@@ -1,20 +1,20 @@
 from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func, distinct
+from sqlalchemy import func, distinct, asc, desc
 from app.models.database import get_db
 from app.models.schemas import RawDataRecord, RawDataOut, PaginatedResponse
 
 router = APIRouter(prefix="/api/rawdata", tags=["rawdata"])
 
+SORTABLE_FIELDS = {
+    "sales_qty": RawDataRecord.sales_qty,
+    "sales_amount": RawDataRecord.sales_amount,
+    "price": RawDataRecord.price,
+    "month": RawDataRecord.month,
+}
 
-def build_query(
-    db: Session,
-    file_id: Optional[int],
-    platform: Optional[str],
-    month: Optional[int],
-    brand_std: Optional[str],
-):
+def build_query(db, file_id, platform, month, brand_std):
     q = db.query(RawDataRecord)
     if file_id is not None:
         q = q.filter(RawDataRecord.file_id == file_id)
@@ -33,13 +33,23 @@ def list_raw_data(
     platform: Optional[str] = Query(None),
     month: Optional[int] = Query(None),
     brand_std: Optional[str] = Query(None),
+    sort_by: Optional[str] = Query(None),
+    sort_order: Optional[str] = Query("desc"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
     q = build_query(db, file_id, platform, month, brand_std)
     total = q.count()
-    items = q.order_by(RawDataRecord.id).offset((page - 1) * page_size).limit(page_size).all()
+
+    # 排序
+    if sort_by and sort_by in SORTABLE_FIELDS:
+        col = SORTABLE_FIELDS[sort_by]
+        q = q.order_by(desc(col) if sort_order == "desc" else asc(col))
+    else:
+        q = q.order_by(RawDataRecord.id)
+
+    items = q.offset((page - 1) * page_size).limit(page_size).all()
     return PaginatedResponse(
         total=total,
         page=page,

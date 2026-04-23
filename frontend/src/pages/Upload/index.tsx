@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import {
   Card, Upload, Table, Tag, Button, Popconfirm,
-  message, Space, Typography
+  message, Space, Typography, Spin, Alert
 } from 'antd'
-import { InboxOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons'
+import { InboxOutlined, DeleteOutlined, ReloadOutlined, CheckCircleOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import { uploadFile, listUploadFiles, deleteUploadFile } from '../../services/api'
 
@@ -11,15 +11,23 @@ const { Text } = Typography
 
 const PLATFORM_LABEL: Record<string, string> = { JD: '京东', TM: '天猫', TB: '淘宝' }
 
+const renderVal = (v: unknown) => (v == null || v === '' ? <Text type="secondary">-</Text> : String(v))
+
 const previewColumns = [
-  { title: '平台', dataIndex: 'platform', width: 100, ellipsis: true },
-  { title: '月份', dataIndex: 'month', width: 90 },
-  { title: '品牌', dataIndex: 'brand_std', width: 100 },
-  { title: '机型', dataIndex: 'model_std', width: 120 },
-  { title: '宝贝名称', dataIndex: 'item_name', ellipsis: true },
-  { title: '销量', dataIndex: 'sales_qty', width: 80 },
-  { title: '销售额', dataIndex: 'sales_amount', width: 110 },
-  { title: '价格', dataIndex: 'price', width: 90 },
+  { title: '平台', dataIndex: 'platform', width: 100, ellipsis: true, render: renderVal },
+  { title: '月份', dataIndex: 'month', width: 90, render: renderVal },
+  { title: '品牌', dataIndex: 'brand_std', width: 100, render: renderVal },
+  { title: '机型', dataIndex: 'model_std', width: 120, render: renderVal },
+  { title: '宝贝名称', dataIndex: 'item_name', ellipsis: true, render: renderVal },
+  { title: '销量', dataIndex: 'sales_qty', width: 80, render: renderVal },
+  {
+    title: '销售额', dataIndex: 'sales_amount', width: 110,
+    render: (v: number) => v != null ? `¥${Number(v).toLocaleString()}` : <Text type="secondary">-</Text>
+  },
+  {
+    title: '价格', dataIndex: 'price', width: 90,
+    render: (v: number) => v != null ? `¥${Number(v).toFixed(2)}` : <Text type="secondary">-</Text>
+  },
 ]
 
 const historyColumns = (onDelete: (id: number) => void) => [
@@ -33,7 +41,7 @@ const historyColumns = (onDelete: (id: number) => void) => [
   { title: '数据量', dataIndex: 'row_count', width: 80 },
   {
     title: '状态', dataIndex: 'status', width: 80,
-    render: (v: string) => <Tag color={v === 'done' ? 'green' : 'orange'}>{v}</Tag>
+    render: (v: string) => <Tag color={v === 'done' ? 'green' : 'orange'}>{v === 'done' ? '已完成' : v}</Tag>
   },
   {
     title: '上传时间', dataIndex: 'uploaded_at', width: 170,
@@ -52,6 +60,7 @@ const historyColumns = (onDelete: (id: number) => void) => [
 export default function UploadPage() {
   const [previewData, setPreviewData] = useState<Record<string, unknown>[]>([])
   const [previewInfo, setPreviewInfo] = useState<{ filename: string; row_count: number; platform: string; month_range: string } | null>(null)
+  const [uploading, setUploading] = useState(false)
   const Dragger = Upload.Dragger
 
   const { data: filesData, loading: filesLoading, refresh: refreshFiles } = useRequest(
@@ -60,6 +69,7 @@ export default function UploadPage() {
   )
 
   const handleUpload = async (file: File) => {
+    setUploading(true)
     const formData = new FormData()
     formData.append('file', file)
     try {
@@ -67,12 +77,14 @@ export default function UploadPage() {
       const { preview, filename, row_count, platform, month_range } = res.data
       setPreviewData(preview)
       setPreviewInfo({ filename, row_count, platform, month_range })
-      message.success(`上传成功，共 ${row_count} 条数据`)
+      message.success(`上传成功，共解析 ${row_count} 条数据`)
       refreshFiles()
     } catch {
       // error handled by interceptor
+    } finally {
+      setUploading(false)
     }
-    return false // 阻止 antd 默认上传
+    return false
   }
 
   const handleDelete = async (id: number) => {
@@ -84,21 +96,33 @@ export default function UploadPage() {
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <Card>
-        <Dragger
-          accept=".xlsx,.xls"
-          multiple={false}
-          beforeUpload={handleUpload}
-          showUploadList={false}
-        >
-          <p className="ant-upload-drag-icon"><InboxOutlined /></p>
-          <p className="ant-upload-text">点击或拖拽 Excel 文件至此上传</p>
-          <p className="ant-upload-hint">支持 .xlsx / .xls 格式，兼容京东/天猫/淘宝原始数据格式</p>
-        </Dragger>
+        <Spin spinning={uploading} tip="正在解析文件，请稍候...">
+          <Dragger
+            accept=".xlsx,.xls"
+            multiple={false}
+            beforeUpload={handleUpload}
+            showUploadList={false}
+            disabled={uploading}
+          >
+            <p className="ant-upload-drag-icon">
+              {uploading ? <Spin /> : <InboxOutlined />}
+            </p>
+            <p className="ant-upload-text">
+              {uploading ? '正在上传并解析中...' : '点击或拖拽 Excel 文件至此上传'}
+            </p>
+            <p className="ant-upload-hint">支持 .xlsx / .xls 格式，兼容京东 / 天猫 / 淘宝原始数据格式</p>
+          </Dragger>
+        </Spin>
       </Card>
 
       {previewInfo && (
         <Card
-          title={`数据预览：${previewInfo.filename}`}
+          title={
+            <Space>
+              <CheckCircleOutlined style={{ color: '#52c41a' }} />
+              {`数据预览：${previewInfo.filename}`}
+            </Space>
+          }
           extra={
             <Space>
               <Tag color="blue">{PLATFORM_LABEL[previewInfo.platform] ?? previewInfo.platform}</Tag>
@@ -107,6 +131,12 @@ export default function UploadPage() {
             </Space>
           }
         >
+          <Alert
+            type="info"
+            showIcon
+            message={`文件已成功入库，共 ${previewInfo.row_count} 条数据。可前往「原始数据」页面查看完整数据，或前往「数据清洗」进行处理。`}
+            style={{ marginBottom: 12 }}
+          />
           <Table
             dataSource={previewData}
             columns={previewColumns}

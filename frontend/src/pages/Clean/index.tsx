@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import {
   Card, Checkbox, Switch, Button, Table, Tag, Modal, Row, Col,
-  Space, Typography, Input, message
+  Space, Typography, Input, message, Alert, Statistic
 } from 'antd'
 import { PlayCircleOutlined, EyeOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
@@ -81,6 +81,20 @@ export default function CleanPage() {
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 0 }}
+        message="数据清洗说明"
+        description={
+          <ul style={{ margin: '4px 0', paddingLeft: 20 }}>
+            <li><b>品牌白名单</b>：只保留指定品牌的数据，留空则保留全部品牌</li>
+            <li><b>去重</b>：同一商品（相同 item_id）同一月份若出现多条，只保留销量最大的一条</li>
+            <li><b>品牌标准化</b>：自动将 brand_std 为空的记录用原始品牌名补全</li>
+            <li>清洗结果独立保存，不影响原始数据，可反复清洗</li>
+          </ul>
+        }
+      />
       <Card title="清洗配置">
         <Row gutter={24}>
           <Col span={12}>
@@ -134,6 +148,17 @@ export default function CleanPage() {
       </Card>
 
       <Card title="清洗任务历史">
+        {(jobsData ?? []).length > 0 && (
+          <Row gutter={16} style={{ marginBottom: 16 }}>
+            {[jobsData[0]].map((j: { id: number; row_in: number; row_out: number }) => (
+              <>
+                <Col span={6}><Statistic title="最近一次：输入行数" value={j.row_in} /></Col>
+                <Col span={6}><Statistic title="清洗后输出行数" value={j.row_out} valueStyle={{ color: '#3f8600' }} /></Col>
+                <Col span={6}><Statistic title="过滤掉" value={j.row_in - j.row_out} valueStyle={{ color: '#cf1322' }} /></Col>
+              </>
+            ))}
+          </Row>
+        )}
         <Table
           dataSource={jobsData ?? []}
           columns={jobColumns(id => { setPreviewJobId(id); setPreviewPage(1) })}

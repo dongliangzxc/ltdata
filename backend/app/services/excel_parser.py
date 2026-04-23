@@ -124,5 +124,27 @@ def parse_raw_excel(file_path: str | Path) -> tuple[list[dict], str, str]:
         elif "淘宝" in str(platform_val):
             platform = "TB"
 
-    records = df.where(df.notna(), None).to_dict(orient="records")
+    raw_records = df.where(df.notna(), None).to_dict(orient="records")
+
+    # MySQL 不支持 float nan，全部转成 None
+    import math
+
+    def clean_val(v):
+        if v is None:
+            return None
+        try:
+            if isinstance(v, float) and math.isnan(v):
+                return None
+        except (TypeError, ValueError):
+            pass
+        # pandas Int64 NA
+        try:
+            import pandas as pd
+            if pd.isna(v):
+                return None
+        except (TypeError, ValueError):
+            pass
+        return v
+
+    records = [{k: clean_val(v) for k, v in row.items()} for row in raw_records]
     return records, platform, month_range

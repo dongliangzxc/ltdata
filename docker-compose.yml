@@ -1,0 +1,51 @@
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: luotu123
+      MYSQL_USER: luotu
+      MYSQL_PASSWORD: luotu123
+      MYSQL_DATABASE: luotu
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uluotu", "-pluotu123"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: mysql+pymysql://luotu:luotu123@mysql:3306/luotu
+      UPLOAD_DIR: /app/uploads
+      EXPORT_DIR: /app/exports
+    volumes:
+      - ./backend:/app
+      - upload_data:/app/uploads
+      - export_data:/app/exports
+    depends_on:
+      mysql:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+    depends_on:
+      - backend
+
+volumes:
+  mysql_data:
+  upload_data:
+  export_data:

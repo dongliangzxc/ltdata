@@ -1,0 +1,64 @@
+import { useState } from 'react'
+import { Layout, Menu, Typography } from 'antd'
+import {
+  UploadOutlined,
+  DatabaseOutlined,
+  ClearOutlined,
+  ExportOutlined,
+} from '@ant-design/icons'
+import { useNavigate, useLocation } from 'react-router-dom'
+
+const { Sider, Header, Content } = Layout
+const { Title } = Typography
+
+const menuItems = [
+  { key: '/upload', icon: <UploadOutlined />, label: '数据上传' },
+  { key: '/rawdata', icon: <DatabaseOutlined />, label: '原始数据' },
+  { key: '/clean', icon: <ClearOutlined />, label: '数据清洗' },
+  { key: '/export', icon: <ExportOutlined />, label: '数据导出' },
+]
+
+interface Props {
+  children: React.ReactNode
+}
+
+export default function AppLayout({ children }: Props) {
+  const navigate = useNavigate()
+  const location = useLocation()
+  const [collapsed, setCollapsed] = useState(false)
+
+  return (
+    <Layout style={{ minHeight: '100vh' }}>
+      <Sider
+        collapsible
+        collapsed={collapsed}
+        onCollapse={setCollapsed}
+        theme="dark"
+        width={200}
+      >
+        <div style={{ padding: '16px 16px 8px', textAlign: 'center' }}>
+          <Title level={5} style={{ color: '#fff', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden' }}>
+            {collapsed ? '落土' : '落土数据平台'}
+          </Title>
+        </div>
+        <Menu
+          theme="dark"
+          mode="inline"
+          selectedKeys={[location.pathname]}
+          items={menuItems}
+          onClick={({ key }) => navigate(key)}
+        />
+      </Sider>
+      <Layout>
+        <Header style={{ background: '#fff', padding: '0 24px', borderBottom: '1px solid #f0f0f0', display: 'flex', alignItems: 'center' }}>
+          <Title level={4} style={{ margin: 0, color: '#1677ff' }}>
+            {menuItems.find(m => m.key === location.pathname)?.label ?? '落土数据处理平台'}
+          </Title>
+        </Header>
+        <Content style={{ margin: 24, minHeight: 280 }}>
+          {children}
+        </Content>
+      </Layout>
+    </Layout>
+  )
+}

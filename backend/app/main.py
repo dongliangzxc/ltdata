@@ -7,7 +7,7 @@ from app.core.security import verify_token, hash_password
 from app.models.database import Base, engine, SessionLocal
 from app.models.analytics_db import AnalyticsBase, analytics_engine
 from app.models.schemas import User
-from app.api import upload, rawdata, clean, export, metadata, models_api, match_api, publish_api, auth
+from app.api import upload, rawdata, clean, export, metadata, models_api, match_api, publish_api, auth, workbench_api
 
 
 # 不需要鉴权的路径
@@ -67,6 +67,7 @@ app.include_router(metadata.router)
 app.include_router(models_api.router)
 app.include_router(match_api.router)
 app.include_router(publish_api.router)
+app.include_router(workbench_api.router)
 
 
 @app.get("/health")

@@ -9,6 +9,7 @@ import MatchPage from './pages/Match'
 import ExportPage from './pages/Export'
 import MetadataPage from './pages/Metadata'
 import ModelsPage from './pages/Models'
+import WorkbenchPage from './pages/Workbench'
 
 export default function App() {
   return (
@@ -28,6 +29,7 @@ export default function App() {
             <Route path="/export" element={<ExportPage />} />
             <Route path="/metadata" element={<MetadataPage />} />
             <Route path="/models" element={<ModelsPage />} />
+            <Route path="/workbench" element={<WorkbenchPage />} />
           </Route>
         </Route>
       </Routes>

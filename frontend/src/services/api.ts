@@ -91,7 +91,14 @@ export const listPendingMatches = (clean_job_id: number, params?: Record<string,
 export const confirmMatch = (match_id: number, data: { model_id?: number; excluded?: boolean }) =>
   api.put(`/match/confirm/${match_id}`, data)
 
-// ─── Publish ────────────────────────────────────────────────
+// ─── Workbench ──────────────────────────────────────────────
+export const getWorkbenchFilters = (clean_job_id: number) =>
+  api.get('/workbench/filters', { params: { clean_job_id } })
+export const queryWorkbenchData = (params: Record<string, unknown>) =>
+  api.get('/workbench/data', { params })
+export const exportWorkbenchData = (params: Record<string, unknown>) =>
+  api.post('/workbench/export', params)
+export const getWorkbenchDownloadUrl = (token: string) => `/api/workbench/download/${token}`
 export const runPublish = (clean_job_id: number) =>
   api.post('/publish/run', { clean_job_id })
 export const listPublishJobs = (clean_job_id?: number) =>

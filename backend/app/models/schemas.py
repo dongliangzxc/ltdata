@@ -367,6 +367,39 @@ class ModelOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# ─────────────────────────── 导出任务 ───────────────────────────
+
+class ExportJob(Base):
+    __tablename__ = "export_jobs"
+
+    id               = Column(Integer, primary_key=True, index=True)
+    clean_job_id     = Column(Integer, nullable=False)
+    filename_prefix  = Column(String(255), nullable=False, default="已处理数据")
+    status           = Column(String(20), default="pending")   # pending/running/done/error
+    filename         = Column(String(500))
+    token            = Column(String(64))
+    rows             = Column(Integer)
+    pending_rows     = Column(Integer)
+    error_msg        = Column(Text)
+    created_at       = Column(DateTime, default=datetime.utcnow)
+    updated_at       = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ExportJobOut(BaseModel):
+    id:              int
+    clean_job_id:    int
+    filename_prefix: str
+    status:          str
+    filename:        Optional[str]
+    token:           Optional[str]
+    rows:            Optional[int]
+    pending_rows:    Optional[int]
+    error_msg:       Optional[str]
+    created_at:      datetime
+
+    model_config = {"from_attributes": True}
+
+
 # ─────────────────────────── 用户（登录） ───────────────────────────
 
 class User(Base):

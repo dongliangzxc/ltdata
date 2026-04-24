@@ -33,6 +33,79 @@ def _clean_val(v):
     return v
 
 
+def _parse_metadata_file(content: bytes) -> dict:
+    """解析 Excel，返回预览数据，不操作数据库"""
+    try:
+        df = pd.read_excel(io.BytesIO(content), sheet_name="元数据", dtype=str)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"读取「元数据」sheet 失败：{e}")
+
+    df.columns = [str(c).strip() for c in df.columns]
+    df = df.dropna(axis=1, how='all')
+
+    col_map = {
+        "品类码": "category_code", "规格名称": "spec_name",
+        "规格类型": "spec_type",   "规格值": "spec_value_raw",
+        "必填": "required_raw",   "保留几位小数": "decimal_places_raw",
+        "单选": "single_select_raw",
+    }
+    df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+
+    for col in ["spec_name", "spec_type"]:
+        if col not in df.columns:
+            raise HTTPException(status_code=422, detail=f"缺少必要列（找不到「{col}」对应列）")
+
+    if "category_code" not in df.columns:
+        df["category_code"] = ""
+    else:
+        df["category_code"] = df["category_code"].replace("不需要填写", None).ffill().fillna("")
+
+    errors = []
+    warnings = []
+    preview = []
+    valid_rows = 0
+    total_rows = len(df)
+
+    for idx, row in df.iterrows():
+        row_num = int(idx) + 2
+        spec_name = _clean_val(row.get("spec_name"))
+        if not spec_name:
+            errors.append({"row": row_num, "message": "规格名称为空，该行将被跳过"})
+            continue
+
+        spec_type = str(_clean_val(row.get("spec_type")) or "文本型").strip()
+        valid_spec_types = {"数值型", "文本型", "布尔型"}
+        if spec_type not in valid_spec_types:
+            warnings.append({"row": row_num, "message": f"规格类型「{spec_type}」不在预设值内，将原样保存"})
+
+        valid_rows += 1
+        if len(preview) < 10:
+            preview.append({
+                "category_code": str(_clean_val(row.get("category_code")) or ""),
+                "spec_name":     str(spec_name).strip(),
+                "spec_type":     spec_type,
+                "spec_values":   str(_clean_val(row.get("spec_value_raw")) or "") or None,
+                "required":      str(_clean_val(row.get("required_raw")) or "") in ("是", "1", "True", "true", "YES"),
+            })
+
+    return {
+        "total_rows": total_rows,
+        "valid_rows": valid_rows,
+        "preview":    preview,
+        "errors":     errors,
+        "warnings":   warnings,
+    }
+
+
+@router.post("/preview", response_model=dict)
+async def preview_metadata(file: UploadFile = File(...)):
+    """解析 Excel 并返回预览数据，不写入数据库"""
+    if not file.filename.endswith((".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="只支持 .xlsx / .xls 格式文件")
+    content = await file.read()
+    return _parse_metadata_file(content)
+
+
 @router.post("/import", response_model=dict)
 async def import_metadata(file: UploadFile = File(...), db: Session = Depends(get_db)):
     """

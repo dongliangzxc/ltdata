@@ -62,11 +62,19 @@ export const triggerExport = (payload: {
   filename_prefix: string
 }) => api.post('/export', payload)
 
+export const listExportJobs = (clean_job_id?: number) =>
+  api.get('/export/jobs', { params: clean_job_id != null ? { clean_job_id } : {} })
+
+export const getExportJob = (job_id: number) =>
+  api.get(`/export/jobs/${job_id}`)
+
 export const getDownloadUrl = (token: string) => `/api/export/download/${token}`
 
 // ─── Metadata ──────────────────────────────────────────────
 export const importMetadata = (formData: FormData) =>
   api.post('/metadata/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+export const previewMetadata = (formData: FormData) =>
+  api.post('/metadata/preview', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
 export const listMetadata = (params: Record<string, unknown>) => api.get('/metadata', { params })
 export const createMetadata = (data: unknown) => api.post('/metadata', data)
 export const updateMetadata = (id: number, data: unknown) => api.put(`/metadata/${id}`, data)
@@ -75,6 +83,8 @@ export const deleteMetadata = (id: number) => api.delete(`/metadata/${id}`)
 // ─── Models ────────────────────────────────────────────────
 export const importModels = (formData: FormData) =>
   api.post('/models/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+export const previewModels = (formData: FormData) =>
+  api.post('/models/preview', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
 export const listModels = (params: Record<string, unknown>) => api.get('/models', { params })
 export const getModelDetail = (id: number) => api.get(`/models/${id}`)
 export const createModel = (data: unknown) => api.post('/models', data)

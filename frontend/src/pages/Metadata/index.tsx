@@ -1,12 +1,12 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import {
   Card, Table, Button, Input, Space, Popconfirm, Upload, Modal, Form,
-  Select, Switch, InputNumber, message, Tag, Row, Col, Tooltip
+  Select, Switch, InputNumber, message, Tag, Row, Col, Tooltip, Collapse
 } from 'antd'
-import { PlusOutlined, UploadOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
+import { PlusOutlined, UploadOutlined, EditOutlined, DeleteOutlined, WarningOutlined, CheckCircleOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import {
-  listMetadata, createMetadata, updateMetadata, deleteMetadata, importMetadata
+  listMetadata, createMetadata, updateMetadata, deleteMetadata, importMetadata, previewMetadata
 } from '../../services/api'
 
 type MetadataItem = {
@@ -20,6 +20,14 @@ type MetadataItem = {
   single_select: boolean
 }
 
+type PreviewResult = {
+  total_rows: number
+  valid_rows: number
+  preview: Record<string, unknown>[]
+  errors: { row: number; message: string }[]
+  warnings: { row: number; message: string }[]
+}
+
 const SPEC_TYPE_OPTIONS = ['数值型', '文本型', '布尔型']
 
 export default function MetadataPage() {
@@ -29,6 +37,10 @@ export default function MetadataPage() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editingItem, setEditingItem] = useState<MetadataItem | null>(null)
   const [importing, setImporting] = useState(false)
+  const [previewing, setPreviewing] = useState(false)
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewResult, setPreviewResult] = useState<PreviewResult | null>(null)
+  const pendingFileRef = useRef<File | null>(null)
   const [form] = Form.useForm()
   const specType = Form.useWatch('spec_type', form)
 
@@ -83,20 +95,40 @@ export default function MetadataPage() {
   }
 
   const handleImport = async (file: File) => {
-    setImporting(true)
+    setPreviewing(true)
     const formData = new FormData()
     formData.append('file', file)
+    try {
+      const res = await previewMetadata(formData)
+      pendingFileRef.current = file
+      setPreviewResult(res.data)
+      setPreviewOpen(true)
+    } catch {
+      // error handled by interceptor
+    } finally {
+      setPreviewing(false)
+    }
+    return false
+  }
+
+  const handleConfirmImport = async () => {
+    if (!pendingFileRef.current) return
+    setImporting(true)
+    const formData = new FormData()
+    formData.append('file', pendingFileRef.current)
     try {
       const res = await importMetadata(formData)
       const { imported, upserted } = res.data
       message.success(`导入成功，处理 ${imported} 条，写入/更新 ${upserted} 条`)
+      setPreviewOpen(false)
+      pendingFileRef.current = null
+      setPreviewResult(null)
       refresh()
     } catch {
       // error handled by interceptor
     } finally {
       setImporting(false)
     }
-    return false
   }
 
   const columns = [
@@ -157,7 +189,7 @@ export default function MetadataPage() {
         <Col>
           <Space>
             <Upload beforeUpload={handleImport} showUploadList={false} accept=".xlsx,.xls">
-              <Button icon={<UploadOutlined />} loading={importing}>Excel 导入</Button>
+              <Button icon={<UploadOutlined />} loading={previewing || importing}>Excel 导入</Button>
             </Upload>
             <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增</Button>
           </Space>
@@ -180,6 +212,93 @@ export default function MetadataPage() {
           onChange: (p, ps) => { setPage(p); setPageSize(ps) },
         }}
       />
+
+      {/* Excel 预览确认 Modal */}
+      <Modal
+        title="Excel 导入预览"
+        open={previewOpen}
+        onCancel={() => { setPreviewOpen(false); pendingFileRef.current = null; setPreviewResult(null) }}
+        onOk={handleConfirmImport}
+        okText="确认导入"
+        cancelText="取消"
+        okButtonProps={{ loading: importing }}
+        width={680}
+      >
+        {previewResult && (
+          <>
+            <Row gutter={16} style={{ marginBottom: 12 }}>
+              <Col span={12}>
+                <Card size="small" style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 22, fontWeight: 600 }}>{previewResult.total_rows}</div>
+                  <div style={{ color: '#888', fontSize: 12 }}>读取行数</div>
+                </Card>
+              </Col>
+              <Col span={12}>
+                <Card size="small" style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 22, fontWeight: 600, color: '#3f8600' }}>{previewResult.valid_rows}</div>
+                  <div style={{ color: '#888', fontSize: 12 }}>有效条目</div>
+                </Card>
+              </Col>
+            </Row>
+
+            {previewResult.errors.length > 0 && (
+              <Collapse
+                size="small"
+                style={{ marginBottom: 8 }}
+                items={[{
+                  key: 'errors',
+                  label: <><WarningOutlined style={{ color: '#cf1322' }} /> 错误 {previewResult.errors.length} 条（这些行将被跳过）</>,
+                  children: previewResult.errors.map(e => (
+                    <div key={e.row} style={{ fontSize: 12, color: '#cf1322' }}>第 {e.row} 行：{e.message}</div>
+                  )),
+                }]}
+              />
+            )}
+
+            {previewResult.warnings.length > 0 && (
+              <Collapse
+                size="small"
+                style={{ marginBottom: 8 }}
+                items={[{
+                  key: 'warnings',
+                  label: <><CheckCircleOutlined style={{ color: '#d46b08' }} /> 警告 {previewResult.warnings.length} 条</>,
+                  children: previewResult.warnings.map((w, i) => (
+                    <div key={i} style={{ fontSize: 12, color: '#d46b08' }}>第 {w.row} 行：{w.message}</div>
+                  )),
+                }]}
+              />
+            )}
+
+            {previewResult.valid_rows > 0 && (
+              <>
+                <div style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>
+                  预览（前 {previewResult.preview.length} 条）：
+                </div>
+                <Table
+                  dataSource={previewResult.preview}
+                  rowKey={(_, i) => String(i)}
+                  size="small"
+                  pagination={false}
+                  scroll={{ x: 500 }}
+                  columns={[
+                    { title: '品类码', dataIndex: 'category_code', width: 100 },
+                    { title: '规格名称', dataIndex: 'spec_name', width: 140 },
+                    { title: '规格类型', dataIndex: 'spec_type', width: 90 },
+                    {
+                      title: '规格值', dataIndex: 'spec_values', ellipsis: true,
+                      render: (v: string | null) => v || '-'
+                    },
+                    {
+                      title: '必填', dataIndex: 'required', width: 60,
+                      render: (v: boolean) => v ? '是' : '否'
+                    },
+                  ]}
+                />
+              </>
+            )}
+          </>
+        )}
+      </Modal>
 
       <Modal
         title={editingItem ? '编辑元数据规格' : '新增元数据规格'}

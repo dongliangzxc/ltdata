@@ -215,6 +215,22 @@ CREATE TABLE IF NOT EXISTS users (
     created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='登录用户';
 
+-- 异步导出任务记录
+CREATE TABLE IF NOT EXISTS export_jobs (
+    id              INT AUTO_INCREMENT PRIMARY KEY,
+    clean_job_id    INT          NOT NULL               COMMENT '关联清洗任务',
+    filename_prefix VARCHAR(255) NOT NULL DEFAULT '已处理数据' COMMENT '文件名前缀',
+    status          VARCHAR(20)  NOT NULL DEFAULT 'pending' COMMENT 'pending/running/done/error',
+    filename        VARCHAR(500)                        COMMENT '生成的文件名',
+    token           VARCHAR(64)                         COMMENT '下载 token',
+    rows            INT                                 COMMENT '已匹配行数',
+    pending_rows    INT                                 COMMENT '待确认行数',
+    error_msg       TEXT                                COMMENT '失败原因',
+    created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    KEY idx_export_clean_job (clean_job_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='异步导出任务';
+
 -- =============================================================
 -- luotu_analytics 分析库（同一 MySQL 实例，独立 database）
 -- =============================================================

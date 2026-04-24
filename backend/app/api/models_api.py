@@ -51,6 +51,118 @@ def _to_float(v):
         return None
 
 
+def _parse_models_file(content: bytes) -> dict:
+    """
+    解析 Excel，返回解析结果（不操作数据库）。
+    返回:
+      total_rows: 读取到的行数
+      valid_rows: 有效行数（brand_code + model_code 非空）
+      preview:    前 10 行预览数据
+      errors:     [{row, message}] 格式错误列表
+      warnings:   [{row, message}] 格式警告列表
+    """
+    try:
+        df_model = pd.read_excel(io.BytesIO(content), sheet_name="型号", dtype=str)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"读取「型号」sheet 失败：{e}")
+
+    try:
+        df_spec = pd.read_excel(io.BytesIO(content), sheet_name="型号规格", dtype=str)
+    except Exception:
+        df_spec = pd.DataFrame()
+
+    df_model.columns = [str(c).strip() for c in df_model.columns]
+    df_model = df_model.dropna(axis=1, how="all")
+
+    def _apply_col_map(df):
+        priority = {"品牌码": "brand_code", "型号码": "model_code"}
+        fallback = {"品牌":   "brand_code", "型号":   "model_code"}
+        other    = {
+            "品类": "category_name", "品牌名称": "brand_name", "型号名称": "model_name",
+            "上市年": "launch_year", "上市月": "launch_month", "上市周": "launch_week",
+            "上市价格": "launch_price", "网址": "url",
+            "规格名称": "spec_name", "规格值": "spec_value",
+        }
+        rename = {}
+        for src, dst in priority.items():
+            if src in df.columns:
+                rename[src] = dst
+        for src, dst in fallback.items():
+            if src in df.columns and dst not in rename.values():
+                rename[src] = dst
+        for src, dst in other.items():
+            if src in df.columns and dst not in rename.values():
+                rename[src] = dst
+        return df.rename(columns=rename)
+
+    df_model = _apply_col_map(df_model)
+
+    for col in ["brand_code", "model_code"]:
+        if col not in df_model.columns:
+            raise HTTPException(status_code=422, detail="「型号」sheet 缺少必要列（品牌/品牌码 或 型号/型号码）")
+        df_model[col] = df_model[col].replace("不需要填写", None).ffill()
+
+    errors = []
+    warnings = []
+    preview = []
+    valid_rows = 0
+    total_rows = len(df_model)
+
+    for idx, row in df_model.iterrows():
+        row_num = int(idx) + 2  # Excel 行号（1=标题行）
+        bc = _clean_val(row.get("brand_code"))
+        mc = _clean_val(row.get("model_code"))
+        if not bc or not mc:
+            errors.append({"row": row_num, "message": "brand_code 或 model_code 为空，该行将被跳过"})
+            continue
+
+        launch_year = _clean_val(row.get("launch_year"))
+        if launch_year and _to_int(launch_year) is None:
+            warnings.append({"row": row_num, "message": f"上市年「{launch_year}」不是有效数字，将置为空"})
+
+        valid_rows += 1
+        if len(preview) < 10:
+            preview.append({
+                "brand_code":    str(bc),
+                "model_code":    str(mc),
+                "brand_name":    str(_clean_val(row.get("brand_name")) or bc),
+                "model_name":    str(_clean_val(row.get("model_name")) or mc),
+                "category_name": str(_clean_val(row.get("category_name")) or ""),
+                "launch_year":   _to_int(_clean_val(row.get("launch_year"))),
+                "launch_month":  _to_int(_clean_val(row.get("launch_month"))),
+                "launch_price":  _to_float(_clean_val(row.get("launch_price"))),
+            })
+
+    spec_rows = 0
+    if not df_spec.empty:
+        df_spec.columns = [str(c).strip() for c in df_spec.columns]
+        df_spec = _apply_col_map(df_spec.dropna(axis=1, how="all"))
+        if "brand_code" in df_spec.columns and "model_code" in df_spec.columns:
+            for col in ["brand_code", "model_code"]:
+                df_spec[col] = df_spec[col].replace("不需要填写", None).ffill()
+            for _, srow in df_spec.iterrows():
+                if _clean_val(srow.get("spec_name")):
+                    spec_rows += 1
+
+    return {
+        "total_rows": total_rows,
+        "valid_rows": valid_rows,
+        "spec_rows":  spec_rows,
+        "preview":    preview,
+        "errors":     errors,
+        "warnings":   warnings,
+    }
+
+
+@router.post("/preview", response_model=dict)
+async def preview_models(file: UploadFile = File(...)):
+    """解析 Excel 并返回预览数据，不写入数据库"""
+    if not file.filename.endswith((".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="只支持 .xlsx / .xls 格式文件")
+    content = await file.read()
+    return _parse_models_file(content)
+
+
 @router.post("/import", response_model=dict)
 async def import_models(file: UploadFile = File(...), db: Session = Depends(get_db)):
     """

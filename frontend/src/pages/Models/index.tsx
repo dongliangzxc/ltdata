@@ -1,14 +1,16 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import {
   Card, Table, Button, Input, Space, Popconfirm, Upload, Modal, Form,
-  InputNumber, message, Row, Col, Divider, Typography
+  InputNumber, message, Row, Col, Divider, Typography, Alert, Tag, Collapse
 } from 'antd'
 import {
-  PlusOutlined, UploadOutlined, EditOutlined, DeleteOutlined, MinusCircleOutlined
+  PlusOutlined, UploadOutlined, EditOutlined, DeleteOutlined,
+  MinusCircleOutlined, CheckCircleOutlined, WarningOutlined
 } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import {
-  listModels, getModelDetail, createModel, updateModel, deleteModel, importModels
+  listModels, getModelDetail, createModel, updateModel, deleteModel,
+  importModels, previewModels
 } from '../../services/api'
 
 const { Text } = Typography
@@ -34,6 +36,15 @@ type ModelItem = {
   specs: ModelSpec[]
 }
 
+type PreviewResult = {
+  total_rows: number
+  valid_rows: number
+  spec_rows: number
+  preview: Record<string, unknown>[]
+  errors: { row: number; message: string }[]
+  warnings: { row: number; message: string }[]
+}
+
 export default function ModelsPage() {
   const [search, setSearch] = useState<Record<string, string | undefined>>({})
   const [page, setPage] = useState(1)
@@ -41,6 +52,10 @@ export default function ModelsPage() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editingItem, setEditingItem] = useState<ModelItem | null>(null)
   const [importing, setImporting] = useState(false)
+  const [previewing, setPreviewing] = useState(false)
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewResult, setPreviewResult] = useState<PreviewResult | null>(null)
+  const pendingFileRef = useRef<File | null>(null)
   const [expandedSpecs, setExpandedSpecs] = useState<Record<number, ModelSpec[]>>({})
   const [form] = Form.useForm()
 
@@ -105,20 +120,40 @@ export default function ModelsPage() {
   }
 
   const handleImport = async (file: File) => {
-    setImporting(true)
+    setPreviewing(true)
     const formData = new FormData()
     formData.append('file', file)
+    try {
+      const res = await previewModels(formData)
+      pendingFileRef.current = file
+      setPreviewResult(res.data)
+      setPreviewOpen(true)
+    } catch {
+      // handled by interceptor
+    } finally {
+      setPreviewing(false)
+    }
+    return false
+  }
+
+  const handleConfirmImport = async () => {
+    if (!pendingFileRef.current) return
+    setImporting(true)
+    const formData = new FormData()
+    formData.append('file', pendingFileRef.current)
     try {
       const res = await importModels(formData)
       const { imported_models, imported_specs } = res.data
       message.success(`导入成功，型号 ${imported_models} 条，规格 ${imported_specs} 条`)
+      setPreviewOpen(false)
+      pendingFileRef.current = null
+      setPreviewResult(null)
       refresh()
     } catch {
       // handled by interceptor
     } finally {
       setImporting(false)
     }
-    return false
   }
 
   const handleExpand = async (expanded: boolean, record: ModelItem) => {
@@ -193,7 +228,7 @@ export default function ModelsPage() {
         <Col>
           <Space>
             <Upload beforeUpload={handleImport} showUploadList={false} accept=".xlsx,.xls">
-              <Button icon={<UploadOutlined />} loading={importing}>Excel 导入</Button>
+              <Button icon={<UploadOutlined />} loading={previewing || importing}>Excel 导入</Button>
             </Upload>
             <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增型号</Button>
           </Space>
@@ -234,6 +269,95 @@ export default function ModelsPage() {
           onChange: (p, ps) => { setPage(p); setPageSize(ps) },
         }}
       />
+
+      {/* Excel 预览确认 Modal */}
+      <Modal
+        title="Excel 导入预览"
+        open={previewOpen}
+        onCancel={() => { setPreviewOpen(false); pendingFileRef.current = null; setPreviewResult(null) }}
+        onOk={handleConfirmImport}
+        okText="确认导入"
+        cancelText="取消"
+        okButtonProps={{ loading: importing }}
+        width={700}
+      >
+        {previewResult && (
+          <>
+            <Row gutter={16} style={{ marginBottom: 12 }}>
+              <Col span={8}>
+                <Card size="small" style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 22, fontWeight: 600 }}>{previewResult.total_rows}</div>
+                  <div style={{ color: '#888', fontSize: 12 }}>读取行数</div>
+                </Card>
+              </Col>
+              <Col span={8}>
+                <Card size="small" style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 22, fontWeight: 600, color: '#3f8600' }}>{previewResult.valid_rows}</div>
+                  <div style={{ color: '#888', fontSize: 12 }}>有效型号</div>
+                </Card>
+              </Col>
+              <Col span={8}>
+                <Card size="small" style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 22, fontWeight: 600, color: '#1677ff' }}>{previewResult.spec_rows}</div>
+                  <div style={{ color: '#888', fontSize: 12 }}>规格行数</div>
+                </Card>
+              </Col>
+            </Row>
+
+            {previewResult.errors.length > 0 && (
+              <Collapse
+                size="small"
+                style={{ marginBottom: 8 }}
+                items={[{
+                  key: 'errors',
+                  label: <><WarningOutlined style={{ color: '#cf1322' }} /> 错误 {previewResult.errors.length} 条（这些行将被跳过）</>,
+                  children: previewResult.errors.map(e => (
+                    <div key={e.row} style={{ fontSize: 12, color: '#cf1322' }}>第 {e.row} 行：{e.message}</div>
+                  )),
+                }]}
+              />
+            )}
+
+            {previewResult.warnings.length > 0 && (
+              <Collapse
+                size="small"
+                style={{ marginBottom: 8 }}
+                items={[{
+                  key: 'warnings',
+                  label: <><CheckCircleOutlined style={{ color: '#d46b08' }} /> 警告 {previewResult.warnings.length} 条</>,
+                  children: previewResult.warnings.map((w, i) => (
+                    <div key={i} style={{ fontSize: 12, color: '#d46b08' }}>第 {w.row} 行：{w.message}</div>
+                  )),
+                }]}
+              />
+            )}
+
+            {previewResult.valid_rows > 0 && (
+              <>
+                <div style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>
+                  预览（前 {previewResult.preview.length} 条）：
+                </div>
+                <Table
+                  dataSource={previewResult.preview}
+                  rowKey={(_, i) => String(i)}
+                  size="small"
+                  pagination={false}
+                  scroll={{ x: 500 }}
+                  columns={[
+                    { title: '品牌码', dataIndex: 'brand_code', width: 90 },
+                    { title: '型号码', dataIndex: 'model_code', width: 110 },
+                    { title: '品牌名', dataIndex: 'brand_name', width: 90 },
+                    { title: '型号名', dataIndex: 'model_name', ellipsis: true },
+                    { title: '上市年', dataIndex: 'launch_year', width: 75 },
+                    { title: '上市价', dataIndex: 'launch_price', width: 80,
+                      render: (v: number | null) => v != null ? `¥${Number(v).toLocaleString()}` : '-' },
+                  ]}
+                />
+              </>
+            )}
+          </>
+        )}
+      </Modal>
 
       <Modal
         title={editingItem ? '编辑型号' : '新增型号'}

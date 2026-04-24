@@ -1,0 +1,54 @@
+# 生产环境 docker compose
+# 使用方式：docker compose -f docker-compose.prod.yml up -d --build
+
+services:
+  mysql:
+    image: mysql:8.0
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-luotu123}
+      MYSQL_USER: luotu
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-luotu123}
+      MYSQL_DATABASE: luotu
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./sql/docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uluotu", "-p${MYSQL_PASSWORD:-luotu123}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    restart: always
+    environment:
+      DATABASE_URL: mysql+pymysql://luotu:${MYSQL_PASSWORD:-luotu123}@mysql:3306/luotu
+      ANALYTICS_DATABASE_URL: mysql+pymysql://luotu:${MYSQL_PASSWORD:-luotu123}@mysql:3306/luotu_analytics
+      UPLOAD_DIR: /app/uploads
+      EXPORT_DIR: /app/exports
+    volumes:
+      - upload_data:/app/uploads
+      - export_data:/app/exports
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend
+
+volumes:
+  mysql_data:
+  upload_data:
+  export_data:

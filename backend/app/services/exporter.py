@@ -1,105 +1,148 @@
 """
-导出服务：将清洗后的数据按"已处理"格式导出为 Excel 文件。
-列顺序与 Soundbar 7-8月已处理 保持一致。
+导出服务：基于型号匹配结果，按品类分 Sheet 导出。
+- 已匹配/已确认的条目 → 按 category_name 分 Sheet，含动态规格列
+- 待确认条目 → 单独"待确认" Sheet，无规格列
+- 规格列由 metadata_specs 定义（按 id 排序）
+- 规格值从 model_specs 查询
 """
 import uuid
 from pathlib import Path
-from typing import Optional
 import pandas as pd
 from sqlalchemy.orm import Session
-from app.models.schemas import CleanedDataRecord
+from app.models.schemas import (
+    MatchResult, RawDataRecord, ModelRecord,
+    ModelSpec, MetadataSpec,
+)
 from app.core.config import settings
 
-# 已处理格式列定义（天猫/淘宝格式，含 Lv1~Lv5）
-PROCESSED_COLUMNS = [
-    ("platform", "平台"),
-    ("month", "月"),
-    ("category_lv1", "Lv1类目名称(逐月固定)"),
-    ("category_lv2", "Lv2类目名称(逐月固定)"),
-    ("category_lv3", "Lv3类目名称(逐月固定)"),
-    ("category_lv4", "Lv4类目名称(逐月固定)"),
-    ("category_lv5", "Lv5类目名称(逐月固定)"),
-    ("item_id", "宝贝ID"),
-    ("item_url", "宝贝链接"),
-    ("item_name", "宝贝名称"),
-    ("item_image", "宝贝图片"),
-    ("ref_price", "参考价格"),
-    ("brand_raw", "宝贝品牌"),
-    ("shop_name", "宝贝店铺名称"),
-    ("sales_qty", "销量"),
-    ("sales_amount", "销售额"),
-    ("price", "价格"),
-    ("brand_std", "品牌"),
-    ("model_std", "机型"),
+# 基础列：字段名 → 中文表头
+BASE_COLS = [
+    ("platform",      "平台"),
+    ("month",         "月"),
+    ("category_lv1",  "Lv1类目名称"),
+    ("category_lv2",  "Lv2类目名称"),
+    ("category_lv3",  "Lv3类目名称"),
+    ("category_lv4",  "Lv4类目名称"),
+    ("category_lv5",  "Lv5类目名称"),
+    ("item_id",       "宝贝ID"),
+    ("item_url",      "宝贝链接"),
+    ("item_name",     "宝贝名称"),
+    ("item_image",    "宝贝图片"),
+    ("ref_price",     "参考价格"),
+    ("brand_raw",     "宝贝品牌"),
+    ("shop_name",     "宝贝店铺名称"),
+    ("sales_qty",     "销量"),
+    ("sales_amount",  "销售额"),
+    ("price",         "价格"),
+    ("brand_std",     "品牌"),
+    ("model_code",    "型号"),
 ]
 
-PLATFORM_NAME_MAP = {
-    "JD": "京东",
-    "TM": "天猫",
-    "TB": "淘宝",
-}
+BASE_FIELD_NAMES = [f for f, _ in BASE_COLS]
+BASE_CN_NAMES    = [cn for _, cn in BASE_COLS]
 
 
-def export_clean_job(
+def export_match_job(
     db: Session,
     clean_job_id: int,
     filename_prefix: str = "已处理数据",
-    split_by_platform: bool = True,
 ) -> list[dict]:
     """
-    生成导出文件，返回文件列表 [{"filename": ..., "path": ..., "token": ...}]
+    生成导出文件，返回 [{"filename": ..., "token": ..., "path": ..., "rows": ..., "pending_rows": ...}]
     """
-    records = db.query(CleanedDataRecord).filter(
-        CleanedDataRecord.clean_job_id == clean_job_id
-    ).all()
+    # ── 1. 查 metadata_specs 定义规格列顺序 ─────────────────────
+    spec_defs = db.query(MetadataSpec).order_by(MetadataSpec.id).all()
+    spec_names = [s.spec_name for s in spec_defs]
 
-    if not records:
+    # ── 2. 查已匹配 / 已确认的条目 ───────────────────────────────
+    matched_rows = (
+        db.query(MatchResult, RawDataRecord, ModelRecord)
+        .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
+        .join(ModelRecord,   MatchResult.model_id     == ModelRecord.id)
+        .filter(
+            MatchResult.clean_job_id == clean_job_id,
+            MatchResult.match_status.in_(["matched", "confirmed"]),
+        )
+        .all()
+    )
+
+    # ── 3. 批量拉取规格值 {model_id: {spec_name: spec_value}} ────
+    model_ids = list({mr.model_id for mr, _, _ in matched_rows})
+    spec_map: dict[int, dict[str, str]] = {}
+    if model_ids:
+        spec_rows = (
+            db.query(ModelSpec)
+            .filter(ModelSpec.model_id.in_(model_ids))
+            .all()
+        )
+        for s in spec_rows:
+            spec_map.setdefault(s.model_id, {})[s.spec_name] = s.spec_value or ""
+
+    # ── 4. 按 category_name 分组构建数据行 ───────────────────────
+    category_data: dict[str, list[dict]] = {}
+    for mr, rd, m in matched_rows:
+        row: dict = {}
+        for field in BASE_FIELD_NAMES:
+            if field == "brand_std":
+                row[field] = rd.brand_std or rd.brand_raw or ""
+            elif field == "model_code":
+                row[field] = m.model_code or ""
+            else:
+                row[field] = getattr(rd, field, None)
+
+        model_specs = spec_map.get(mr.model_id, {})
+        for sn in spec_names:
+            row[sn] = model_specs.get(sn, "")
+
+        cat = m.category_name or "未知品类"
+        category_data.setdefault(cat, []).append(row)
+
+    # ── 5. 查待确认条目 ──────────────────────────────────────────
+    pending_rows = (
+        db.query(MatchResult, RawDataRecord)
+        .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
+        .filter(
+            MatchResult.clean_job_id == clean_job_id,
+            MatchResult.match_status == "pending",
+        )
+        .all()
+    )
+    pending_data: list[dict] = []
+    for mr, rd in pending_rows:
+        row = {}
+        for field in BASE_FIELD_NAMES:
+            if field in ("brand_std", "model_code"):
+                row[field] = ""
+            else:
+                row[field] = getattr(rd, field, None)
+        pending_data.append(row)
+
+    # ── 6. 写 Excel（多 Sheet）────────────────────────────────────
+    if not category_data and not pending_data:
         return []
 
-    # 转为 DataFrame
-    field_names = [f for f, _ in PROCESSED_COLUMNS]
-    rows = []
-    for r in records:
-        rows.append({f: getattr(r, f, None) for f in field_names})
-    df = pd.DataFrame(rows)
-
-    # 重命名为中文列名
-    df = df.rename(columns={f: cn for f, cn in PROCESSED_COLUMNS})
-    cn_columns = [cn for _, cn in PROCESSED_COLUMNS]
-    df = df[cn_columns]
-
     export_dir = Path(settings.EXPORT_DIR)
-    result_files = []
+    token = uuid.uuid4().hex
+    safe_name = f"{filename_prefix}.xlsx"
+    file_path = export_dir / f"{token}_{safe_name}"
 
-    if split_by_platform:
-        platform_groups = df.groupby("平台")
-        for platform_val, group_df in platform_groups:
-            # 推断平台简称
-            plat_code = str(platform_val)
-            for code, name in PLATFORM_NAME_MAP.items():
-                if name in plat_code:
-                    plat_code = name
-                    break
-            safe_name = f"{filename_prefix} {plat_code}.xlsx"
-            token = uuid.uuid4().hex
-            file_path = export_dir / f"{token}_{safe_name}"
-            group_df.to_excel(file_path, index=False, engine="openpyxl")
-            result_files.append({
-                "filename": safe_name,
-                "token": token,
-                "path": str(file_path),
-                "rows": len(group_df),
-            })
-    else:
-        safe_name = f"{filename_prefix}.xlsx"
-        token = uuid.uuid4().hex
-        file_path = export_dir / f"{token}_{safe_name}"
-        df.to_excel(file_path, index=False, engine="openpyxl")
-        result_files.append({
-            "filename": safe_name,
-            "token": token,
-            "path": str(file_path),
-            "rows": len(df),
-        })
+    total_rows = sum(len(v) for v in category_data.values())
 
-    return result_files
+    with pd.ExcelWriter(str(file_path), engine="openpyxl") as writer:
+        for cat, rows in category_data.items():
+            df = pd.DataFrame(rows, columns=BASE_FIELD_NAMES + spec_names)
+            df.columns = BASE_CN_NAMES + spec_names
+            df.to_excel(writer, sheet_name=cat[:31], index=False)
+
+        if pending_data:
+            df_pending = pd.DataFrame(pending_data, columns=BASE_FIELD_NAMES)
+            df_pending.columns = BASE_CN_NAMES
+            df_pending.to_excel(writer, sheet_name="待确认", index=False)
+
+    return [{
+        "filename": safe_name,
+        "token": token,
+        "path": str(file_path),
+        "rows": total_rows,
+        "pending_rows": len(pending_data),
+    }]

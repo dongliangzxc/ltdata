@@ -177,3 +177,191 @@ class PaginatedResponse(BaseModel):
     page: int
     page_size: int
     items: list
+
+
+# ─────────────────────────── 元数据规格 ───────────────────────────
+
+class MetadataSpec(Base):
+    __tablename__ = "metadata_specs"
+
+    id             = Column(Integer, primary_key=True, index=True)
+    category_code  = Column(String(100), nullable=False)
+    spec_name      = Column(String(200), nullable=False)
+    spec_type      = Column(String(50),  nullable=False)
+    spec_values    = Column(Text)                         # 逗号分隔
+    required       = Column(Integer, default=0)           # 0/1
+    decimal_places = Column(Integer, default=None)
+    single_select  = Column(Integer, default=1)           # 0/1
+    created_at     = Column(DateTime, default=datetime.utcnow)
+    updated_at     = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class MetadataSpecIn(BaseModel):
+    category_code:  str
+    spec_name:      str
+    spec_type:      str
+    spec_values:    Optional[str] = None
+    required:       bool = False
+    decimal_places: Optional[int] = None
+    single_select:  bool = True
+
+
+class MetadataSpecOut(BaseModel):
+    id:             int
+    category_code:  str
+    spec_name:      str
+    spec_type:      str
+    spec_values:    Optional[str]
+    required:       bool
+    decimal_places: Optional[int]
+    single_select:  bool
+    created_at:     datetime
+    updated_at:     datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ─────────────────────────── 型号主信息 ───────────────────────────
+
+class ModelRecord(Base):
+    __tablename__ = "models"
+
+    id            = Column(Integer, primary_key=True, index=True)
+    brand_code    = Column(String(100), nullable=False)
+    model_code    = Column(String(100), nullable=False)
+    category_name = Column(String(200))
+    brand_name    = Column(String(200))
+    model_name    = Column(String(200))
+    launch_year   = Column(Integer)
+    launch_month  = Column(Integer)
+    launch_week   = Column(Integer)
+    launch_price  = Column(Numeric(12, 2))
+    url           = Column(Text)
+    created_at    = Column(DateTime, default=datetime.utcnow)
+    updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    specs = relationship("ModelSpec", back_populates="model", cascade="all, delete-orphan")
+
+
+class ModelSpec(Base):
+    __tablename__ = "model_specs"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    model_id   = Column(Integer, ForeignKey("models.id"), nullable=False)
+    spec_name  = Column(String(200), nullable=False)
+    spec_value = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    model = relationship("ModelRecord", back_populates="specs")
+
+
+class ModelSpecIn(BaseModel):
+    spec_name:  str
+    spec_value: Optional[str] = None
+
+
+class ModelSpecOut(BaseModel):
+    id:         int
+    spec_name:  str
+    spec_value: Optional[str]
+
+    model_config = {"from_attributes": True}
+
+
+
+# ─────────────────────────── 型号匹配结果 ───────────────────────────
+
+class MatchResult(Base):
+    __tablename__ = "match_results"
+
+    id           = Column(Integer, primary_key=True, index=True)
+    clean_job_id = Column(Integer, nullable=False)
+    raw_data_id  = Column(Integer, nullable=False)
+    model_id     = Column(Integer)
+    match_status = Column(String(20), default="pending")  # matched/pending/confirmed/excluded
+    matched_by   = Column(String(20), default="auto")     # auto/manual
+    created_at   = Column(DateTime, default=datetime.utcnow)
+    updated_at   = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class MatchResultOut(BaseModel):
+    id:           int
+    clean_job_id: int
+    raw_data_id:  int
+    model_id:     Optional[int]
+    match_status: str
+    matched_by:   str
+    # 关联字段（join 查询后填充）
+    item_name:  Optional[str] = None
+    brand_raw:  Optional[str] = None
+    model_code: Optional[str] = None
+    brand_code: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
+class MatchSummary(BaseModel):
+    clean_job_id: int
+    total:     int
+    matched:   int
+    pending:   int
+    confirmed: int
+    excluded:  int
+
+
+# ─────────────────────────── 发布任务 ───────────────────────────
+
+class PublishJob(Base):
+    __tablename__ = "publish_jobs"
+
+    id              = Column(Integer, primary_key=True, index=True)
+    clean_job_id    = Column(Integer, nullable=False)
+    status          = Column(String(20), default="done")
+    published_count = Column(Integer, default=0)
+    note            = Column(String(500))
+    created_at      = Column(DateTime, default=datetime.utcnow)
+
+
+class PublishJobOut(BaseModel):
+    id:              int
+    clean_job_id:    int
+    status:          str
+    published_count: int
+    note:            Optional[str]
+    created_at:      datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ModelIn(BaseModel):
+    brand_code:    str
+    model_code:    str
+    category_name: Optional[str] = None
+    brand_name:    Optional[str] = None
+    model_name:    Optional[str] = None
+    launch_year:   Optional[int] = None
+    launch_month:  Optional[int] = None
+    launch_week:   Optional[int] = None
+    launch_price:  Optional[float] = None
+    url:           Optional[str] = None
+    specs:         list[ModelSpecIn] = []
+
+
+class ModelOut(BaseModel):
+    id:            int
+    brand_code:    str
+    model_code:    str
+    category_name: Optional[str]
+    brand_name:    Optional[str]
+    model_name:    Optional[str]
+    launch_year:   Optional[int]
+    launch_month:  Optional[int]
+    launch_week:   Optional[int]
+    launch_price:  Optional[float]
+    url:           Optional[str]
+    specs:         list[ModelSpecOut] = []
+    created_at:    datetime
+    updated_at:    datetime
+
+    model_config = {"from_attributes": True}

@@ -4,13 +4,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.core.config import settings
 from app.models.database import Base, engine
-from app.api import upload, rawdata, clean, export
+from app.models.analytics_db import AnalyticsBase, analytics_engine
+from app.api import upload, rawdata, clean, export, metadata, models_api, match_api, publish_api
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 启动时自动建表（开发环境简化用，生产用 alembic）
     Base.metadata.create_all(bind=engine)
+    AnalyticsBase.metadata.create_all(bind=analytics_engine)
     yield
 
 
@@ -37,6 +39,10 @@ app.include_router(upload.router)
 app.include_router(rawdata.router)
 app.include_router(clean.router)
 app.include_router(export.router)
+app.include_router(metadata.router)
+app.include_router(models_api.router)
+app.include_router(match_api.router)
+app.include_router(publish_api.router)
 
 
 @app.get("/health")

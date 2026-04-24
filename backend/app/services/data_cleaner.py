@@ -1,10 +1,8 @@
 """
 数据清洗服务：
-1. 按品牌白名单过滤
-2. 去重（同 item_id 同月份保留销量最大记录）
-3. 品牌标准化补全（brand_std 为空时用 brand_raw 填充）
+1. 去重（同 item_id + month + shop_name 保留第一条）
+2. brand_std 补全（brand_std 为空时用 brand_raw 填充）
 """
-from typing import Optional
 from sqlalchemy.orm import Session
 from app.models.schemas import RawDataRecord, CleanedDataRecord
 
@@ -16,24 +14,15 @@ def run_clean(
     rules: dict,
 ) -> int:
     """执行清洗逻辑，返回清洗后写入的行数"""
-    filter_brands: list[str] = [b.upper().strip() for b in rules.get("filter_brands", [])]
     dedup: bool = rules.get("dedup", True)
 
-    # 查询原始数据
-    q = db.query(RawDataRecord).filter(RawDataRecord.file_id.in_(file_ids))
-    records = q.all()
+    records = db.query(RawDataRecord).filter(RawDataRecord.file_id.in_(file_ids)).all()
 
     cleaned: list[CleanedDataRecord] = []
     seen_keys: set = set()
 
     for r in records:
-        brand = (r.brand_std or r.brand_raw or "").upper().strip()
-
-        # 品牌白名单过滤（白名单为空则不过滤）
-        if filter_brands and brand not in filter_brands:
-            continue
-
-        # 去重 key：item_id + month
+        # 去重 key：item_id + month + shop_name
         if dedup:
             key = (r.item_id, r.month, r.shop_name)
             if key in seen_keys:

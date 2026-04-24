@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api/clean", tags=["clean"])
 def run_clean_job(payload: dict, db: Session = Depends(get_db)):
     """
     执行数据清洗任务。
-    payload: { "file_ids": [1,2], "rules": { "filter_brands": [], "dedup": true } }
+    payload: { "file_ids": [1,2], "rules": { "dedup": true } }
     """
     file_ids: list[int] = payload.get("file_ids", [])
     rules: dict = payload.get("rules", {"dedup": True})

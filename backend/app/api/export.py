@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from app.models.database import get_db
 from app.models.schemas import CleanJobRecord
-from app.services.exporter import export_clean_job
+from app.services.exporter import export_match_job
 from app.core.config import settings
 
 router = APIRouter(prefix="/api/export", tags=["export"])
@@ -21,13 +21,11 @@ def trigger_export(payload: dict, db: Session = Depends(get_db)):
     触发导出。
     payload: {
         "clean_job_id": 1,
-        "filename_prefix": "Soundbar 7-8月已处理",
-        "split_by_platform": true
+        "filename_prefix": "Soundbar 7-8月已处理"
     }
     """
     clean_job_id: int = payload.get("clean_job_id")
     filename_prefix: str = payload.get("filename_prefix", "已处理数据")
-    split_by_platform: bool = payload.get("split_by_platform", True)
 
     if not clean_job_id:
         raise HTTPException(status_code=400, detail="clean_job_id 不能为空")
@@ -36,9 +34,9 @@ def trigger_export(payload: dict, db: Session = Depends(get_db)):
     if not job:
         raise HTTPException(status_code=404, detail="清洗任务不存在")
 
-    files = export_clean_job(db, clean_job_id, filename_prefix, split_by_platform)
+    files = export_match_job(db, clean_job_id, filename_prefix)
     if not files:
-        raise HTTPException(status_code=404, detail="无可导出数据")
+        raise HTTPException(status_code=404, detail="无可导出数据，请先执行型号匹配")
 
     # 注册 token
     for f in files:
@@ -46,7 +44,7 @@ def trigger_export(payload: dict, db: Session = Depends(get_db)):
 
     return {
         "files": [
-            {"filename": f["filename"], "token": f["token"], "rows": f["rows"]}
+            {"filename": f["filename"], "token": f["token"], "rows": f["rows"], "pending_rows": f.get("pending_rows", 0)}
             for f in files
         ]
     }

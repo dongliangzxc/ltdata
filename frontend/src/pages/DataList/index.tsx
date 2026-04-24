@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import {
   Card, Table, Select, Input, Row, Col, Statistic, Space, Tag
 } from 'antd'
-import type { TableProps } from 'antd'
+import type { TableProps, TableColumnType } from 'antd'
 import {
   ShoppingCartOutlined, DollarOutlined, TagsOutlined, AppstoreOutlined
 } from '@ant-design/icons'
@@ -13,7 +13,55 @@ const PLATFORM_LABEL: Record<string, string> = { JD: '京东', TM: '天猫', TB:
 
 const renderVal = (v: unknown) => (v == null || v === '' ? '-' : String(v))
 
-const tableColumns = [
+// 渲染品牌：brand_std 优先，为空则 fallback 到 brand_raw
+const renderBrand = (v: unknown, row: Record<string, unknown>) => {
+  const val = v || row.brand_raw
+  return val == null || val === '' ? '-' : String(val)
+}
+
+// 可拖拽列宽的表头渲染器
+function ResizableTitle(props: React.ThHTMLAttributes<HTMLTableCellElement> & { width?: number; onResize?: (w: number) => void }) {
+  const { onResize, width, ...restProps } = props
+  const startX = useRef(0)
+  const startW = useRef(0)
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    startX.current = e.clientX
+    startW.current = width ?? 100
+
+    const onMouseMove = (me: MouseEvent) => {
+      const newW = Math.max(50, startW.current + me.clientX - startX.current)
+      onResize?.(newW)
+    }
+    const onMouseUp = () => {
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mouseup', onMouseUp)
+    }
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
+  }, [width, onResize])
+
+  if (!onResize) return <th {...restProps} />
+
+  return (
+    <th {...restProps} style={{ ...restProps.style, position: 'relative' }}>
+      {restProps.children}
+      <span
+        onMouseDown={handleMouseDown}
+        style={{
+          position: 'absolute', right: 0, top: 0, bottom: 0, width: 6,
+          cursor: 'col-resize', zIndex: 1,
+          background: 'transparent',
+        }}
+      />
+    </th>
+  )
+}
+
+type ColDef = TableColumnType<Record<string, unknown>> & { dataIndex?: string }
+
+const BASE_COLUMNS: ColDef[] = [
   {
     title: '平台', dataIndex: 'platform', width: 90, fixed: 'left' as const,
     render: (v: string) => {
@@ -23,7 +71,7 @@ const tableColumns = [
     }
   },
   { title: '月份', dataIndex: 'month', width: 90, sorter: true, render: renderVal },
-  { title: '品牌', dataIndex: 'brand_std', width: 110, fixed: 'left' as const, render: renderVal },
+  { title: '品牌', dataIndex: 'brand_std', width: 110, fixed: 'left' as const, render: renderBrand },
   { title: '机型', dataIndex: 'model_std', width: 130, render: renderVal },
   { title: '宝贝名称', dataIndex: 'item_name', ellipsis: true, width: 280, render: renderVal },
   { title: '店铺', dataIndex: 'shop_name', ellipsis: true, width: 200, render: renderVal },
@@ -48,6 +96,7 @@ export default function DataListPage() {
   const [pageSize, setPageSize] = useState(20)
   const [sortBy, setSortBy] = useState<string | undefined>()
   const [sortOrder, setSortOrder] = useState<string>('desc')
+  const [colWidths, setColWidths] = useState<Record<string, number>>({})
 
   const { data: filterOptions } = useRequest(() => getRawFilters().then(r => r.data))
   const { data: filesData } = useRequest(() => listUploadFiles().then(r => r.data))
@@ -69,7 +118,7 @@ export default function DataListPage() {
     setPage(1)
   }
 
-  const handleTableChange: TableProps['onChange'] = (_pagination, _filters, sorter) => {
+  const handleTableChange: TableProps<Record<string, unknown>>['onChange'] = (_pagination, _filters, sorter) => {
     const s = Array.isArray(sorter) ? sorter[0] : sorter
     if (s?.field && s?.order) {
       setSortBy(String(s.field))
@@ -79,6 +128,19 @@ export default function DataListPage() {
     }
     setPage(1)
   }
+
+  const columns = BASE_COLUMNS.map(col => {
+    const key = (col.dataIndex as string) ?? String(col.title)
+    const width = colWidths[key] ?? (col.width as number)
+    return {
+      ...col,
+      width,
+      onHeaderCell: () => ({
+        width,
+        onResize: (w: number) => setColWidths(prev => ({ ...prev, [key]: w })),
+      }),
+    }
+  })
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -127,7 +189,8 @@ export default function DataListPage() {
 
         <Table
           dataSource={tableData?.items ?? []}
-          columns={tableColumns}
+          columns={columns}
+          components={{ header: { cell: ResizableTitle } }}
           rowKey="id"
           size="small"
           loading={loading}

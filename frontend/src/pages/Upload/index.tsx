@@ -59,7 +59,14 @@ const historyColumns = (onDelete: (id: number) => void) => [
 
 export default function UploadPage() {
   const [previewData, setPreviewData] = useState<Record<string, unknown>[]>([])
-  const [previewInfo, setPreviewInfo] = useState<{ filename: string; row_count: number; platform: string; month_range: string } | null>(null)
+  const [previewInfo, setPreviewInfo] = useState<{
+    filename: string
+    row_count: number
+    platform: string
+    month_range: string
+    inserted: number
+    skipped: number
+  } | null>(null)
   const [uploading, setUploading] = useState(false)
   const Dragger = Upload.Dragger
 
@@ -74,9 +81,9 @@ export default function UploadPage() {
     formData.append('file', file)
     try {
       const res = await uploadFile(formData)
-      const { preview, filename, row_count, platform, month_range } = res.data
+      const { preview, filename, row_count, platform, month_range, inserted, skipped } = res.data
       setPreviewData(preview)
-      setPreviewInfo({ filename, row_count, platform, month_range })
+      setPreviewInfo({ filename, row_count, platform, month_range, inserted: inserted ?? row_count, skipped: skipped ?? 0 })
       message.success(`上传成功，共解析 ${row_count} 条数据`)
       refreshFiles()
     } catch {
@@ -96,23 +103,21 @@ export default function UploadPage() {
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <Card>
-        <Spin spinning={uploading} tip="正在解析文件，请稍候...">
-          <Dragger
-            accept=".xlsx,.xls"
-            multiple={false}
-            beforeUpload={handleUpload}
-            showUploadList={false}
-            disabled={uploading}
-          >
-            <p className="ant-upload-drag-icon">
-              {uploading ? <Spin /> : <InboxOutlined />}
-            </p>
-            <p className="ant-upload-text">
-              {uploading ? '正在上传并解析中...' : '点击或拖拽 Excel 文件至此上传'}
-            </p>
-            <p className="ant-upload-hint">支持 .xlsx / .xls 格式，兼容京东 / 天猫 / 淘宝原始数据格式</p>
-          </Dragger>
-        </Spin>
+        <Dragger
+          accept=".xlsx,.xls"
+          multiple={false}
+          beforeUpload={handleUpload}
+          showUploadList={false}
+          disabled={uploading}
+        >
+          <p className="ant-upload-drag-icon">
+            {uploading ? <Spin /> : <InboxOutlined />}
+          </p>
+          <p className="ant-upload-text">
+            {uploading ? '正在上传并解析中...' : '点击或拖拽 Excel 文件至此上传'}
+          </p>
+          <p className="ant-upload-hint">支持 .xlsx / .xls 格式，兼容京东 / 天猫 / 淘宝原始数据格式</p>
+        </Dragger>
       </Card>
 
       {previewInfo && (
@@ -134,7 +139,7 @@ export default function UploadPage() {
           <Alert
             type="info"
             showIcon
-            message={`文件已成功入库，共 ${previewInfo.row_count} 条数据。可前往「原始数据」页面查看完整数据，或前往「数据清洗」进行处理。`}
+            message={`文件已成功入库，写入 ${previewInfo.inserted} 条数据${previewInfo.skipped > 0 ? `，跳过重复 ${previewInfo.skipped} 条` : ''}。可前往「原始数据」页面查看完整数据，或前往「数据清洗」进行处理。`}
             style={{ marginBottom: 12 }}
           />
           <Table

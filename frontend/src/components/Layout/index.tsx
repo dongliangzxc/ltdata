@@ -5,6 +5,9 @@ import {
   DatabaseOutlined,
   ClearOutlined,
   ExportOutlined,
+  ProfileOutlined,
+  AppstoreAddOutlined,
+  AimOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 
@@ -12,10 +15,13 @@ const { Sider, Header, Content } = Layout
 const { Title } = Typography
 
 const menuItems = [
-  { key: '/upload', icon: <UploadOutlined />, label: '数据上传' },
-  { key: '/rawdata', icon: <DatabaseOutlined />, label: '原始数据' },
-  { key: '/clean', icon: <ClearOutlined />, label: '数据清洗' },
-  { key: '/export', icon: <ExportOutlined />, label: '数据导出' },
+  { key: '/upload',   icon: <UploadOutlined />,        label: '数据上传' },
+  { key: '/rawdata',  icon: <DatabaseOutlined />,      label: '原始数据' },
+  { key: '/metadata', icon: <ProfileOutlined />,       label: '元数据管理' },
+  { key: '/models',   icon: <AppstoreAddOutlined />,   label: '型号管理' },
+  { key: '/clean',    icon: <ClearOutlined />,         label: '数据清洗' },
+  { key: '/match',    icon: <AimOutlined />,           label: '匹配确认' },
+  { key: '/export',   icon: <ExportOutlined />,        label: '数据导出' },
 ]
 
 interface Props {

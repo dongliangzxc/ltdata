@@ -2,6 +2,7 @@ import os
 import shutil
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
+from sqlalchemy import tuple_
 from sqlalchemy.orm import Session
 from app.models.database import get_db
 from app.models.schemas import UploadFileRecord, RawDataRecord, UploadFileOut, RawDataOut
@@ -13,7 +14,7 @@ router = APIRouter(prefix="/api/upload", tags=["upload"])
 
 @router.post("", response_model=dict)
 async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    """上传原始数据 Excel 文件，解析后写入数据库"""
+    """上传原始数据 Excel 文件，解析后写入数据库（相同 item_id+month+platform 自动去重）"""
     if not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="只支持 .xlsx / .xls 格式文件")
 
@@ -28,12 +29,34 @@ async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db
         os.remove(save_path)
         raise HTTPException(status_code=422, detail=f"文件解析失败: {str(e)}")
 
+    # 去重：查出已存在的 (item_id, month, platform) 组合
+    keys = {
+        (str(r.get("item_id")), r.get("month"), r.get("platform"))
+        for r in records
+        if r.get("item_id") is not None
+    }
+    if keys:
+        existing_rows = db.query(
+            RawDataRecord.item_id, RawDataRecord.month, RawDataRecord.platform
+        ).filter(
+            tuple_(RawDataRecord.item_id, RawDataRecord.month, RawDataRecord.platform).in_(keys)
+        ).all()
+        existing_set = {(e.item_id, e.month, e.platform) for e in existing_rows}
+        to_insert = [
+            r for r in records
+            if (str(r.get("item_id")), r.get("month"), r.get("platform")) not in existing_set
+        ]
+    else:
+        to_insert = records
+
+    skipped = len(records) - len(to_insert)
+
     # 写入 upload_files 表
     file_record = UploadFileRecord(
         filename=file.filename,
         platform=platform,
         month_range=month_range,
-        row_count=len(records),
+        row_count=len(to_insert),
         status="done",
     )
     db.add(file_record)
@@ -41,7 +64,7 @@ async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db
 
     # 批量写入 raw_data
     batch = []
-    for r in records:
+    for r in to_insert:
         batch.append(RawDataRecord(
             file_id=file_record.id,
             platform=r.get("platform"),
@@ -69,7 +92,7 @@ async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db
     db.commit()
     db.refresh(file_record)
 
-    # 返回预览（前50行）
+    # 返回预览（前50行，取原始解析数据）
     preview = records[:50]
     return {
         "file_id": file_record.id,
@@ -77,8 +100,11 @@ async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db
         "platform": platform,
         "month_range": month_range,
         "row_count": len(records),
+        "inserted": len(to_insert),
+        "skipped": skipped,
         "preview": preview,
     }
+
 
 
 @router.get("/files", response_model=list[UploadFileOut])

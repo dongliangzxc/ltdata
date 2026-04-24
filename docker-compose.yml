@@ -10,6 +10,7 @@ services:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
+      - ./sql/docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uluotu", "-pluotu123"]
       interval: 5s
@@ -22,6 +23,7 @@ services:
       - "8000:8000"
     environment:
       DATABASE_URL: mysql+pymysql://luotu:luotu123@mysql:3306/luotu
+      ANALYTICS_DATABASE_URL: mysql+pymysql://luotu:luotu123@mysql:3306/luotu_analytics
       UPLOAD_DIR: /app/uploads
       EXPORT_DIR: /app/exports
     volumes:

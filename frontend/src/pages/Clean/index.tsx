@@ -1,17 +1,18 @@
 import { useState } from 'react'
 import {
   Card, Checkbox, Switch, Button, Table, Tag, Modal, Row, Col,
-  Space, Typography, Input, message, Alert, Statistic
+  Space, Typography, message, Alert, Statistic
 } from 'antd'
-import { PlayCircleOutlined, EyeOutlined } from '@ant-design/icons'
+import { PlayCircleOutlined, EyeOutlined, AimOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
+import { useNavigate } from 'react-router-dom'
 import {
   listUploadFiles, listCleanJobs, runCleanJob, previewCleanJob
 } from '../../services/api'
 
 const { Text } = Typography
 
-const jobColumns = (onPreview: (id: number) => void) => [
+const jobColumns = (onPreview: (id: number) => void, onMatch: (id: number) => void) => [
   { title: 'ID', dataIndex: 'id', width: 60 },
   {
     title: '文件', dataIndex: 'file_ids', width: 120,
@@ -28,9 +29,14 @@ const jobColumns = (onPreview: (id: number) => void) => [
     render: (v: string) => new Date(v).toLocaleString('zh-CN')
   },
   {
-    title: '操作', width: 80,
-    render: (_: unknown, row: { id: number }) => (
-      <Button type="link" icon={<EyeOutlined />} size="small" onClick={() => onPreview(row.id)}>预览</Button>
+    title: '操作', width: 140,
+    render: (_: unknown, row: { id: number; status: string }) => (
+      <Space size={4}>
+        <Button type="link" icon={<EyeOutlined />} size="small" onClick={() => onPreview(row.id)}>预览</Button>
+        {row.status === 'done' && (
+          <Button type="link" icon={<AimOutlined />} size="small" onClick={() => onMatch(row.id)}>执行匹配</Button>
+        )}
+      </Space>
     )
   },
 ]
@@ -39,7 +45,6 @@ const previewCols = [
   { title: '平台', dataIndex: 'platform', width: 90 },
   { title: '月份', dataIndex: 'month', width: 90 },
   { title: '品牌', dataIndex: 'brand_std', width: 110 },
-  { title: '机型', dataIndex: 'model_std', width: 130 },
   { title: '宝贝名称', dataIndex: 'item_name', ellipsis: true },
   { title: '销量', dataIndex: 'sales_qty', width: 80 },
   {
@@ -49,8 +54,8 @@ const previewCols = [
 ]
 
 export default function CleanPage() {
+  const navigate = useNavigate()
   const [selectedFileIds, setSelectedFileIds] = useState<number[]>([])
-  const [brandInput, setBrandInput] = useState('')
   const [dedup, setDedup] = useState(true)
   const [running, setRunning] = useState(false)
   const [previewJobId, setPreviewJobId] = useState<number | null>(null)
@@ -68,10 +73,7 @@ export default function CleanPage() {
     if (!selectedFileIds.length) { message.warning('请先选择文件'); return }
     setRunning(true)
     try {
-      const filterBrands = brandInput.trim()
-        ? brandInput.split(/[,，\s]+/).map(s => s.trim()).filter(Boolean)
-        : []
-      await runCleanJob({ file_ids: selectedFileIds, rules: { filter_brands: filterBrands, dedup } })
+      await runCleanJob({ file_ids: selectedFileIds, rules: { dedup } })
       message.success('清洗完成')
       refreshJobs()
     } finally {
@@ -88,10 +90,10 @@ export default function CleanPage() {
         message="数据清洗说明"
         description={
           <ul style={{ margin: '4px 0', paddingLeft: 20 }}>
-            <li><b>品牌白名单</b>：只保留指定品牌的数据，留空则保留全部品牌</li>
-            <li><b>去重</b>：同一商品（相同 item_id）同一月份若出现多条，只保留销量最大的一条</li>
+            <li><b>去重</b>：同一商品（相同 item_id）同月份同店铺只保留第一条</li>
             <li><b>品牌标准化</b>：自动将 brand_std 为空的记录用原始品牌名补全</li>
             <li>清洗结果独立保存，不影响原始数据，可反复清洗</li>
+            <li>清洗完成后，点击"执行匹配"前往匹配确认页面进行型号匹配</li>
           </ul>
         }
       />
@@ -118,19 +120,10 @@ export default function CleanPage() {
           <Col span={12}>
             <Space direction="vertical" size={16} style={{ width: '100%' }}>
               <div>
-                <Text strong>品牌白名单（留空则保留全部）</Text>
-                <Input
-                  style={{ marginTop: 8 }}
-                  placeholder="如：BOSE,JBL,EDIFIER（逗号或空格分隔）"
-                  value={brandInput}
-                  onChange={e => setBrandInput(e.target.value)}
-                />
-              </div>
-              <div>
                 <Space>
                   <Text strong>去重</Text>
                   <Switch checked={dedup} onChange={setDedup} />
-                  <Text type="secondary">（同 item_id + 月份保留销量最大记录）</Text>
+                  <Text type="secondary">（同 item_id + 月份 + 店铺保留第一条）</Text>
                 </Space>
               </div>
               <Button
@@ -161,7 +154,10 @@ export default function CleanPage() {
         )}
         <Table
           dataSource={jobsData ?? []}
-          columns={jobColumns(id => { setPreviewJobId(id); setPreviewPage(1) })}
+          columns={jobColumns(
+            id => { setPreviewJobId(id); setPreviewPage(1) },
+            id => navigate(`/match?job_id=${id}`)
+          )}
           rowKey="id"
           size="small"
           pagination={{ pageSize: 10 }}

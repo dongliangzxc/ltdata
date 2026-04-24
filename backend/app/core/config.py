@@ -4,6 +4,7 @@ from pathlib import Path
 
 class Settings(BaseSettings):
     DATABASE_URL: str = "mysql+pymysql://luotu:luotu123@localhost:3306/luotu"
+    ANALYTICS_DATABASE_URL: str = "mysql+pymysql://luotu:luotu123@localhost:3306/luotu_analytics"
     UPLOAD_DIR: str = "./uploads"
     EXPORT_DIR: str = "./exports"
     MAX_UPLOAD_SIZE_MB: int = 50

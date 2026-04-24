@@ -45,7 +45,39 @@ export const previewCleanJob = (jobId: number, params?: Record<string, unknown>)
 export const triggerExport = (payload: {
   clean_job_id: number
   filename_prefix: string
-  split_by_platform: boolean
 }) => api.post('/export', payload)
 
 export const getDownloadUrl = (token: string) => `/api/export/download/${token}`
+
+// ─── Metadata ──────────────────────────────────────────────
+export const importMetadata = (formData: FormData) =>
+  api.post('/metadata/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+export const listMetadata = (params: Record<string, unknown>) => api.get('/metadata', { params })
+export const createMetadata = (data: unknown) => api.post('/metadata', data)
+export const updateMetadata = (id: number, data: unknown) => api.put(`/metadata/${id}`, data)
+export const deleteMetadata = (id: number) => api.delete(`/metadata/${id}`)
+
+// ─── Models ────────────────────────────────────────────────
+export const importModels = (formData: FormData) =>
+  api.post('/models/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+export const listModels = (params: Record<string, unknown>) => api.get('/models', { params })
+export const getModelDetail = (id: number) => api.get(`/models/${id}`)
+export const createModel = (data: unknown) => api.post('/models', data)
+export const updateModel = (id: number, data: unknown) => api.put(`/models/${id}`, data)
+export const deleteModel = (id: number) => api.delete(`/models/${id}`)
+
+// ─── Match ─────────────────────────────────────────────────
+export const runMatch = (clean_job_id: number) =>
+  api.post('/match/run', { clean_job_id })
+export const getMatchSummary = (clean_job_id: number) =>
+  api.get(`/match/${clean_job_id}/summary`)
+export const listPendingMatches = (clean_job_id: number, params?: Record<string, unknown>) =>
+  api.get(`/match/${clean_job_id}/pending`, { params })
+export const confirmMatch = (match_id: number, data: { model_id?: number; excluded?: boolean }) =>
+  api.put(`/match/confirm/${match_id}`, data)
+
+// ─── Publish ────────────────────────────────────────────────
+export const runPublish = (clean_job_id: number) =>
+  api.post('/publish/run', { clean_job_id })
+export const listPublishJobs = (clean_job_id?: number) =>
+  api.get('/publish/jobs', { params: clean_job_id != null ? { clean_job_id } : {} })

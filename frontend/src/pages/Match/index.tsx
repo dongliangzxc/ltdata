@@ -244,7 +244,7 @@ export default function MatchPage() {
         </Row>
       </Card>
 
-      {summary && (
+      {summary && summary.total > 0 && (
         <Card>
           <Row gutter={24}>
             <Col span={4}><Statistic title="总条数" value={summary.total} /></Col>
@@ -294,7 +294,13 @@ export default function MatchPage() {
         </Card>
       )}
 
-      {summary && summary.pending === 0 && (
+      {summary && summary.total === 0 && (
+        <Card>
+          <Text type="secondary">该任务尚未执行匹配，请点击「执行匹配」开始匹配。</Text>
+        </Card>
+      )}
+
+      {summary && summary.total > 0 && summary.pending === 0 && (
         <Card>
           <Text type="secondary">暂无待确认条目，可点击「发布到分析库」发布已匹配结果。</Text>
         </Card>

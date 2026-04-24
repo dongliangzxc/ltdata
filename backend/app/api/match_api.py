@@ -43,10 +43,13 @@ def run_match_job(payload: dict, db: Session = Depends(get_db)):
 
 @router.get("/{clean_job_id}/summary", response_model=MatchSummary)
 def get_match_summary(clean_job_id: int, db: Session = Depends(get_db)):
-    """查看某次清洗任务的匹配统计"""
+    """查看某次清洗任务的匹配统计，无记录时返回全零（不报错）"""
     rows = db.query(MatchResult).filter(MatchResult.clean_job_id == clean_job_id).all()
     if not rows:
-        raise HTTPException(status_code=404, detail="该清洗任务暂无匹配结果，请先执行匹配")
+        return MatchSummary(
+            clean_job_id=clean_job_id,
+            total=0, matched=0, pending=0, confirmed=0, excluded=0,
+        )
 
     total = len(rows)
     status_count: dict[str, int] = {}

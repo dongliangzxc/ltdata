@@ -57,7 +57,7 @@ export default function AppLayout({ children }: Props) {
       >
         <div style={{ padding: '16px 16px 8px', textAlign: 'center' }}>
           <Title level={5} style={{ color: '#fff', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden' }}>
-            {collapsed ? '落土' : '落土数据平台'}
+            {collapsed ? '洛图' : '洛图数据平台'}
           </Title>
         </div>
         <Menu
@@ -78,7 +78,7 @@ export default function AppLayout({ children }: Props) {
           justifyContent: 'space-between',
         }}>
           <Title level={4} style={{ margin: 0, color: '#1677ff' }}>
-            {menuItems.find(m => m.key === location.pathname)?.label ?? '落土数据处理平台'}
+            {menuItems.find(m => m.key === location.pathname)?.label ?? '洛图数据处理平台'}
           </Title>
           <Dropdown
             menu={{

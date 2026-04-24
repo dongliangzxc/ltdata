@@ -37,7 +37,7 @@ export default function LoginPage() {
     }}>
       <Card style={{ width: 380, boxShadow: '0 4px 24px rgba(0,0,0,0.08)' }}>
         <div style={{ textAlign: 'center', marginBottom: 32 }}>
-          <Title level={3} style={{ margin: 0, color: '#1677ff' }}>落土数据处理平台</Title>
+          <Title level={3} style={{ margin: 0, color: '#1677ff' }}>洛图数据处理平台</Title>
         </div>
         <Form layout="vertical" onFinish={handleLogin} size="large">
           <Form.Item name="username" rules={[{ required: true, message: '请输入用户名' }]}>

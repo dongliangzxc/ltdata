@@ -29,7 +29,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="落土数据处理平台", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="洛图数据处理平台", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

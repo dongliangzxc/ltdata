@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react'
 import {
   Card, Table, Button, Input, Space, Popconfirm, Upload, Modal, Form,
-  InputNumber, message, Row, Col, Divider, Typography, Alert, Tag, Collapse
+  InputNumber, message, Row, Col, Divider, Typography, Collapse
 } from 'antd'
 import {
   PlusOutlined, UploadOutlined, EditOutlined, DeleteOutlined,

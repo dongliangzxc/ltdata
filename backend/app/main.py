@@ -10,8 +10,9 @@ from app.models.schemas import User
 from app.api import upload, rawdata, clean, export, metadata, models_api, match_api, publish_api, auth, workbench_api
 
 
-# 不需要鉴权的路径
+# 不需要鉴权的路径（精确匹配或前缀匹配）
 _SKIP_AUTH = {"/api/auth/login", "/health"}
+_SKIP_AUTH_PREFIXES = ("/api/export/download/", "/api/workbench/download/")
 
 
 @asynccontextmanager
@@ -42,7 +43,8 @@ app.add_middleware(
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
-    if request.url.path in _SKIP_AUTH:
+    path = request.url.path
+    if path in _SKIP_AUTH or path.startswith(_SKIP_AUTH_PREFIXES):
         return await call_next(request)
     token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
     if not token or not verify_token(token):

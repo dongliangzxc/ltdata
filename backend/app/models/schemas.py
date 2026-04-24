@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional
 from sqlalchemy import (
     Column, Integer, String, Numeric, Text, DateTime,
-    ForeignKey, JSON
+    ForeignKey, JSON, SmallInteger
 )
 from sqlalchemy.orm import relationship
 from pydantic import BaseModel
@@ -363,5 +363,26 @@ class ModelOut(BaseModel):
     specs:         list[ModelSpecOut] = []
     created_at:    datetime
     updated_at:    datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ─────────────────────────── 用户（登录） ───────────────────────────
+
+class User(Base):
+    __tablename__ = "users"
+
+    id              = Column(Integer, primary_key=True, index=True)
+    username        = Column(String(100), nullable=False, unique=True)
+    hashed_password = Column(String(200), nullable=False)
+    is_active       = Column(SmallInteger, default=1)
+    created_at      = Column(DateTime, default=datetime.utcnow)
+
+
+class UserOut(BaseModel):
+    id:         int
+    username:   str
+    is_active:  int
+    created_at: datetime
 
     model_config = {"from_attributes": True}

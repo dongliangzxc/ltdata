@@ -206,6 +206,15 @@ CREATE TABLE IF NOT EXISTS publish_jobs (
     KEY idx_publish_clean_job (clean_job_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='发布任务记录';
 
+-- 用户表（登录账号，默认创建 admin/luotu123）
+CREATE TABLE IF NOT EXISTS users (
+    id              INT AUTO_INCREMENT PRIMARY KEY,
+    username        VARCHAR(100) NOT NULL UNIQUE COMMENT '用户名',
+    hashed_password VARCHAR(200) NOT NULL        COMMENT 'bcrypt 哈希密码',
+    is_active       TINYINT(1)   NOT NULL DEFAULT 1 COMMENT '是否启用',
+    created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='登录用户';
+
 -- =============================================================
 -- luotu_analytics 分析库（同一 MySQL 实例，独立 database）
 -- =============================================================

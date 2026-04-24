@@ -1,5 +1,7 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom'
 import AppLayout from './components/Layout'
+import PrivateRoute from './components/PrivateRoute'
+import LoginPage from './pages/Login'
 import UploadPage from './pages/Upload'
 import DataListPage from './pages/DataList'
 import CleanPage from './pages/Clean'
@@ -11,18 +13,24 @@ import ModelsPage from './pages/Models'
 export default function App() {
   return (
     <BrowserRouter>
-      <AppLayout>
-        <Routes>
-          <Route path="/" element={<Navigate to="/upload" replace />} />
-          <Route path="/upload" element={<UploadPage />} />
-          <Route path="/rawdata" element={<DataListPage />} />
-          <Route path="/clean" element={<CleanPage />} />
-          <Route path="/match" element={<MatchPage />} />
-          <Route path="/export" element={<ExportPage />} />
-          <Route path="/metadata" element={<MetadataPage />} />
-          <Route path="/models" element={<ModelsPage />} />
-        </Routes>
-      </AppLayout>
+      <Routes>
+        {/* 登录页，不需要布局 */}
+        <Route path="/login" element={<LoginPage />} />
+
+        {/* 受保护的业务路由，统一 AppLayout */}
+        <Route element={<PrivateRoute />}>
+          <Route element={<AppLayout><Outlet /></AppLayout>}>
+            <Route path="/" element={<Navigate to="/upload" replace />} />
+            <Route path="/upload" element={<UploadPage />} />
+            <Route path="/rawdata" element={<DataListPage />} />
+            <Route path="/clean" element={<CleanPage />} />
+            <Route path="/match" element={<MatchPage />} />
+            <Route path="/export" element={<ExportPage />} />
+            <Route path="/metadata" element={<MetadataPage />} />
+            <Route path="/models" element={<ModelsPage />} />
+          </Route>
+        </Route>
+      </Routes>
     </BrowserRouter>
   )
 }

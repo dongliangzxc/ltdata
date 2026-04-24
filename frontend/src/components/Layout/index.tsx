@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Layout, Menu, Typography } from 'antd'
+import { Layout, Menu, Typography, Button, Dropdown } from 'antd'
 import {
   UploadOutlined,
   DatabaseOutlined,
@@ -8,11 +8,13 @@ import {
   ProfileOutlined,
   AppstoreAddOutlined,
   AimOutlined,
+  UserOutlined,
+  LogoutOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 
 const { Sider, Header, Content } = Layout
-const { Title } = Typography
+const { Title, Text } = Typography
 
 const menuItems = [
   { key: '/upload',   icon: <UploadOutlined />,        label: '数据上传' },
@@ -32,6 +34,13 @@ export default function AppLayout({ children }: Props) {
   const navigate = useNavigate()
   const location = useLocation()
   const [collapsed, setCollapsed] = useState(false)
+  const username = localStorage.getItem('username') ?? '用户'
+
+  const handleLogout = () => {
+    localStorage.removeItem('token')
+    localStorage.removeItem('username')
+    navigate('/login', { replace: true })
+  }
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -56,10 +65,35 @@ export default function AppLayout({ children }: Props) {
         />
       </Sider>
       <Layout>
-        <Header style={{ background: '#fff', padding: '0 24px', borderBottom: '1px solid #f0f0f0', display: 'flex', alignItems: 'center' }}>
+        <Header style={{
+          background: '#fff',
+          padding: '0 24px',
+          borderBottom: '1px solid #f0f0f0',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+        }}>
           <Title level={4} style={{ margin: 0, color: '#1677ff' }}>
             {menuItems.find(m => m.key === location.pathname)?.label ?? '落土数据处理平台'}
           </Title>
+          <Dropdown
+            menu={{
+              items: [
+                {
+                  key: 'logout',
+                  icon: <LogoutOutlined />,
+                  label: '退出登录',
+                  danger: true,
+                  onClick: handleLogout,
+                },
+              ],
+            }}
+            placement="bottomRight"
+          >
+            <Button type="text" icon={<UserOutlined />} style={{ color: '#595959' }}>
+              <Text style={{ marginLeft: 4 }}>{username}</Text>
+            </Button>
+          </Dropdown>
         </Header>
         <Content style={{ margin: 24, minHeight: 280 }}>
           {children}

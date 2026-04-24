@@ -6,9 +6,24 @@ const api = axios.create({
   timeout: 60000,
 })
 
+// 请求拦截：自动携带 token
+api.interceptors.request.use(config => {
+  const token = localStorage.getItem('token')
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+})
+
 api.interceptors.response.use(
   (res) => res,
   (err) => {
+    if (err.response?.status === 401) {
+      localStorage.removeItem('token')
+      localStorage.removeItem('username')
+      window.location.href = '/login'
+      return Promise.reject(err)
+    }
     const msg = err.response?.data?.detail || err.response?.data?.message || err.message || '请求失败'
     message.error(msg)
     return Promise.reject(err)

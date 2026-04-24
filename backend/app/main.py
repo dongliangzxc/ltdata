@@ -3,16 +3,29 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.core.config import settings
-from app.models.database import Base, engine
+from app.core.security import verify_token, hash_password
+from app.models.database import Base, engine, SessionLocal
 from app.models.analytics_db import AnalyticsBase, analytics_engine
-from app.api import upload, rawdata, clean, export, metadata, models_api, match_api, publish_api
+from app.models.schemas import User
+from app.api import upload, rawdata, clean, export, metadata, models_api, match_api, publish_api, auth
+
+
+# 不需要鉴权的路径
+_SKIP_AUTH = {"/api/auth/login", "/health"}
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 启动时自动建表（开发环境简化用，生产用 alembic）
     Base.metadata.create_all(bind=engine)
     AnalyticsBase.metadata.create_all(bind=analytics_engine)
+    # 若 users 表为空，自动创建默认管理员 admin/luotu123
+    db = SessionLocal()
+    try:
+        if db.query(User).count() == 0:
+            db.add(User(username="admin", hashed_password=hash_password("luotu123")))
+            db.commit()
+    finally:
+        db.close()
     yield
 
 
@@ -27,6 +40,16 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    if request.url.path in _SKIP_AUTH:
+        return await call_next(request)
+    token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    if not token or not verify_token(token):
+        return JSONResponse(status_code=401, content={"code": 401, "message": "未登录或登录已过期"})
+    return await call_next(request)
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     return JSONResponse(
@@ -35,6 +58,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
+app.include_router(auth.router)
 app.include_router(upload.router)
 app.include_router(rawdata.router)
 app.include_router(clean.router)

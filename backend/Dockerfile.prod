@@ -5,8 +5,21 @@ WORKDIR /app
 # 使用阿里云 pip 镜像加速
 RUN pip install uv -i https://mirrors.aliyun.com/pypi/simple/
 
+# 只安装依赖，不做 editable install（生产环境不需要）
 COPY pyproject.toml .
-RUN uv pip install --system -e . -i https://mirrors.aliyun.com/pypi/simple/
+RUN uv pip install --system \
+    "fastapi>=0.111.0" \
+    "uvicorn[standard]>=0.30.0" \
+    "sqlalchemy>=2.0.0" \
+    "pymysql>=1.1.0" \
+    "alembic>=1.13.0" \
+    "pandas>=2.2.0" \
+    "openpyxl>=3.1.0" \
+    "python-multipart>=0.0.9" \
+    "python-dotenv>=1.0.0" \
+    "pydantic>=2.7.0" \
+    "pydantic-settings>=2.3.0" \
+    -i https://mirrors.aliyun.com/pypi/simple/
 
 COPY . .
 

@@ -96,6 +96,7 @@ export default function MatchPage() {
   const handleRunMatch = async () => {
     if (!selectedJobId) { message.warning('请先选择清洗任务'); return }
     setRunning(true)
+    setSummary(null)   // 清除旧统计，避免展示中间批次的半成品数据
     setMatchProgress({ status: 'running', total: 0, processed: 0, matched: 0, rate: null, eta_seconds: null })
     try {
       await runMatch(selectedJobId)

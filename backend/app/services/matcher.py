@@ -105,8 +105,9 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
     results: list[MatchResult] = []
     matched_count = 0
     BATCH = 500
+    total = len(cleaned_rows)
 
-    for row in cleaned_rows:
+    for i, row in enumerate(cleaned_rows):
         item_upper = _norm(row.item_name)
         best_model: ModelRecord | None = None
 
@@ -166,5 +167,4 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
         db.bulk_save_objects(results)
         db.commit()
 
-    total = len(cleaned_rows)
     return {"total": total, "matched": matched_count, "pending": total - matched_count}

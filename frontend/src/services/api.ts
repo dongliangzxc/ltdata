@@ -92,8 +92,8 @@ export const confirmMatch = (match_id: number, data: { model_id?: number; exclud
   api.put(`/match/confirm/${match_id}`, data)
 
 // ─── Workbench ──────────────────────────────────────────────
-export const getWorkbenchFilters = (clean_job_id: number) =>
-  api.get('/workbench/filters', { params: { clean_job_id } })
+export const getWorkbenchFilters = () =>
+  api.get('/workbench/filters')
 export const queryWorkbenchData = (params: Record<string, unknown>) =>
   api.get('/workbench/data', { params })
 export const exportWorkbenchData = (params: Record<string, unknown>) =>

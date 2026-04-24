@@ -11,6 +11,7 @@ import {
   UserOutlined,
   LogoutOutlined,
   FundOutlined,
+  QuestionCircleOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 
@@ -24,8 +25,9 @@ const menuItems = [
   { key: '/models',     icon: <AppstoreAddOutlined />,   label: '型号管理' },
   { key: '/clean',      icon: <ClearOutlined />,         label: '数据清洗' },
   { key: '/match',      icon: <AimOutlined />,           label: '匹配确认' },
-  { key: '/workbench',  icon: <FundOutlined />,          label: '查询工作台' },
-  { key: '/export',     icon: <ExportOutlined />,        label: '数据导出' },
+  { key: '/workbench',  icon: <FundOutlined />,            label: '查询工作台' },
+  { key: '/export',     icon: <ExportOutlined />,          label: '数据导出' },
+  { key: '/manual',     icon: <QuestionCircleOutlined />,  label: '使用手册' },
 ]
 
 interface Props {

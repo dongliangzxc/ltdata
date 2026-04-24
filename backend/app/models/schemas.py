@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional
 from sqlalchemy import (
     Column, Integer, String, Numeric, Text, DateTime,
-    ForeignKey, JSON, SmallInteger
+    ForeignKey, JSON, SmallInteger, UniqueConstraint
 )
 from sqlalchemy.orm import relationship
 from pydantic import BaseModel
@@ -183,6 +183,9 @@ class PaginatedResponse(BaseModel):
 
 class MetadataSpec(Base):
     __tablename__ = "metadata_specs"
+    __table_args__ = (
+        UniqueConstraint("category_code", "spec_name", name="uq_category_spec"),
+    )
 
     id             = Column(Integer, primary_key=True, index=True)
     category_code  = Column(String(100), nullable=False)
@@ -225,6 +228,9 @@ class MetadataSpecOut(BaseModel):
 
 class ModelRecord(Base):
     __tablename__ = "models"
+    __table_args__ = (
+        UniqueConstraint("brand_code", "model_code", name="uq_model"),
+    )
 
     id            = Column(Integer, primary_key=True, index=True)
     brand_code    = Column(String(100), nullable=False)

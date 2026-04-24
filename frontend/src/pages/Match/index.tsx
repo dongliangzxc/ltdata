@@ -325,6 +325,8 @@ export default function MatchPage() {
       {matchProgress && matchProgress.status === 'error' && (
         <Alert type="error" message={`匹配出错：${matchProgress.error}`} showIcon />
       )}
+
+      {summary && summary.total > 0 && (
         <Card>
           <Row gutter={24}>
             <Col span={4}><Statistic title="总条数" value={summary.total} /></Col>

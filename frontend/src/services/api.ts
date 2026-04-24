@@ -83,7 +83,9 @@ export const deleteModel = (id: number) => api.delete(`/models/${id}`)
 
 // ─── Match ─────────────────────────────────────────────────
 export const runMatch = (clean_job_id: number) =>
-  api.post('/match/run', { clean_job_id }, { timeout: 300_000 })
+  api.post('/match/run', { clean_job_id })
+export const getMatchProgress = (clean_job_id: number) =>
+  api.get(`/match/progress/${clean_job_id}`)
 export const getMatchSummary = (clean_job_id: number) =>
   api.get(`/match/${clean_job_id}/summary`)
 export const listPendingMatches = (clean_job_id: number, params?: Record<string, unknown>) =>

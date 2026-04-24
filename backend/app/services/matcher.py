@@ -18,7 +18,10 @@ def _norm(s: str | None) -> str:
     return (s or "").upper().strip()
 
 
-def run_match(db: Session, clean_job_id: int) -> dict:
+def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
+    """
+    progress_cb(processed: int, total: int, matched: int) — 每批次调用一次
+    """
     # ── 删除旧结果（支持重跑）────────────────────────────────────
     db.query(MatchResult).filter(MatchResult.clean_job_id == clean_job_id).delete(
         synchronize_session=False
@@ -155,6 +158,8 @@ def run_match(db: Session, clean_job_id: int) -> dict:
         if len(results) >= BATCH:
             db.bulk_save_objects(results)
             db.commit()
+            if progress_cb:
+                progress_cb(i + 1, total, matched_count)
             results = []
 
     if results:

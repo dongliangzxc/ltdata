@@ -1,10 +1,12 @@
 """
 型号匹配 API
 """
+import time
+from threading import Thread
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from app.models.database import get_db
+from app.models.database import get_db, SessionLocal
 from app.models.schemas import (
     MatchResult, MatchResultOut, MatchSummary,
     CleanJobRecord, RawDataRecord, ModelRecord,
@@ -14,10 +16,49 @@ from app.services.matcher import run_match
 
 router = APIRouter(prefix="/api/match", tags=["match"])
 
+# ── 进度状态（内存，key=clean_job_id）────────────────────────────────
+# {
+#   clean_job_id: {
+#     "status":    "running" | "done" | "error",
+#     "total":     int,
+#     "processed": int,
+#     "matched":   int,
+#     "started_at": float,
+#     "finished_at": float | None,
+#     "error":     str | None,
+#   }
+# }
+_progress: dict[int, dict] = {}
 
-@router.post("/run", response_model=MatchSummary)
+
+def _run_match_thread(clean_job_id: int):
+    """在独立线程中执行匹配，更新 _progress"""
+    db = SessionLocal()
+    try:
+        _progress[clean_job_id].update(status="running", started_at=time.time())
+
+        def on_progress(processed: int, total: int, matched: int):
+            _progress[clean_job_id].update(
+                processed=processed, total=total, matched=matched
+            )
+
+        stats = run_match(db, clean_job_id, progress_cb=on_progress)
+        _progress[clean_job_id].update(
+            status="done",
+            total=stats["total"],
+            processed=stats["total"],
+            matched=stats["matched"],
+            finished_at=time.time(),
+        )
+    except Exception as e:
+        _progress[clean_job_id].update(status="error", error=str(e), finished_at=time.time())
+    finally:
+        db.close()
+
+
+@router.post("/run")
 def run_match_job(payload: dict, db: Session = Depends(get_db)):
-    """对清洗任务执行型号匹配，返回匹配统计"""
+    """启动后台匹配任务，立即返回。通过 /progress/{id} 轮询进度。"""
     clean_job_id: int = payload.get("clean_job_id")
     if not clean_job_id:
         raise HTTPException(status_code=400, detail="clean_job_id 不能为空")
@@ -26,19 +67,45 @@ def run_match_job(payload: dict, db: Session = Depends(get_db)):
     if not job:
         raise HTTPException(status_code=404, detail="清洗任务不存在")
 
-    try:
-        stats = run_match(db, clean_job_id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"匹配失败: {str(e)}")
+    # 若已在运行则拒绝重复触发
+    if _progress.get(clean_job_id, {}).get("status") == "running":
+        raise HTTPException(status_code=409, detail="该任务匹配正在进行中，请勿重复触发")
 
-    return MatchSummary(
-        clean_job_id=clean_job_id,
-        total=stats["total"],
-        matched=stats["matched"],
-        pending=stats["pending"],
-        confirmed=0,
-        excluded=0,
-    )
+    _progress[clean_job_id] = {
+        "status": "running",
+        "total": 0,
+        "processed": 0,
+        "matched": 0,
+        "started_at": time.time(),
+        "finished_at": None,
+        "error": None,
+    }
+
+    t = Thread(target=_run_match_thread, args=(clean_job_id,), daemon=True)
+    t.start()
+
+    return {"status": "started", "clean_job_id": clean_job_id}
+
+
+@router.get("/progress/{clean_job_id}")
+def get_match_progress(clean_job_id: int):
+    """查询匹配进度"""
+    p = _progress.get(clean_job_id)
+    if not p:
+        return {"status": "idle"}
+
+    result = dict(p)
+    if p["total"] > 0 and p["status"] == "running":
+        elapsed = time.time() - p["started_at"]
+        rate = p["processed"] / elapsed if elapsed > 0 else 0
+        remaining_items = p["total"] - p["processed"]
+        result["eta_seconds"] = int(remaining_items / rate) if rate > 0 else None
+        result["rate"] = round(rate)
+    else:
+        result["eta_seconds"] = None
+        result["rate"] = None
+
+    return result
 
 
 @router.get("/{clean_job_id}/summary", response_model=MatchSummary)
@@ -136,7 +203,6 @@ def confirm_match(match_id: int, payload: dict, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(mr)
 
-    # 拼装 item_name / brand_raw
     rd = db.query(RawDataRecord).filter(RawDataRecord.id == mr.raw_data_id).first()
     model_info = db.query(ModelRecord).filter(ModelRecord.id == mr.model_id).first() if mr.model_id else None
 

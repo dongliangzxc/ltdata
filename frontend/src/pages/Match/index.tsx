@@ -1,13 +1,13 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import {
   Card, Select, Button, Table, Tag, Space, Typography, Input,
-  message, Row, Col, Statistic, Tooltip
+  message, Row, Col, Statistic, Tooltip, Progress, Alert
 } from 'antd'
-import { AimOutlined, CheckOutlined, StopOutlined, CloudUploadOutlined } from '@ant-design/icons'
+import { AimOutlined, CheckOutlined, StopOutlined, CloudUploadOutlined, LoadingOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import { useSearchParams } from 'react-router-dom'
 import {
-  listCleanJobs, runMatch, getMatchSummary, listPendingMatches,
+  listCleanJobs, runMatch, getMatchProgress, getMatchSummary, listPendingMatches,
   confirmMatch, listModels, runPublish, listPublishJobs
 } from '../../services/api'
 
@@ -45,12 +45,24 @@ type PublishJob = {
   created_at: string
 }
 
+type MatchProgress = {
+  status: 'idle' | 'running' | 'done' | 'error'
+  total: number
+  processed: number
+  matched: number
+  rate: number | null
+  eta_seconds: number | null
+  error?: string
+}
+
 export default function MatchPage() {
   const [searchParams] = useSearchParams()
   const [selectedJobId, setSelectedJobId] = useState<number | null>(
     searchParams.get('job_id') ? Number(searchParams.get('job_id')) : null
   )
   const [running, setRunning] = useState(false)
+  const [matchProgress, setMatchProgress] = useState<MatchProgress | null>(null)
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [publishing, setPublishing] = useState(false)
   const [summary, setSummary] = useState<MatchSummary | null>(null)
   const [keyword, setKeyword] = useState('')
@@ -84,14 +96,38 @@ export default function MatchPage() {
   const handleRunMatch = async () => {
     if (!selectedJobId) { message.warning('请先选择清洗任务'); return }
     setRunning(true)
+    setMatchProgress({ status: 'running', total: 0, processed: 0, matched: 0, rate: null, eta_seconds: null })
     try {
-      const res = await runMatch(selectedJobId)
-      setSummary(res.data)
-      refreshPending()
-      message.success(`匹配完成：已匹配 ${res.data.matched} 条，待确认 ${res.data.pending} 条`)
-    } finally {
+      await runMatch(selectedJobId)
+    } catch {
       setRunning(false)
+      setMatchProgress(null)
+      return
     }
+    // 开始轮询进度
+    if (pollTimerRef.current) clearInterval(pollTimerRef.current)
+    pollTimerRef.current = setInterval(async () => {
+      try {
+        const res = await getMatchProgress(selectedJobId)
+        const p: MatchProgress = res.data
+        setMatchProgress(p)
+        if (p.status === 'done') {
+          clearInterval(pollTimerRef.current!)
+          pollTimerRef.current = null
+          setRunning(false)
+          message.success(`匹配完成：已匹配 ${p.matched} 条，待确认 ${p.total - p.matched} 条`)
+          getMatchSummary(selectedJobId).then(r => setSummary(r.data))
+          refreshPending()
+        } else if (p.status === 'error') {
+          clearInterval(pollTimerRef.current!)
+          pollTimerRef.current = null
+          setRunning(false)
+          message.error(`匹配出错：${p.error}`)
+        }
+      } catch {
+        // 网络抖动时忽略，继续轮询
+      }
+    }, 1500)
   }
 
   const handleConfirm = async (matchId: number) => {
@@ -244,7 +280,51 @@ export default function MatchPage() {
         </Row>
       </Card>
 
-      {summary && summary.total > 0 && (
+      {matchProgress && matchProgress.status === 'running' && (
+        <Card>
+          <Space direction="vertical" style={{ width: '100%' }} size={8}>
+            <Row justify="space-between" align="middle">
+              <Col>
+                <Space>
+                  <LoadingOutlined style={{ color: '#1677ff' }} />
+                  <Text strong>正在匹配…</Text>
+                  {matchProgress.total > 0 && (
+                    <Text type="secondary">
+                      {matchProgress.processed.toLocaleString()} / {matchProgress.total.toLocaleString()} 条
+                    </Text>
+                  )}
+                </Space>
+              </Col>
+              <Col>
+                <Space size={16}>
+                  {matchProgress.rate != null && (
+                    <Text type="secondary">速度 {matchProgress.rate} 条/秒</Text>
+                  )}
+                  {matchProgress.eta_seconds != null && matchProgress.eta_seconds > 0 && (
+                    <Text type="secondary">
+                      预计还需 {matchProgress.eta_seconds >= 60
+                        ? `${Math.floor(matchProgress.eta_seconds / 60)} 分 ${matchProgress.eta_seconds % 60} 秒`
+                        : `${matchProgress.eta_seconds} 秒`}
+                    </Text>
+                  )}
+                  {matchProgress.matched > 0 && (
+                    <Text style={{ color: '#3f8600' }}>已匹配 {matchProgress.matched.toLocaleString()} 条</Text>
+                  )}
+                </Space>
+              </Col>
+            </Row>
+            <Progress
+              percent={matchProgress.total > 0 ? Math.round(matchProgress.processed / matchProgress.total * 100) : 0}
+              status="active"
+              strokeColor={{ from: '#1677ff', to: '#52c41a' }}
+            />
+          </Space>
+        </Card>
+      )}
+
+      {matchProgress && matchProgress.status === 'error' && (
+        <Alert type="error" message={`匹配出错：${matchProgress.error}`} showIcon />
+      )}
         <Card>
           <Row gutter={24}>
             <Col span={4}><Statistic title="总条数" value={summary.total} /></Col>

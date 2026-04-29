@@ -21,7 +21,7 @@ def upgrade() -> None:
         sa.Column('id',         sa.Integer(),     primary_key=True, autoincrement=True),
         sa.Column('model_id',   sa.Integer(),     nullable=False),
         sa.Column('alias_code', sa.String(200),   nullable=False),
-        sa.Column('created_at', sa.DateTime(),    nullable=False, server_default=sa.func.now()),
+        sa.Column('created_at', sa.DateTime(),    nullable=False, server_default=sa.text('CURRENT_TIMESTAMP')),
         sa.ForeignKeyConstraint(['model_id'], ['models.id'], ondelete='CASCADE'),
         sa.UniqueConstraint('alias_code', name='uq_alias_code'),
         mysql_engine='InnoDB',

@@ -98,6 +98,16 @@ export default function MatchPage() {
     { ready: selectedJobId != null && summary != null && summary.pending > 0, refreshDeps: [selectedJobId, keyword, page] }
   )
 
+  // 组件卸载时清理轮询计时器，防止离开页面后仍持续请求
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current) {
+        clearInterval(pollTimerRef.current)
+        pollTimerRef.current = null
+      }
+    }
+  }, [])
+
   // 选任务后自动拉取摘要 + 发布历史
   useEffect(() => {
     if (!selectedJobId) return
@@ -141,6 +151,12 @@ export default function MatchPage() {
           pollTimerRef.current = null
           setRunning(false)
           message.error(`匹配出错：${p.error}`)
+        } else if (p.status === 'idle') {
+          // 后端重启导致进度状态丢失，停止轮询
+          clearInterval(pollTimerRef.current!)
+          pollTimerRef.current = null
+          setRunning(false)
+          setMatchProgress(null)
         }
       } catch {
         // 网络抖动时忽略，继续轮询

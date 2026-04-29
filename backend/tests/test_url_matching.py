@@ -194,3 +194,154 @@ def test_update_url_mapping_not_found():
                    json={"platform": "jd", "item_id": "ghost_item", "model_id": model_id},
                    headers=headers)
     assert r.status_code == 404, f"Expected 404, got {r.status_code}: {r.text}"
+
+
+from app.services.matcher import run_match
+from app.models.schemas import (
+    CleanedDataRecord, CleanJobRecord, UploadFileRecord, RawDataRecord,
+)
+
+
+def _seed_match_data(db, item_url: str, item_name: str, brand_raw: str, brand_code: str, model_code: str):
+    """Seed minimal data for a single cleaned row with given URL."""
+    model = db.query(ModelRecord).filter_by(brand_code=brand_code, model_code=model_code).first()
+    if not model:
+        model = ModelRecord(brand_code=brand_code, model_code=model_code, category_name="SOUNDBAR")
+        db.add(model)
+        db.flush()
+
+    uf = UploadFileRecord(filename="t.xlsx", platform="jd", month_range="202601")
+    db.add(uf)
+    db.flush()
+
+    rd = RawDataRecord(
+        file_id=uf.id, platform="jd", month=202601, category_lv1="音频",
+        item_id="testitem", item_name=item_name, brand_raw=brand_raw,
+        item_url=item_url, price=999.0, sales_qty=1, sales_amount=999.0,
+    )
+    db.add(rd)
+    db.flush()
+
+    cj = CleanJobRecord(status="done", file_ids=[uf.id])
+    db.add(cj)
+    db.flush()
+
+    cd = CleanedDataRecord(
+        raw_data_id=rd.id, clean_job_id=cj.id,
+        platform="jd", month=202601, category_lv1="音频",
+        item_id="testitem", item_name=item_name, item_url=item_url,
+        brand_raw=brand_raw, price=999.0, sales_qty=1, sales_amount=999.0,
+    )
+    db.add(cd)
+    db.commit()
+    return cj.id, model.id
+
+
+def test_s0_url_match():
+    """S0: item with URL in mapping table → url_matched"""
+    db = TestSession()
+
+    cj_id, model_id = _seed_match_data(
+        db,
+        item_url="https://item.jd.com/800055334411.html",
+        item_name="完全不含型号的商品名称",
+        brand_raw="BOSE",
+        brand_code="BOSE",
+        model_code="SB_S0_TEST",
+    )
+    # Add URL mapping (use item_id distinct from other tests)
+    existing = db.query(ItemUrlMapping).filter_by(platform="jd", item_id="800055334411").first()
+    if not existing:
+        db.add(ItemUrlMapping(platform="jd", item_id="800055334411", model_id=model_id))
+    db.commit()
+
+    run_match(db, cj_id)
+    from app.models.schemas import MatchResult
+    results = db.query(MatchResult).filter_by(clean_job_id=cj_id).all()
+    assert len(results) == 1
+    assert results[0].match_status == "url_matched"
+    assert results[0].match_source == "s0"
+    assert results[0].model_id == model_id
+    db.close()
+
+
+def test_text_only_when_url_not_in_map():
+    """S1-S4 text match + URL exists in raw data but NOT in mapping → text_only"""
+    db = TestSession()
+
+    model = ModelRecord(brand_code="EDIFIER_TX", model_code="EDIFIER_R1280", category_name="SOUNDBAR")
+    db.add(model)
+    db.flush()
+
+    uf = UploadFileRecord(filename="t2.xlsx", platform="jd", month_range="202601")
+    db.add(uf)
+    db.flush()
+    rd = RawDataRecord(
+        file_id=uf.id, platform="jd", month=202601, category_lv1="音频",
+        item_id="textonly_item", item_name="EDIFIER_R1280 蓝牙音箱",
+        brand_raw="EDIFIER_TX",
+        item_url="https://item.jd.com/777999888.html",  # NOT in url_map
+        price=500.0, sales_qty=2, sales_amount=1000.0,
+    )
+    db.add(rd)
+    db.flush()
+    cj = CleanJobRecord(status="done", file_ids=[uf.id])
+    db.add(cj)
+    db.flush()
+    cd = CleanedDataRecord(
+        raw_data_id=rd.id, clean_job_id=cj.id,
+        platform="jd", month=202601, category_lv1="音频",
+        item_id="textonly_item", item_name="EDIFIER_R1280 蓝牙音箱",
+        item_url="https://item.jd.com/777999888.html",
+        brand_raw="EDIFIER_TX", price=500.0, sales_qty=2, sales_amount=1000.0,
+    )
+    db.add(cd)
+    db.commit()
+
+    run_match(db, cj.id)
+    from app.models.schemas import MatchResult
+    results = db.query(MatchResult).filter_by(clean_job_id=cj.id).all()
+    assert len(results) == 1
+    assert results[0].match_status == "text_only", f"Expected text_only, got {results[0].match_status}"
+    db.close()
+
+
+def test_matched_when_no_url():
+    """Text match with no URL in raw data → matched (not text_only)"""
+    db = TestSession()
+
+    model = ModelRecord(brand_code="SENNHSR", model_code="MOMENTUM_S3", category_name="SOUNDBAR")
+    db.add(model)
+    db.flush()
+
+    uf = UploadFileRecord(filename="t3.xlsx", platform="jd", month_range="202601")
+    db.add(uf)
+    db.flush()
+    rd = RawDataRecord(
+        file_id=uf.id, platform="jd", month=202601, category_lv1="音频",
+        item_id="nourl_item", item_name="MOMENTUM_S3 蓝牙音箱",
+        brand_raw="SENNHSR",
+        item_url=None,   # No URL
+        price=500.0, sales_qty=2, sales_amount=1000.0,
+    )
+    db.add(rd)
+    db.flush()
+    cj = CleanJobRecord(status="done", file_ids=[uf.id])
+    db.add(cj)
+    db.flush()
+    cd = CleanedDataRecord(
+        raw_data_id=rd.id, clean_job_id=cj.id,
+        platform="jd", month=202601, category_lv1="音频",
+        item_id="nourl_item", item_name="MOMENTUM_S3 蓝牙音箱",
+        item_url=None,
+        brand_raw="SENNHSR", price=500.0, sales_qty=2, sales_amount=1000.0,
+    )
+    db.add(cd)
+    db.commit()
+
+    run_match(db, cj.id)
+    from app.models.schemas import MatchResult
+    results = db.query(MatchResult).filter_by(clean_job_id=cj.id).all()
+    assert len(results) == 1
+    assert results[0].match_status == "matched"
+    db.close()

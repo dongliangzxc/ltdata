@@ -2,6 +2,7 @@
 型号匹配引擎
 
 匹配步骤（依次降级）：
+  S0: item_url 精确查 item_url_mappings 表 → 直接命中，跳过文本匹配
   S1: brand_raw → 精确/包含匹配 brand_code / brand_name → 在候选组里找 model_code/model_name/alias
   S2: item_name 中包含 brand_code → 在对应品牌组找 model_code/model_name/alias
   S3: item_name 中包含 brand_name（≥2字符）→ 在对应品牌组找 model_code/model_name/alias
@@ -9,9 +10,12 @@
 
 同优先级多候选时取 model_code 最长的，减少短码误匹配。
 支持重复执行：先删旧结果再写入。
+
+text_only：S1-S4 文本命中，但 item_url 存在且不在 url_map → 需人工补录 URL 映射
 """
 from sqlalchemy.orm import Session
-from app.models.schemas import CleanedDataRecord, ModelRecord, ModelAlias, MatchResult
+from app.models.schemas import CleanedDataRecord, ModelRecord, ModelAlias, MatchResult, ItemUrlMapping
+from app.utils.url_utils import extract_item_id
 
 
 def _norm(s: str | None) -> str:
@@ -26,6 +30,12 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
     db.query(MatchResult).filter(MatchResult.clean_job_id == clean_job_id).delete(
         synchronize_session=False
     )
+
+    # ── S0: 预加载 URL 映射表 ─────────────────────────────────────
+    # key=(platform, item_id), value=model_id
+    url_map: dict[tuple[str, str], int] = {}
+    for um in db.query(ItemUrlMapping).all():
+        url_map[(um.platform, um.item_id)] = um.model_id
 
     # ── 构建内存索引 ─────────────────────────────────────────────
     all_models = db.query(ModelRecord).all()
@@ -121,6 +131,31 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
 
     for i, row in enumerate(cleaned_rows):
         item_upper = _norm(row.item_name)
+
+        # ── S0: URL精确匹配 ────────────────────────────────────
+        url_info = extract_item_id(row.item_url) if row.item_url else None
+        if url_info:
+            platform, item_id = url_info
+            url_model_id = url_map.get((platform, item_id))
+            if url_model_id:
+                results.append(MatchResult(
+                    clean_job_id=clean_job_id,
+                    raw_data_id=row.raw_data_id,
+                    model_id=url_model_id,
+                    match_status="url_matched",
+                    matched_by="auto",
+                    match_source="s0",
+                ))
+                matched_count += 1
+                if len(results) >= BATCH:
+                    db.bulk_save_objects(results)
+                    db.commit()
+                    if progress_cb:
+                        progress_cb(i + 1, total, matched_count)
+                    results = []
+                continue  # 跳过 S1-S4
+
+        # ── S1-S4 文本匹配 ─────────────────────────────────────
         best_model: ModelRecord | None = None
         brand_identified = False
         match_source: str | None = None
@@ -164,11 +199,13 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
                 match_source = "s4"
 
         if best_model:
+            # url_info 不为 None → URL存在但不在映射表 → 需人工审核
+            status = "text_only" if url_info else "matched"
             results.append(MatchResult(
                 clean_job_id=clean_job_id,
                 raw_data_id=row.raw_data_id,
                 model_id=best_model.id,
-                match_status="matched",
+                match_status=status,
                 matched_by="auto",
                 match_source=match_source,
             ))

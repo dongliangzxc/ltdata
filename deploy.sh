@@ -6,11 +6,8 @@ cd "$(dirname "$0")"
 echo ">>> 拉取最新代码..."
 git pull
 
-echo ">>> 重新构建并启动服务..."
+echo ">>> 重新构建并启动服务（迁移由容器 entrypoint 自动执行）..."
 docker compose -f docker-compose.prod.yml up -d --build
-
-echo ">>> 执行数据库迁移..."
-docker compose -f docker-compose.prod.yml exec -T backend alembic upgrade head
 
 echo ">>> 清理旧镜像..."
 docker image prune -f

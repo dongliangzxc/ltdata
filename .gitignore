@@ -26,6 +26,10 @@ frontend/.env.local
 
 # 测试数据（不提交）
 平台测试-Soundbar/
+test_output/
+
+# Superpowers 计划/设计文档（本地工具产物，不提交）
+docs/superpowers/
 
 # 平台文档（不提交）
 平台文档/

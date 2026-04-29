@@ -7,7 +7,7 @@ services:
       MYSQL_PASSWORD: luotu123
       MYSQL_DATABASE: luotu
     ports:
-      - "3306:3306"
+      - "3307:3306"
     volumes:
       - mysql_data:/var/lib/mysql
       - ./sql/docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d:ro

@@ -46,6 +46,7 @@ def publish_run(
         "data": {
             "publish_job_id": job.id,
             "published_count": published_count,
+            "skipped_pending_count": result["skipped_pending_count"],
         }
     }
 

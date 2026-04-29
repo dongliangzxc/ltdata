@@ -26,6 +26,15 @@ def run_publish(luotu_db: Session, analytics_db: Session, clean_job_id: int) -> 
     """
     _ensure_analytics_tables()
 
+    # 统计本次被跳过的 pending 条目数
+    pending_count_sql = text(
+        "SELECT COUNT(*) FROM match_results "
+        "WHERE clean_job_id = :clean_job_id AND match_status = 'pending'"
+    )
+    skipped_pending_count: int = luotu_db.execute(
+        pending_count_sql, {"clean_job_id": clean_job_id}
+    ).scalar() or 0
+
     # 1. 查询已匹配/已确认的 match_results，JOIN raw_data + models
     sql = text("""
         SELECT
@@ -61,7 +70,7 @@ def run_publish(luotu_db: Session, analytics_db: Session, clean_job_id: int) -> 
     rows = luotu_db.execute(sql, {"clean_job_id": clean_job_id}).mappings().all()
 
     if not rows:
-        return {"published_count": 0}
+        return {"published_count": 0, "skipped_pending_count": skipped_pending_count}
 
     # 2. 批量查 model_specs
     model_ids = list({r["model_id"] for r in rows})
@@ -139,4 +148,7 @@ def run_publish(luotu_db: Session, analytics_db: Session, clean_job_id: int) -> 
         analytics_db.add_all(specs_to_insert)
 
     analytics_db.commit()
-    return {"published_count": len(items_to_insert)}
+    return {
+        "published_count": len(items_to_insert),
+        "skipped_pending_count": skipped_pending_count,
+    }

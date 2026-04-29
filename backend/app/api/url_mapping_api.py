@@ -64,10 +64,17 @@ def import_url_mappings(file: UploadFile = File(...), db: Session = Depends(get_
     header = [str(c).strip() if c is not None else "" for c in rows[0]]
     col = {name: idx for idx, name in enumerate(header)}
 
-    required = {"渠道", "网址", "品牌码", "型号码"}
+    # 必需列：品牌码/型号码 可以用 品牌/型号 替代（rawdata sheet 有时只有后者）
+    required = {"渠道", "网址"}
+    required_brand = {"品牌码", "品牌"}   # 至少有其中一列
+    required_model = {"型号码", "型号"}   # 至少有其中一列
     missing = required - set(col.keys())
     if missing:
         raise HTTPException(400, detail=f"Excel 缺少必需列：{missing}")
+    if not (required_brand & set(col.keys())):
+        raise HTTPException(400, detail="Excel 缺少品牌列（需要「品牌码」或「品牌」）")
+    if not (required_model & set(col.keys())):
+        raise HTTPException(400, detail="Excel 缺少型号列（需要「型号码」或「型号」）")
 
     # 构建 (brand_code, model_code) → model_id 缓存
     all_models = db.query(ModelRecord).all()
@@ -85,8 +92,15 @@ def import_url_mappings(file: UploadFile = File(...), db: Session = Depends(get_
             platform_raw = str(row[col["渠道"]] or "").strip().upper()
             platform = _PLATFORM_MAP.get(platform_raw)
             url = str(row[col["网址"]] or "").strip()
-            brand_code = str(row[col["品牌码"]] or "").strip().upper()
-            model_code = str(row[col["型号码"]] or "").strip().upper()
+            brand_code_raw = row[col["品牌码"]] if "品牌码" in col else None
+            if not brand_code_raw and "品牌" in col:
+                brand_code_raw = row[col["品牌"]]
+            brand_code = str(brand_code_raw or "").strip().upper()
+
+            model_code_raw = row[col["型号码"]] if "型号码" in col else None
+            if not model_code_raw and "型号" in col:
+                model_code_raw = row[col["型号"]]
+            model_code = str(model_code_raw or "").strip().upper()
             price_raw = row[col["单价"]] if "单价" in col else None
             price = float(price_raw) if price_raw not in (None, "") else None
         except Exception as e:

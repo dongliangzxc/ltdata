@@ -10,7 +10,8 @@ import {
 import { useRequest } from 'ahooks'
 import {
   listModels, getModelDetail, createModel, updateModel, deleteModel,
-  importModels, previewModels
+  importModels, previewModels,
+  listModelAliases, addModelAlias, deleteModelAlias,
 } from '../../services/api'
 
 const { Text } = Typography
@@ -19,6 +20,11 @@ type ModelSpec = {
   id?: number
   spec_name: string
   spec_value?: string | null
+}
+
+type ModelAlias = {
+  id: number
+  alias_code: string
 }
 
 type ModelItem = {
@@ -34,6 +40,7 @@ type ModelItem = {
   launch_price?: number | null
   url?: string | null
   specs: ModelSpec[]
+  aliases: ModelAlias[]
 }
 
 type PreviewResult = {
@@ -59,6 +66,10 @@ export default function ModelsPage() {
   const [expandedSpecs, setExpandedSpecs] = useState<Record<number, ModelSpec[]>>({})
   const [form] = Form.useForm()
 
+  const [aliases, setAliases] = useState<ModelAlias[]>([])
+  const [aliasInput, setAliasInput] = useState('')
+  const [aliasLoading, setAliasLoading] = useState(false)
+
   const queryParams = { ...search, page, page_size: pageSize }
   const { data, loading, refresh } = useRequest(
     () => listModels(queryParams).then(r => r.data),
@@ -69,6 +80,8 @@ export default function ModelsPage() {
     setEditingItem(null)
     form.resetFields()
     form.setFieldsValue({ specs: [] })
+    setAliases([])
+    setAliasInput('')
     setModalOpen(true)
   }
 
@@ -90,6 +103,8 @@ export default function ModelsPage() {
         url:           full.url,
         specs:         full.specs,
       })
+      const aliasRes = await listModelAliases(item.id)
+      setAliases(aliasRes.data)
     } catch {
       // handled by interceptor
     }
@@ -117,6 +132,30 @@ export default function ModelsPage() {
     await deleteModel(id)
     message.success('已删除')
     refresh()
+  }
+
+  const handleAddAlias = async () => {
+    if (!editingItem || !aliasInput.trim()) return
+    setAliasLoading(true)
+    try {
+      const res = await addModelAlias(editingItem.id, aliasInput.trim())
+      setAliases(prev => [...prev, res.data])
+      setAliasInput('')
+    } catch {
+      // handled by interceptor
+    } finally {
+      setAliasLoading(false)
+    }
+  }
+
+  const handleDeleteAlias = async (aliasId: number) => {
+    if (!editingItem) return
+    try {
+      await deleteModelAlias(editingItem.id, aliasId)
+      setAliases(prev => prev.filter(a => a.id !== aliasId))
+    } catch {
+      // handled by interceptor
+    }
   }
 
   const handleImport = async (file: File) => {
@@ -452,6 +491,49 @@ export default function ModelsPage() {
               </>
             )}
           </Form.List>
+
+          <Divider orientation="left" plain style={{ fontSize: 13, color: '#666' }}>别名</Divider>
+          {editingItem ? (
+            <>
+              <div style={{ marginBottom: 8 }}>
+                {aliases.map(a => (
+                  <div key={a.id} style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
+                    <span style={{ flex: 1, fontSize: 13 }}>{a.alias_code}</span>
+                    <Popconfirm
+                      title="确认删除该别名？"
+                      onConfirm={() => handleDeleteAlias(a.id)}
+                      okText="删除"
+                      cancelText="取消"
+                    >
+                      <Button type="link" size="small" danger icon={<MinusCircleOutlined />} />
+                    </Popconfirm>
+                  </div>
+                ))}
+                {aliases.length === 0 && (
+                  <div style={{ fontSize: 12, color: '#aaa' }}>暂无别名</div>
+                )}
+              </div>
+              <Space.Compact style={{ width: '100%' }}>
+                <Input
+                  placeholder="输入别名后回车或点击添加"
+                  value={aliasInput}
+                  onChange={e => setAliasInput(e.target.value)}
+                  onPressEnter={handleAddAlias}
+                  style={{ flex: 1 }}
+                />
+                <Button
+                  type="primary"
+                  loading={aliasLoading}
+                  onClick={handleAddAlias}
+                  icon={<PlusOutlined />}
+                >
+                  添加
+                </Button>
+              </Space.Compact>
+            </>
+          ) : (
+            <div style={{ fontSize: 12, color: '#aaa' }}>新增型号保存后再添加别名</div>
+          )}
         </Form>
       </Modal>
     </Card>

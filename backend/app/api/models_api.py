@@ -13,8 +13,8 @@ from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy import func
 from app.models.database import get_db
 from app.models.schemas import (
-    ModelRecord, ModelSpec,
-    ModelIn, ModelOut, ModelSpecOut,
+    ModelRecord, ModelSpec, ModelAlias,
+    ModelIn, ModelOut, ModelSpecOut, ModelAliasOut,
     PaginatedResponse,
 )
 
@@ -407,5 +407,53 @@ def delete_model(model_id: int, db: Session = Depends(get_db)):
     if not obj:
         raise HTTPException(status_code=404, detail="型号不存在")
     db.delete(obj)
+    db.commit()
+    return {"message": "已删除"}
+
+
+# ─── 别名 CRUD ────────────────────────────────────────────────
+
+from pydantic import BaseModel as _BaseModel
+
+
+class _AliasIn(_BaseModel):
+    alias_code: str
+
+
+@router.get("/{model_id}/aliases", response_model=list[ModelAliasOut])
+def list_aliases(model_id: int, db: Session = Depends(get_db)):
+    obj = db.query(ModelRecord).filter(ModelRecord.id == model_id).first()
+    if not obj:
+        raise HTTPException(status_code=404, detail="型号不存在")
+    return obj.aliases
+
+
+@router.post("/{model_id}/aliases", response_model=ModelAliasOut)
+def add_alias(model_id: int, payload: _AliasIn, db: Session = Depends(get_db)):
+    obj = db.query(ModelRecord).filter(ModelRecord.id == model_id).first()
+    if not obj:
+        raise HTTPException(status_code=404, detail="型号不存在")
+    code = payload.alias_code.strip()
+    if not code:
+        raise HTTPException(status_code=422, detail="alias_code 不能为空")
+    existing = db.query(ModelAlias).filter(ModelAlias.alias_code == code).first()
+    if existing:
+        raise HTTPException(status_code=409, detail=f"别名「{code}」已存在")
+    alias = ModelAlias(model_id=model_id, alias_code=code)
+    db.add(alias)
+    db.commit()
+    db.refresh(alias)
+    return alias
+
+
+@router.delete("/{model_id}/aliases/{alias_id}")
+def delete_alias(model_id: int, alias_id: int, db: Session = Depends(get_db)):
+    alias = db.query(ModelAlias).filter(
+        ModelAlias.id == alias_id,
+        ModelAlias.model_id == model_id,
+    ).first()
+    if not alias:
+        raise HTTPException(status_code=404, detail="别名不存在")
+    db.delete(alias)
     db.commit()
     return {"message": "已删除"}

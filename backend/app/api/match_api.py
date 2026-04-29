@@ -115,13 +115,15 @@ def get_match_summary(clean_job_id: int, db: Session = Depends(get_db)):
     if not rows:
         return MatchSummary(
             clean_job_id=clean_job_id,
-            total=0, matched=0, pending=0, confirmed=0, excluded=0,
+            total=0, matched=0, pending=0, confirmed=0, excluded=0, disabled=0,
         )
 
     total = len(rows)
     status_count: dict[str, int] = {}
     for r in rows:
         status_count[r.match_status] = status_count.get(r.match_status, 0) + 1
+
+    disabled_count = sum(1 for r in rows if r.is_disabled == 1)
 
     return MatchSummary(
         clean_job_id=clean_job_id,
@@ -130,6 +132,7 @@ def get_match_summary(clean_job_id: int, db: Session = Depends(get_db)):
         pending=status_count.get("pending", 0),
         confirmed=status_count.get("confirmed", 0),
         excluded=status_count.get("excluded", 0),
+        disabled=disabled_count,
     )
 
 

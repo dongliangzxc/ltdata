@@ -275,3 +275,21 @@ def test_list_disabled():
     data = r.json()
     assert data["total"] >= 1
     assert all(item["is_disabled"] == 1 for item in data["items"])
+
+
+def test_summary_includes_disabled_count():
+    """summary 端点应包含 disabled 字段且计数正确"""
+    token = _get_or_create_user_token()
+    match_id, cj_id = _seed_single_mr()
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # 禁用一条
+    r = client.patch(f"/api/match/{match_id}/disable",
+                     json={"reason": "其他"}, headers=headers)
+    assert r.status_code == 200
+
+    r = client.get(f"/api/match/{cj_id}/summary", headers=headers)
+    assert r.status_code == 200
+    body = r.json()
+    assert "disabled" in body, f"summary missing 'disabled' field: {body}"
+    assert body["disabled"] >= 1

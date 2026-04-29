@@ -27,7 +27,10 @@ def override_get_db():
     finally:
         db.close()
 
-app.dependency_overrides[get_db] = override_get_db
+def _set_override():
+    app.dependency_overrides[get_db] = override_get_db
+
+_set_override()
 client = TestClient(app)
 
 
@@ -134,6 +137,8 @@ _pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def _get_or_create_user_token():
     """创建测试用户并获取 JWT token"""
+    # 确保当前 override 是 test_disable 的 engine（防止被其他测试文件覆盖）
+    _set_override()
     db = TestSession()
     user = db.query(UserRecord).filter(UserRecord.username == "tester").first()
     if not user:

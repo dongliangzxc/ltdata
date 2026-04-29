@@ -162,3 +162,35 @@ def test_delete_url_mapping():
     db = TestSession()
     assert db.query(ItemUrlMapping).filter_by(id=mid).first() is None
     db.close()
+
+
+def test_create_url_mapping_conflict():
+    """POST /api/url-mappings returns 409 on duplicate platform+item_id"""
+    token = _get_token()
+    headers = {"Authorization": f"Bearer {token}"}
+    db = TestSession()
+    model_id = _seed_model(db)
+    # Seed a mapping directly
+    mapping = ItemUrlMapping(platform="jd", item_id="conflict_test_999", model_id=model_id)
+    db.add(mapping)
+    db.commit()
+    db.close()
+
+    r = client.post("/api/url-mappings", json={
+        "platform": "jd", "item_id": "conflict_test_999", "model_id": model_id
+    }, headers=headers)
+    assert r.status_code == 409, f"Expected 409, got {r.status_code}: {r.text}"
+
+
+def test_update_url_mapping_not_found():
+    """PUT /api/url-mappings/{id} returns 404 for missing id"""
+    token = _get_token()
+    headers = {"Authorization": f"Bearer {token}"}
+    db = TestSession()
+    model_id = _seed_model(db)
+    db.close()
+
+    r = client.put("/api/url-mappings/999999",
+                   json={"platform": "jd", "item_id": "ghost_item", "model_id": model_id},
+                   headers=headers)
+    assert r.status_code == 404, f"Expected 404, got {r.status_code}: {r.text}"

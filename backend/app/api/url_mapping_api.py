@@ -88,7 +88,7 @@ def import_url_mappings(file: UploadFile = File(...), db: Session = Depends(get_
             brand_code = str(row[col["品牌码"]] or "").strip().upper()
             model_code = str(row[col["型号码"]] or "").strip().upper()
             price_raw = row[col["单价"]] if "单价" in col else None
-            price = float(price_raw) if price_raw is not None else None
+            price = float(price_raw) if price_raw not in (None, "") else None
         except Exception as e:
             errors.append(f"第{row_idx}行解析错误：{e}")
             skipped += 1
@@ -141,7 +141,7 @@ def list_url_mappings(
         q = q.filter(ItemUrlMapping.platform == platform)
     if keyword:
         kw = f"%{keyword}%"
-        q = q.join(ModelRecord, ItemUrlMapping.model_id == ModelRecord.id).filter(
+        q = q.outerjoin(ModelRecord, ItemUrlMapping.model_id == ModelRecord.id).filter(
             or_(
                 ItemUrlMapping.item_id.ilike(kw),
                 ModelRecord.model_code.ilike(kw),

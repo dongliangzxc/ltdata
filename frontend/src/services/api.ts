@@ -97,6 +97,19 @@ export const addModelAlias = (modelId: number, aliasCode: string) =>
 export const deleteModelAlias = (modelId: number, aliasId: number) =>
   api.delete(`/models/${modelId}/aliases/${aliasId}`)
 
+// ── 禁用 / 启用 ──────────────────────────────────────────────
+export const disableMatch = (matchId: number, reason?: string) =>
+  api.patch(`/match/${matchId}/disable`, { reason })
+
+export const enableMatch = (matchId: number) =>
+  api.patch(`/match/${matchId}/enable`)
+
+export const avgPriceDisable = (cleanJobId: number, threshold: number) =>
+  api.post(`/match/${cleanJobId}/avg-price-disable`, { threshold })
+
+export const listDisabled = (cleanJobId: number, page = 1, pageSize = 20) =>
+  api.get(`/match/${cleanJobId}/disabled`, { params: { page, page_size: pageSize } })
+
 // ─── Match ─────────────────────────────────────────────────
 export const runMatch = (clean_job_id: number) =>
   api.post('/match/run', { clean_job_id })

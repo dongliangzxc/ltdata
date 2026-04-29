@@ -19,7 +19,7 @@ def upgrade() -> None:
         'item_url_mappings',
         sa.Column('id',         sa.Integer(),      primary_key=True, autoincrement=True),
         sa.Column('platform',   sa.String(20),     nullable=False, comment='jd/tmall/taobao/suning'),
-        sa.Column('item_id',    sa.String(50),     nullable=False, comment='从URL提取的商品ID'),
+        sa.Column('item_id',    sa.String(100),    nullable=False, comment='从URL提取的商品ID'),
         sa.Column('model_id',   sa.Integer(),      nullable=False, comment='FK → models.id'),
         sa.Column('price',      sa.Numeric(10, 2), nullable=True,  comment='单价'),
         sa.Column('created_at', sa.DateTime(),     nullable=False, server_default=sa.text('NOW()')),

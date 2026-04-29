@@ -300,7 +300,7 @@ class ItemUrlMapping(Base):
 
     id         = Column(Integer, primary_key=True, autoincrement=True)
     platform   = Column(String(20), nullable=False)
-    item_id    = Column(String(50), nullable=False)
+    item_id    = Column(String(100), nullable=False)
     model_id   = Column(Integer, ForeignKey("models.id"), nullable=False)
     price      = Column(Numeric(10, 2), nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import {
   Card, Select, Button, Table, Tag, Space, Typography, Input,
-  message, Row, Col, Statistic, Tooltip, Progress, Alert, Popconfirm, InputNumber
+  message, Row, Col, Statistic, Tooltip, Progress, Alert, Popconfirm, InputNumber, Tabs
 } from 'antd'
 import { AimOutlined, CheckOutlined, StopOutlined, CloudUploadOutlined, LoadingOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
@@ -17,7 +17,9 @@ const { Text } = Typography
 type MatchSummary = {
   clean_job_id: number
   total: number
+  url_matched: number
   matched: number
+  text_only: number
   pending: number
   confirmed: number
   excluded: number
@@ -86,7 +88,7 @@ export default function MatchPage() {
   const [disabledLoading, setDisabledLoading] = useState(false)
   const [avgPriceThreshold, setAvgPriceThreshold] = useState(200)
   const [disableReasonMap, setDisableReasonMap] = useState<Record<number, string>>({})
-
+  const [activeTab, setActiveTab] = useState<'pending' | 'text_only'>('text_only')
   const { data: jobsData } = useRequest(() => listCleanJobs().then(r => r.data))
   const { data: modelsData } = useRequest(
     () => listModels({ page: 1, page_size: 200 }).then(r => r.data),
@@ -94,8 +96,16 @@ export default function MatchPage() {
   const modelOptions: ModelOption[] = modelsData?.items ?? []
 
   const { data: pendingData, loading: pendingLoading, refresh: refreshPending } = useRequest(
-    () => listPendingMatches(selectedJobId!, { keyword: keyword || undefined, page, page_size: 20 }).then(r => r.data),
-    { ready: selectedJobId != null && summary != null && summary.pending > 0, refreshDeps: [selectedJobId, keyword, page] }
+    () => listPendingMatches(selectedJobId!, {
+      keyword: keyword || undefined,
+      page,
+      page_size: 20,
+      status: activeTab,
+    }).then(r => r.data),
+    {
+      ready: selectedJobId != null && summary != null && (summary.pending > 0 || summary.text_only > 0),
+      refreshDeps: [selectedJobId, keyword, page, activeTab],
+    }
   )
 
   // 组件卸载时清理轮询计时器，防止离开页面后仍持续请求
@@ -329,7 +339,7 @@ export default function MatchPage() {
   ]
 
   const doneJobs = (jobsData ?? []).filter((j: { status: string }) => j.status === 'done')
-  const readyCount = summary ? summary.matched + summary.confirmed : 0
+  const readyCount = summary ? (summary?.url_matched ?? 0) + summary.matched + summary.confirmed : 0
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -453,15 +463,19 @@ export default function MatchPage() {
         <Card>
           <Row gutter={16}>
             <Col span={3}><Statistic title="总条数" value={summary.total} /></Col>
-            <Col span={3}><Statistic title="自动匹配" value={summary.matched} valueStyle={{ color: '#3f8600' }} /></Col>
+            <Col span={3}><Statistic title="URL匹配" value={summary.url_matched ?? 0} valueStyle={{ color: '#389e0d' }} /></Col>
+            <Col span={3}><Statistic title="文本匹配" value={summary.matched} valueStyle={{ color: '#3f8600' }} /></Col>
+            <Col span={3}><Statistic title="URL待审" value={summary.text_only ?? 0} valueStyle={{ color: '#d48806' }} /></Col>
             <Col span={3}><Statistic title="待确认" value={summary.pending} valueStyle={{ color: '#d46b08' }} /></Col>
             <Col span={3}><Statistic title="已人工确认" value={summary.confirmed} valueStyle={{ color: '#1677ff' }} /></Col>
-            <Col span={3}><Statistic title="已排除" value={summary.excluded} valueStyle={{ color: '#cf1322' }} /></Col>
-            <Col span={3}><Statistic title="已禁用" value={summary.disabled ?? 0} valueStyle={{ color: '#faad14' }} /></Col>
+            <Col span={2}><Statistic title="已排除" value={summary.excluded} valueStyle={{ color: '#cf1322' }} /></Col>
+            <Col span={2}><Statistic title="已禁用" value={summary.disabled ?? 0} valueStyle={{ color: '#faad14' }} /></Col>
             <Col span={3}>
               <Statistic
                 title="匹配率"
-                value={summary.total ? Math.round((summary.matched + summary.confirmed) / summary.total * 100) : 0}
+                value={summary.total ? Math.round(
+                  ((summary.url_matched ?? 0) + summary.matched + summary.confirmed) / summary.total * 100
+                ) : 0}
                 suffix="%"
                 valueStyle={{ color: '#3f8600' }}
               />
@@ -470,9 +484,16 @@ export default function MatchPage() {
         </Card>
       )}
 
-      {summary && summary.pending > 0 && (
+      {summary && (summary.pending > 0 || (summary.text_only ?? 0) > 0) && (
         <Card
-          title={`待确认条目（${summary.pending} 条）`}
+          title={
+            <Space>
+              <span>待处理条目</span>
+              <span style={{ fontSize: 12, color: '#8c8c8c' }}>
+                URL待审 {summary.text_only ?? 0} 条 · 待确认 {summary.pending} 条
+              </span>
+            </Space>
+          }
           extra={
             <Input.Search
               placeholder="搜索宝贝名称"
@@ -482,6 +503,50 @@ export default function MatchPage() {
             />
           }
         >
+          <Tabs
+            activeKey={activeTab}
+            onChange={key => {
+              setActiveTab(key as 'pending' | 'text_only')
+              setPage(1)
+              setKeyword('')
+            }}
+            items={[
+              {
+                key: 'text_only',
+                label: (
+                  <span>
+                    URL待审
+                    {(summary.text_only ?? 0) > 0 && (
+                      <span style={{
+                        marginLeft: 6, background: '#d48806', color: '#fff',
+                        borderRadius: 10, padding: '0 6px', fontSize: 11,
+                      }}>
+                        {summary.text_only}
+                      </span>
+                    )}
+                  </span>
+                ),
+                children: null,
+              },
+              {
+                key: 'pending',
+                label: (
+                  <span>
+                    待确认
+                    {summary.pending > 0 && (
+                      <span style={{
+                        marginLeft: 6, background: '#d46b08', color: '#fff',
+                        borderRadius: 10, padding: '0 6px', fontSize: 11,
+                      }}>
+                        {summary.pending}
+                      </span>
+                    )}
+                  </span>
+                ),
+                children: null,
+              },
+            ]}
+          />
           <Table
             dataSource={pendingData?.items ?? []}
             columns={pendingColumns}
@@ -549,7 +614,7 @@ export default function MatchPage() {
         </Card>
       )}
 
-      {summary && summary.total > 0 && summary.pending === 0 && (
+      {summary && summary.total > 0 && summary.pending === 0 && (summary.text_only ?? 0) === 0 && (
         <Card>
           <Text type="secondary">暂无待确认条目，可点击「发布到分析库」发布已匹配结果。</Text>
         </Card>

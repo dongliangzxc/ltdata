@@ -22,7 +22,7 @@ def run_publish(luotu_db: Session, analytics_db: Session, clean_job_id: int) -> 
     """
     执行发布：从 luotu 读取匹配结果，写入 luotu_analytics。
     支持重复执行（先删除同 clean_job_id 的旧数据）。
-    返回 {"published_count": N}
+    返回 {"published_count": N, "skipped_pending_count": N}
     """
     _ensure_analytics_tables()
 

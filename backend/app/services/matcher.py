@@ -82,7 +82,7 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
         brand_raw_cache[brand_raw] = result
         return result
 
-    def _best(candidates: list[ModelRecord], item_upper: str) -> ModelRecord | None:
+    def _best(candidates: list[ModelRecord], item_upper: str, allow_alias: bool = True) -> ModelRecord | None:
         """在候选列表里找命中 item_name 的最优型号（model_code 最长优先，别名次之）。"""
         best: ModelRecord | None = None
         best_len = 0
@@ -95,7 +95,7 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
                 hit_len = len(mc)
             elif mn and len(mn) >= 3 and mn in item_upper:
                 hit_len = len(mn)
-            else:
+            elif allow_alias:
                 # 检查别名（最短 4 字符避免误匹配）
                 for alias in alias_map.get(m.id, []):
                     if alias and len(alias) >= 4 and alias in item_upper:
@@ -159,7 +159,7 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
 
         # S4: 仅在品牌完全未识别时才做全局长码兜底
         if best_model is None and not brand_identified:
-            best_model = _best(long_code_models, item_upper)
+            best_model = _best(long_code_models, item_upper, allow_alias=False)
             if best_model:
                 match_source = "s4"
 

@@ -134,3 +134,19 @@ export const runPublish = (clean_job_id: number) =>
   api.post('/publish/run', { clean_job_id })
 export const listPublishJobs = (clean_job_id?: number) =>
   api.get('/publish/jobs', { params: clean_job_id != null ? { clean_job_id } : {} })
+
+// ─── URL Mappings ───────────────────────────────────────────
+export const importUrlMappings = (formData: FormData) =>
+  api.post('/url-mappings/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+
+export const listUrlMappings = (params: Record<string, unknown>) =>
+  api.get('/url-mappings', { params })
+
+export const createUrlMapping = (data: { platform: string; item_id: string; model_id: number; price?: number }) =>
+  api.post('/url-mappings', data)
+
+export const updateUrlMapping = (id: number, data: { platform: string; item_id: string; model_id: number; price?: number }) =>
+  api.put(`/url-mappings/${id}`, data)
+
+export const deleteUrlMapping = (id: number) =>
+  api.delete(`/url-mappings/${id}`)

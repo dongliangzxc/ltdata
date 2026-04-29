@@ -11,6 +11,7 @@ import MetadataPage from './pages/Metadata'
 import ModelsPage from './pages/Models'
 import WorkbenchPage from './pages/Workbench'
 import ManualPage from './pages/Manual'
+import UrlMappingsPage from './pages/UrlMappings'
 
 export default function App() {
   return (
@@ -32,6 +33,7 @@ export default function App() {
             <Route path="/models" element={<ModelsPage />} />
             <Route path="/workbench" element={<WorkbenchPage />} />
             <Route path="/manual" element={<ManualPage />} />
+            <Route path="/url-mappings" element={<UrlMappingsPage />} />
           </Route>
         </Route>
       </Routes>

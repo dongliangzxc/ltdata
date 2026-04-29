@@ -50,9 +50,12 @@ def export_match_job(
     """
     生成导出文件，返回 [{"filename": ..., "token": ..., "path": ..., "rows": ..., "pending_rows": ...}]
     """
-    # ── 1. 查 metadata_specs 定义规格列顺序 ─────────────────────
-    spec_defs = db.query(MetadataSpec).order_by(MetadataSpec.id).all()
-    spec_names = [s.spec_name for s in spec_defs]
+    # ── 1. 预加载所有 metadata_specs，按 category_code 分组 ──────
+    all_spec_defs = db.query(MetadataSpec).order_by(MetadataSpec.id).all()
+    # { category_code: [spec_name, ...] }
+    category_spec_names: dict[str, list[str]] = {}
+    for s in all_spec_defs:
+        category_spec_names.setdefault(s.category_code, []).append(s.spec_name)
 
     # ── 2. 查已匹配 / 已确认的条目 ───────────────────────────────
     matched_rows = (
@@ -91,8 +94,9 @@ def export_match_job(
                 row[field] = getattr(rd, field, None)
 
         model_specs = spec_map.get(mr.model_id, {})
-        for sn in spec_names:
-            row[sn] = model_specs.get(sn, "")
+        # 规格值先全部存入 row，写 DataFrame 时按品类列名筛选
+        for sn, sv in model_specs.items():
+            row[sn] = sv
 
         cat = m.category_name or "未知品类"
         category_data.setdefault(cat, []).append(row)
@@ -130,8 +134,10 @@ def export_match_job(
 
     with pd.ExcelWriter(str(file_path), engine="openpyxl") as writer:
         for cat, rows in category_data.items():
-            df = pd.DataFrame(rows, columns=BASE_FIELD_NAMES + spec_names)
-            df.columns = BASE_CN_NAMES + spec_names
+            # 取该品类对应的规格列（category_name 与 category_code 同值）
+            cat_spec_names = category_spec_names.get(cat, [])
+            df = pd.DataFrame(rows, columns=BASE_FIELD_NAMES + cat_spec_names)
+            df.columns = BASE_CN_NAMES + cat_spec_names
             df.to_excel(writer, sheet_name=cat[:31], index=False)
 
         if pending_data:

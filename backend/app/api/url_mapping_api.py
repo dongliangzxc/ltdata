@@ -86,6 +86,7 @@ def import_url_mappings(file: UploadFile = File(...), db: Session = Depends(get_
     imported = 0
     skipped = 0
     errors: list[str] = []
+    seen_keys: set[tuple[str, str]] = set()  # 同一文件内去重，避免重复 INSERT
 
     for row_idx, row in enumerate(rows[1:], start=2):
         try:
@@ -118,6 +119,14 @@ def import_url_mappings(file: UploadFile = File(...), db: Session = Depends(get_
             continue
 
         _, item_id = url_info
+        key = (platform, item_id)
+
+        # 同文件内重复行：只保留最后一条（继续处理，覆盖 seen_keys）
+        if key in seen_keys:
+            skipped += 1
+            continue
+        seen_keys.add(key)
+
         model_id = model_lookup.get((brand_code, model_code))
         if not model_id:
             errors.append(f"第{row_idx}行：型号 [{brand_code}]{model_code} 不存在，已跳过")

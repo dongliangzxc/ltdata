@@ -287,6 +287,7 @@ class MatchResult(Base):
     model_id     = Column(Integer)
     match_status = Column(String(20), default="pending")  # matched/pending/confirmed/excluded
     matched_by   = Column(String(20), default="auto")     # auto/manual
+    match_source = Column(String(20), nullable=True)      # s1/s2/s3/s4/manual
     created_at   = Column(DateTime, default=datetime.utcnow)
     updated_at   = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -298,6 +299,7 @@ class MatchResultOut(BaseModel):
     model_id:     Optional[int]
     match_status: str
     matched_by:   str
+    match_source: Optional[str] = None
     # 关联字段（join 查询后填充）
     item_name:  Optional[str] = None
     brand_raw:  Optional[str] = None

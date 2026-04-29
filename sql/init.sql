@@ -286,3 +286,8 @@ CREATE TABLE IF NOT EXISTS published_item_specs (
     KEY idx_spec_item  (published_item_id),
     KEY idx_spec_name  (spec_name(50))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='已发布商品规格(EAV)';
+
+-- 新增 match_source 列（记录命中步骤：s1/s2/s3/s4/manual）
+ALTER TABLE luotu.match_results
+    ADD COLUMN IF NOT EXISTS match_source VARCHAR(20) DEFAULT NULL
+        COMMENT 's1/s2/s3/s4=自动匹配步骤 manual=人工' AFTER matched_by;

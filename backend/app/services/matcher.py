@@ -115,9 +115,9 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
 
         # S1: 用 brand_raw 缩窄候选
         if row.brand_raw:
+            brand_identified = True        # 有品牌原始值即视为品牌已识别，无论库中是否有对应型号
             candidates = _candidates_by_brand_raw(row.brand_raw)
             if candidates:
-                brand_identified = True
                 m = _best(candidates, item_upper)
                 if m:
                     best_model = m

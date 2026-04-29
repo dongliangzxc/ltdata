@@ -90,6 +90,12 @@ export const getModelDetail = (id: number) => api.get(`/models/${id}`)
 export const createModel = (data: unknown) => api.post('/models', data)
 export const updateModel = (id: number, data: unknown) => api.put(`/models/${id}`, data)
 export const deleteModel = (id: number) => api.delete(`/models/${id}`)
+export const listModelAliases = (modelId: number) =>
+  api.get(`/models/${modelId}/aliases`)
+export const addModelAlias = (modelId: number, aliasCode: string) =>
+  api.post(`/models/${modelId}/aliases`, { alias_code: aliasCode })
+export const deleteModelAlias = (modelId: number, aliasId: number) =>
+  api.delete(`/models/${modelId}/aliases/${aliasId}`)
 
 // ─── Match ─────────────────────────────────────────────────
 export const runMatch = (clean_job_id: number) =>

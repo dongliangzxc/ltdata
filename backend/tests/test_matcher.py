@@ -137,3 +137,40 @@ def test_match_source_s2(db):
     result = db.query(MatchResult).filter(MatchResult.clean_job_id == clean_job_id).first()
     assert result.match_status == "matched"
     assert result.match_source == "s2"
+
+
+from app.models.schemas import ModelAlias
+
+
+def test_alias_match_within_brand(db):
+    """别名出现在 item_name 中，应命中对应型号（品牌内匹配）。"""
+    m = _seed(db, brand_code="EDIFIER", brand_name="漫步者", model_code="B2-PRO")
+    alias = ModelAlias(model_id=m.id, alias_code="B2PRO")
+    db.add(alias)
+
+    item_name = "漫步者 EDIFIER B2PRO 回音壁蓝牙音箱"
+    clean_job_id = _seed_clean_row(db, brand_raw="漫步者", item_name=item_name)
+    db.commit()
+
+    run_match(db, clean_job_id)
+
+    result = db.query(MatchResult).filter(MatchResult.clean_job_id == clean_job_id).first()
+    assert result.match_status == "matched", f"期望 matched，实际 {result.match_status}"
+    assert result.model_id == m.id
+
+
+def test_alias_not_cross_brand(db):
+    """别名不跨品牌匹配：品牌B的商品不应命中品牌A的别名。"""
+    m_a = _seed(db, brand_code="BRAND_A", brand_name="品牌A", model_code="X100")
+    alias = ModelAlias(model_id=m_a.id, alias_code="X100ALIAS")
+    db.add(alias)
+
+    _seed(db, brand_code="BRAND_B", brand_name="品牌B", model_code="Y200")
+    item_name = "品牌B BRAND_B X100ALIAS 音箱"
+    clean_job_id = _seed_clean_row(db, brand_raw="品牌B", item_name=item_name)
+    db.commit()
+
+    run_match(db, clean_job_id)
+
+    result = db.query(MatchResult).filter(MatchResult.clean_job_id == clean_job_id).first()
+    assert result.match_status == "pending", f"期望 pending，实际 {result.match_status}"

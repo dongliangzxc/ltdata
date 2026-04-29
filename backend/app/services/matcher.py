@@ -2,16 +2,16 @@
 型号匹配引擎
 
 匹配步骤（依次降级）：
-  S1: brand_raw → 精确/包含匹配 brand_code / brand_name → 在候选组里找 model_code/model_name
-  S2: item_name 中包含 brand_code → 在对应品牌组找 model_code/model_name
-  S3: item_name 中包含 brand_name（≥2字符）→ 在对应品牌组找 model_code/model_name
-  S4: 兜底 — model_code（≥5字符）直接出现在 item_name 中
+  S1: brand_raw → 精确/包含匹配 brand_code / brand_name → 在候选组里找 model_code/model_name/alias
+  S2: item_name 中包含 brand_code → 在对应品牌组找 model_code/model_name/alias
+  S3: item_name 中包含 brand_name（≥2字符）→ 在对应品牌组找 model_code/model_name/alias
+  S4: 兜底 — model_code（≥5字符）直接出现在 item_name 中（不检查别名，避免短别名误匹配）
 
 同优先级多候选时取 model_code 最长的，减少短码误匹配。
 支持重复执行：先删旧结果再写入。
 """
 from sqlalchemy.orm import Session
-from app.models.schemas import CleanedDataRecord, ModelRecord, MatchResult
+from app.models.schemas import CleanedDataRecord, ModelRecord, ModelAlias, MatchResult
 
 
 def _norm(s: str | None) -> str:
@@ -45,6 +45,11 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
     # S4 候选：model_code 足够长（≥5）的全量型号
     long_code_models = [m for m in all_models if len(_norm(m.model_code)) >= 5]
 
+    # ── 预加载别名 {model_id: [alias_code_upper, ...]} ───────────
+    alias_map: dict[int, list[str]] = {}
+    for a in db.query(ModelAlias).all():
+        alias_map.setdefault(a.model_id, []).append(_norm(a.alias_code))
+
     # ── brand_raw → 候选列表缓存 ─────────────────────────────────
     brand_raw_cache: dict[str, list[ModelRecord]] = {}
 
@@ -61,18 +66,14 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
                     result.append(m)
                     seen.add(m.id)
 
-        # 1) brand_raw 精确等于 brand_code
         if bu in brand_code_index:
             _add(brand_code_index[bu])
-        # 2) brand_raw 精确等于 brand_name
         if bu in brand_name_index:
             _add(brand_name_index[bu])
-        # 3) brand_code 是 brand_raw 的子串（如 brand_raw="锐族RUIZU" 含 "RUIZU"）
         if not result:
             for bc, grp in brand_code_index.items():
                 if bc and bc in bu:
                     _add(grp)
-        # 4) brand_name 是 brand_raw 的子串
         if not result:
             for bn, grp in brand_name_index.items():
                 if len(bn) >= 2 and bn in bu:
@@ -82,17 +83,28 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
         return result
 
     def _best(candidates: list[ModelRecord], item_upper: str) -> ModelRecord | None:
-        """在候选列表里找命中 item_name 的最优型号（model_code 最长优先）"""
+        """在候选列表里找命中 item_name 的最优型号（model_code 最长优先，别名次之）。"""
         best: ModelRecord | None = None
         best_len = 0
         for m in candidates:
             mc = _norm(m.model_code)
             mn = _norm(m.model_name)
-            if (mc and mc in item_upper) or (mn and len(mn) >= 3 and mn in item_upper):
-                cur = len(mc)
-                if cur > best_len:
-                    best = m
-                    best_len = cur
+            hit_len = 0
+
+            if mc and mc in item_upper:
+                hit_len = len(mc)
+            elif mn and len(mn) >= 3 and mn in item_upper:
+                hit_len = len(mn)
+            else:
+                # 检查别名（最短 4 字符避免误匹配）
+                for alias in alias_map.get(m.id, []):
+                    if alias and len(alias) >= 4 and alias in item_upper:
+                        hit_len = len(alias)
+                        break
+
+            if hit_len > best_len:
+                best = m
+                best_len = hit_len
         return best
 
     # ── 加载清洗数据 ──────────────────────────────────────────────
@@ -110,12 +122,12 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
     for i, row in enumerate(cleaned_rows):
         item_upper = _norm(row.item_name)
         best_model: ModelRecord | None = None
-        brand_identified = False   # 是否发现品牌候选
-        match_source: str | None = None  # 命中步骤
+        brand_identified = False
+        match_source: str | None = None
 
         # S1: 用 brand_raw 缩窄候选
         if row.brand_raw:
-            brand_identified = True        # 有品牌原始值即视为品牌已识别，无论库中是否有对应型号
+            brand_identified = True
             candidates = _candidates_by_brand_raw(row.brand_raw)
             if candidates:
                 m = _best(candidates, item_upper)

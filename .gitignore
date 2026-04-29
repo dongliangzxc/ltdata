@@ -17,8 +17,7 @@ backend/.env
 backend/uploads/
 backend/exports/
 
-# Alembic
-backend/alembic/versions/*.py
+# Alembic（migration 文件需要提交，不忽略）
 
 # Node
 frontend/node_modules/
@@ -27,6 +26,9 @@ frontend/.env.local
 
 # 测试数据（不提交）
 平台测试-Soundbar/
+
+# 平台文档（不提交）
+平台文档/
 *.rar
 .DS_Store
 .AppleDouble

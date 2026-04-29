@@ -114,15 +114,25 @@ def parse_raw_excel(file_path: str | Path) -> tuple[list[dict], str, str]:
     else:
         month_range = ""
 
-    # 推断 platform 值（从数据中读取）
+    # 推断并标准化 platform 值（从数据中读取，统一写成小写标准值）
+    _PLATFORM_NORM = {"京东": "jd", "天猫": "tmall", "淘宝": "taobao", "苏宁": "suning"}
     if "platform" in df.columns and df["platform"].notna().any():
         platform_val = df["platform"].dropna().iloc[0]
-        if "京东" in str(platform_val):
-            platform = "JD"
-        elif "天猫" in str(platform_val):
-            platform = "TM"
-        elif "淘宝" in str(platform_val):
-            platform = "TB"
+        platform_str = str(platform_val)
+        for kw, std in _PLATFORM_NORM.items():
+            if kw in platform_str:
+                platform = std.upper()   # 文件级别沿用大写（JD/TM/TB 约定）
+                break
+        # 每行的 platform 字段也标准化为小写（jd/tmall/taobao）
+        def _norm_platform(v):
+            if v is None:
+                return None
+            s = str(v)
+            for kw, std in _PLATFORM_NORM.items():
+                if kw in s:
+                    return std
+            return v
+        df["platform"] = df["platform"].apply(_norm_platform)
 
     raw_records = df.where(df.notna(), None).to_dict(orient="records")
 

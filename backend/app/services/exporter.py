@@ -2,7 +2,8 @@
 导出服务：基于型号匹配结果，按品类分 Sheet 导出。
 - 已匹配/已确认的条目 → 按 category_name 分 Sheet，含动态规格列
 - 待确认条目 → 单独"待确认" Sheet，无规格列
-- 规格列由 metadata_specs 定义（按 id 排序）
+- 规格列按品类过滤：每个 Sheet 只显示本品类（category_code）的规格列
+- 约定：models.category_name 与 metadata_specs.category_code 使用相同的品类码（如 SOUNDBAR）
 - 规格值从 model_specs 查询
 """
 import uuid
@@ -94,11 +95,12 @@ def export_match_job(
                 row[field] = getattr(rd, field, None)
 
         model_specs = spec_map.get(mr.model_id, {})
-        # 规格值先全部存入 row，写 DataFrame 时按品类列名筛选
-        for sn, sv in model_specs.items():
-            row[sn] = sv
-
         cat = m.category_name or "未知品类"
+        # 按本品类规格列预填空字符串，再覆盖实际值（保持缺失规格为 "" 而非 NaN）
+        # 注意：models.category_name 与 metadata_specs.category_code 使用同一品类码
+        for sn in category_spec_names.get(cat, []):
+            row[sn] = model_specs.get(sn, "")
+
         category_data.setdefault(cat, []).append(row)
 
     # ── 5. 查待确认条目 ──────────────────────────────────────────
@@ -134,7 +136,7 @@ def export_match_job(
 
     with pd.ExcelWriter(str(file_path), engine="openpyxl") as writer:
         for cat, rows in category_data.items():
-            # 取该品类对应的规格列（category_name 与 category_code 同值）
+            # category_name 与 category_code 同值，直接用 cat 查本品类规格列
             cat_spec_names = category_spec_names.get(cat, [])
             df = pd.DataFrame(rows, columns=BASE_FIELD_NAMES + cat_spec_names)
             df.columns = BASE_CN_NAMES + cat_spec_names

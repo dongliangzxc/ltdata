@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Text, Numeric, DateTime
+from sqlalchemy import create_engine, Column, Integer, String, Text, Numeric, DateTime, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
@@ -21,6 +21,9 @@ def get_analytics_db():
 
 class PublishedItem(AnalyticsBase):
     __tablename__ = "published_items"
+    __table_args__ = (
+        UniqueConstraint("platform", "item_id", "month", name="uq_published_item"),
+    )
 
     id                = Column(Integer, primary_key=True, index=True)
     publish_job_id    = Column(Integer, nullable=False)

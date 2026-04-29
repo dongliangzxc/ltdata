@@ -9,9 +9,10 @@ publisher.py — 将已匹配/已确认数据发布到 luotu_analytics 分析库
 5. 记录 luotu.publish_jobs
 """
 
+from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from app.models.analytics_db import AnalyticsBase, analytics_engine, PublishedItem, PublishedItemSpec
+from app.models.analytics_db import AnalyticsBase, analytics_engine, PublishedItemSpec
 
 def _ensure_analytics_tables():
     """确保分析库表已创建（首次运行）"""
@@ -101,52 +102,112 @@ def run_publish(luotu_db: Session, analytics_db: Session, clean_job_id: int) -> 
             {"cjid": clean_job_id}
         )
 
-    # 4. 批量写入 published_items（暂不带 publish_job_id，稍后回填）
+    # 4. 批量写入 published_items，使用 upsert（ON DUPLICATE KEY UPDATE）
+    #    uq_published_item: UNIQUE(platform, item_id, month)
+    upsert_sql = text("""
+        INSERT INTO published_items
+            (publish_job_id, clean_job_id, match_result_id, platform, month,
+             category_lv1, category_lv2, category_lv3, category_lv4, category_lv5,
+             item_id, item_name, item_image, item_url, ref_price, shop_name,
+             sales_qty, sales_amount, price,
+             brand_code, brand_name, model_code, model_name, category_name, published_at)
+        VALUES
+            (:publish_job_id, :clean_job_id, :match_result_id, :platform, :month,
+             :category_lv1, :category_lv2, :category_lv3, :category_lv4, :category_lv5,
+             :item_id, :item_name, :item_image, :item_url, :ref_price, :shop_name,
+             :sales_qty, :sales_amount, :price,
+             :brand_code, :brand_name, :model_code, :model_name, :category_name, :published_at)
+        ON DUPLICATE KEY UPDATE
+            publish_job_id  = VALUES(publish_job_id),
+            clean_job_id    = VALUES(clean_job_id),
+            match_result_id = VALUES(match_result_id),
+            item_name       = VALUES(item_name),
+            item_image      = VALUES(item_image),
+            item_url        = VALUES(item_url),
+            ref_price       = VALUES(ref_price),
+            shop_name       = VALUES(shop_name),
+            sales_qty       = VALUES(sales_qty),
+            sales_amount    = VALUES(sales_amount),
+            price           = VALUES(price),
+            brand_code      = VALUES(brand_code),
+            brand_name      = VALUES(brand_name),
+            model_code      = VALUES(model_code),
+            model_name      = VALUES(model_name),
+            category_name   = VALUES(category_name),
+            published_at    = VALUES(published_at)
+    """)
+
     items_to_insert = []
     for r in rows:
-        items_to_insert.append(PublishedItem(
-            publish_job_id=0,        # 占位，稍后回填
-            clean_job_id=clean_job_id,
-            match_result_id=r["match_result_id"],
-            platform=r["platform"],
-            month=r["month"],
-            category_lv1=r["category_lv1"],
-            category_lv2=r["category_lv2"],
-            category_lv3=r["category_lv3"],
-            category_lv4=r["category_lv4"],
-            category_lv5=r["category_lv5"],
-            item_id=r["item_id"],
-            item_name=r["item_name"],
-            item_image=r["item_image"],
-            item_url=r["item_url"],
-            ref_price=r["ref_price"],
-            shop_name=r["shop_name"],
-            sales_qty=r["sales_qty"],
-            sales_amount=r["sales_amount"],
-            price=r["price"],
-            brand_code=r["brand_code"],
-            brand_name=r["brand_name"],
-            model_code=r["model_code"],
-            model_name=r["model_name"],
-            category_name=r["category_name"],
-        ))
+        items_to_insert.append({
+            "publish_job_id":  0,   # 占位，稍后回填
+            "clean_job_id":    clean_job_id,
+            "match_result_id": r["match_result_id"],
+            "platform":        r["platform"],
+            "month":           r["month"],
+            "category_lv1":    r["category_lv1"],
+            "category_lv2":    r["category_lv2"],
+            "category_lv3":    r["category_lv3"],
+            "category_lv4":    r["category_lv4"],
+            "category_lv5":    r["category_lv5"],
+            "item_id":         r["item_id"],
+            "item_name":       r["item_name"],
+            "item_image":      r["item_image"],
+            "item_url":        r["item_url"],
+            "ref_price":       r["ref_price"],
+            "shop_name":       r["shop_name"],
+            "sales_qty":       r["sales_qty"],
+            "sales_amount":    r["sales_amount"],
+            "price":           r["price"],
+            "brand_code":      r["brand_code"],
+            "brand_name":      r["brand_name"],
+            "model_code":      r["model_code"],
+            "model_name":      r["model_name"],
+            "category_name":   r["category_name"],
+            "published_at":    datetime.utcnow(),
+        })
 
-    analytics_db.add_all(items_to_insert)
-    analytics_db.flush()  # 获取自增 id
+    for item_dict in items_to_insert:
+        analytics_db.execute(upsert_sql, item_dict)
+    analytics_db.flush()
 
     # 5. 写入 published_item_specs
-    specs_to_insert = []
-    for item_obj, r in zip(items_to_insert, rows):
-        model_specs = specs_map.get(r["model_id"], {})
-        for spec_name, spec_value in model_specs.items():
-            specs_to_insert.append(PublishedItemSpec(
-                published_item_id=item_obj.id,
-                spec_name=spec_name,
-                spec_value=spec_value,
-            ))
+    #    upsert 后无法直接拿到 id，通过 (platform, item_id, month) 查回
+    if specs_map:
+        # 构建 (platform, item_id, month) → model_id 映射
+        key_to_model: dict[tuple, int] = {
+            (r["platform"], r["item_id"], r["month"]): r["model_id"]
+            for r in rows
+        }
+        # 查回刚插入/更新的 published_item id
+        placeholders = ",".join(
+            f"(:p{i}, :ii{i}, :m{i})" for i in range(len(items_to_insert))
+        )
+        bind = {}
+        for i, d in enumerate(items_to_insert):
+            bind[f"p{i}"] = d["platform"]
+            bind[f"ii{i}"] = d["item_id"]
+            bind[f"m{i}"] = d["month"]
+        id_rows = analytics_db.execute(
+            text(f"SELECT id, platform, item_id, month FROM published_items "
+                 f"WHERE (platform, item_id, month) IN ({placeholders})"),
+            bind,
+        ).fetchall()
 
-    if specs_to_insert:
-        analytics_db.add_all(specs_to_insert)
+        specs_to_insert = []
+        for pub_id, platform, item_id, month in id_rows:
+            model_id = key_to_model.get((platform, item_id, month))
+            if model_id is None:
+                continue
+            for spec_name, spec_value in specs_map.get(model_id, {}).items():
+                specs_to_insert.append(PublishedItemSpec(
+                    published_item_id=pub_id,
+                    spec_name=spec_name,
+                    spec_value=spec_value,
+                ))
+
+        if specs_to_insert:
+            analytics_db.add_all(specs_to_insert)
 
     analytics_db.commit()
     return {

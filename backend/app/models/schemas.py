@@ -294,6 +294,43 @@ class ModelAliasOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ItemUrlMapping(Base):
+    __tablename__ = "item_url_mappings"
+    __table_args__ = (UniqueConstraint("platform", "item_id", name="uq_platform_item"),)
+
+    id         = Column(Integer, primary_key=True, autoincrement=True)
+    platform   = Column(String(20), nullable=False)
+    item_id    = Column(String(50), nullable=False)
+    model_id   = Column(Integer, ForeignKey("models.id"), nullable=False)
+    price      = Column(Numeric(10, 2), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow,
+                        onupdate=datetime.utcnow)
+
+    model = relationship("ModelRecord")
+
+
+class ItemUrlMappingIn(BaseModel):
+    platform: str
+    item_id:  str
+    model_id: int
+    price:    Optional[float] = None
+
+
+class ItemUrlMappingOut(BaseModel):
+    id:         int
+    platform:   str
+    item_id:    str
+    model_id:   int
+    price:      Optional[float]
+    brand_code: Optional[str] = None
+    model_code: Optional[str] = None
+    brand_name: Optional[str] = None
+    model_name: Optional[str] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
 
 # ─────────────────────────── 型号匹配结果 ───────────────────────────
 
@@ -334,12 +371,14 @@ class MatchResultOut(BaseModel):
 
 class MatchSummary(BaseModel):
     clean_job_id: int
-    total:     int
-    matched:   int
-    pending:   int
-    confirmed: int
-    excluded:  int
-    disabled:  int = 0
+    total:       int
+    url_matched: int = 0
+    matched:     int
+    text_only:   int = 0
+    pending:     int
+    confirmed:   int
+    excluded:    int
+    disabled:    int = 0
 
 
 # ─────────────────────────── 发布任务 ───────────────────────────

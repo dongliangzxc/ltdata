@@ -65,7 +65,7 @@ def export_match_job(
         .join(ModelRecord,   MatchResult.model_id     == ModelRecord.id)
         .filter(
             MatchResult.clean_job_id == clean_job_id,
-            MatchResult.match_status.in_(["matched", "confirmed"]),
+            MatchResult.match_status.in_(["url_matched", "matched", "confirmed"]),
         )
         .all()
     )

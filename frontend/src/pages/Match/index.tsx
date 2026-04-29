@@ -1,14 +1,15 @@
 import { useState, useEffect, useRef } from 'react'
 import {
   Card, Select, Button, Table, Tag, Space, Typography, Input,
-  message, Row, Col, Statistic, Tooltip, Progress, Alert
+  message, Row, Col, Statistic, Tooltip, Progress, Alert, Popconfirm, InputNumber
 } from 'antd'
 import { AimOutlined, CheckOutlined, StopOutlined, CloudUploadOutlined, LoadingOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import { useSearchParams } from 'react-router-dom'
 import {
   listCleanJobs, runMatch, getMatchProgress, getMatchSummary, listPendingMatches,
-  confirmMatch, listModels, runPublish, listPublishJobs
+  confirmMatch, listModels, runPublish, listPublishJobs,
+  disableMatch, enableMatch, avgPriceDisable, listDisabled
 } from '../../services/api'
 
 const { Text } = Typography
@@ -20,6 +21,7 @@ type MatchSummary = {
   pending: number
   confirmed: number
   excluded: number
+  disabled: number
 }
 
 type PendingItem = {
@@ -27,6 +29,14 @@ type PendingItem = {
   raw_data_id: number
   item_name: string
   brand_raw: string
+}
+
+type DisabledItem = {
+  id: number
+  item_name: string
+  brand_raw: string
+  match_status: string
+  disable_reason: string | null
 }
 
 type ModelOption = {
@@ -70,6 +80,12 @@ export default function MatchPage() {
   const [confirmingIds, setConfirmingIds] = useState<Set<number>>(new Set())
   const [selectedModels, setSelectedModels] = useState<Record<number, number>>({})
   const [publishJobs, setPublishJobs] = useState<PublishJob[]>([])
+  const [disabledItems, setDisabledItems] = useState<DisabledItem[]>([])
+  const [disabledTotal, setDisabledTotal] = useState(0)
+  const [disabledPage, setDisabledPage] = useState(1)
+  const [disabledLoading, setDisabledLoading] = useState(false)
+  const [avgPriceThreshold, setAvgPriceThreshold] = useState(200)
+  const [disableReasonMap, setDisableReasonMap] = useState<Record<number, string>>({})
 
   const { data: jobsData } = useRequest(() => listCleanJobs().then(r => r.data))
   const { data: modelsData } = useRequest(
@@ -91,6 +107,7 @@ export default function MatchPage() {
     listPublishJobs(selectedJobId)
       .then(r => setPublishJobs(r.data.data ?? []))
       .catch(() => setPublishJobs([]))
+    loadDisabled()
   }, [selectedJobId])
 
   const handleRunMatch = async () => {
@@ -181,6 +198,33 @@ export default function MatchPage() {
     }
   }
 
+  const loadDisabled = async (page = 1) => {
+    if (!selectedJobId) return
+    setDisabledLoading(true)
+    try {
+      const res = await listDisabled(selectedJobId, page)
+      setDisabledItems(res.data.items ?? [])
+      setDisabledTotal(res.data.total)
+      setDisabledPage(page)
+    } finally {
+      setDisabledLoading(false)
+    }
+  }
+
+  const handleDisable = async (matchId: number) => {
+    const reason = disableReasonMap[matchId]
+    setConfirmingIds(prev => new Set(prev).add(matchId))
+    try {
+      await disableMatch(matchId, reason || undefined)
+      message.success('已禁用')
+      refreshPending()
+      getMatchSummary(selectedJobId!).then(r => setSummary(r.data))
+      loadDisabled()
+    } finally {
+      setConfirmingIds(prev => { const s = new Set(prev); s.delete(matchId); return s })
+    }
+  }
+
   const pendingColumns = [
     {
       title: '宝贝名称', dataIndex: 'item_name', ellipsis: true,
@@ -209,7 +253,7 @@ export default function MatchPage() {
       )
     },
     {
-      title: '操作', width: 110, fixed: 'right' as const,
+      title: '操作', width: 180, fixed: 'right' as const,
       render: (_: unknown, row: PendingItem) => (
         <Space size={4}>
           <Button
@@ -222,6 +266,34 @@ export default function MatchPage() {
             loading={confirmingIds.has(row.id)}
             onClick={() => handleExclude(row.id)}
           >排除</Button>
+          <Popconfirm
+            title={
+              <Space direction="vertical" size={4}>
+                <span>选择禁用原因</span>
+                <Select
+                  size="small"
+                  style={{ width: 130 }}
+                  placeholder="原因(可选)"
+                  allowClear
+                  onChange={(v: string) => setDisableReasonMap(prev => ({ ...prev, [row.id]: v }))}
+                  options={[
+                    { value: '商用', label: '商用' },
+                    { value: '配件', label: '配件' },
+                    { value: 'avg_price', label: '均价过低' },
+                    { value: '其他', label: '其他' },
+                  ]}
+                />
+              </Space>
+            }
+            onConfirm={() => handleDisable(row.id)}
+            okText="禁用"
+            cancelText="取消"
+          >
+            <Button
+              size="small"
+              loading={confirmingIds.has(row.id)}
+            >禁用</Button>
+          </Popconfirm>
         </Space>
       )
     },
@@ -287,6 +359,34 @@ export default function MatchPage() {
         </Row>
       </Card>
 
+      {selectedJobId && summary && summary.total > 0 && (
+        <Card size="small">
+          <Space wrap>
+            <Text>均价批量禁用：</Text>
+            <InputNumber
+              value={avgPriceThreshold}
+              onChange={v => setAvgPriceThreshold(v ?? 200)}
+              addonBefore="价格低于"
+              addonAfter="元"
+              min={0}
+              style={{ width: 200 }}
+            />
+            <Popconfirm
+              title={`将禁用价格低于 ${avgPriceThreshold} 元的已匹配数据，是否继续？`}
+              onConfirm={async () => {
+                if (!selectedJobId) return
+                const res = await avgPriceDisable(selectedJobId, avgPriceThreshold)
+                message.success(`均价禁用完成，共禁用 ${res.data.disabled_count} 条`)
+                getMatchSummary(selectedJobId).then(r => setSummary(r.data))
+                loadDisabled()
+              }}
+            >
+              <Button>均价批量禁用</Button>
+            </Popconfirm>
+          </Space>
+        </Card>
+      )}
+
       {matchProgress && matchProgress.status === 'running' && (
         <Card>
           <Space direction="vertical" style={{ width: '100%' }} size={8}>
@@ -335,13 +435,14 @@ export default function MatchPage() {
 
       {summary && summary.total > 0 && (
         <Card>
-          <Row gutter={24}>
-            <Col span={4}><Statistic title="总条数" value={summary.total} /></Col>
-            <Col span={4}><Statistic title="自动匹配" value={summary.matched} valueStyle={{ color: '#3f8600' }} /></Col>
-            <Col span={4}><Statistic title="待确认" value={summary.pending} valueStyle={{ color: '#d46b08' }} /></Col>
-            <Col span={4}><Statistic title="已人工确认" value={summary.confirmed} valueStyle={{ color: '#1677ff' }} /></Col>
-            <Col span={4}><Statistic title="已排除" value={summary.excluded} valueStyle={{ color: '#cf1322' }} /></Col>
-            <Col span={4}>
+          <Row gutter={16}>
+            <Col span={3}><Statistic title="总条数" value={summary.total} /></Col>
+            <Col span={3}><Statistic title="自动匹配" value={summary.matched} valueStyle={{ color: '#3f8600' }} /></Col>
+            <Col span={3}><Statistic title="待确认" value={summary.pending} valueStyle={{ color: '#d46b08' }} /></Col>
+            <Col span={3}><Statistic title="已人工确认" value={summary.confirmed} valueStyle={{ color: '#1677ff' }} /></Col>
+            <Col span={3}><Statistic title="已排除" value={summary.excluded} valueStyle={{ color: '#cf1322' }} /></Col>
+            <Col span={3}><Statistic title="已禁用" value={summary.disabled ?? 0} valueStyle={{ color: '#faad14' }} /></Col>
+            <Col span={3}>
               <Statistic
                 title="匹配率"
                 value={summary.total ? Math.round((summary.matched + summary.confirmed) / summary.total * 100) : 0}
@@ -379,6 +480,49 @@ export default function MatchPage() {
               onChange: setPage,
               showTotal: t => `共 ${t} 条`,
             }}
+          />
+        </Card>
+      )}
+
+      {summary && (summary.disabled ?? 0) > 0 && (
+        <Card title={`禁用列表（${disabledTotal} 条）`}>
+          <Table
+            loading={disabledLoading}
+            dataSource={disabledItems}
+            rowKey="id"
+            size="small"
+            pagination={{
+              current: disabledPage,
+              total: disabledTotal,
+              pageSize: 20,
+              onChange: (p) => loadDisabled(p),
+              showTotal: t => `共 ${t} 条`,
+            }}
+            columns={[
+              { title: '商品名称', dataIndex: 'item_name', ellipsis: true },
+              { title: '原始品牌', dataIndex: 'brand_raw', width: 120 },
+              { title: '匹配状态', dataIndex: 'match_status', width: 100 },
+              {
+                title: '禁用原因', dataIndex: 'disable_reason', width: 120,
+                render: (v: string | null) => v ? <Tag color="orange">{v}</Tag> : '-'
+              },
+              {
+                title: '操作', width: 80, fixed: 'right' as const,
+                render: (_: unknown, record: DisabledItem) => (
+                  <Popconfirm
+                    title="确认启用此条数据？"
+                    onConfirm={async () => {
+                      await enableMatch(record.id)
+                      message.success('已启用')
+                      loadDisabled(disabledPage)
+                      getMatchSummary(selectedJobId!).then(r => setSummary(r.data))
+                    }}
+                  >
+                    <Button size="small" type="link">启用</Button>
+                  </Popconfirm>
+                ),
+              },
+            ]}
           />
         </Card>
       )}

@@ -110,33 +110,46 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
     for i, row in enumerate(cleaned_rows):
         item_upper = _norm(row.item_name)
         best_model: ModelRecord | None = None
+        brand_identified = False   # 是否发现品牌候选
+        match_source: str | None = None  # 命中步骤
 
         # S1: 用 brand_raw 缩窄候选
         if row.brand_raw:
             candidates = _candidates_by_brand_raw(row.brand_raw)
-            best_model = _best(candidates, item_upper)
+            if candidates:
+                brand_identified = True
+                m = _best(candidates, item_upper)
+                if m:
+                    best_model = m
+                    match_source = "s1"
 
-        # S2: item_name 里找 brand_code（处理"飞利浦（PHILIPS）"等英文码直接出现在名称中的情况）
+        # S2: item_name 里找 brand_code
         if best_model is None:
             for bc, grp in brand_code_index.items():
                 if bc and bc in item_upper:
+                    brand_identified = True
                     m = _best(grp, item_upper)
                     if m:
                         if len(_norm(m.model_code)) > len(_norm(best_model.model_code) if best_model else ""):
                             best_model = m
+                            match_source = "s2"
 
         # S3: item_name 里找 brand_name
         if best_model is None:
             for bn, grp in brand_name_index.items():
                 if len(bn) >= 2 and bn in item_upper:
+                    brand_identified = True
                     m = _best(grp, item_upper)
                     if m:
                         if len(_norm(m.model_code)) > len(_norm(best_model.model_code) if best_model else ""):
                             best_model = m
+                            match_source = "s3"
 
-        # S4: 无品牌线索时用长 model_code 兜底
-        if best_model is None:
+        # S4: 仅在品牌完全未识别时才做全局长码兜底
+        if best_model is None and not brand_identified:
             best_model = _best(long_code_models, item_upper)
+            if best_model:
+                match_source = "s4"
 
         if best_model:
             results.append(MatchResult(
@@ -145,6 +158,7 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
                 model_id=best_model.id,
                 match_status="matched",
                 matched_by="auto",
+                match_source=match_source,
             ))
             matched_count += 1
         else:
@@ -154,6 +168,7 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
                 model_id=None,
                 match_status="pending",
                 matched_by="auto",
+                match_source=None,
             ))
 
         if len(results) >= BATCH:

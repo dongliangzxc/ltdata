@@ -246,7 +246,8 @@ class ModelRecord(Base):
     created_at    = Column(DateTime, default=datetime.utcnow)
     updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    specs = relationship("ModelSpec", back_populates="model", cascade="all, delete-orphan")
+    specs   = relationship("ModelSpec",  back_populates="model", cascade="all, delete-orphan")
+    aliases = relationship("ModelAlias", back_populates="model", cascade="all, delete-orphan")
 
 
 class ModelSpec(Base):
@@ -262,6 +263,17 @@ class ModelSpec(Base):
     model = relationship("ModelRecord", back_populates="specs")
 
 
+class ModelAlias(Base):
+    __tablename__ = "model_aliases"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    model_id   = Column(Integer, ForeignKey("models.id", ondelete="CASCADE"), nullable=False)
+    alias_code = Column(String(200), nullable=False, unique=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    model = relationship("ModelRecord", back_populates="aliases")
+
+
 class ModelSpecIn(BaseModel):
     spec_name:  str
     spec_value: Optional[str] = None
@@ -271,6 +283,13 @@ class ModelSpecOut(BaseModel):
     id:         int
     spec_name:  str
     spec_value: Optional[str]
+
+    model_config = {"from_attributes": True}
+
+
+class ModelAliasOut(BaseModel):
+    id:         int
+    alias_code: str
 
     model_config = {"from_attributes": True}
 
@@ -369,6 +388,7 @@ class ModelOut(BaseModel):
     launch_price:  Optional[float]
     url:           Optional[str]
     specs:         list[ModelSpecOut] = []
+    aliases:       list[ModelAliasOut] = []
     created_at:    datetime
     updated_at:    datetime
 

@@ -24,10 +24,13 @@ type ExportJobItem = {
 
 type MatchSummary = {
   total: number
+  url_matched: number
   matched: number
+  text_only: number
   pending: number
   confirmed: number
   excluded: number
+  disabled: number
 }
 
 export default function ExportPage() {
@@ -146,7 +149,7 @@ export default function ExportPage() {
   ]
 
   const doneJobs = (jobsData ?? []).filter((j: { status: string }) => j.status === 'done')
-  const readyMatched = matchSummary ? matchSummary.matched + matchSummary.confirmed : 0
+  const readyMatched = matchSummary ? matchSummary.url_matched + matchSummary.matched + matchSummary.confirmed : 0
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -197,9 +200,10 @@ export default function ExportPage() {
             {selectedJobId && matchSummary && (
               <Card size="small" title="匹配状态">
                 <Row gutter={12}>
-                  <Col span={8}><Statistic title="已匹配" value={matchSummary.matched} valueStyle={{ color: '#3f8600', fontSize: 18 }} /></Col>
-                  <Col span={8}><Statistic title="已确认" value={matchSummary.confirmed} valueStyle={{ color: '#1677ff', fontSize: 18 }} /></Col>
-                  <Col span={8}><Statistic title="待确认" value={matchSummary.pending} valueStyle={{ color: '#d46b08', fontSize: 18 }} /></Col>
+                  <Col span={6}><Statistic title="URL匹配" value={matchSummary.url_matched} valueStyle={{ color: '#7c3aed', fontSize: 18 }} /></Col>
+                  <Col span={6}><Statistic title="已匹配" value={matchSummary.matched} valueStyle={{ color: '#3f8600', fontSize: 18 }} /></Col>
+                  <Col span={6}><Statistic title="已确认" value={matchSummary.confirmed} valueStyle={{ color: '#1677ff', fontSize: 18 }} /></Col>
+                  <Col span={6}><Statistic title="待确认" value={matchSummary.pending} valueStyle={{ color: '#d46b08', fontSize: 18 }} /></Col>
                 </Row>
                 {matchSummary.pending > 0 && (
                   <Alert

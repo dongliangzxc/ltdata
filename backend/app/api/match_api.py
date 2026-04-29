@@ -115,7 +115,8 @@ def get_match_summary(clean_job_id: int, db: Session = Depends(get_db)):
     if not rows:
         return MatchSummary(
             clean_job_id=clean_job_id,
-            total=0, matched=0, pending=0, confirmed=0, excluded=0, disabled=0,
+            total=0, url_matched=0, matched=0, text_only=0,
+            pending=0, confirmed=0, excluded=0, disabled=0,
         )
 
     total = len(rows)
@@ -128,7 +129,9 @@ def get_match_summary(clean_job_id: int, db: Session = Depends(get_db)):
     return MatchSummary(
         clean_job_id=clean_job_id,
         total=total,
+        url_matched=status_count.get("url_matched", 0),
         matched=status_count.get("matched", 0),
+        text_only=status_count.get("text_only", 0),
         pending=status_count.get("pending", 0),
         confirmed=status_count.get("confirmed", 0),
         excluded=status_count.get("excluded", 0),
@@ -140,17 +143,22 @@ def get_match_summary(clean_job_id: int, db: Session = Depends(get_db)):
 def list_pending(
     clean_job_id: int,
     keyword: Optional[str] = Query(None),
+    status: str = Query("pending"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
-    """分页查询待确认条目（status=pending），支持关键词搜索宝贝名称"""
+    """分页查询待处理条目，status=pending 或 text_only"""
+    allowed_statuses = {"pending", "text_only"}
+    if status not in allowed_statuses:
+        status = "pending"
+
     q = (
         db.query(MatchResult, RawDataRecord)
         .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
         .filter(
             MatchResult.clean_job_id == clean_job_id,
-            MatchResult.match_status == "pending",
+            MatchResult.match_status == status,
         )
     )
     if keyword:
@@ -291,7 +299,7 @@ def avg_price_disable(
         .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
         .filter(
             MatchResult.clean_job_id == clean_job_id,
-            MatchResult.match_status.in_(["matched", "confirmed"]),
+            MatchResult.match_status.in_(["url_matched", "matched", "confirmed"]),
             MatchResult.is_disabled == 0,
             RawDataRecord.price < payload.threshold,
         )

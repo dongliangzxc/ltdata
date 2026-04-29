@@ -65,7 +65,7 @@ def run_publish(luotu_db: Session, analytics_db: Session, clean_job_id: int) -> 
         JOIN raw_data rd  ON rd.id = mr.raw_data_id
         JOIN models m     ON m.id  = mr.model_id
         WHERE mr.clean_job_id = :clean_job_id
-          AND mr.match_status IN ('matched', 'confirmed')
+          AND mr.match_status IN ('url_matched', 'matched', 'confirmed')
           AND mr.is_disabled = 0
     """)
     rows = luotu_db.execute(sql, {"clean_job_id": clean_job_id}).mappings().all()

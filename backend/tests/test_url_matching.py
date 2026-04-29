@@ -345,3 +345,120 @@ def test_matched_when_no_url():
     assert len(results) == 1
     assert results[0].match_status == "matched"
     db.close()
+
+
+@pytest.mark.skip(reason="requires analytics DB (MySQL); run inside Docker only")
+def test_publisher_includes_url_matched():
+    """url_matched rows are published; text_only rows are skipped"""
+    from app.models.schemas import (
+        MatchResult, UploadFileRecord, RawDataRecord, CleanJobRecord,
+    )
+    from app.models.analytics_db import AnalyticsBase, analytics_engine, AnalyticsSession
+    from app.services.publisher import run_publish
+
+    AnalyticsBase.metadata.create_all(bind=analytics_engine)
+
+    db = TestSession()
+    model = db.query(ModelRecord).first()
+    if not model:
+        model = ModelRecord(brand_code="PUB_TEST", model_code="PUB_MODEL", category_name="SOUNDBAR")
+        db.add(model)
+        db.flush()
+
+    uf = UploadFileRecord(filename="pub.xlsx", platform="jd", month_range="202601")
+    db.add(uf)
+    db.flush()
+
+    rd1 = RawDataRecord(file_id=uf.id, platform="jd", month=202601, category_lv1="音频",
+                        item_id="pub1", item_name="pub item 1", brand_raw="PUB_TEST",
+                        price=500.0, sales_qty=1, sales_amount=500.0)
+    rd2 = RawDataRecord(file_id=uf.id, platform="jd", month=202601, category_lv1="音频",
+                        item_id="pub2", item_name="pub item 2", brand_raw="PUB_TEST",
+                        price=300.0, sales_qty=1, sales_amount=300.0)
+    db.add_all([rd1, rd2])
+    db.flush()
+
+    cj = CleanJobRecord(status="done", file_ids=[uf.id])
+    db.add(cj)
+    db.flush()
+
+    mr1 = MatchResult(clean_job_id=cj.id, raw_data_id=rd1.id,
+                      model_id=model.id, match_status="url_matched", is_disabled=0)
+    mr2 = MatchResult(clean_job_id=cj.id, raw_data_id=rd2.id,
+                      model_id=model.id, match_status="text_only", is_disabled=0)
+    db.add_all([mr1, mr2])
+    db.commit()
+
+    analytics_db = AnalyticsSession()
+    try:
+        result = run_publish(db, analytics_db, cj.id)
+        assert result["published_count"] == 1, \
+            f"Should publish url_matched only, got {result['published_count']}"
+    finally:
+        db.close()
+        analytics_db.close()
+
+
+def test_summary_includes_url_matched_and_text_only():
+    """GET /api/match/{cj_id}/summary returns url_matched and text_only counts"""
+    token = _get_token()
+    headers = {"Authorization": f"Bearer {token}"}
+
+    db = TestSession()
+    model = db.query(ModelRecord).first()
+    uf = UploadFileRecord(filename="sum.xlsx", platform="jd", month_range="202601")
+    db.add(uf); db.flush()
+    cj = CleanJobRecord(status="done", file_ids=[uf.id])
+    db.add(cj); db.flush()
+
+    rd1 = RawDataRecord(file_id=uf.id, platform="jd", month=202601, category_lv1="音频",
+                        item_id="s1", item_name="s1", brand_raw="X", price=1.0,
+                        sales_qty=1, sales_amount=1.0)
+    rd2 = RawDataRecord(file_id=uf.id, platform="jd", month=202601, category_lv1="音频",
+                        item_id="s2", item_name="s2", brand_raw="X", price=1.0,
+                        sales_qty=1, sales_amount=1.0)
+    db.add_all([rd1, rd2]); db.flush()
+
+    from app.models.schemas import MatchResult
+    db.add(MatchResult(clean_job_id=cj.id, raw_data_id=rd1.id,
+                       model_id=model.id, match_status="url_matched"))
+    db.add(MatchResult(clean_job_id=cj.id, raw_data_id=rd2.id,
+                       model_id=model.id, match_status="text_only"))
+    db.commit()
+    cj_id = cj.id
+    db.close()
+
+    r = client.get(f"/api/match/{cj_id}/summary", headers=headers)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["url_matched"] == 1, f"url_matched should be 1: {body}"
+    assert body["text_only"] == 1, f"text_only should be 1: {body}"
+
+
+def test_list_text_only():
+    """GET /api/match/{cj_id}/pending?status=text_only returns text_only rows"""
+    token = _get_token()
+    headers = {"Authorization": f"Bearer {token}"}
+
+    db = TestSession()
+    model = db.query(ModelRecord).first()
+    uf = UploadFileRecord(filename="to.xlsx", platform="jd", month_range="202601")
+    db.add(uf); db.flush()
+    cj = CleanJobRecord(status="done", file_ids=[uf.id])
+    db.add(cj); db.flush()
+    rd = RawDataRecord(file_id=uf.id, platform="jd", month=202601, category_lv1="音频",
+                       item_id="to1", item_name="test text only item", brand_raw="X",
+                       price=1.0, sales_qty=1, sales_amount=1.0)
+    db.add(rd); db.flush()
+    from app.models.schemas import MatchResult
+    db.add(MatchResult(clean_job_id=cj.id, raw_data_id=rd.id,
+                       model_id=model.id, match_status="text_only"))
+    db.commit()
+    cj_id = cj.id
+    db.close()
+
+    r = client.get(f"/api/match/{cj_id}/pending", params={"status": "text_only"}, headers=headers)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] >= 1
+    assert all(item["match_status"] == "text_only" for item in body["items"])

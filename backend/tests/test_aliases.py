@@ -103,3 +103,50 @@ def test_delete_alias(db):
     assert len(remaining) == 0
 
     app.dependency_overrides.clear()
+
+
+import io
+import openpyxl
+
+
+def _make_excel_with_alias() -> bytes:
+    """构造含「别名」sheet 的 Excel，返回字节内容。"""
+    wb = openpyxl.Workbook()
+    ws1 = wb.active
+    ws1.title = "型号"
+    ws1.append(["品牌码", "型号码", "品类"])
+    ws1.append(["SONY", "HT-A3000", "SOUNDBAR"])
+    wb.create_sheet("型号规格")
+    ws3 = wb.create_sheet("别名")
+    ws3.append(["品牌码", "型号码", "别名"])
+    ws3.append(["SONY", "HT-A3000", "HTA3000"])
+    ws3.append(["SONY", "HT-A3000", "HT A3000"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def test_import_aliases_from_excel(db):
+    """Excel「别名」sheet 中的别名在导入后写入 model_aliases 表。"""
+    app.dependency_overrides[get_db] = _override_db(db)
+    client = TestClient(app, headers=_AUTH_HEADERS)
+
+    content = _make_excel_with_alias()
+    res = client.post(
+        "/api/models/import",
+        files={"file": ("models.xlsx", content,
+               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["imported_models"] == 1
+    assert data["imported_aliases"] == 2
+
+    m = db.query(ModelRecord).filter(ModelRecord.model_code == "HT-A3000").first()
+    assert m is not None
+    aliases = db.query(ModelAlias).filter(ModelAlias.model_id == m.id).all()
+    alias_codes = {a.alias_code for a in aliases}
+    assert "HTA3000" in alias_codes
+    assert "HT A3000" in alias_codes
+
+    app.dependency_overrides.clear()

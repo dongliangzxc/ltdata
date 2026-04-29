@@ -199,6 +199,7 @@ async def import_models(file: UploadFile = File(...), db: Session = Depends(get_
             "上市年": "launch_year", "上市月": "launch_month", "上市周": "launch_week",
             "上市价格": "launch_price", "网址": "url",
             "规格名称": "spec_name", "规格值": "spec_value",
+            "别名": "alias_code",
         }
         rename = {}
         for src, dst in priority.items():
@@ -230,6 +231,9 @@ async def import_models(file: UploadFile = File(...), db: Session = Depends(get_
     upserted_models = 0
     model_key_to_id: dict[tuple, int] = {}
 
+    # 检测数据库方言，决定是否使用 MySQL ON DUPLICATE KEY UPDATE
+    dialect_name = db.bind.dialect.name if hasattr(db, "bind") and db.bind else db.get_bind().dialect.name
+
     for _, row in df_model.iterrows():
         bc = _clean_val(row.get("brand_code"))
         mc = _clean_val(row.get("model_code"))
@@ -249,19 +253,31 @@ async def import_models(file: UploadFile = File(...), db: Session = Depends(get_
             "url":           str(_clean_val(row.get("url")) or "") or None,
         }
 
-        stmt = mysql_insert(ModelRecord).values(**vals)
-        stmt = stmt.on_duplicate_key_update(
-            category_name=stmt.inserted.category_name,
-            brand_name=stmt.inserted.brand_name,
-            model_name=stmt.inserted.model_name,
-            launch_year=stmt.inserted.launch_year,
-            launch_month=stmt.inserted.launch_month,
-            launch_week=stmt.inserted.launch_week,
-            launch_price=stmt.inserted.launch_price,
-            url=stmt.inserted.url,
-            updated_at=func.now(),
-        )
-        db.execute(stmt)
+        if dialect_name == "mysql":
+            stmt = mysql_insert(ModelRecord).values(**vals)
+            stmt = stmt.on_duplicate_key_update(
+                category_name=stmt.inserted.category_name,
+                brand_name=stmt.inserted.brand_name,
+                model_name=stmt.inserted.model_name,
+                launch_year=stmt.inserted.launch_year,
+                launch_month=stmt.inserted.launch_month,
+                launch_week=stmt.inserted.launch_week,
+                launch_price=stmt.inserted.launch_price,
+                url=stmt.inserted.url,
+                updated_at=func.now(),
+            )
+            db.execute(stmt)
+        else:
+            existing = db.query(ModelRecord).filter(
+                ModelRecord.brand_code == vals["brand_code"],
+                ModelRecord.model_code == vals["model_code"],
+            ).first()
+            if existing:
+                for k, v in vals.items():
+                    if k not in ("brand_code", "model_code"):
+                        setattr(existing, k, v)
+            else:
+                db.add(ModelRecord(**vals))
         upserted_models += 1
 
     db.flush()
@@ -300,8 +316,36 @@ async def import_models(file: UploadFile = File(...), db: Session = Depends(get_
             db.add(ModelSpec(**s))
             upserted_specs += 1
 
+    # 处理「别名」sheet（可选，无此 sheet 时静默跳过）
+    upserted_aliases = 0
+    try:
+        df_alias = pd.read_excel(io.BytesIO(content), sheet_name="别名", dtype=str)
+        df_alias.columns = [str(c).strip() for c in df_alias.columns]
+        df_alias = _apply_col_map(df_alias.dropna(axis=1, how="all"))
+        if "brand_code" in df_alias.columns and "model_code" in df_alias.columns and "alias_code" in df_alias.columns:
+            for col in ["brand_code", "model_code"]:
+                df_alias[col] = df_alias[col].replace("不需要填写", None).ffill()
+            for _, arow in df_alias.iterrows():
+                bc = _clean_val(arow.get("brand_code"))
+                mc = _clean_val(arow.get("model_code"))
+                ac = _clean_val(arow.get("alias_code"))
+                if not bc or not mc or not ac:
+                    continue
+                model_id = model_key_to_id.get((str(bc), str(mc)))
+                if model_id is None:
+                    continue
+                ac_str = str(ac).strip()
+                if not ac_str:
+                    continue
+                exists = db.query(ModelAlias).filter(ModelAlias.alias_code == ac_str).first()
+                if not exists:
+                    db.add(ModelAlias(model_id=model_id, alias_code=ac_str))
+                    upserted_aliases += 1
+    except Exception:
+        pass  # 无「别名」sheet 时静默跳过
+
     db.commit()
-    return {"imported_models": upserted_models, "imported_specs": upserted_specs}
+    return {"imported_models": upserted_models, "imported_specs": upserted_specs, "imported_aliases": upserted_aliases}
 
 
 @router.get("", response_model=PaginatedResponse)

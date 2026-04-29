@@ -218,3 +218,115 @@ def confirm_match(match_id: int, payload: dict, db: Session = Depends(get_db)):
         model_code=model_info.model_code if model_info else None,
         brand_code=model_info.brand_code if model_info else None,
     )
+
+
+# ── 禁用 / 启用 ────────────────────────────────────────────────────────────
+
+from pydantic import BaseModel as _PydanticBase
+from typing import Optional as _Opt
+
+
+class _DisableIn(_PydanticBase):
+    reason: _Opt[str] = None
+
+
+class _AvgPriceDisableIn(_PydanticBase):
+    threshold: float = 200.0
+
+
+@router.patch("/{match_id}/disable", response_model=MatchResultOut)
+def disable_match(match_id: int, payload: _DisableIn, db: Session = Depends(get_db)):
+    """单条禁用"""
+    mr = db.query(MatchResult).filter(MatchResult.id == match_id).first()
+    if not mr:
+        raise HTTPException(status_code=404, detail="匹配记录不存在")
+    mr.is_disabled = 1
+    mr.disable_reason = payload.reason
+    db.commit()
+    db.refresh(mr)
+    rd = db.query(RawDataRecord).filter(RawDataRecord.id == mr.raw_data_id).first()
+    return MatchResultOut(
+        id=mr.id, clean_job_id=mr.clean_job_id, raw_data_id=mr.raw_data_id,
+        model_id=mr.model_id, match_status=mr.match_status, matched_by=mr.matched_by,
+        match_source=mr.match_source, is_disabled=mr.is_disabled,
+        disable_reason=mr.disable_reason,
+        item_name=rd.item_name if rd else None,
+        brand_raw=rd.brand_raw if rd else None,
+    )
+
+
+@router.patch("/{match_id}/enable", response_model=MatchResultOut)
+def enable_match(match_id: int, db: Session = Depends(get_db)):
+    """单条启用（清除禁用状态）"""
+    mr = db.query(MatchResult).filter(MatchResult.id == match_id).first()
+    if not mr:
+        raise HTTPException(status_code=404, detail="匹配记录不存在")
+    mr.is_disabled = 0
+    mr.disable_reason = None
+    db.commit()
+    db.refresh(mr)
+    rd = db.query(RawDataRecord).filter(RawDataRecord.id == mr.raw_data_id).first()
+    return MatchResultOut(
+        id=mr.id, clean_job_id=mr.clean_job_id, raw_data_id=mr.raw_data_id,
+        model_id=mr.model_id, match_status=mr.match_status, matched_by=mr.matched_by,
+        match_source=mr.match_source, is_disabled=mr.is_disabled,
+        disable_reason=mr.disable_reason,
+        item_name=rd.item_name if rd else None,
+        brand_raw=rd.brand_raw if rd else None,
+    )
+
+
+@router.post("/{clean_job_id}/avg-price-disable")
+def avg_price_disable(
+    clean_job_id: int,
+    payload: _AvgPriceDisableIn,
+    db: Session = Depends(get_db),
+):
+    """批量均价禁用：price < threshold 的 matched/confirmed 行"""
+    rows = (
+        db.query(MatchResult)
+        .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
+        .filter(
+            MatchResult.clean_job_id == clean_job_id,
+            MatchResult.match_status.in_(["matched", "confirmed"]),
+            MatchResult.is_disabled == 0,
+            RawDataRecord.price < payload.threshold,
+        )
+        .all()
+    )
+    for mr in rows:
+        mr.is_disabled = 1
+        mr.disable_reason = "avg_price"
+    db.commit()
+    return {"disabled_count": len(rows)}
+
+
+@router.get("/{clean_job_id}/disabled", response_model=PaginatedResponse)
+def list_disabled(
+    clean_job_id: int,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """分页查询禁用列表"""
+    q = (
+        db.query(MatchResult, RawDataRecord)
+        .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
+        .filter(
+            MatchResult.clean_job_id == clean_job_id,
+            MatchResult.is_disabled == 1,
+        )
+    )
+    total = q.count()
+    rows = q.offset((page - 1) * page_size).limit(page_size).all()
+    items = [
+        MatchResultOut(
+            id=mr.id, clean_job_id=mr.clean_job_id, raw_data_id=mr.raw_data_id,
+            model_id=mr.model_id, match_status=mr.match_status, matched_by=mr.matched_by,
+            match_source=mr.match_source, is_disabled=mr.is_disabled,
+            disable_reason=mr.disable_reason,
+            item_name=rd.item_name, brand_raw=rd.brand_raw,
+        )
+        for mr, rd in rows
+    ]
+    return PaginatedResponse(total=total, page=page, page_size=page_size, items=items)

@@ -188,6 +188,7 @@ CREATE TABLE IF NOT EXISTS match_results (
                                        COMMENT 'matched/pending/confirmed/excluded',
     matched_by   VARCHAR(20) NOT NULL DEFAULT 'auto'
                                        COMMENT 'auto=自动匹配 manual=人工确认',
+    match_source VARCHAR(20)           COMMENT 's1/s2/s3/s4=自动匹配步骤 manual=人工',
     created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     KEY idx_match_clean_job (clean_job_id),

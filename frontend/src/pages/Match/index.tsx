@@ -166,8 +166,14 @@ export default function MatchPage() {
     setPublishing(true)
     try {
       const res = await runPublish(selectedJobId)
-      const { published_count } = res.data.data
+      const { published_count, skipped_pending_count } = res.data.data
       message.success(`发布成功，共写入 ${published_count} 条到分析库`)
+      if (skipped_pending_count > 0) {
+        message.warning(
+          `另有 ${skipped_pending_count} 条待确认（pending）条目未发布，如需发布请先人工确认`,
+          6,
+        )
+      }
       // 刷新发布历史
       listPublishJobs(selectedJobId).then(r => setPublishJobs(r.data.data ?? []))
     } finally {

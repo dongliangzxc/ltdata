@@ -65,6 +65,7 @@ class CleanJobRecord(Base):
     status = Column(String(20), default="done")
     row_in = Column(Integer, default=0)
     row_out = Column(Integer, default=0)
+    row_filtered = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     cleaned_data = relationship("CleanedDataRecord", back_populates="job", cascade="all, delete-orphan")
@@ -96,6 +97,7 @@ class CleanedDataRecord(Base):
     brand_std = Column(String(100))
     model_std = Column(String(100))
     created_at = Column(DateTime, default=datetime.utcnow)
+    is_recovered = Column(SmallInteger, default=0)
 
     job = relationship("CleanJobRecord", back_populates="cleaned_data")
 
@@ -145,6 +147,7 @@ class CleanJobOut(BaseModel):
     status: str
     row_in: int
     row_out: int
+    row_filtered: int = 0
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -311,6 +314,7 @@ class ItemUrlMapping(Base):
 
 
 class ItemUrlMappingIn(BaseModel):
+
     platform: str
     item_id:  str
     model_id: int
@@ -332,6 +336,58 @@ class ItemUrlMappingOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# ─────────────────────────── 规则引擎 ───────────────────────────
+
+class NoiseWord(Base):
+    __tablename__ = "noise_words"
+    __table_args__ = (
+        UniqueConstraint("keyword", "match_field", name="uq_noise_keyword_field"),
+    )
+
+    id          = Column(Integer, primary_key=True, index=True)
+    keyword     = Column(String(200), nullable=False)
+    match_field = Column(String(20),  default="item_name")  # item_name/shop_name/brand_raw
+    is_active   = Column(SmallInteger, default=1)
+    created_by  = Column(String(50))
+    created_at  = Column(DateTime, default=datetime.utcnow)
+
+
+class FilteredItem(Base):
+    __tablename__ = "filtered_items"
+
+    id              = Column(Integer, primary_key=True, index=True)
+    raw_data_id     = Column(Integer, ForeignKey("raw_data.id"))
+    clean_job_id    = Column(Integer, ForeignKey("clean_jobs.id"))
+    matched_keyword = Column(String(200))
+    is_recovered    = Column(SmallInteger, default=0)
+    recovered_at    = Column(DateTime)
+    created_at      = Column(DateTime, default=datetime.utcnow)
+
+
+class BrandAlias(Base):
+    __tablename__ = "brand_aliases"
+
+    id          = Column(Integer, primary_key=True, index=True)
+    alias_name  = Column(String(200), nullable=False, unique=True)
+    brand_code  = Column(String(100), nullable=False)
+    is_active   = Column(SmallInteger, default=1)
+    created_by  = Column(String(50))
+    created_at  = Column(DateTime, default=datetime.utcnow)
+
+
+class MatchRule(Base):
+    __tablename__ = "match_rules"
+
+    id          = Column(Integer, primary_key=True, index=True)
+    keyword     = Column(String(200), nullable=False, unique=True)
+    match_type  = Column(String(20),  default="contains")  # contains/exact
+    model_id    = Column(Integer, ForeignKey("models.id"), nullable=False)
+    priority    = Column(Integer, default=100)
+    is_active   = Column(SmallInteger, default=1)
+    created_by  = Column(String(50))
+    created_at  = Column(DateTime, default=datetime.utcnow)
+
+
 # ─────────────────────────── 型号匹配结果 ───────────────────────────
 
 class MatchResult(Base):
@@ -346,6 +402,7 @@ class MatchResult(Base):
     match_source   = Column(String(20), nullable=True)      # s1/s2/s3/s4/manual
     is_disabled    = Column(SmallInteger, nullable=False, default=0)
     disable_reason = Column(String(100), nullable=True)
+    brand_identified = Column(SmallInteger, default=1)
     created_at     = Column(DateTime, default=datetime.utcnow)
     updated_at   = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

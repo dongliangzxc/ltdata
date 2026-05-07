@@ -14,7 +14,7 @@
 text_only：S1-S4 文本命中，但 item_url 存在且不在 url_map → 需人工补录 URL 映射
 """
 from sqlalchemy.orm import Session
-from app.models.schemas import CleanedDataRecord, ModelRecord, ModelAlias, MatchResult, ItemUrlMapping
+from app.models.schemas import CleanedDataRecord, ModelRecord, ModelAlias, MatchResult, ItemUrlMapping, MatchRule
 from app.utils.url_utils import extract_item_id
 
 
@@ -36,6 +36,14 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
     url_map: dict[tuple[str, str], int] = {}
     for um in db.query(ItemUrlMapping).all():
         url_map[(um.platform, um.item_id)] = um.model_id
+
+    # ── S0.5: 预加载显式匹配规则（按 priority 升序）────────────────
+    explicit_rules = (
+        db.query(MatchRule)
+        .filter(MatchRule.is_active == 1)
+        .order_by(MatchRule.priority)
+        .all()
+    )
 
     # ── 构建内存索引 ─────────────────────────────────────────────
     all_models = db.query(ModelRecord).all()
@@ -155,6 +163,39 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
                     results = []
                 continue  # 跳过 S1-S4
 
+        # ── S0.5: 显式规则匹配 ─────────────────────────────────────
+        s05_model_id: int | None = None
+        for rule in explicit_rules:
+            kw = rule.keyword.upper()
+            if rule.match_type == "exact":
+                if item_upper == kw:
+                    s05_model_id = rule.model_id
+                    break
+            else:  # contains
+                if kw in item_upper:
+                    s05_model_id = rule.model_id
+                    break
+
+        if s05_model_id is not None:
+            status = "text_only" if url_info else "matched"
+            results.append(MatchResult(
+                clean_job_id=clean_job_id,
+                raw_data_id=row.raw_data_id,
+                model_id=s05_model_id,
+                match_status=status,
+                matched_by="auto",
+                match_source="s0.5",
+                brand_identified=1,
+            ))
+            matched_count += 1
+            if len(results) >= BATCH:
+                db.bulk_save_objects(results)
+                db.commit()
+                if progress_cb:
+                    progress_cb(i + 1, total, matched_count)
+                results = []
+            continue  # 跳过 S1-S4
+
         # ── S1-S4 文本匹配 ─────────────────────────────────────
         best_model: ModelRecord | None = None
         brand_identified = False
@@ -162,9 +203,9 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
 
         # S1: 用 brand_raw 缩窄候选
         if row.brand_raw:
-            brand_identified = True
             candidates = _candidates_by_brand_raw(row.brand_raw)
             if candidates:
+                brand_identified = True
                 m = _best(candidates, item_upper)
                 if m:
                     best_model = m
@@ -208,6 +249,7 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
                 match_status=status,
                 matched_by="auto",
                 match_source=match_source,
+                brand_identified=1 if brand_identified else 0,
             ))
             matched_count += 1
         else:
@@ -218,6 +260,7 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
                 match_status="pending",
                 matched_by="auto",
                 match_source=None,
+                brand_identified=1 if brand_identified else 0,
             ))
 
         if len(results) >= BATCH:

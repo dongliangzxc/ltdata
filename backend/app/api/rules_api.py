@@ -309,16 +309,6 @@ def _recover_one(fi: FilteredItem, db: Session) -> None:
     fi.recovered_at = datetime.utcnow()
 
 
-@router.post("/filtered-items/{fi_id}/recover")
-def recover_filtered_item(fi_id: int, db: Session = Depends(get_db)):
-    fi = db.query(FilteredItem).filter(FilteredItem.id == fi_id, FilteredItem.is_recovered == 0).first()
-    if not fi:
-        raise HTTPException(404, "干扰项不存在或已恢复")
-    _recover_one(fi, db)
-    db.commit()
-    return {"recovered": 1}
-
-
 class BatchRecoverIn(BaseModel):
     ids: list[int]
 
@@ -332,3 +322,13 @@ def recover_filtered_items_batch(body: BatchRecoverIn, db: Session = Depends(get
         _recover_one(fi, db)
     db.commit()
     return {"recovered": len(rows)}
+
+
+@router.post("/filtered-items/{fi_id}/recover")
+def recover_filtered_item(fi_id: int, db: Session = Depends(get_db)):
+    fi = db.query(FilteredItem).filter(FilteredItem.id == fi_id, FilteredItem.is_recovered == 0).first()
+    if not fi:
+        raise HTTPException(404, "干扰项不存在或已恢复")
+    _recover_one(fi, db)
+    db.commit()
+    return {"recovered": 1}

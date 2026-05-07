@@ -187,7 +187,7 @@ def run_publish(luotu_db: Session, analytics_db: Session, clean_job_id: int) -> 
 
     # 5. 写入 published_item_specs
     #    upsert 后无法直接拿到 id，通过 (platform, item_id, month) 查回
-    if specs_map:
+    if specs_map or attrs_map:
         # 构建 (platform, item_id, month) → model_id 映射
         key_to_model: dict[tuple, int] = {
             (r["platform"], r["item_id"], r["month"]): r["model_id"]

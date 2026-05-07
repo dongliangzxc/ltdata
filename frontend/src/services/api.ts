@@ -150,3 +150,55 @@ export const updateUrlMapping = (id: number, data: { platform: string; item_id: 
 
 export const deleteUrlMapping = (id: number) =>
   api.delete(`/url-mappings/${id}`)
+
+// ─── Rules - Noise Words ────────────────────────────────────
+export const listNoiseWords = () =>
+  api.get('/rules/noise-words')
+
+export const createNoiseWord = (payload: { keyword: string; match_field: string }) =>
+  api.post('/rules/noise-words', payload)
+
+export const toggleNoiseWord = (id: number) =>
+  api.patch(`/rules/noise-words/${id}`)
+
+export const deleteNoiseWord = (id: number) =>
+  api.delete(`/rules/noise-words/${id}`)
+
+// ─── Rules - Brand Aliases ──────────────────────────────────
+export const listBrandAliases = () =>
+  api.get('/rules/brand-aliases')
+
+export const createBrandAlias = (payload: { alias_name: string; brand_code: string }) =>
+  api.post('/rules/brand-aliases', payload)
+
+export const importBrandAliases = (formData: FormData) =>
+  api.post('/rules/brand-aliases/import', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+
+export const deleteBrandAlias = (id: number) =>
+  api.delete(`/rules/brand-aliases/${id}`)
+
+// ─── Rules - Match Rules ────────────────────────────────────
+export const listMatchRules = () =>
+  api.get('/rules/match-rules')
+
+export const createMatchRule = (payload: {
+  keyword: string; match_type: string; model_id: number; priority: number
+}) => api.post('/rules/match-rules', payload)
+
+export const updateMatchRule = (id: number, payload: Record<string, unknown>) =>
+  api.patch(`/rules/match-rules/${id}`, payload)
+
+export const deleteMatchRule = (id: number) =>
+  api.delete(`/rules/match-rules/${id}`)
+
+// ─── Rules - Filtered Items ─────────────────────────────────
+export const listFilteredItems = (params: Record<string, unknown>) =>
+  api.get('/rules/filtered-items', { params })
+
+export const recoverFilteredItem = (id: number) =>
+  api.post(`/rules/filtered-items/${id}/recover`)
+
+export const recoverFilteredItemsBatch = (ids: number[]) =>
+  api.post('/rules/filtered-items/recover-batch', { ids })

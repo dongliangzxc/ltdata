@@ -85,6 +85,20 @@ def run_publish(luotu_db: Session, analytics_db: Session, clean_job_id: int) -> 
         for sr in spec_rows:
             specs_map.setdefault(sr["model_id"], {})[sr["spec_name"]] = sr["spec_value"]
 
+    # 2b. 批量查 match_result_attrs（按条目维度的属性，优先级高于 model_specs）
+    match_result_ids = [r["match_result_id"] for r in rows]
+    attrs_map: dict[int, dict[str, str]] = {}  # match_result_id → {attr_name: attr_value}
+    if match_result_ids:
+        placeholders = ",".join([f":mrid{i}" for i in range(len(match_result_ids))])
+        attrs_sql = text(
+            f"SELECT match_result_id, attr_name, attr_value FROM match_result_attrs "
+            f"WHERE match_result_id IN ({placeholders})"
+        )
+        bind_params = {f"mrid{i}": mrid for i, mrid in enumerate(match_result_ids)}
+        attr_rows = luotu_db.execute(attrs_sql, bind_params).mappings().all()
+        for ar in attr_rows:
+            attrs_map.setdefault(ar["match_result_id"], {})[ar["attr_name"]] = ar["attr_value"]
+
     # 3. 先删除同 clean_job_id 的旧发布数据（支持重复发布）
     old_ids_sql = text(
         "SELECT id FROM published_items WHERE clean_job_id = :cjid"
@@ -179,6 +193,11 @@ def run_publish(luotu_db: Session, analytics_db: Session, clean_job_id: int) -> 
             (r["platform"], r["item_id"], r["month"]): r["model_id"]
             for r in rows
         }
+        # 同时建立 (platform, item_id, month) → match_result_id 映射
+        key_to_match_result: dict[tuple, int] = {
+            (r["platform"], r["item_id"], r["month"]): r["match_result_id"]
+            for r in rows
+        }
         # 查回刚插入/更新的 published_item id
         placeholders = ",".join(
             f"(:p{i}, :ii{i}, :m{i})" for i in range(len(items_to_insert))
@@ -197,9 +216,15 @@ def run_publish(luotu_db: Session, analytics_db: Session, clean_job_id: int) -> 
         specs_to_insert = []
         for pub_id, platform, item_id, month in id_rows:
             model_id = key_to_model.get((platform, item_id, month))
+            match_result_id = key_to_match_result.get((platform, item_id, month))
             if model_id is None:
                 continue
-            for spec_name, spec_value in specs_map.get(model_id, {}).items():
+
+            # model_specs 作为基础，match_result_attrs 覆盖（条目级属性优先）
+            merged: dict[str, str] = dict(specs_map.get(model_id, {}))
+            merged.update(attrs_map.get(match_result_id, {}))
+
+            for spec_name, spec_value in merged.items():
                 specs_to_insert.append(PublishedItemSpec(
                     published_item_id=pub_id,
                     spec_name=spec_name,

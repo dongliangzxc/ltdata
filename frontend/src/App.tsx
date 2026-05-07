@@ -12,6 +12,7 @@ import ModelsPage from './pages/Models'
 import WorkbenchPage from './pages/Workbench'
 import ManualPage from './pages/Manual'
 import UrlMappingsPage from './pages/UrlMappings'
+import RulesPage from './pages/Rules'
 
 export default function App() {
   return (
@@ -27,6 +28,7 @@ export default function App() {
             <Route path="/upload" element={<UploadPage />} />
             <Route path="/rawdata" element={<DataListPage />} />
             <Route path="/clean" element={<CleanPage />} />
+            <Route path="/rules" element={<RulesPage />} />
             <Route path="/match" element={<MatchPage />} />
             <Route path="/export" element={<ExportPage />} />
             <Route path="/metadata" element={<MetadataPage />} />

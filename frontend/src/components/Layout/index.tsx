@@ -13,6 +13,7 @@ import {
   FundOutlined,
   QuestionCircleOutlined,
   LinkOutlined,
+  FilterOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 
@@ -26,6 +27,7 @@ const menuItems = [
   { key: '/models',     icon: <AppstoreAddOutlined />,   label: '型号管理' },
   { key: '/url-mappings', icon: <LinkOutlined />,        label: 'URL映射管理' },
   { key: '/clean',      icon: <ClearOutlined />,         label: '数据清洗' },
+  { key: '/rules',      icon: <FilterOutlined />,        label: '规则管理' },
   { key: '/match',      icon: <AimOutlined />,           label: '匹配确认' },
   { key: '/workbench',  icon: <FundOutlined />,            label: '查询工作台' },
   { key: '/export',     icon: <ExportOutlined />,          label: '数据导出' },

@@ -9,12 +9,7 @@ from app.models.schemas import (
 from app.services.attribute_matcher import run_attribute_matching
 
 
-_seed_counter = 0
-
-
 def _seed_match_result(db, *, item_name, brand_raw="SONY", category_name="soundbar"):
-    global _seed_counter
-    _seed_counter += 1
     upload = UploadFileRecord(filename="t.xlsx", status="done", row_count=1)
     db.add(upload)
     db.flush()
@@ -24,7 +19,9 @@ def _seed_match_result(db, *, item_name, brand_raw="SONY", category_name="soundb
     job = CleanJobRecord(file_ids=[upload.id], rules={}, status="done", row_in=1, row_out=1)
     db.add(job)
     db.flush()
-    model = ModelRecord(brand_code="SONY", model_code=f"HT-A7000-{_seed_counter}", category_name=category_name)
+    # Use item_name hash for unique model_code within a test's DB session
+    model_code = f"MODEL-{abs(hash(item_name)) % 100000}"
+    model = ModelRecord(brand_code="SONY", model_code=model_code, category_name=category_name)
     db.add(model)
     db.flush()
     mr = MatchResult(

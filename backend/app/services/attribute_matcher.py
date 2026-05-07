@@ -39,11 +39,20 @@ def run_attribute_matching(db: Session, match_result_ids: list[int]) -> dict:
         .all()
     )
 
+    # Pre-load existing attrs to avoid N+1 queries
+    existing_attrs: dict[tuple[int, str], MatchResultAttr] = {}
+    if rows:
+        all_mr_ids = [mr.id for mr, rd, model in rows]
+        for attr in db.query(MatchResultAttr).filter(MatchResultAttr.match_result_id.in_(all_mr_ids)).all():
+            existing_attrs[(attr.match_result_id, attr.attr_name)] = attr
+
     total_attrs = 0
+    items_processed = 0
 
     for mr, rd, model in rows:
         if mr.model_id is None:
             continue
+        items_processed += 1
         category = model.category_name if model else None
         item_upper = (rd.item_name or "").upper()
 
@@ -73,25 +82,20 @@ def run_attribute_matching(db: Session, match_result_ids: list[int]) -> dict:
         applied = {**global_hits, **category_hits}
 
         for attr_name, (attr_value, rule_id) in applied.items():
-            existing = (
-                db.query(MatchResultAttr)
-                .filter(
-                    MatchResultAttr.match_result_id == mr.id,
-                    MatchResultAttr.attr_name == attr_name,
-                )
-                .first()
-            )
-            if existing:
-                existing.attr_value = attr_value
-                existing.rule_id = rule_id
+            key = (mr.id, attr_name)
+            if key in existing_attrs:
+                existing_attrs[key].attr_value = attr_value
+                existing_attrs[key].rule_id = rule_id
             else:
-                db.add(MatchResultAttr(
+                new_attr = MatchResultAttr(
                     match_result_id=mr.id,
                     attr_name=attr_name,
                     attr_value=attr_value,
                     rule_id=rule_id,
-                ))
+                )
+                db.add(new_attr)
+                existing_attrs[key] = new_attr
             total_attrs += 1
 
     db.commit()
-    return {"matched_attrs": total_attrs, "items_processed": len(match_result_ids)}
+    return {"matched_attrs": total_attrs, "items_processed": items_processed}

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   Tabs, Card, Table, Button, Input, Select, Space, Popconfirm,
   Upload, Modal, Form, InputNumber, Tag, message, Alert,
@@ -237,7 +238,9 @@ function MatchRuleTab() {
 // Tab 4: 干扰项存档
 // ══════════════════════════════════════════════
 function FilteredItemTab() {
-  const [jobId, setJobId] = useState<number | undefined>()
+  const [searchParams] = useSearchParams()
+  const initialJobId = searchParams.get('job_id') ? Number(searchParams.get('job_id')) : undefined
+  const [jobId, setJobId] = useState<number | undefined>(initialJobId)
   const [keyword, setKeyword] = useState('')
   const [page, setPage] = useState(1)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
@@ -304,13 +307,17 @@ function FilteredItemTab() {
 // 主页面
 // ══════════════════════════════════════════════
 export default function RulesPage() {
-  const [activeTab, setActiveTab] = useState('noise')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [activeTab, setActiveTab] = useState(searchParams.get('tab') ?? 'noise')
 
   return (
     <Card>
       <Tabs
         activeKey={activeTab}
-        onChange={setActiveTab}
+        onChange={(key) => {
+          setActiveTab(key)
+          setSearchParams(key !== 'noise' ? { tab: key } : {})
+        }}
         items={[
           { key: 'noise',    label: '干扰词库',   children: <NoiseWordTab /> },
           { key: 'brand',    label: '品牌写法库', children: <BrandAliasTab /> },

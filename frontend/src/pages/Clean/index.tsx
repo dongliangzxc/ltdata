@@ -143,11 +143,26 @@ export default function CleanPage() {
       <Card title="清洗任务历史">
         {(jobsData ?? []).length > 0 && (
           <Row gutter={16} style={{ marginBottom: 16 }}>
-            {[jobsData[0]].map((j: { id: number; row_in: number; row_out: number }) => (
+            {[jobsData[0]].map((j: { id: number; row_in: number; row_out: number; row_filtered?: number }) => (
               <>
                 <Col span={6}><Statistic title="最近一次：输入行数" value={j.row_in} /></Col>
                 <Col span={6}><Statistic title="清洗后输出行数" value={j.row_out} valueStyle={{ color: '#3f8600' }} /></Col>
                 <Col span={6}><Statistic title="过滤掉" value={j.row_in - j.row_out} valueStyle={{ color: '#cf1322' }} /></Col>
+                <Col span={6}>
+                  <Statistic
+                    title="被过滤（干扰词）"
+                    value={j.row_filtered ?? 0}
+                    valueStyle={{ color: '#d48806' }}
+                    suffix={
+                      (j.row_filtered ?? 0) > 0
+                        ? <a style={{ fontSize: 12, marginLeft: 4 }}
+                            onClick={() => window.open(`/rules?tab=filtered&job_id=${j.id}`, '_blank')}>
+                            查看 →
+                          </a>
+                        : undefined
+                    }
+                  />
+                </Col>
               </>
             ))}
           </Row>

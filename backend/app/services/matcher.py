@@ -177,7 +177,7 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
                     break
 
         if s05_model_id is not None:
-            status = "text_only" if url_info else "matched"
+            status = "matched"
             results.append(MatchResult(
                 clean_job_id=clean_job_id,
                 raw_data_id=row.raw_data_id,

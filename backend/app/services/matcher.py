@@ -16,6 +16,7 @@ text_only：S1-S4 文本命中，但 item_url 存在且不在 url_map → 需人
 from sqlalchemy.orm import Session
 from app.models.schemas import CleanedDataRecord, ModelRecord, ModelAlias, MatchResult, ItemUrlMapping, MatchRule
 from app.utils.url_utils import extract_item_id
+from app.services.attribute_matcher import run_attribute_matching
 
 
 def _norm(s: str | None) -> str:
@@ -273,5 +274,17 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
     if results:
         db.bulk_save_objects(results)
         db.commit()
+
+    # 触发属性匹配（仅对 matched/url_matched 状态）
+    matched_result_ids = [
+        r.id for r in db.query(MatchResult)
+        .filter(
+            MatchResult.clean_job_id == clean_job_id,
+            MatchResult.match_status.in_(["matched", "url_matched"]),
+        )
+        .all()
+    ]
+    if matched_result_ids:
+        run_attribute_matching(db, matched_result_ids)
 
     return {"total": total, "matched": matched_count, "pending": total - matched_count}

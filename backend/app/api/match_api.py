@@ -282,6 +282,12 @@ def confirm_match(match_id: int, payload: dict, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="需提供 model_id 或 excluded=true")
 
     db.commit()
+
+    # 型号确认后触发属性匹配
+    if mr.match_status in ("confirmed", "matched") and mr.model_id:
+        from app.services.attribute_matcher import run_attribute_matching
+        run_attribute_matching(db, [mr.id])
+
     db.refresh(mr)
 
     rd = db.query(RawDataRecord).filter(RawDataRecord.id == mr.raw_data_id).first()

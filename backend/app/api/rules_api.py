@@ -16,7 +16,9 @@ from sqlalchemy.orm import Session
 from app.models.database import get_db
 from app.models.schemas import (
     NoiseWord, FilteredItem, BrandAlias, MatchRule,
+    AttrRule, MatchResultAttr,
     RawDataRecord, CleanedDataRecord, ModelRecord,
+    AttrRuleIn, AttrRuleOut,
 )
 
 router = APIRouter(prefix="/api/rules", tags=["rules"])
@@ -332,3 +334,123 @@ def recover_filtered_item(fi_id: int, db: Session = Depends(get_db)):
     _recover_one(fi, db)
     db.commit()
     return {"recovered": 1}
+
+
+# ═══════════════════════════════════════════════════════════
+# 属性关键词规则
+# ═══════════════════════════════════════════════════════════
+
+@router.get("/attr-rules/categories")
+def list_attr_rule_categories(db: Session = Depends(get_db)):
+    """返回 models 表中 distinct category_name 列表，供前端属性规则品类下拉使用"""
+    rows = (
+        db.query(ModelRecord.category_name)
+        .filter(ModelRecord.category_name.isnot(None))
+        .distinct()
+        .order_by(ModelRecord.category_name)
+        .all()
+    )
+    return [r[0] for r in rows if r[0]]
+
+
+class AttrRulePatch(BaseModel):
+    keyword:       Optional[str] = None
+    match_type:    Optional[str] = None
+    attr_name:     Optional[str] = None
+    attr_value:    Optional[str] = None
+    category_code: Optional[str] = None
+    priority:      Optional[int] = None
+    is_active:     Optional[int] = None
+
+
+@router.post("/attr-rules/apply")
+def apply_attr_rules(payload: dict, db: Session = Depends(get_db)):
+    """对指定 match_job 的所有 matched/confirmed 结果重跑属性匹配"""
+    from app.services.attribute_matcher import run_attribute_matching
+    from app.models.schemas import MatchResult as MR
+
+    match_job_id = payload.get("match_job_id")
+    if not match_job_id:
+        raise HTTPException(400, "match_job_id 不能为空")
+
+    ids = [
+        r.id for r in db.query(MR).filter(
+            MR.clean_job_id == match_job_id,
+            MR.match_status.in_(["matched", "confirmed", "url_matched"]),
+        ).all()
+    ]
+    result = run_attribute_matching(db, ids)
+    return result
+
+
+@router.get("/attr-rules")
+def list_attr_rules(
+    category_code: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    q = db.query(AttrRule).order_by(AttrRule.priority, AttrRule.id)
+    if category_code == "__global__":
+        q = q.filter(AttrRule.category_code.is_(None))
+    elif category_code:
+        q = q.filter(AttrRule.category_code == category_code)
+    rows = q.all()
+    return [
+        {
+            "id": r.id, "keyword": r.keyword, "match_type": r.match_type,
+            "attr_name": r.attr_name, "attr_value": r.attr_value,
+            "category_code": r.category_code, "priority": r.priority,
+            "is_active": r.is_active, "created_at": r.created_at,
+        }
+        for r in rows
+    ]
+
+
+@router.post("/attr-rules", status_code=201)
+def create_attr_rule(body: AttrRuleIn, db: Session = Depends(get_db)):
+    if body.match_type not in ("contains", "exact"):
+        raise HTTPException(400, "match_type 必须是 contains 或 exact")
+    existing = db.query(AttrRule).filter(
+        AttrRule.keyword == body.keyword,
+        AttrRule.attr_name == body.attr_name,
+        AttrRule.category_code == body.category_code,
+    ).first()
+    if existing:
+        raise HTTPException(400, "该关键词+属性名+品类组合已存在")
+    row = AttrRule(
+        keyword=body.keyword,
+        match_type=body.match_type,
+        attr_name=body.attr_name,
+        attr_value=body.attr_value,
+        category_code=body.category_code or None,
+        priority=body.priority,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"id": row.id, "keyword": row.keyword, "attr_name": row.attr_name,
+            "attr_value": row.attr_value, "category_code": row.category_code,
+            "priority": row.priority, "is_active": row.is_active}
+
+
+@router.patch("/attr-rules/{rule_id}")
+def update_attr_rule(rule_id: int, body: AttrRulePatch, db: Session = Depends(get_db)):
+    row = db.query(AttrRule).filter(AttrRule.id == rule_id).first()
+    if not row:
+        raise HTTPException(404, "规则不存在")
+    for field in ("keyword", "match_type", "attr_name", "attr_value", "category_code", "priority", "is_active"):
+        val = getattr(body, field)
+        if val is not None:
+            setattr(row, field, val)
+    db.commit()
+    return {"id": row.id, "keyword": row.keyword, "attr_name": row.attr_name,
+            "attr_value": row.attr_value, "category_code": row.category_code,
+            "priority": row.priority, "is_active": row.is_active}
+
+
+@router.delete("/attr-rules/{rule_id}", status_code=204)
+def delete_attr_rule(rule_id: int, db: Session = Depends(get_db)):
+    row = db.query(AttrRule).filter(AttrRule.id == rule_id).first()
+    if not row:
+        raise HTTPException(404, "规则不存在")
+    db.delete(row)
+    db.commit()

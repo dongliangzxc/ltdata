@@ -7,9 +7,11 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from app.models.database import get_db, SessionLocal
+from sqlalchemy import func
 from app.models.schemas import (
     MatchResult, MatchResultOut, MatchSummary,
     CleanJobRecord, RawDataRecord, ModelRecord,
+    MatchResultAttr,
     PaginatedResponse,
 )
 from app.services.matcher import run_match
@@ -127,6 +129,19 @@ def get_match_summary(clean_job_id: int, db: Session = Depends(get_db)):
     disabled_count = sum(1 for r in rows if r.is_disabled == 1)
     unidentified_brand_count = sum(1 for r in rows if getattr(r, 'brand_identified', 1) == 0 and r.match_status == "pending")
 
+    confirmed_ids = {r.id for r in rows if r.match_status in ("matched", "confirmed", "url_matched")}
+    if confirmed_ids:
+        ids_with_attrs = {
+            r.match_result_id
+            for r in db.query(MatchResultAttr.match_result_id)
+                        .filter(MatchResultAttr.match_result_id.in_(confirmed_ids))
+                        .distinct()
+                        .all()
+        }
+        missing_attrs_count = len(confirmed_ids - ids_with_attrs)
+    else:
+        missing_attrs_count = 0
+
     return MatchSummary(
         clean_job_id=clean_job_id,
         total=total,
@@ -138,6 +153,7 @@ def get_match_summary(clean_job_id: int, db: Session = Depends(get_db)):
         excluded=status_count.get("excluded", 0),
         disabled=disabled_count,
         unidentified_brand=unidentified_brand_count,
+        missing_attrs=missing_attrs_count,
     )
 
 
@@ -157,12 +173,14 @@ def list_pending(
         status = "pending"
 
     q = (
-        db.query(MatchResult, RawDataRecord)
+        db.query(MatchResult, RawDataRecord, func.count(MatchResultAttr.id).label("attr_count"))
         .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
+        .outerjoin(MatchResultAttr, MatchResultAttr.match_result_id == MatchResult.id)
         .filter(
             MatchResult.clean_job_id == clean_job_id,
             MatchResult.match_status == status,
         )
+        .group_by(MatchResult.id, RawDataRecord.id)
     )
     if keyword:
         q = q.filter(RawDataRecord.item_name.ilike(f"%{keyword}%"))
@@ -173,7 +191,7 @@ def list_pending(
     rows = q.offset((page - 1) * page_size).limit(page_size).all()
 
     items = []
-    for mr, rd in rows:
+    for mr, rd, attr_count in rows:
         items.append(MatchResultOut(
             id=mr.id,
             clean_job_id=mr.clean_job_id,
@@ -185,8 +203,55 @@ def list_pending(
             brand_raw=rd.brand_raw,
             model_code=None,
             brand_code=None,
+            attr_count=attr_count,
         ))
 
+    return PaginatedResponse(total=total, page=page, page_size=page_size, items=items)
+
+
+@router.get("/{clean_job_id}/missing-attrs", response_model=PaginatedResponse)
+def list_missing_attrs(
+    clean_job_id: int,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """
+    列出已匹配/已确认但无属性标注的条目（用于「未补属性」Tab）。
+    match_status IN (matched, confirmed, url_matched) 且 match_result_attrs 为空。
+    """
+    subq = (
+        db.query(MatchResultAttr.match_result_id)
+        .filter(MatchResultAttr.match_result_id == MatchResult.id)
+        .correlate(MatchResult)
+        .exists()
+    )
+    q = (
+        db.query(MatchResult, RawDataRecord, ModelRecord)
+        .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
+        .outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
+        .filter(
+            MatchResult.clean_job_id == clean_job_id,
+            MatchResult.match_status.in_(["matched", "confirmed", "url_matched"]),
+            MatchResult.is_disabled == 0,
+            ~subq,
+        )
+    )
+    total = q.count()
+    rows = q.offset((page - 1) * page_size).limit(page_size).all()
+
+    items = []
+    for mr, rd, model in rows:
+        items.append({
+            "id": mr.id,
+            "raw_data_id": mr.raw_data_id,
+            "match_status": mr.match_status,
+            "item_name": rd.item_name,
+            "brand_raw": rd.brand_raw,
+            "model_code": model.model_code if model else None,
+            "brand_code": model.brand_code if model else None,
+            "category_name": model.category_name if model else None,
+        })
     return PaginatedResponse(total=total, page=page, page_size=page_size, items=items)
 
 

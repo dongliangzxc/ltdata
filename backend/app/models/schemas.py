@@ -391,6 +391,39 @@ class MatchRule(Base):
     created_at  = Column(DateTime, default=datetime.utcnow)
 
 
+class AttrRule(Base):
+    __tablename__ = "attr_rules"
+    __table_args__ = (
+        UniqueConstraint("keyword", "attr_name", "category_code", name="uq_attr_rule"),
+        CheckConstraint("match_type IN ('contains', 'exact')", name="ck_attr_rule_type"),
+    )
+
+    id            = Column(Integer, primary_key=True, index=True)
+    keyword       = Column(String(200), nullable=False)
+    match_type    = Column(String(20),  default="contains")   # contains / exact
+    attr_name     = Column(String(100), nullable=False)
+    attr_value    = Column(String(200), nullable=False)
+    category_code = Column(String(100), nullable=True)        # NULL = 全局生效
+    priority      = Column(Integer,     default=100)
+    is_active     = Column(SmallInteger, default=1)
+    created_by    = Column(String(50))
+    created_at    = Column(DateTime, default=datetime.utcnow)
+
+
+class MatchResultAttr(Base):
+    __tablename__ = "match_result_attrs"
+    __table_args__ = (
+        UniqueConstraint("match_result_id", "attr_name", name="uq_mr_attr_name"),
+    )
+
+    id               = Column(Integer, primary_key=True, index=True)
+    match_result_id  = Column(Integer, ForeignKey("match_results.id"), nullable=False)
+    attr_name        = Column(String(100), nullable=False)
+    attr_value       = Column(String(200), nullable=False)
+    rule_id          = Column(Integer, ForeignKey("attr_rules.id"), nullable=True)
+    created_at       = Column(DateTime, default=datetime.utcnow)
+
+
 # ─────────────────────────── 型号匹配结果 ───────────────────────────
 
 class MatchResult(Base):
@@ -425,6 +458,7 @@ class MatchResultOut(BaseModel):
     brand_raw:  Optional[str] = None
     model_code: Optional[str] = None
     brand_code: Optional[str] = None
+    attr_count: int = 0
 
     model_config = {"from_attributes": True}
 
@@ -440,6 +474,7 @@ class MatchSummary(BaseModel):
     excluded:    int
     disabled:    int = 0
     unidentified_brand: int = 0
+    missing_attrs: int = 0
 
 
 # ─────────────────────────── 发布任务 ───────────────────────────
@@ -501,6 +536,39 @@ class ModelOut(BaseModel):
 
 
 # ─────────────────────────── 导出任务 ───────────────────────────
+
+class AttrRuleIn(BaseModel):
+    keyword:       str
+    match_type:    str = "contains"
+    attr_name:     str
+    attr_value:    str
+    category_code: Optional[str] = None
+    priority:      int = 100
+
+
+class AttrRuleOut(BaseModel):
+    id:            int
+    keyword:       str
+    match_type:    str
+    attr_name:     str
+    attr_value:    str
+    category_code: Optional[str]
+    priority:      int
+    is_active:     int
+    created_at:    datetime
+
+    model_config = {"from_attributes": True}
+
+
+class MatchResultAttrOut(BaseModel):
+    id:              int
+    match_result_id: int
+    attr_name:       str
+    attr_value:      str
+    rule_id:         Optional[int]
+
+    model_config = {"from_attributes": True}
+
 
 class ExportJob(Base):
     __tablename__ = "export_jobs"

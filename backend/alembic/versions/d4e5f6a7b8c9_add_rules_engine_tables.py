@@ -41,6 +41,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(['clean_job_id'], ['clean_jobs.id']),
     )
     op.create_index('idx_filtered_items_job', 'filtered_items', ['clean_job_id'])
+    op.create_index('idx_filtered_items_raw', 'filtered_items', ['raw_data_id'])
 
     # ── brand_aliases ─────────────────────────────────────────
     op.create_table(
@@ -81,6 +82,7 @@ def downgrade() -> None:
     op.drop_index('idx_match_rules_priority', table_name='match_rules')
     op.drop_table('match_rules')
     op.drop_table('brand_aliases')
+    op.drop_index('idx_filtered_items_raw', table_name='filtered_items')
     op.drop_index('idx_filtered_items_job', table_name='filtered_items')
     op.drop_table('filtered_items')
     op.drop_table('noise_words')

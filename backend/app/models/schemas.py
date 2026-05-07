@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional
 from sqlalchemy import (
     Column, Integer, String, Numeric, Text, DateTime,
-    ForeignKey, JSON, SmallInteger, UniqueConstraint
+    ForeignKey, JSON, SmallInteger, UniqueConstraint, CheckConstraint
 )
 from sqlalchemy.orm import relationship
 from pydantic import BaseModel
@@ -377,6 +377,9 @@ class BrandAlias(Base):
 
 class MatchRule(Base):
     __tablename__ = "match_rules"
+    __table_args__ = (
+        CheckConstraint("match_type IN ('contains', 'exact')", name="ck_match_rule_type"),
+    )
 
     id          = Column(Integer, primary_key=True, index=True)
     keyword     = Column(String(200), nullable=False, unique=True)

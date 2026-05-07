@@ -202,3 +202,32 @@ export const recoverFilteredItem = (id: number) =>
 
 export const recoverFilteredItemsBatch = (ids: number[]) =>
   api.post('/rules/filtered-items/recover-batch', { ids })
+
+// ─── Rules - Attr Rules ─────────────────────────────────────
+export const listAttrRuleCategories = () =>
+  api.get('/rules/attr-rules/categories')
+
+export const listAttrRules = (params?: { category_code?: string }) =>
+  api.get('/rules/attr-rules', { params })
+
+export const createAttrRule = (payload: {
+  keyword: string
+  match_type: string
+  attr_name: string
+  attr_value: string
+  category_code?: string | null
+  priority: number
+}) => api.post('/rules/attr-rules', payload)
+
+export const updateAttrRule = (id: number, payload: Record<string, unknown>) =>
+  api.patch(`/rules/attr-rules/${id}`, payload)
+
+export const deleteAttrRule = (id: number) =>
+  api.delete(`/rules/attr-rules/${id}`)
+
+export const applyAttrRules = (match_job_id: number) =>
+  api.post('/rules/attr-rules/apply', { match_job_id })
+
+// ─── Match - Missing Attrs ──────────────────────────────────
+export const listMissingAttrs = (clean_job_id: number, params?: Record<string, unknown>) =>
+  api.get(`/match/${clean_job_id}/missing-attrs`, { params })

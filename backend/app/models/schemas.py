@@ -410,20 +410,6 @@ class AttrRule(Base):
     created_at    = Column(DateTime, default=datetime.utcnow)
 
 
-class MatchResultAttr(Base):
-    __tablename__ = "match_result_attrs"
-    __table_args__ = (
-        UniqueConstraint("match_result_id", "attr_name", name="uq_mr_attr_name"),
-    )
-
-    id               = Column(Integer, primary_key=True, index=True)
-    match_result_id  = Column(Integer, ForeignKey("match_results.id"), nullable=False)
-    attr_name        = Column(String(100), nullable=False)
-    attr_value       = Column(String(200), nullable=False)
-    rule_id          = Column(Integer, ForeignKey("attr_rules.id"), nullable=True)
-    created_at       = Column(DateTime, default=datetime.utcnow)
-
-
 # ─────────────────────────── 型号匹配结果 ───────────────────────────
 
 class MatchResult(Base):
@@ -441,6 +427,20 @@ class MatchResult(Base):
     brand_identified = Column(SmallInteger, default=1)
     created_at     = Column(DateTime, default=datetime.utcnow)
     updated_at   = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class MatchResultAttr(Base):
+    __tablename__ = "match_result_attrs"
+    __table_args__ = (
+        UniqueConstraint("match_result_id", "attr_name", name="uq_mr_attr_name"),
+    )
+
+    id               = Column(Integer, primary_key=True, index=True)
+    match_result_id  = Column(Integer, ForeignKey("match_results.id"), nullable=False)
+    attr_name        = Column(String(100), nullable=False)
+    attr_value       = Column(String(200), nullable=False)
+    rule_id          = Column(Integer, ForeignKey("attr_rules.id"), nullable=True)
+    created_at       = Column(DateTime, default=datetime.utcnow)
 
 
 class MatchResultOut(BaseModel):

@@ -29,6 +29,7 @@ def upgrade() -> None:
         sa.Column('created_by',    sa.String(50),     nullable=True),
         sa.Column('created_at',    sa.DateTime(),     nullable=False, server_default=sa.text('NOW()')),
         sa.UniqueConstraint('keyword', 'attr_name', 'category_code', name='uq_attr_rule'),
+        sa.CheckConstraint("match_type IN ('contains', 'exact')", name='ck_attr_rule_type'),
     )
     op.create_index('idx_attr_rules_priority', 'attr_rules', ['priority'])
     op.create_index('idx_attr_rules_category', 'attr_rules', ['category_code'])

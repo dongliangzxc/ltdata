@@ -9,7 +9,8 @@ import { useSearchParams } from 'react-router-dom'
 import {
   listCleanJobs, runMatch, getMatchProgress, getMatchSummary, listPendingMatches,
   confirmMatch, listModels, runPublish, listPublishJobs,
-  disableMatch, enableMatch, avgPriceDisable, listDisabled
+  disableMatch, enableMatch, avgPriceDisable, listDisabled,
+  applyAttrRules, listMissingAttrs,
 } from '../../services/api'
 
 const { Text } = Typography
@@ -25,6 +26,7 @@ type MatchSummary = {
   excluded: number
   disabled: number
   unidentified_brand?: number
+  missing_attrs?: number
 }
 
 type PendingItem = {
@@ -32,6 +34,9 @@ type PendingItem = {
   raw_data_id: number
   item_name: string
   brand_raw: string
+  model_code?: string
+  category_name?: string
+  attr_count?: number
 }
 
 type DisabledItem = {
@@ -68,6 +73,74 @@ type MatchProgress = {
   error?: string
 }
 
+function MissingAttrsTabContent({
+  cleanJobId,
+  onApplyDone,
+}: {
+  cleanJobId: number
+  onApplyDone: () => void
+}) {
+  const [page, setPage] = useState(1)
+  const [applying, setApplying] = useState(false)
+  const { data, loading, refresh } = useRequest(
+    () => listMissingAttrs(cleanJobId, { page, page_size: 20 }).then(r => r.data),
+    { refreshDeps: [cleanJobId, page] }
+  )
+
+  const handleApply = async () => {
+    setApplying(true)
+    try {
+      const res = await applyAttrRules(cleanJobId)
+      message.success(`重跑完成，共命中 ${res.data.matched_attrs} 个属性`)
+      refresh()
+      onApplyDone()
+    } finally {
+      setApplying(false)
+    }
+  }
+
+  const columns = [
+    { title: '商品名称', dataIndex: 'item_name', ellipsis: true },
+    { title: '品牌', dataIndex: 'brand_raw', width: 120 },
+    { title: '型号', dataIndex: 'model_code', width: 150 },
+    { title: '品类', dataIndex: 'category_name', width: 120 },
+  ]
+
+  return (
+    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      <Alert
+        type="warning"
+        showIcon
+        message="以下商品型号已确认，但未匹配到属性规则。建议先前往「规则管理 → 属性规则」补充规则后重跑，或手动前往型号管理补充规格。"
+        action={
+          <Space>
+            <Button size="small" onClick={() => window.open('/rules?tab=attr', '_blank')}>
+              前往属性规则
+            </Button>
+            <Button size="small" type="primary" loading={applying} onClick={handleApply}>
+              重跑属性规则
+            </Button>
+          </Space>
+        }
+      />
+      <Table
+        dataSource={data?.items ?? []}
+        columns={columns}
+        rowKey="id"
+        size="small"
+        loading={loading}
+        pagination={{
+          current: page,
+          pageSize: 20,
+          total: data?.total ?? 0,
+          onChange: setPage,
+          showTotal: (t: number) => `共 ${t} 条`,
+        }}
+      />
+    </Space>
+  )
+}
+
 export default function MatchPage() {
   const [searchParams] = useSearchParams()
   const [selectedJobId, setSelectedJobId] = useState<number | null>(
@@ -89,7 +162,7 @@ export default function MatchPage() {
   const [disabledLoading, setDisabledLoading] = useState(false)
   const [avgPriceThreshold, setAvgPriceThreshold] = useState(200)
   const [disableReasonMap, setDisableReasonMap] = useState<Record<number, string>>({})
-  const [activeTab, setActiveTab] = useState<'pending' | 'text_only' | 'unidentified_brand'>('text_only')
+  const [activeTab, setActiveTab] = useState<'pending' | 'text_only' | 'unidentified_brand' | 'missing_attrs'>('text_only')
   const { data: jobsData } = useRequest(() => listCleanJobs().then(r => r.data))
   const { data: modelsData } = useRequest(
     () => listModels({ page: 1, page_size: 200 }).then(r => r.data),
@@ -105,7 +178,7 @@ export default function MatchPage() {
       ...(activeTab === 'unidentified_brand' ? { brand_identified: 0 } : {}),
     }).then(r => r.data),
     {
-      ready: selectedJobId != null && summary != null && (summary.pending > 0 || summary.text_only > 0 || (summary.unidentified_brand ?? 0) > 0),
+      ready: selectedJobId != null && summary != null && activeTab !== 'missing_attrs' && (summary.pending > 0 || summary.text_only > 0 || (summary.unidentified_brand ?? 0) > 0),
       refreshDeps: [selectedJobId, keyword, page, activeTab],
     }
   )
@@ -279,6 +352,14 @@ export default function MatchPage() {
           onChange={v => setSelectedModels(prev => ({ ...prev, [row.id]: v }))}
         />
       )
+    },
+    {
+      title: '属性',
+      width: 100,
+      render: (_: unknown, row: PendingItem) =>
+        (row.attr_count ?? 0) > 0
+          ? <Tag color="green">已补 {row.attr_count} 个</Tag>
+          : <Tag color="default">未补</Tag>,
     },
     {
       title: '操作', width: 180, fixed: 'right' as const,
@@ -493,7 +574,7 @@ export default function MatchPage() {
         </Card>
       )}
 
-      {summary && (summary.pending > 0 || (summary.text_only ?? 0) > 0 || (summary.unidentified_brand ?? 0) > 0) && (
+      {summary && (summary.pending > 0 || (summary.text_only ?? 0) > 0 || (summary.unidentified_brand ?? 0) > 0 || (summary.missing_attrs ?? 0) > 0) && (
         <Card
           title={
             <Space>
@@ -515,7 +596,7 @@ export default function MatchPage() {
           <Tabs
             activeKey={activeTab}
             onChange={key => {
-              setActiveTab(key as 'pending' | 'text_only' | 'unidentified_brand')
+              setActiveTab(key as 'pending' | 'text_only' | 'unidentified_brand' | 'missing_attrs')
               setPage(1)
               setKeyword('')
             }}
@@ -571,6 +652,23 @@ export default function MatchPage() {
                 ),
                 children: null,
               },
+              {
+                key: 'missing_attrs',
+                label: (
+                  <span>
+                    未补属性
+                    {(summary?.missing_attrs ?? 0) > 0 && (
+                      <Tag color="orange" style={{ marginLeft: 4 }}>{summary?.missing_attrs}</Tag>
+                    )}
+                  </span>
+                ),
+                children: activeTab === 'missing_attrs' && selectedJobId ? (
+                  <MissingAttrsTabContent
+                    cleanJobId={selectedJobId}
+                    onApplyDone={() => getMatchSummary(selectedJobId).then(r => setSummary(r.data))}
+                  />
+                ) : null,
+              },
             ]}
           />
           {activeTab === 'unidentified_brand' && (
@@ -586,21 +684,23 @@ export default function MatchPage() {
               }
             />
           )}
-          <Table
-            dataSource={pendingData?.items ?? []}
-            columns={pendingColumns}
-            rowKey="id"
-            size="small"
-            loading={pendingLoading}
-            scroll={{ x: 800 }}
-            pagination={{
-              current: page,
-              pageSize: 20,
-              total: pendingData?.total ?? 0,
-              onChange: setPage,
-              showTotal: t => `共 ${t} 条`,
-            }}
-          />
+          {activeTab !== 'missing_attrs' && (
+            <Table
+              dataSource={pendingData?.items ?? []}
+              columns={pendingColumns}
+              rowKey="id"
+              size="small"
+              loading={pendingLoading}
+              scroll={{ x: 800 }}
+              pagination={{
+                current: page,
+                pageSize: 20,
+                total: pendingData?.total ?? 0,
+                onChange: setPage,
+                showTotal: t => `共 ${t} 条`,
+              }}
+            />
+          )}
         </Card>
       )}
 

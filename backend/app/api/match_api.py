@@ -125,6 +125,7 @@ def get_match_summary(clean_job_id: int, db: Session = Depends(get_db)):
         status_count[r.match_status] = status_count.get(r.match_status, 0) + 1
 
     disabled_count = sum(1 for r in rows if r.is_disabled == 1)
+    unidentified_brand_count = sum(1 for r in rows if getattr(r, 'brand_identified', 1) == 0 and r.match_status == "pending")
 
     return MatchSummary(
         clean_job_id=clean_job_id,
@@ -136,6 +137,7 @@ def get_match_summary(clean_job_id: int, db: Session = Depends(get_db)):
         confirmed=status_count.get("confirmed", 0),
         excluded=status_count.get("excluded", 0),
         disabled=disabled_count,
+        unidentified_brand=unidentified_brand_count,
     )
 
 
@@ -144,6 +146,7 @@ def list_pending(
     clean_job_id: int,
     keyword: Optional[str] = Query(None),
     status: str = Query("pending"),
+    brand_identified: Optional[int] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -163,6 +166,8 @@ def list_pending(
     )
     if keyword:
         q = q.filter(RawDataRecord.item_name.ilike(f"%{keyword}%"))
+    if brand_identified is not None:
+        q = q.filter(MatchResult.brand_identified == brand_identified)
 
     total = q.count()
     rows = q.offset((page - 1) * page_size).limit(page_size).all()

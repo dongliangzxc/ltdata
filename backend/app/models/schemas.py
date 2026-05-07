@@ -439,6 +439,7 @@ class MatchSummary(BaseModel):
     confirmed:   int
     excluded:    int
     disabled:    int = 0
+    unidentified_brand: int = 0
 
 
 # ─────────────────────────── 发布任务 ───────────────────────────

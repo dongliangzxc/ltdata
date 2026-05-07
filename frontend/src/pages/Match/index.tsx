@@ -24,6 +24,7 @@ type MatchSummary = {
   confirmed: number
   excluded: number
   disabled: number
+  unidentified_brand?: number
 }
 
 type PendingItem = {
@@ -88,7 +89,7 @@ export default function MatchPage() {
   const [disabledLoading, setDisabledLoading] = useState(false)
   const [avgPriceThreshold, setAvgPriceThreshold] = useState(200)
   const [disableReasonMap, setDisableReasonMap] = useState<Record<number, string>>({})
-  const [activeTab, setActiveTab] = useState<'pending' | 'text_only'>('text_only')
+  const [activeTab, setActiveTab] = useState<'pending' | 'text_only' | 'unidentified_brand'>('text_only')
   const { data: jobsData } = useRequest(() => listCleanJobs().then(r => r.data))
   const { data: modelsData } = useRequest(
     () => listModels({ page: 1, page_size: 200 }).then(r => r.data),
@@ -100,10 +101,11 @@ export default function MatchPage() {
       keyword: keyword || undefined,
       page,
       page_size: 20,
-      status: activeTab,
+      status: activeTab === 'unidentified_brand' ? 'pending' : activeTab,
+      ...(activeTab === 'unidentified_brand' ? { brand_identified: 0 } : {}),
     }).then(r => r.data),
     {
-      ready: selectedJobId != null && summary != null && (summary.pending > 0 || summary.text_only > 0),
+      ready: selectedJobId != null && summary != null && (summary.pending > 0 || summary.text_only > 0 || (summary.unidentified_brand ?? 0) > 0),
       refreshDeps: [selectedJobId, keyword, page, activeTab],
     }
   )
@@ -472,6 +474,13 @@ export default function MatchPage() {
             <Col span={2}><Statistic title="已禁用" value={summary.disabled ?? 0} valueStyle={{ color: '#faad14' }} /></Col>
             <Col span={3}>
               <Statistic
+                title="未识别品牌"
+                value={summary?.unidentified_brand ?? 0}
+                valueStyle={{ color: '#722ed1' }}
+              />
+            </Col>
+            <Col span={3}>
+              <Statistic
                 title="匹配率"
                 value={summary.total ? Math.round(
                   ((summary.url_matched ?? 0) + summary.matched + summary.confirmed) / summary.total * 100
@@ -484,7 +493,7 @@ export default function MatchPage() {
         </Card>
       )}
 
-      {summary && (summary.pending > 0 || (summary.text_only ?? 0) > 0) && (
+      {summary && (summary.pending > 0 || (summary.text_only ?? 0) > 0 || (summary.unidentified_brand ?? 0) > 0) && (
         <Card
           title={
             <Space>
@@ -506,11 +515,28 @@ export default function MatchPage() {
           <Tabs
             activeKey={activeTab}
             onChange={key => {
-              setActiveTab(key as 'pending' | 'text_only')
+              setActiveTab(key as 'pending' | 'text_only' | 'unidentified_brand')
               setPage(1)
               setKeyword('')
             }}
             items={[
+              {
+                key: 'unidentified_brand',
+                label: (
+                  <span>
+                    未识别品牌
+                    {(summary?.unidentified_brand ?? 0) > 0 && (
+                      <span style={{
+                        marginLeft: 6, background: '#722ed1', color: '#fff',
+                        borderRadius: 10, padding: '0 6px', fontSize: 11,
+                      }}>
+                        {summary?.unidentified_brand}
+                      </span>
+                    )}
+                  </span>
+                ),
+                children: null,
+              },
               {
                 key: 'text_only',
                 label: (
@@ -547,6 +573,19 @@ export default function MatchPage() {
               },
             ]}
           />
+          {activeTab === 'unidentified_brand' && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message={
+                <span>
+                  以下商品的品牌在系统中未能识别，建议先前往「规则管理 → 品牌写法库」补充写法后重新执行匹配，效率高于逐条人工确认。
+                  <Button type="link" size="small" onClick={() => window.open('/rules', '_blank')}>前往规则管理 →</Button>
+                </span>
+              }
+            />
+          )}
           <Table
             dataSource={pendingData?.items ?? []}
             columns={pendingColumns}

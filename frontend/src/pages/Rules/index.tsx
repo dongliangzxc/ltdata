@@ -15,6 +15,8 @@ import {
   listMatchRules, createMatchRule, updateMatchRule, deleteMatchRule,
   listFilteredItems, recoverFilteredItem, recoverFilteredItemsBatch,
   listCleanJobs, listModels,
+  listAttrRuleCategories, listAttrRules, createAttrRule,
+  updateAttrRule, deleteAttrRule,
 } from '../../services/api'
 
 // ══════════════════════════════════════════════
@@ -304,6 +306,133 @@ function FilteredItemTab() {
 }
 
 // ══════════════════════════════════════════════
+// Tab 5: 属性规则
+// ══════════════════════════════════════════════
+function AttrRuleTab() {
+  const [modalOpen, setModalOpen] = useState(false)
+  const [editing, setEditing] = useState<Record<string, unknown> | null>(null)
+  const [filterCategory, setFilterCategory] = useState<string | undefined>(undefined)
+  const [form] = Form.useForm()
+
+  const { data: categories } = useRequest(() =>
+    listAttrRuleCategories().then(r => r.data as string[])
+  )
+  const { data, loading, refresh } = useRequest(
+    () => listAttrRules(filterCategory ? { category_code: filterCategory } : undefined).then(r => r.data),
+    { refreshDeps: [filterCategory] }
+  )
+
+  const openAdd = () => { setEditing(null); form.resetFields(); setModalOpen(true) }
+  const openEdit = (row: Record<string, unknown>) => {
+    setEditing(row)
+    form.setFieldsValue({ ...row, category_code: row.category_code ?? undefined })
+    setModalOpen(true)
+  }
+
+  const handleSave = async () => {
+    const values = await form.validateFields()
+    values.category_code = values.category_code || null
+    if (editing) {
+      await updateAttrRule(editing.id as number, values)
+      message.success('更新成功')
+    } else {
+      await createAttrRule(values)
+      message.success('添加成功')
+    }
+    setModalOpen(false)
+    refresh()
+  }
+
+  const categoryOptions = [
+    { value: '', label: '全部' },
+    { value: '__global__', label: '全局（无品类限制）' },
+    ...(categories ?? []).map(c => ({ value: c, label: c })),
+  ]
+
+  const columns = [
+    { title: '品类', dataIndex: 'category_code', width: 120,
+      render: (v: string | null) => v ? <Tag>{v}</Tag> : <Tag color="blue">全局</Tag> },
+    { title: '关键词', dataIndex: 'keyword', ellipsis: true },
+    { title: '匹配方式', dataIndex: 'match_type', width: 90,
+      render: (v: string) => v === 'exact' ? '精准' : '包含' },
+    { title: '属性名', dataIndex: 'attr_name', width: 120 },
+    { title: '属性值', dataIndex: 'attr_value', ellipsis: true },
+    { title: '优先级', dataIndex: 'priority', width: 80 },
+    { title: '状态', dataIndex: 'is_active', width: 80,
+      render: (v: number) => v ? <Tag color="green">启用</Tag> : <Tag color="default">禁用</Tag> },
+    {
+      title: '操作', width: 150,
+      render: (_: unknown, row: Record<string, unknown>) => (
+        <Space size={4}>
+          <Button size="small" onClick={() => openEdit(row)}>编辑</Button>
+          <Button size="small" icon={row.is_active ? <StopOutlined /> : <CheckCircleOutlined />}
+            onClick={async () => { await updateAttrRule(row.id as number, { is_active: row.is_active ? 0 : 1 }); refresh() }}>
+            {row.is_active ? '禁用' : '启用'}
+          </Button>
+          <Popconfirm title="确认删除？" onConfirm={async () => { await deleteAttrRule(row.id as number); refresh() }}>
+            <Button size="small" danger icon={<DeleteOutlined />} />
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ]
+
+  const modalCategoryOptions = [
+    { value: '', label: '全局（不限品类）' },
+    ...(categories ?? []).map(c => ({ value: c, label: c })),
+  ]
+
+  return (
+    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      <Alert type="info" showIcon
+        message="属性规则在型号确认后自动触发，根据商品名称中的关键词自动打属性标签（如屏幕尺寸、声道数等）。品类规则优先于全局规则。" />
+      <Space wrap>
+        <Select
+          placeholder="按品类筛选"
+          allowClear
+          style={{ width: 160 }}
+          options={categoryOptions}
+          value={filterCategory}
+          onChange={v => setFilterCategory(v || undefined)}
+        />
+        <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>添加规则</Button>
+      </Space>
+      <Table dataSource={data ?? []} columns={columns} rowKey="id" size="small" loading={loading}
+        pagination={{ pageSize: 20, showTotal: (t: number) => `共 ${t} 条` }} />
+
+      <Modal
+        title={editing ? '编辑属性规则' : '新增属性规则'}
+        open={modalOpen}
+        onOk={handleSave}
+        onCancel={() => setModalOpen(false)}
+        destroyOnClose
+      >
+        <Form form={form} layout="vertical">
+          <Form.Item label="品类（留空=全局生效）" name="category_code">
+            <Select allowClear placeholder="选择品类（不选=全局）" options={modalCategoryOptions} />
+          </Form.Item>
+          <Form.Item label="关键词" name="keyword" rules={[{ required: true, message: '请输入关键词' }]}>
+            <Input placeholder="如：65英寸" />
+          </Form.Item>
+          <Form.Item label="匹配方式" name="match_type" initialValue="contains">
+            <Select options={[{ value: 'contains', label: '包含' }, { value: 'exact', label: '精准' }]} />
+          </Form.Item>
+          <Form.Item label="属性名" name="attr_name" rules={[{ required: true, message: '请输入属性名' }]}>
+            <Input placeholder="如：屏幕尺寸" />
+          </Form.Item>
+          <Form.Item label="属性值" name="attr_value" rules={[{ required: true, message: '请输入属性值' }]}>
+            <Input placeholder="如：65英寸" />
+          </Form.Item>
+          <Form.Item label="优先级（数字越小越先执行）" name="priority" initialValue={100}>
+            <InputNumber min={1} max={9999} style={{ width: '100%' }} />
+          </Form.Item>
+        </Form>
+      </Modal>
+    </Space>
+  )
+}
+
+// ══════════════════════════════════════════════
 // 主页面
 // ══════════════════════════════════════════════
 export default function RulesPage() {
@@ -323,6 +452,7 @@ export default function RulesPage() {
           { key: 'brand',    label: '品牌写法库', children: <BrandAliasTab /> },
           { key: 'rules',    label: '匹配规则',   children: <MatchRuleTab /> },
           { key: 'filtered', label: '干扰项存档', children: <FilteredItemTab /> },
+          { key: 'attr',     label: '属性规则',   children: <AttrRuleTab /> },
         ]}
       />
     </Card>

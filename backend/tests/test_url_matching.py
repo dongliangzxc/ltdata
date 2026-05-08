@@ -15,7 +15,7 @@ TestSession = sessionmaker(bind=engine)
 def test_item_url_mapping_orm():
     """ItemUrlMapping ORM can be created and queried"""
     db = TestSession()
-    model = ModelRecord(brand_code="BOSE", model_code="SB850", category_name="SOUNDBAR")
+    model = ModelRecord(brand_code="BOSE", model_code="SB850", category_code="SOUNDBAR")
     db.add(model)
     db.flush()
 
@@ -100,7 +100,7 @@ def _seed_model(db, brand_code="BOSE", model_code="SB900") -> int:
     from app.models.schemas import ModelRecord
     m = db.query(ModelRecord).filter_by(brand_code=brand_code, model_code=model_code).first()
     if not m:
-        m = ModelRecord(brand_code=brand_code, model_code=model_code, category_name="SOUNDBAR")
+        m = ModelRecord(brand_code=brand_code, model_code=model_code, category_code="SOUNDBAR")
         db.add(m)
         db.commit()
     return m.id
@@ -213,7 +213,7 @@ def _seed_match_data(db, item_url: str, item_name: str, brand_raw: str, brand_co
     """Seed minimal data for a single cleaned row with given URL."""
     model = db.query(ModelRecord).filter_by(brand_code=brand_code, model_code=model_code).first()
     if not model:
-        model = ModelRecord(brand_code=brand_code, model_code=model_code, category_name="SOUNDBAR")
+        model = ModelRecord(brand_code=brand_code, model_code=model_code, category_code="SOUNDBAR")
         db.add(model)
         db.flush()
 
@@ -276,7 +276,7 @@ def test_text_only_when_url_not_in_map():
     """S1-S4 text match + URL exists in raw data but NOT in mapping → text_only"""
     db = TestSession()
 
-    model = ModelRecord(brand_code="EDIFIER_TX", model_code="EDIFIER_R1280", category_name="SOUNDBAR")
+    model = ModelRecord(brand_code="EDIFIER_TX", model_code="EDIFIER_R1280", category_code="SOUNDBAR")
     db.add(model)
     db.flush()
 
@@ -317,7 +317,7 @@ def test_matched_when_no_url():
     """Text match with no URL in raw data → matched (not text_only)"""
     db = TestSession()
 
-    model = ModelRecord(brand_code="SENNHSR", model_code="MOMENTUM_S3", category_name="SOUNDBAR")
+    model = ModelRecord(brand_code="SENNHSR", model_code="MOMENTUM_S3", category_code="SOUNDBAR")
     db.add(model)
     db.flush()
 
@@ -368,7 +368,7 @@ def test_publisher_includes_url_matched():
     db = TestSession()
     model = db.query(ModelRecord).first()
     if not model:
-        model = ModelRecord(brand_code="PUB_TEST", model_code="PUB_MODEL", category_name="SOUNDBAR")
+        model = ModelRecord(brand_code="PUB_TEST", model_code="PUB_MODEL", category_code="SOUNDBAR")
         db.add(model)
         db.flush()
 

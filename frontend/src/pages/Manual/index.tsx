@@ -2,7 +2,7 @@ import { Anchor, Typography, Tag, Alert, Divider, Row, Col, Card, Steps } from '
 import {
   UploadOutlined, DatabaseOutlined, ProfileOutlined, AppstoreAddOutlined,
   ClearOutlined, AimOutlined, FundOutlined, ExportOutlined, QuestionCircleOutlined,
-  LinkOutlined, FilterOutlined, HistoryOutlined,
+  LinkOutlined, FilterOutlined, HistoryOutlined, TagsOutlined,
 } from '@ant-design/icons'
 
 const { Title, Paragraph, Text } = Typography
@@ -22,6 +22,7 @@ export default function ManualPage() {
             { key: 'flow',        href: '#flow',        title: '整体流程' },
             { key: 'upload',      href: '#upload',      title: '数据上传' },
             { key: 'rawdata',     href: '#rawdata',     title: '原始数据' },
+            { key: 'categories', href: '#categories', title: '品类管理' },
             { key: 'metadata',    href: '#metadata',    title: '元数据管理' },
             { key: 'models',      href: '#models',      title: '型号管理' },
             { key: 'url-mapping', href: '#url-mapping', title: 'URL映射管理' },
@@ -109,6 +110,23 @@ export default function ManualPage() {
           <Paragraph>
             用于浏览和核查已上传数据。支持按平台、月份、品牌、关键词筛选，仅供查阅，不做任何修改。
           </Paragraph>
+
+          <Divider />
+
+          {/* ── 品类管理 ── */}
+          <Title level={3} id="categories"><TagsOutlined /> 品类管理</Title>
+          <Paragraph>
+            品类库是系统的受控品类词表，型号管理、元数据管理、属性规则均通过品类码与品类库关联。
+            <S>唯一键：品类码</S>，品类码一旦创建不可修改（避免破坏关联关系）。
+          </Paragraph>
+          <Paragraph>
+            <S>新增品类</S>：点「新增品类」，填写品类码（小写字母/数字/下划线，如 <Text code>soundbar</Text>）
+            和品类名称（如「回音壁」）。<br />
+            <S>修改名称</S>：点「改名」可修改显示名称，品类码不变。<br />
+            <S>删除品类</S>：若品类下已有型号或元数据规格，系统将拒绝删除（返回提示），需先清理关联数据。
+          </Paragraph>
+          <Alert type="info" showIcon style={{ marginBottom: 16 }}
+            message="型号 Excel 导入时「品类码」列须为已在品类管理中配置的品类码，否则该行将被跳过并记录错误。" />
 
           <Divider />
 

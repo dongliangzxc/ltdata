@@ -14,6 +14,7 @@ import ManualPage from './pages/Manual'
 import UrlMappingsPage from './pages/UrlMappings'
 import RulesPage from './pages/Rules'
 import HistoricalPage from './pages/Historical'
+import CategoriesPage from './pages/Categories'
 
 export default function App() {
   return (
@@ -37,6 +38,7 @@ export default function App() {
             <Route path="/workbench" element={<WorkbenchPage />} />
             <Route path="/manual" element={<ManualPage />} />
             <Route path="/url-mappings" element={<UrlMappingsPage />} />
+            <Route path="/categories" element={<CategoriesPage />} />
             <Route path="/historical" element={<HistoricalPage />} />
           </Route>
         </Route>

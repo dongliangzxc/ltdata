@@ -182,6 +182,31 @@ class PaginatedResponse(BaseModel):
     items: list
 
 
+# ─────────────────────────── 品类 ───────────────────────────
+
+class Category(Base):
+    __tablename__ = "categories"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    code       = Column(String(50),  nullable=False, unique=True)
+    name       = Column(String(100), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class CategoryOut(BaseModel):
+    id:         int
+    code:       str
+    name:       str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class CategoryCreate(BaseModel):
+    code: str
+    name: str
+
+
 # ─────────────────────────── 元数据规格 ───────────────────────────
 
 class MetadataSpec(Base):
@@ -238,7 +263,7 @@ class ModelRecord(Base):
     id            = Column(Integer, primary_key=True, index=True)
     brand_code    = Column(String(100), nullable=False)
     model_code    = Column(String(100), nullable=False)
-    category_name = Column(String(200))
+    category_code = Column(String(50), ForeignKey("categories.code", ondelete="SET NULL"), nullable=True)
     brand_name    = Column(String(200))
     model_name    = Column(String(200))
     launch_year   = Column(Integer)
@@ -521,7 +546,7 @@ class PublishJobOut(BaseModel):
 class ModelIn(BaseModel):
     brand_code:    str
     model_code:    str
-    category_name: Optional[str] = None
+    category_code: Optional[str] = None
     brand_name:    Optional[str] = None
     model_name:    Optional[str] = None
     launch_year:   Optional[int] = None
@@ -536,7 +561,8 @@ class ModelOut(BaseModel):
     id:            int
     brand_code:    str
     model_code:    str
-    category_name: Optional[str]
+    category_code: Optional[str]
+    category_name: Optional[str] = None   # JOIN 后填充，API 返回用
     brand_name:    Optional[str]
     model_name:    Optional[str]
     launch_year:   Optional[int]

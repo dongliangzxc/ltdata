@@ -33,6 +33,8 @@ def _build_query(db: Session, params: dict):
         q = q.filter(PublishedItem.brand_code == params["brand_code"])
     if params.get("model_code"):
         q = q.filter(PublishedItem.model_code == params["model_code"])
+    if params.get("category_name"):
+        q = q.filter(PublishedItem.category_name == params["category_name"])
     if params.get("category_lv1"):
         q = q.filter(PublishedItem.category_lv1 == params["category_lv1"])
     if params.get("category_lv2"):
@@ -58,7 +60,7 @@ def get_filters(db: Session = Depends(get_analytics_db)):
         "platforms": _vals(PublishedItem.platform),
         "brands": _vals(PublishedItem.brand_code),
         "models": _vals(PublishedItem.model_code),
-        "categories": _vals(PublishedItem.category_lv1),
+        "categories": _vals(PublishedItem.category_name),
     }
 
 
@@ -68,6 +70,7 @@ def query_data(
     platform: Optional[str] = Query(None),
     brand_code: Optional[str] = Query(None),
     model_code: Optional[str] = Query(None),
+    category_name: Optional[str] = Query(None),
     category_lv1: Optional[str] = Query(None),
     category_lv2: Optional[str] = Query(None),
     keyword: Optional[str] = Query(None),
@@ -77,7 +80,8 @@ def query_data(
 ):
     params = dict(
         month=month, platform=platform, brand_code=brand_code,
-        model_code=model_code, category_lv1=category_lv1,
+        model_code=model_code, category_name=category_name,
+        category_lv1=category_lv1,
         category_lv2=category_lv2, keyword=keyword,
     )
     q = _build_query(db, params)
@@ -102,6 +106,7 @@ def query_data(
             "shop_name": r.shop_name,
             "ref_price": float(r.ref_price) if r.ref_price is not None else None,
             "sales_qty": r.sales_qty,
+            "category_name": r.category_name,
             "category_lv1": r.category_lv1,
             "category_lv2": r.category_lv2,
             "item_url": r.item_url,

@@ -21,7 +21,7 @@ def _seed_match_result(db, *, item_name, brand_raw="SONY", category_name="soundb
     db.flush()
     # Use item_name hash for unique model_code within a test's DB session
     model_code = f"MODEL-{abs(hash(item_name)) % 100000}"
-    model = ModelRecord(brand_code="SONY", model_code=model_code, category_name=category_name)
+    model = ModelRecord(brand_code="SONY", model_code=model_code, category_code=category_name)
     db.add(model)
     db.flush()
     mr = MatchResult(

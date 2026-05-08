@@ -19,6 +19,7 @@ from app.models.schemas import (
     AttrRule, MatchResultAttr,
     RawDataRecord, CleanedDataRecord, ModelRecord,
     AttrRuleIn, AttrRuleOut,
+    Category,
 )
 
 router = APIRouter(prefix="/api/rules", tags=["rules"])
@@ -342,15 +343,9 @@ def recover_filtered_item(fi_id: int, db: Session = Depends(get_db)):
 
 @router.get("/attr-rules/categories")
 def list_attr_rule_categories(db: Session = Depends(get_db)):
-    """返回 models 表中 distinct category_name 列表，供前端属性规则品类下拉使用"""
-    rows = (
-        db.query(ModelRecord.category_name)
-        .filter(ModelRecord.category_name.isnot(None))
-        .distinct()
-        .order_by(ModelRecord.category_name)
-        .all()
-    )
-    return [r[0] for r in rows if r[0]]
+    """返回 categories 表列表，供前端属性规则品类下拉使用"""
+    rows = db.query(Category).order_by(Category.name).all()
+    return [{"code": r.code, "name": r.name} for r in rows]
 
 
 class AttrRulePatch(BaseModel):
@@ -409,6 +404,9 @@ def list_attr_rules(
 def create_attr_rule(body: AttrRuleIn, db: Session = Depends(get_db)):
     if body.match_type not in ("contains", "exact"):
         raise HTTPException(400, "match_type 必须是 contains 或 exact")
+    if body.category_code:
+        if not db.query(Category).filter(Category.code == body.category_code).first():
+            raise HTTPException(400, f"品类码 {body.category_code} 不存在")
     existing = db.query(AttrRule).filter(
         AttrRule.keyword == body.keyword,
         AttrRule.attr_name == body.attr_name,
@@ -437,10 +435,16 @@ def update_attr_rule(rule_id: int, body: AttrRulePatch, db: Session = Depends(ge
     row = db.query(AttrRule).filter(AttrRule.id == rule_id).first()
     if not row:
         raise HTTPException(404, "规则不存在")
-    for field in ("keyword", "match_type", "attr_name", "attr_value", "category_code", "priority", "is_active"):
+    if body.category_code:
+        if not db.query(Category).filter(Category.code == body.category_code).first():
+            raise HTTPException(400, f"品类码 {body.category_code} 不存在")
+    for field in ("keyword", "match_type", "attr_name", "attr_value", "priority", "is_active"):
         val = getattr(body, field)
         if val is not None:
             setattr(row, field, val)
+    # category_code can be explicitly set to None (= global rule)
+    if "category_code" in body.model_fields_set:
+        row.category_code = body.category_code or None
     db.commit()
     return {"id": row.id, "keyword": row.keyword, "attr_name": row.attr_name,
             "attr_value": row.attr_value, "category_code": row.category_code,

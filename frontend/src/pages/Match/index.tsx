@@ -168,12 +168,19 @@ export default function MatchPage() {
   const [disableReasonMap, setDisableReasonMap] = useState<Record<number, string>>({})
   const [activeTab, setActiveTab] = useState<'pending' | 'text_only' | 'unidentified_brand' | 'missing_attrs'>('text_only')
   const { data: jobsData } = useRequest(() => listCleanJobs().then(r => r.data))
-  const { data: modelsData } = useRequest(
-    () => listModels({ page: 1, page_size: 200 }).then(r => r.data),
-  )
-  const modelOptions: ModelOption[] = modelsData?.items ?? []
+  const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
+  const [modelSearchLoading, setModelSearchLoading] = useState(false)
 
-  const { data: pendingData, loading: pendingLoading, refresh: refreshPending } = useRequest(
+  const handleModelSearch = async (keyword: string) => {
+    if (!keyword.trim()) return
+    setModelSearchLoading(true)
+    try {
+      const res = await listModels({ keyword, page: 1, page_size: 50 }).then(r => r.data)
+      setModelOptions(res.items ?? [])
+    } finally {
+      setModelSearchLoading(false)
+    }
+  }  const { data: pendingData, loading: pendingLoading, refresh: refreshPending } = useRequest(
     () => listPendingMatches(selectedJobId!, {
       keyword: keyword || undefined,
       page,
@@ -369,13 +376,13 @@ export default function MatchPage() {
       render: (_: unknown, row: PendingItem) => (
         <Select
           showSearch
-          placeholder="搜索品牌/型号码"
+          placeholder="输入品牌/型号码搜索"
           style={{ width: '100%' }}
           size="small"
           allowClear
-          filterOption={(input, option) =>
-            (option?.label as string ?? '').toLowerCase().includes(input.toLowerCase())
-          }
+          filterOption={false}
+          onSearch={handleModelSearch}
+          loading={modelSearchLoading}
           options={modelOptions.map(m => ({
             value: m.id,
             label: `[${m.brand_code}] ${m.model_code}${m.model_name ? ' ' + m.model_name : ''}`,

@@ -31,6 +31,7 @@ type DataRow = {
   shop_name: string | null
   ref_price: number | null
   sales_qty: number | null
+  category_name: string | null
   category_lv1: string | null
   category_lv2: string | null
   item_url: string | null
@@ -129,7 +130,7 @@ export default function WorkbenchPage() {
       render: (v: number | null) => v ?? '-',
     },
     {
-      title: '一级类目', dataIndex: 'category_lv1', width: 110, ellipsis: true,
+      title: '品类', dataIndex: 'category_name', width: 110, ellipsis: true,
     },
   ]
 
@@ -178,10 +179,10 @@ export default function WorkbenchPage() {
               }
             />
           </Form.Item>
-          <Form.Item name="category_lv1" style={{ marginBottom: 8 }}>
+          <Form.Item name="category_name" style={{ marginBottom: 8 }}>
             <Select
               showSearch
-              placeholder="一级类目"
+              placeholder="品类"
               allowClear
               style={{ width: 150 }}
               options={filters.categories.map(c => ({ value: c, label: c }))}

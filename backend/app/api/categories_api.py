@@ -6,9 +6,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from app.models.database import get_db
-from app.models.schemas import Category, ModelRecord, MetadataSpec, AttrRule, CategoryOut, CategoryCreate
+from app.models.schemas import Category, ModelRecord, MetadataSpec, CategoryOut, CategoryCreate
 
-router = APIRouter(prefix="/categories", tags=["categories"])
+router = APIRouter(prefix="/api/categories", tags=["categories"])
 
 
 class CategoryNameUpdate(BaseModel):

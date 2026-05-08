@@ -74,7 +74,7 @@ app.include_router(workbench_api.router)
 app.include_router(url_mapping_api.router)
 app.include_router(rules_api.router)
 app.include_router(historical_api.router)
-app.include_router(categories_api.router, prefix="/api")
+app.include_router(categories_api.router)
 
 
 @app.get("/health")

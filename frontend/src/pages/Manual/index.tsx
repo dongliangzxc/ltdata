@@ -39,7 +39,7 @@ export default function ManualPage() {
       {/* 主内容区 */}
       <Col flex="auto" style={{ maxWidth: 860 }}>
         <Typography>
-          <Title level={2}>落土数据处理平台 · 使用手册</Title>
+          <Title level={2}>洛图数据处理平台 · 使用手册</Title>
           <Paragraph type="secondary">适用对象：运营、数据分析等业务人员 &nbsp;|&nbsp; 版本：规则引擎三期</Paragraph>
 
           {/* ── 整体流程 ── */}

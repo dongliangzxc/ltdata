@@ -360,6 +360,7 @@ class ItemUrlMappingIn(BaseModel):
 
     platform: str
     item_id:  str
+    item_url: Optional[str] = None
     model_id: int
     price:    Optional[float] = None
 

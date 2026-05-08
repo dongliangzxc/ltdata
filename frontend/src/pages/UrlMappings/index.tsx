@@ -80,6 +80,7 @@ export default function UrlMappingsPage() {
     form.setFieldsValue({
       platform: record.platform,
       item_id: record.item_id,
+      item_url: record.item_url,
       model_id: record.model_id,
       price: record.price,
     })
@@ -230,6 +231,9 @@ export default function UrlMappingsPage() {
           </Form.Item>
           <Form.Item name="item_id" label="item_id" rules={[{ required: true }]}>
             <Input placeholder="如：100045223280" />
+          </Form.Item>
+          <Form.Item name="item_url" label="商品 URL">
+            <Input placeholder="https://item.jd.com/..." />
           </Form.Item>
           <Form.Item name="model_id" label="型号" rules={[{ required: true }]}>
             <Select

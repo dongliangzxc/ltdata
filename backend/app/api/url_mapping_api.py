@@ -193,6 +193,7 @@ def create_url_mapping(payload: ItemUrlMappingIn, db: Session = Depends(get_db))
     m = ItemUrlMapping(
         platform=payload.platform,
         item_id=payload.item_id,
+        item_url=payload.item_url,
         model_id=payload.model_id,
         price=payload.price,
     )
@@ -211,6 +212,7 @@ def update_url_mapping(mapping_id: int, payload: ItemUrlMappingIn, db: Session =
         raise HTTPException(404, "型号不存在")
     m.platform = payload.platform
     m.item_id = payload.item_id
+    m.item_url = payload.item_url
     m.model_id = payload.model_id
     m.price = payload.price
     m.updated_at = datetime.utcnow()

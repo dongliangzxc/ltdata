@@ -194,7 +194,7 @@ export default function MatchPage() {
     }
   }, [])
 
-  // 选任务后自动拉取摘要 + 发布历史
+  // 选任务后自动拉取摘要 + 发布历史；若后台匹配正在运行则自动恢复轮询
   useEffect(() => {
     if (!selectedJobId) return
     getMatchSummary(selectedJobId)
@@ -204,25 +204,22 @@ export default function MatchPage() {
       .then(r => setPublishJobs(r.data.data ?? []))
       .catch(() => setPublishJobs([]))
     loadDisabled()
+    // 检查是否有正在运行的匹配任务（切走后回来时恢复进度显示）
+    getMatchProgress(selectedJobId).then(res => {
+      const p: MatchProgress = res.data
+      if (p.status === 'running') {
+        setRunning(true)
+        setMatchProgress(p)
+        startPolling(selectedJobId)
+      }
+    }).catch(() => {})
   }, [selectedJobId])
 
-  const handleRunMatch = async () => {
-    if (!selectedJobId) { message.warning('请先选择清洗任务'); return }
-    setRunning(true)
-    setSummary(null)   // 清除旧统计，避免展示中间批次的半成品数据
-    setMatchProgress({ status: 'running', total: 0, processed: 0, matched: 0, rate: null, eta_seconds: null })
-    try {
-      await runMatch(selectedJobId)
-    } catch {
-      setRunning(false)
-      setMatchProgress(null)
-      return
-    }
-    // 开始轮询进度
+  const startPolling = (jobId: number) => {
     if (pollTimerRef.current) clearInterval(pollTimerRef.current)
     pollTimerRef.current = setInterval(async () => {
       try {
-        const res = await getMatchProgress(selectedJobId)
+        const res = await getMatchProgress(jobId)
         const p: MatchProgress = res.data
         setMatchProgress(p)
         if (p.status === 'done') {
@@ -230,7 +227,7 @@ export default function MatchPage() {
           pollTimerRef.current = null
           setRunning(false)
           message.success(`匹配完成：已匹配 ${p.matched} 条，待确认 ${p.total - p.matched} 条`)
-          getMatchSummary(selectedJobId).then(r => setSummary(r.data))
+          getMatchSummary(jobId).then(r => setSummary(r.data))
           refreshPending()
         } else if (p.status === 'error') {
           clearInterval(pollTimerRef.current!)
@@ -248,6 +245,21 @@ export default function MatchPage() {
         // 网络抖动时忽略，继续轮询
       }
     }, 1500)
+  }
+
+  const handleRunMatch = async () => {
+    if (!selectedJobId) { message.warning('请先选择清洗任务'); return }
+    setRunning(true)
+    setSummary(null)   // 清除旧统计，避免展示中间批次的半成品数据
+    setMatchProgress({ status: 'running', total: 0, processed: 0, matched: 0, rate: null, eta_seconds: null })
+    try {
+      await runMatch(selectedJobId)
+    } catch {
+      setRunning(false)
+      setMatchProgress(null)
+      return
+    }
+    startPolling(selectedJobId)
   }
 
   const handleConfirm = async (matchId: number) => {

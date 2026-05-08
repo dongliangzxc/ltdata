@@ -231,3 +231,23 @@ export const applyAttrRules = (match_job_id: number) =>
 // ─── Match - Missing Attrs ──────────────────────────────────
 export const listMissingAttrs = (clean_job_id: number, params?: Record<string, unknown>) =>
   api.get(`/match/${clean_job_id}/missing-attrs`, { params })
+
+// ─── Historical Mappings ─────────────────────────────────────
+export const importHistoricalMappings = (formData: FormData) =>
+  api.post('/historical/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+
+export const listHistoricalBatches = () =>
+  api.get<{ batch: string; count: number }[]>('/historical/batches')
+
+export const listHistoricalMappings = (params?: {
+  platform?: string
+  import_batch?: string
+  page?: number
+  page_size?: number
+}) => api.get('/historical/mappings', { params })
+
+export const deleteHistoricalMapping = (id: number) =>
+  api.delete(`/historical/mappings/${id}`)
+
+export const deleteHistoricalBatch = (importBatch: string) =>
+  api.delete('/historical/mappings/batch', { data: { import_batch: importBatch } })

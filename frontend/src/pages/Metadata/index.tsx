@@ -6,7 +6,8 @@ import {
 import { PlusOutlined, UploadOutlined, EditOutlined, DeleteOutlined, WarningOutlined, CheckCircleOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import {
-  listMetadata, createMetadata, updateMetadata, deleteMetadata, importMetadata, previewMetadata
+  listMetadata, createMetadata, updateMetadata, deleteMetadata, importMetadata, previewMetadata,
+  listCategories
 } from '../../services/api'
 
 type MetadataItem = {
@@ -43,6 +44,11 @@ export default function MetadataPage() {
   const pendingFileRef = useRef<File | null>(null)
   const [form] = Form.useForm()
   const specType = Form.useWatch('spec_type', form)
+
+  const { data: categoriesData } = useRequest(() => listCategories().then(r => r.data))
+  const categoryOptions = (categoriesData ?? []).map((c: { code: string; name: string }) => ({
+    value: c.code, label: `${c.code} · ${c.name}`
+  }))
 
   const queryParams = { ...search, page, page_size: pageSize }
   const { data, loading, refresh } = useRequest(
@@ -170,11 +176,12 @@ export default function MetadataPage() {
     <Card>
       <Row gutter={12} style={{ marginBottom: 16 }} align="middle">
         <Col>
-          <Input
-            placeholder="搜索品类码"
+          <Select
+            placeholder="搜索品类"
             allowClear
-            style={{ width: 160 }}
-            onChange={e => { setSearch(p => ({ ...p, category_code: e.target.value || undefined })); setPage(1) }}
+            style={{ width: 180 }}
+            options={categoryOptions}
+            onChange={v => { setSearch(p => ({ ...p, category_code: v || undefined })); setPage(1) }}
           />
         </Col>
         <Col>
@@ -312,8 +319,9 @@ export default function MetadataPage() {
         <Form form={form} layout="vertical" style={{ marginTop: 8 }}>
           <Row gutter={12}>
             <Col span={12}>
-              <Form.Item label="品类码" name="category_code" rules={[{ required: true, message: '请填写品类码' }]}>
-                <Input placeholder="如 SB（Soundbar）" />
+              <Form.Item label="品类码" name="category_code" rules={[{ required: true, message: '请选择品类' }]}>
+                <Select placeholder="请选择品类" options={categoryOptions} showSearch
+                  filterOption={(input, opt) => (opt?.label as string ?? '').toLowerCase().includes(input.toLowerCase())} />
               </Form.Item>
             </Col>
             <Col span={12}>

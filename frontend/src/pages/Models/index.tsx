@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react'
 import {
   Card, Table, Button, Input, Space, Popconfirm, Upload, Modal, Form,
-  InputNumber, message, Row, Col, Divider, Typography, Collapse
+  InputNumber, message, Row, Col, Divider, Typography, Collapse, Select
 } from 'antd'
 import {
   PlusOutlined, UploadOutlined, EditOutlined, DeleteOutlined,
@@ -12,6 +12,7 @@ import {
   listModels, getModelDetail, createModel, updateModel, deleteModel,
   importModels, previewModels,
   listModelAliases, addModelAlias, deleteModelAlias,
+  listCategories,
 } from '../../services/api'
 
 const { Text } = Typography
@@ -70,6 +71,11 @@ export default function ModelsPage() {
   const [aliasInput, setAliasInput] = useState('')
   const [aliasLoading, setAliasLoading] = useState(false)
 
+  const { data: categoriesData } = useRequest(() => listCategories().then(r => r.data))
+  const categoryOptions = (categoriesData ?? []).map((c: { code: string; name: string }) => ({
+    value: c.code, label: `${c.name}（${c.code}）`
+  }))
+
   const queryParams = { ...search, page, page_size: pageSize }
   const { data, loading, refresh } = useRequest(
     () => listModels(queryParams).then(r => r.data),
@@ -93,7 +99,7 @@ export default function ModelsPage() {
       form.setFieldsValue({
         brand_code:    full.brand_code,
         model_code:    full.model_code,
-        category_name: full.category_name,
+        category_code: full.category_code,
         brand_name:    full.brand_name,
         model_name:    full.model_name,
         launch_year:   full.launch_year,
@@ -411,8 +417,9 @@ export default function ModelsPage() {
           <Divider orientation="left" plain style={{ fontSize: 13, color: '#666' }}>基本信息</Divider>
           <Row gutter={12}>
             <Col span={8}>
-              <Form.Item label="品类名称" name="category_name">
-                <Input placeholder="如 SOUNDBAR" />
+              <Form.Item label="品类" name="category_code">
+                <Select placeholder="请选择品类" allowClear options={categoryOptions} showSearch
+                  filterOption={(input, opt) => (opt?.label as string ?? '').toLowerCase().includes(input.toLowerCase())} />
               </Form.Item>
             </Col>
             <Col span={8}>

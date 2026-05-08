@@ -60,7 +60,7 @@ def run_publish(luotu_db: Session, analytics_db: Session, clean_job_id: int) -> 
             m.brand_name,
             m.model_code,
             m.model_name,
-            m.category_name,
+            m.category_code AS category_name,
             m.id            AS model_id
         FROM match_results mr
         JOIN raw_data rd  ON rd.id = mr.raw_data_id

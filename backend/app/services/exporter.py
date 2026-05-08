@@ -95,7 +95,7 @@ def export_match_job(
                 row[field] = getattr(rd, field, None)
 
         model_specs = spec_map.get(mr.model_id, {})
-        cat = m.category_name or "未知品类"
+        cat = m.category_code or "未知品类"
         # 按本品类规格列预填空字符串，再覆盖实际值（保持缺失规格为 "" 而非 NaN）
         # 注意：models.category_name 与 metadata_specs.category_code 使用同一品类码
         for sn in category_spec_names.get(cat, []):

@@ -39,7 +39,7 @@ def _seed(db, *, platform="jd", item_id="12345", item_name="Sony HT-A7000 soundb
     model = ModelRecord(
         brand_code="SONY",
         model_code=f"MODEL-{item_id}",
-        category_name="soundbar",
+        category_code="soundbar",
     )
     db.add(model)
     db.flush()
@@ -83,7 +83,7 @@ def test_s0_takes_precedence_over_s02(db):
     cleaned.item_url = "https://item.jd.com/77777.html"
     db.flush()
     # S0: url mapping → 另一个 model
-    model2 = ModelRecord(brand_code="SONY", model_code="MODEL-URL", category_name="soundbar")
+    model2 = ModelRecord(brand_code="SONY", model_code="MODEL-URL", category_code="soundbar")
     db.add(model2)
     db.flush()
     db.add(ItemUrlMapping(platform="jd", item_id="77777", model_id=model2.id))

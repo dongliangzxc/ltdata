@@ -250,7 +250,7 @@ def list_missing_attrs(
             "brand_raw": rd.brand_raw,
             "model_code": model.model_code if model else None,
             "brand_code": model.brand_code if model else None,
-            "category_name": model.category_name if model else None,
+            "category_name": model.category_code if model else None,
         })
     return PaginatedResponse(total=total, page=page, page_size=page_size, items=items)
 

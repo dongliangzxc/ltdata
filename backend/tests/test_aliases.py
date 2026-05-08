@@ -31,7 +31,7 @@ def db():
 def test_model_alias_orm_exists(db):
     """ModelAlias ORM 可以写入和查询。"""
     m = ModelRecord(brand_code="SONY", model_code="HT-A7000",
-                    brand_name="索尼", category_name="SOUNDBAR")
+                    brand_name="索尼")
     db.add(m)
     db.flush()
 
@@ -64,7 +64,7 @@ def test_add_and_list_aliases(db):
     client = TestClient(app, headers=_AUTH_HEADERS)
 
     m = ModelRecord(brand_code="SONY", model_code="HT-X9000F",
-                    brand_name="索尼", category_name="SOUNDBAR")
+                    brand_name="索尼")
     db.add(m)
     db.commit()
 
@@ -89,7 +89,7 @@ def test_delete_alias(db):
     client = TestClient(app, headers=_AUTH_HEADERS)
 
     m = ModelRecord(brand_code="SONY", model_code="HT-S400",
-                    brand_name="索尼", category_name="SOUNDBAR")
+                    brand_name="索尼")
     db.add(m)
     db.flush()
     alias = ModelAlias(model_id=m.id, alias_code="HTS400")
@@ -114,8 +114,8 @@ def _make_excel_with_alias() -> bytes:
     wb = openpyxl.Workbook()
     ws1 = wb.active
     ws1.title = "型号"
-    ws1.append(["品牌码", "型号码", "品类"])
-    ws1.append(["SONY", "HT-A3000", "SOUNDBAR"])
+    ws1.append(["品牌码", "型号码"])
+    ws1.append(["SONY", "HT-A3000"])
     wb.create_sheet("型号规格")
     ws3 = wb.create_sheet("别名")
     ws3.append(["品牌码", "型号码", "别名"])

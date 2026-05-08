@@ -70,7 +70,7 @@ def _seed_publish_data(db):
         brand_code="TST",
         model_code="X100",
         model_name="Test Model",
-        category_name="平板",
+        category_code="平板",
         brand_name="Test Brand",
     )
     db.add(model)
@@ -164,7 +164,7 @@ def _seed_single_mr():
     if not model:
         model = ModelRecord(
             brand_code="API", model_code="API100",
-            model_name="API Model", category_name="平板",
+            model_name="API Model", category_code="平板",
         )
         db.add(model)
         db.flush()

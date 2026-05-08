@@ -20,7 +20,7 @@ def _seed(db, *, brand_code, model_code, brand_name=None, model_name=None, categ
         model_code=model_code,
         brand_name=brand_name or brand_code,
         model_name=model_name or model_code,
-        category_name=category_name,
+        category_code=category_name,
     )
     db.add(m)
     db.flush()

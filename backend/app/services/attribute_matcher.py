@@ -53,7 +53,7 @@ def run_attribute_matching(db: Session, match_result_ids: list[int]) -> dict:
         if mr.model_id is None:
             continue
         items_processed += 1
-        category = model.category_name if model else None
+        category = model.category_code if model else None
         item_upper = (rd.item_name or "").upper()
 
         # 两路分别收集命中：品类规则 + 全局规则

@@ -344,10 +344,10 @@ def recover_filtered_item(fi_id: int, db: Session = Depends(get_db)):
 def list_attr_rule_categories(db: Session = Depends(get_db)):
     """返回 models 表中 distinct category_name 列表，供前端属性规则品类下拉使用"""
     rows = (
-        db.query(ModelRecord.category_name)
-        .filter(ModelRecord.category_name.isnot(None))
+        db.query(ModelRecord.category_code)
+        .filter(ModelRecord.category_code.isnot(None))
         .distinct()
-        .order_by(ModelRecord.category_name)
+        .order_by(ModelRecord.category_code)
         .all()
     )
     return [r[0] for r in rows if r[0]]

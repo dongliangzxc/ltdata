@@ -78,7 +78,7 @@ def _parse_models_file(content: bytes) -> dict:
         priority = {"品牌码": "brand_code", "型号码": "model_code"}
         fallback = {"品牌":   "brand_code", "型号":   "model_code"}
         other    = {
-            "品类": "category_name", "品牌名称": "brand_name", "型号名称": "model_name",
+            "品类": "category_code", "品牌名称": "brand_name", "型号名称": "model_name",
             "上市年": "launch_year", "上市月": "launch_month", "上市周": "launch_week",
             "上市价格": "launch_price", "网址": "url",
             "规格名称": "spec_name", "规格值": "spec_value",
@@ -127,7 +127,7 @@ def _parse_models_file(content: bytes) -> dict:
                 "model_code":    str(mc),
                 "brand_name":    str(_clean_val(row.get("brand_name")) or bc),
                 "model_name":    str(_clean_val(row.get("model_name")) or mc),
-                "category_name": str(_clean_val(row.get("category_name")) or ""),
+                "category_code": str(_clean_val(row.get("category_code")) or "") or None,
                 "launch_year":   _to_int(_clean_val(row.get("launch_year"))),
                 "launch_month":  _to_int(_clean_val(row.get("launch_month"))),
                 "launch_price":  _to_float(_clean_val(row.get("launch_price"))),
@@ -195,7 +195,7 @@ async def import_models(file: UploadFile = File(...), db: Session = Depends(get_
         priority = {"品牌码": "brand_code", "型号码": "model_code"}
         fallback = {"品牌":   "brand_code", "型号":   "model_code"}
         other    = {
-            "品类": "category_name",
+            "品类": "category_code",
             "上市年": "launch_year", "上市月": "launch_month", "上市周": "launch_week",
             "上市价格": "launch_price", "网址": "url",
             "规格名称": "spec_name", "规格值": "spec_value",
@@ -243,7 +243,7 @@ async def import_models(file: UploadFile = File(...), db: Session = Depends(get_
         vals = {
             "brand_code":    str(bc),
             "model_code":    str(mc),
-            "category_name": str(_clean_val(row.get("category_name")) or ""),
+            "category_code": str(_clean_val(row.get("category_code")) or "") or None,
             "brand_name":    str(_clean_val(row.get("brand_name"))    or bc),
             "model_name":    str(_clean_val(row.get("model_name"))    or mc),
             "launch_year":   _to_int(_clean_val(row.get("launch_year"))),
@@ -256,7 +256,7 @@ async def import_models(file: UploadFile = File(...), db: Session = Depends(get_
         if dialect_name == "mysql":
             stmt = mysql_insert(ModelRecord).values(**vals)
             stmt = stmt.on_duplicate_key_update(
-                category_name=stmt.inserted.category_name,
+                category_code=stmt.inserted.category_code,
                 brand_name=stmt.inserted.brand_name,
                 model_name=stmt.inserted.model_name,
                 launch_year=stmt.inserted.launch_year,
@@ -399,7 +399,7 @@ def create_model(payload: ModelIn, db: Session = Depends(get_db)):
     obj = ModelRecord(
         brand_code=payload.brand_code,
         model_code=payload.model_code,
-        category_name=payload.category_name,
+        category_code=payload.category_code,
         brand_name=payload.brand_name,
         model_name=payload.model_name,
         launch_year=payload.launch_year,
@@ -427,7 +427,7 @@ def update_model(model_id: int, payload: ModelIn, db: Session = Depends(get_db))
 
     obj.brand_code    = payload.brand_code
     obj.model_code    = payload.model_code
-    obj.category_name = payload.category_name
+    obj.category_code = payload.category_code
     obj.brand_name    = payload.brand_name
     obj.model_name    = payload.model_name
     obj.launch_year   = payload.launch_year

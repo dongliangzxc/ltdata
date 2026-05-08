@@ -14,7 +14,7 @@
 text_only：S1-S4 文本命中，但 item_url 存在且不在 url_map → 需人工补录 URL 映射
 """
 from sqlalchemy.orm import Session
-from app.models.schemas import CleanedDataRecord, ModelRecord, ModelAlias, MatchResult, ItemUrlMapping, MatchRule
+from app.models.schemas import CleanedDataRecord, ModelRecord, ModelAlias, MatchResult, ItemUrlMapping, MatchRule, HistoricalMapping
 from app.utils.url_utils import extract_item_id
 from app.services.attribute_matcher import run_attribute_matching
 
@@ -45,6 +45,12 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
         .order_by(MatchRule.priority)
         .all()
     )
+
+    # ── S0.2: 预加载历史库映射 ────────────────────────────────────
+    # key=(platform_lower, item_id), value=model_id
+    hist_map: dict[tuple[str, str], int] = {}
+    for hm in db.query(HistoricalMapping).all():
+        hist_map[(hm.platform.lower(), hm.item_id)] = hm.model_id
 
     # ── 构建内存索引 ─────────────────────────────────────────────
     all_models = db.query(ModelRecord).all()
@@ -163,6 +169,28 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
                         progress_cb(i + 1, total, matched_count)
                     results = []
                 continue  # 跳过 S1-S4
+
+        # ── S0.2: 历史库精确匹配 ─────────────────────────────────
+        plat_key = (row.platform or "").lower()
+        hist_model_id = hist_map.get((plat_key, row.item_id or ""))
+        if hist_model_id:
+            results.append(MatchResult(
+                clean_job_id=clean_job_id,
+                raw_data_id=row.raw_data_id,
+                model_id=hist_model_id,
+                match_status="matched",
+                matched_by="auto",
+                match_source="historical",
+                brand_identified=1,
+            ))
+            matched_count += 1
+            if len(results) >= BATCH:
+                db.bulk_save_objects(results)
+                db.commit()
+                if progress_cb:
+                    progress_cb(i + 1, total, matched_count)
+                results = []
+            continue  # 跳过 S0.5 / S1-S4
 
         # ── S0.5: 显式规则匹配 ─────────────────────────────────────
         s05_model_id: int | None = None

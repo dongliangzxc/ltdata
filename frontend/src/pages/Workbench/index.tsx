@@ -3,7 +3,7 @@ import {
   Card, Row, Col, Select, Input, Button, Table,
   Typography, Tooltip, Form, Statistic, message, Space
 } from 'antd'
-import { SearchOutlined, DownloadOutlined, ClearOutlined } from '@ant-design/icons'
+import { SearchOutlined, DownloadOutlined, ClearOutlined, LinkOutlined } from '@ant-design/icons'
 import {
   getWorkbenchFilters, queryWorkbenchData,
   exportWorkbenchData, getWorkbenchDownloadUrl
@@ -109,13 +109,16 @@ export default function WorkbenchPage() {
     { title: '平台', dataIndex: 'platform', width: 70 },
     {
       title: '宝贝名称', dataIndex: 'item_name', ellipsis: true,
-      render: (v: string, row: DataRow) => (
-        <Tooltip title={v}>
-          {row.item_url
-            ? <a href={row.item_url} target="_blank" rel="noreferrer"><Text style={{ fontSize: 12 }}>{v}</Text></a>
-            : <Text style={{ fontSize: 12 }}>{v}</Text>}
-        </Tooltip>
+      render: (v: string) => (
+        <Tooltip title={v}><Text style={{ fontSize: 12 }}>{v}</Text></Tooltip>
       ),
+    },
+    {
+      title: '链接', width: 60,
+      render: (_: unknown, row: DataRow) =>
+        row.item_url
+          ? <a href={row.item_url} target="_blank" rel="noreferrer"><LinkOutlined /></a>
+          : '-',
     },
     { title: '品牌', dataIndex: 'brand_code', width: 90 },
     { title: '型号', dataIndex: 'model_code', width: 100 },

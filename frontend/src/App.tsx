@@ -13,6 +13,7 @@ import WorkbenchPage from './pages/Workbench'
 import ManualPage from './pages/Manual'
 import UrlMappingsPage from './pages/UrlMappings'
 import RulesPage from './pages/Rules'
+import HistoricalPage from './pages/Historical'
 
 export default function App() {
   return (
@@ -36,6 +37,7 @@ export default function App() {
             <Route path="/workbench" element={<WorkbenchPage />} />
             <Route path="/manual" element={<ManualPage />} />
             <Route path="/url-mappings" element={<UrlMappingsPage />} />
+            <Route path="/historical" element={<HistoricalPage />} />
           </Route>
         </Route>
       </Routes>

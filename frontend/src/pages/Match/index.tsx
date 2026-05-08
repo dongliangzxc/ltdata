@@ -290,7 +290,7 @@ export default function MatchPage() {
 
   const handlePublish = async () => {
     if (!selectedJobId) { message.warning('请先选择清洗任务'); return }
-    if (!summary || (summary.matched + summary.confirmed) === 0) {
+    if (!summary || (summary.url_matched ?? 0) + summary.matched + summary.confirmed === 0) {
       message.warning('没有可发布的已匹配数据')
       return
     }

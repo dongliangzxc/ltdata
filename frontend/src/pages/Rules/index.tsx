@@ -315,7 +315,7 @@ function AttrRuleTab() {
   const [form] = Form.useForm()
 
   const { data: categories } = useRequest(() =>
-    listAttrRuleCategories().then(r => r.data as string[])
+    listAttrRuleCategories().then(r => r.data as { code: string; name: string }[])
   )
   const { data, loading, refresh } = useRequest(
     () => listAttrRules(filterCategory ? { category_code: filterCategory } : undefined).then(r => r.data),
@@ -346,12 +346,16 @@ function AttrRuleTab() {
   const categoryOptions = [
     { value: '', label: '全部' },
     { value: '__global__', label: '全局（无品类限制）' },
-    ...(categories ?? []).map(c => ({ value: c, label: c })),
+    ...(categories ?? []).map(c => ({ value: c.code, label: c.name })),
   ]
 
   const columns = [
     { title: '品类', dataIndex: 'category_code', width: 120,
-      render: (v: string | null) => v ? <Tag>{v}</Tag> : <Tag color="blue">全局</Tag> },
+      render: (v: string | null) => {
+        if (!v) return <Tag color="blue">全局</Tag>
+        const cat = (categories ?? []).find(c => c.code === v)
+        return <Tag>{cat ? cat.name : v}</Tag>
+      } },
     { title: '关键词', dataIndex: 'keyword', ellipsis: true },
     { title: '匹配方式', dataIndex: 'match_type', width: 90,
       render: (v: string) => v === 'exact' ? '精准' : '包含' },
@@ -379,7 +383,7 @@ function AttrRuleTab() {
 
   const modalCategoryOptions = [
     { value: '', label: '全局（不限品类）' },
-    ...(categories ?? []).map(c => ({ value: c, label: c })),
+    ...(categories ?? []).map(c => ({ value: c.code, label: c.name })),
   ]
 
   return (

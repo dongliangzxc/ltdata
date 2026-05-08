@@ -1,18 +1,6 @@
 """验证 Category ORM 和 ModelRecord 字段变更"""
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from app.models.database import Base
 from app.models.schemas import Category, ModelRecord
-
-@pytest.fixture
-def db():
-    engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
-    S = sessionmaker(bind=engine)
-    s = S()
-    yield s
-    s.close()
 
 def test_category_create_and_query(db):
     cat = Category(code="soundbar", name="回音壁")

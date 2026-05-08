@@ -342,7 +342,7 @@ def recover_filtered_item(fi_id: int, db: Session = Depends(get_db)):
 
 @router.get("/attr-rules/categories")
 def list_attr_rule_categories(db: Session = Depends(get_db)):
-    """返回 models 表中 distinct category_name 列表，供前端属性规则品类下拉使用"""
+    """返回 models 表中 distinct category_code 列表，供前端属性规则品类下拉使用"""
     rows = (
         db.query(ModelRecord.category_code)
         .filter(ModelRecord.category_code.isnot(None))

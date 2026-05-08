@@ -313,6 +313,36 @@ class ItemUrlMapping(Base):
     model = relationship("ModelRecord")
 
 
+class HistoricalMapping(Base):
+    __tablename__ = "historical_mappings"
+    __table_args__ = (
+        UniqueConstraint("platform", "item_id", name="uq_hist_platform_item"),
+    )
+
+    id           = Column(Integer, primary_key=True, index=True)
+    platform     = Column(String(50),  nullable=False)
+    item_id      = Column(String(200), nullable=False)
+    model_id     = Column(Integer, ForeignKey("models.id"), nullable=False)
+    import_batch = Column(String(100), nullable=True)
+    created_at   = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at   = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    model = relationship("ModelRecord")
+
+
+class HistoricalMappingOut(BaseModel):
+    id:           int
+    platform:     str
+    item_id:      str
+    model_id:     int
+    import_batch: Optional[str]
+    brand_code:   Optional[str] = None
+    model_code:   Optional[str] = None
+    updated_at:   datetime
+
+    model_config = {"from_attributes": True}
+
+
 class ItemUrlMappingIn(BaseModel):
 
     platform: str

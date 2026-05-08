@@ -3,7 +3,7 @@ import {
   Card, Table, Button, Input, Select, Space, Typography,
   Modal, Form, InputNumber, Upload, message, Popconfirm, Tag,
 } from 'antd'
-import { PlusOutlined, UploadOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
+import { PlusOutlined, UploadOutlined, EditOutlined, DeleteOutlined, LinkOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import {
   listUrlMappings, createUrlMapping, updateUrlMapping,
@@ -38,6 +38,15 @@ const PLATFORM_OPTIONS = [
   { value: 'taobao', label: '淘宝 (TAOBAO)' },
   { value: 'suning', label: '苏宁 (SUNING)' },
 ]
+
+function buildUrl(platform: string, itemId: string): string | null {
+  switch (platform) {
+    case 'jd':     return `https://item.jd.com/${itemId}.html`
+    case 'tmall':  return `https://detail.tmall.com/item.htm?id=${itemId}`
+    case 'taobao': return `https://item.taobao.com/item.htm?id=${itemId}`
+    default:       return null
+  }
+}
 
 export default function UrlMappingsPage() {
   const [keyword, setKeyword] = useState('')
@@ -124,6 +133,13 @@ export default function UrlMappingsPage() {
       render: (v: string) => <Tag color={v === 'jd' ? 'blue' : 'orange'}>{v.toUpperCase()}</Tag>
     },
     { title: 'item_id', dataIndex: 'item_id', width: 160 },
+    {
+      title: '商品链接', width: 80,
+      render: (_: unknown, record: UrlMapping) => {
+        const url = buildUrl(record.platform, record.item_id)
+        return url ? <a href={url} target="_blank" rel="noreferrer"><LinkOutlined /> 查看</a> : '-'
+      }
+    },
     {
       title: '品牌码', dataIndex: 'brand_code', width: 100,
       render: (v: string | null) => v ?? '-'

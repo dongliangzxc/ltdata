@@ -330,19 +330,6 @@ class HistoricalMapping(Base):
     model = relationship("ModelRecord")
 
 
-class HistoricalMappingOut(BaseModel):
-    id:           int
-    platform:     str
-    item_id:      str
-    model_id:     int
-    import_batch: Optional[str]
-    brand_code:   Optional[str] = None
-    model_code:   Optional[str] = None
-    updated_at:   datetime
-
-    model_config = {"from_attributes": True}
-
-
 class ItemUrlMappingIn(BaseModel):
 
     platform: str

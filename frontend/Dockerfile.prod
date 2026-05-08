@@ -1,4 +1,4 @@
-FROM node:20-alpine AS builder
+FROM gc5ly4il.mirror.aliyuncs.com/library/node:20-alpine AS builder
 
 WORKDIR /app
 
@@ -9,7 +9,7 @@ COPY . .
 RUN npm run build
 
 # ── 生产阶段：Nginx 托管静态文件 ──
-FROM nginx:alpine
+FROM gc5ly4il.mirror.aliyuncs.com/library/nginx:alpine
 
 COPY --from=builder /app/dist /usr/share/nginx/html
 # nginx 配置由 docker-compose 挂载进来

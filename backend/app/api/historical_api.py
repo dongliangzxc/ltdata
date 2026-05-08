@@ -11,7 +11,7 @@ from typing import Optional
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from pydantic import BaseModel
-from sqlalchemy import func, distinct
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.database import get_db

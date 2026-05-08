@@ -199,6 +199,8 @@ def list_pending(
             model_id=mr.model_id,
             match_status=mr.match_status,
             matched_by=mr.matched_by,
+            match_source=mr.match_source,
+            brand_identified=mr.brand_identified,
             item_name=rd.item_name,
             brand_raw=rd.brand_raw,
             model_code=None,

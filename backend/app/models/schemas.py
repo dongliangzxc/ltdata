@@ -498,6 +498,7 @@ class MatchResultOut(BaseModel):
     match_source: Optional[str] = None
     is_disabled:    int = 0
     disable_reason: Optional[str] = None
+    brand_identified: int = 1
     # 关联字段（join 查询后填充）
     item_name:  Optional[str] = None
     brand_raw:  Optional[str] = None

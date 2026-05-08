@@ -329,6 +329,7 @@ class ItemUrlMapping(Base):
     id         = Column(Integer, primary_key=True, autoincrement=True)
     platform   = Column(String(20), nullable=False)
     item_id    = Column(String(100), nullable=False)
+    item_url   = Column(String(500), nullable=True)
     model_id   = Column(Integer, ForeignKey("models.id"), nullable=False)
     price      = Column(Numeric(10, 2), nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
@@ -367,6 +368,7 @@ class ItemUrlMappingOut(BaseModel):
     id:         int
     platform:   str
     item_id:    str
+    item_url:   Optional[str] = None
     model_id:   int
     price:      Optional[float]
     brand_code: Optional[str] = None

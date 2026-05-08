@@ -33,6 +33,7 @@ def _to_out(m: ItemUrlMapping) -> ItemUrlMappingOut:
         id=m.id,
         platform=m.platform,
         item_id=m.item_id,
+        item_url=m.item_url,
         model_id=m.model_id,
         price=float(m.price) if m.price is not None else None,
         brand_code=model.brand_code if model else None,
@@ -140,10 +141,11 @@ def import_url_mappings(file: UploadFile = File(...), db: Session = Depends(get_
         if existing:
             existing.model_id = model_id
             existing.price = price
+            existing.item_url = url
             existing.updated_at = datetime.utcnow()
         else:
             db.add(ItemUrlMapping(
-                platform=platform, item_id=item_id, model_id=model_id, price=price
+                platform=platform, item_id=item_id, item_url=url, model_id=model_id, price=price
             ))
         imported += 1
 

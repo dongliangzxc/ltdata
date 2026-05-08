@@ -16,6 +16,7 @@ type UrlMapping = {
   id: number
   platform: string
   item_id: string
+  item_url: string | null
   model_id: number
   price: number | null
   brand_code: string | null
@@ -136,7 +137,7 @@ export default function UrlMappingsPage() {
     {
       title: '商品链接', width: 80,
       render: (_: unknown, record: UrlMapping) => {
-        const url = buildUrl(record.platform, record.item_id)
+        const url = record.item_url || buildUrl(record.platform, record.item_id)
         return url ? <a href={url} target="_blank" rel="noreferrer"><LinkOutlined /> 查看</a> : '-'
       }
     },

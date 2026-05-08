@@ -435,13 +435,16 @@ def update_attr_rule(rule_id: int, body: AttrRulePatch, db: Session = Depends(ge
     row = db.query(AttrRule).filter(AttrRule.id == rule_id).first()
     if not row:
         raise HTTPException(404, "规则不存在")
-    if body.category_code is not None and body.category_code:
+    if body.category_code:
         if not db.query(Category).filter(Category.code == body.category_code).first():
             raise HTTPException(400, f"品类码 {body.category_code} 不存在")
-    for field in ("keyword", "match_type", "attr_name", "attr_value", "category_code", "priority", "is_active"):
+    for field in ("keyword", "match_type", "attr_name", "attr_value", "priority", "is_active"):
         val = getattr(body, field)
         if val is not None:
             setattr(row, field, val)
+    # category_code can be explicitly set to None (= global rule)
+    if "category_code" in body.model_fields_set:
+        row.category_code = body.category_code or None
     db.commit()
     return {"id": row.id, "keyword": row.keyword, "attr_name": row.attr_name,
             "attr_value": row.attr_value, "category_code": row.category_code,

@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.models.schemas import (
     MatchResult, RawDataRecord, ModelRecord,
     ModelSpec, MetadataSpec,
+    Category,
 )
 from app.core.config import settings
 
@@ -51,6 +52,12 @@ def export_match_job(
     """
     生成导出文件，返回 [{"filename": ..., "token": ..., "path": ..., "rows": ..., "pending_rows": ...}]
     """
+    # ── 0. 预加载品类 code→name 映射 ─────────────────────────────
+    cat_map: dict[str, str] = {
+        c.code: c.name
+        for c in db.query(Category).all()
+    }
+
     # ── 1. 预加载所有 metadata_specs，按 category_code 分组 ──────
     all_spec_defs = db.query(MetadataSpec).order_by(MetadataSpec.id).all()
     # { category_code: [spec_name, ...] }
@@ -84,6 +91,7 @@ def export_match_job(
 
     # ── 4. 按 category_name 分组构建数据行 ───────────────────────
     category_data: dict[str, list[dict]] = {}
+    category_code_for: dict[str, str] = {}  # cat(name) → cat_code
     for mr, rd, m in matched_rows:
         row: dict = {}
         for field in BASE_FIELD_NAMES:
@@ -95,13 +103,15 @@ def export_match_job(
                 row[field] = getattr(rd, field, None)
 
         model_specs = spec_map.get(mr.model_id, {})
-        cat = m.category_code or "未知品类"
+        cat_code = m.category_code or ""
+        cat = cat_map.get(cat_code, cat_code) or "未知品类"
         # 按本品类规格列预填空字符串，再覆盖实际值（保持缺失规格为 "" 而非 NaN）
         # 注意：models.category_name 与 metadata_specs.category_code 使用同一品类码
-        for sn in category_spec_names.get(cat, []):
+        for sn in category_spec_names.get(cat_code, []):
             row[sn] = model_specs.get(sn, "")
 
         category_data.setdefault(cat, []).append(row)
+        category_code_for[cat] = cat_code
 
     # ── 5. 查待确认条目 ──────────────────────────────────────────
     pending_rows = (
@@ -136,8 +146,9 @@ def export_match_job(
 
     with pd.ExcelWriter(str(file_path), engine="openpyxl") as writer:
         for cat, rows in category_data.items():
-            # category_name 与 category_code 同值，直接用 cat 查本品类规格列
-            cat_spec_names = category_spec_names.get(cat, [])
+            # cat is the human-readable name; use cat_code for spec column lookup
+            cat_code = category_code_for.get(cat, cat)
+            cat_spec_names = category_spec_names.get(cat_code, [])
             df = pd.DataFrame(rows, columns=BASE_FIELD_NAMES + cat_spec_names)
             df.columns = BASE_CN_NAMES + cat_spec_names
             df.to_excel(writer, sheet_name=cat[:31], index=False)

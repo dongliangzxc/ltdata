@@ -173,14 +173,15 @@ def list_pending(
         status = "pending"
 
     q = (
-        db.query(MatchResult, RawDataRecord, func.count(MatchResultAttr.id).label("attr_count"))
+        db.query(MatchResult, RawDataRecord, ModelRecord, func.count(MatchResultAttr.id).label("attr_count"))
         .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
+        .outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
         .outerjoin(MatchResultAttr, MatchResultAttr.match_result_id == MatchResult.id)
         .filter(
             MatchResult.clean_job_id == clean_job_id,
             MatchResult.match_status == status,
         )
-        .group_by(MatchResult.id, RawDataRecord.id)
+        .group_by(MatchResult.id, RawDataRecord.id, ModelRecord.id)
     )
     if keyword:
         q = q.filter(RawDataRecord.item_name.ilike(f"%{keyword}%"))
@@ -191,7 +192,7 @@ def list_pending(
     rows = q.offset((page - 1) * page_size).limit(page_size).all()
 
     items = []
-    for mr, rd, attr_count in rows:
+    for mr, rd, model, attr_count in rows:
         items.append(MatchResultOut(
             id=mr.id,
             clean_job_id=mr.clean_job_id,
@@ -202,9 +203,10 @@ def list_pending(
             match_source=mr.match_source,
             brand_identified=mr.brand_identified,
             item_name=rd.item_name,
+            item_url=rd.item_url,
             brand_raw=rd.brand_raw,
-            model_code=None,
-            brand_code=None,
+            model_code=model.model_code if model else None,
+            brand_code=model.brand_code if model else None,
             attr_count=attr_count,
         ))
 

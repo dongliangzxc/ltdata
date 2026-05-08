@@ -3,7 +3,7 @@ import {
   Card, Select, Button, Table, Tag, Space, Typography, Input,
   message, Row, Col, Statistic, Tooltip, Progress, Alert, Popconfirm, InputNumber, Tabs
 } from 'antd'
-import { AimOutlined, CheckOutlined, StopOutlined, CloudUploadOutlined, LoadingOutlined } from '@ant-design/icons'
+import { AimOutlined, CheckOutlined, StopOutlined, CloudUploadOutlined, LoadingOutlined, LinkOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import { useSearchParams } from 'react-router-dom'
 import {
@@ -33,8 +33,11 @@ type PendingItem = {
   id: number
   raw_data_id: number
   item_name: string
+  item_url?: string | null
   brand_raw: string
-  model_code?: string
+  model_id?: number | null
+  model_code?: string | null
+  brand_code?: string | null
   category_name?: string
   attr_count?: number
   match_source?: string
@@ -345,6 +348,22 @@ export default function MatchPage() {
       render: (v: string) => <Tooltip title={v}><Text style={{ fontSize: 12 }}>{v}</Text></Tooltip>
     },
     { title: '原始品牌', dataIndex: 'brand_raw', width: 120 },
+    ...(activeTab === 'text_only' ? [
+      {
+        title: '匹配型号', width: 160,
+        render: (_: unknown, row: PendingItem) =>
+          row.brand_code && row.model_code
+            ? <Text code style={{ fontSize: 12 }}>[{row.brand_code}] {row.model_code}</Text>
+            : <Text type="secondary">-</Text>
+      },
+      {
+        title: '商品链接', width: 80,
+        render: (_: unknown, row: PendingItem) =>
+          row.item_url
+            ? <a href={row.item_url} target="_blank" rel="noreferrer"><LinkOutlined /> 查看</a>
+            : '-'
+      },
+    ] : []),
     {
       title: '指定型号', width: 260,
       render: (_: unknown, row: PendingItem) => (

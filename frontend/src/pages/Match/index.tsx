@@ -180,7 +180,9 @@ export default function MatchPage() {
     } finally {
       setModelSearchLoading(false)
     }
-  }  const { data: pendingData, loading: pendingLoading, refresh: refreshPending } = useRequest(
+  }
+
+  const { data: pendingData, loading: pendingLoading, refresh: refreshPending } = useRequest(
     () => listPendingMatches(selectedJobId!, {
       keyword: keyword || undefined,
       page,

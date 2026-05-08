@@ -114,7 +114,6 @@ def test_s02_skips_when_item_id_is_none(db):
     """item_id 为 None 时，S0.2 不崩溃也不匹配"""
     job_id, model_id = _seed(db, platform="jd", item_id="55555")
     # Patch the cleaned record's item_id to None after seeding
-    from app.models.schemas import CleanedDataRecord
     cleaned = db.query(CleanedDataRecord).filter(CleanedDataRecord.clean_job_id == job_id).first()
     cleaned.item_id = None
     db.add(HistoricalMapping(platform="jd", item_id="55555", model_id=model_id, import_batch="b1"))
@@ -125,3 +124,4 @@ def test_s02_skips_when_item_id_is_none(db):
     mr = db.query(MatchResult).filter(MatchResult.clean_job_id == job_id).first()
     assert mr is not None
     assert mr.match_source != "historical"
+    assert mr.match_source in ("s1", "s2", "s3", "s4", None)

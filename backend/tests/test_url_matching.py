@@ -81,7 +81,14 @@ def override_get_db():
         db.close()
 
 
-app.dependency_overrides[get_db] = override_get_db
+@pytest.fixture(autouse=True)
+def _set_db_override():
+    """确保每个测试前 get_db override 指向 SQLite，防止其他测试文件 clear() 污染"""
+    app.dependency_overrides[get_db] = override_get_db
+    yield
+    app.dependency_overrides[get_db] = override_get_db
+
+
 client = TestClient(app)
 
 

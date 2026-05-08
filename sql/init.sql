@@ -330,3 +330,11 @@ INSERT IGNORE INTO categories (code, name) VALUES
     ('smartwatch',     '智能手表'),
     ('band',           '手环'),
     ('vrar',           'VRAR');
+
+-- Alembic 版本记录：与 init.sql 建表结构对应的迁移链终点
+-- 新环境初始化时直接标记为当前最新，后续增量迁移正常执行
+CREATE TABLE IF NOT EXISTS alembic_version (
+    version_num VARCHAR(32) NOT NULL,
+    CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)
+);
+INSERT IGNORE INTO alembic_version (version_num) VALUES ('d5e6f7a8b9c0');

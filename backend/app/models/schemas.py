@@ -313,6 +313,23 @@ class ItemUrlMapping(Base):
     model = relationship("ModelRecord")
 
 
+class HistoricalMapping(Base):
+    __tablename__ = "historical_mappings"
+    __table_args__ = (
+        UniqueConstraint("platform", "item_id", name="uq_hist_platform_item"),
+    )
+
+    id           = Column(Integer, primary_key=True, index=True)
+    platform     = Column(String(50),  nullable=False)
+    item_id      = Column(String(200), nullable=False)
+    model_id     = Column(Integer, ForeignKey("models.id"), nullable=False)
+    import_batch = Column(String(100), nullable=True)
+    created_at   = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at   = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    model = relationship("ModelRecord")
+
+
 class ItemUrlMappingIn(BaseModel):
 
     platform: str
@@ -421,7 +438,7 @@ class MatchResult(Base):
     model_id     = Column(Integer)
     match_status = Column(String(20), default="pending")  # matched/pending/confirmed/excluded
     matched_by   = Column(String(20), default="auto")     # auto/manual
-    match_source   = Column(String(20), nullable=True)      # s1/s2/s3/s4/manual
+    match_source   = Column(String(20), nullable=True)      # s0/s0.2/s0.5/historical/s1/s2/s3/s4/manual
     is_disabled    = Column(SmallInteger, nullable=False, default=0)
     disable_reason = Column(String(100), nullable=True)
     brand_identified = Column(SmallInteger, default=1)

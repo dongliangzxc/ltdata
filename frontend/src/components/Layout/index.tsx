@@ -14,6 +14,7 @@ import {
   QuestionCircleOutlined,
   LinkOutlined,
   FilterOutlined,
+  HistoryOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 
@@ -26,6 +27,7 @@ const menuItems = [
   { key: '/metadata',   icon: <ProfileOutlined />,       label: '元数据管理' },
   { key: '/models',     icon: <AppstoreAddOutlined />,   label: '型号管理' },
   { key: '/url-mappings', icon: <LinkOutlined />,        label: 'URL映射管理' },
+  { key: '/historical',   icon: <HistoryOutlined />,     label: '历史库' },
   { key: '/clean',      icon: <ClearOutlined />,         label: '数据清洗' },
   { key: '/rules',      icon: <FilterOutlined />,        label: '规则管理' },
   { key: '/match',      icon: <AimOutlined />,           label: '匹配确认' },

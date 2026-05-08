@@ -37,6 +37,7 @@ type PendingItem = {
   model_code?: string
   category_name?: string
   attr_count?: number
+  match_source?: string
 }
 
 type DisabledItem = {
@@ -360,6 +361,26 @@ export default function MatchPage() {
         (row.attr_count ?? 0) > 0
           ? <Tag color="green">已补 {row.attr_count} 个</Tag>
           : <Tag color="default">未补</Tag>,
+    },
+    {
+      title: '来源', width: 90,
+      render: (_: unknown, row: PendingItem) => {
+        const map: Record<string, { label: string; color: string }> = {
+          's0':         { label: 'URL映射',  color: 'blue'   },
+          'historical': { label: '历史库',   color: 'purple' },
+          's0.5':       { label: '规则',     color: 'cyan'   },
+          's1':         { label: '算法S1',   color: 'green'  },
+          's2':         { label: '算法S2',   color: 'green'  },
+          's3':         { label: '算法S3',   color: 'green'  },
+          's4':         { label: '算法S4',   color: 'orange' },
+        }
+        const src = row.match_source
+        if (!src) return <Tag color="default">未知</Tag>
+        const entry = map[src]
+        return entry
+          ? <Tag color={entry.color}>{entry.label}</Tag>
+          : <Tag>{src}</Tag>
+      },
     },
     {
       title: '操作', width: 180, fixed: 'right' as const,

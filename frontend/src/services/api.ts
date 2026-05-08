@@ -251,3 +251,16 @@ export const deleteHistoricalMapping = (id: number) =>
 
 export const deleteHistoricalBatch = (importBatch: string) =>
   api.delete('/historical/mappings/batch', { data: { import_batch: importBatch } })
+
+// ─── Categories ─────────────────────────────────────────────
+export const listCategories = () =>
+  api.get('/categories')
+
+export const createCategory = (data: { code: string; name: string }) =>
+  api.post('/categories', data)
+
+export const updateCategory = (id: number, data: { name: string }) =>
+  api.put(`/categories/${id}`, data)
+
+export const deleteCategory = (id: number) =>
+  api.delete(`/categories/${id}`)

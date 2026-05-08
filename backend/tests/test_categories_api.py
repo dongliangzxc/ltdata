@@ -35,13 +35,13 @@ def client():
 
 
 def test_list_empty(client):
-    r = client.get("/categories")
+    r = client.get("/api/categories")
     assert r.status_code == 200
     assert r.json() == []
 
 
 def test_create_category(client):
-    r = client.post("/categories", json={"code": "soundbar", "name": "回音壁"})
+    r = client.post("/api/categories", json={"code": "soundbar", "name": "回音壁"})
     assert r.status_code == 201
     data = r.json()
     assert data["code"] == "soundbar"
@@ -50,24 +50,24 @@ def test_create_category(client):
 
 
 def test_create_duplicate_code_returns_409(client):
-    client.post("/categories", json={"code": "tv", "name": "电视"})
-    r = client.post("/categories", json={"code": "tv", "name": "电视B"})
+    client.post("/api/categories", json={"code": "tv", "name": "电视"})
+    r = client.post("/api/categories", json={"code": "tv", "name": "电视B"})
     assert r.status_code == 409
 
 
 def test_update_name(client):
-    res = client.post("/categories", json={"code": "spk", "name": "音箱"})
+    res = client.post("/api/categories", json={"code": "spk", "name": "音箱"})
     cat_id = res.json()["id"]
-    r = client.put(f"/categories/{cat_id}", json={"name": "智能音箱"})
+    r = client.put(f"/api/categories/{cat_id}", json={"name": "智能音箱"})
     assert r.status_code == 200
     assert r.json()["name"] == "智能音箱"
     assert r.json()["code"] == "spk"  # code 不变
 
 
 def test_delete_category(client):
-    res = client.post("/categories", json={"code": "del", "name": "删除测试"})
+    res = client.post("/api/categories", json={"code": "del", "name": "删除测试"})
     cat_id = res.json()["id"]
-    r = client.delete(f"/categories/{cat_id}")
+    r = client.delete(f"/api/categories/{cat_id}")
     assert r.status_code == 204
 
 

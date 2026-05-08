@@ -292,3 +292,41 @@ CREATE TABLE IF NOT EXISTS published_item_specs (
 ALTER TABLE luotu.match_results
     ADD COLUMN IF NOT EXISTS match_source VARCHAR(20) DEFAULT NULL
         COMMENT 's1/s2/s3/s4=自动匹配步骤 manual=人工' AFTER matched_by;
+
+-- =============================================================
+-- 品类受控词表（categories）及预置 24 条数据
+-- =============================================================
+USE luotu;
+
+CREATE TABLE IF NOT EXISTS categories (
+    id         INT AUTO_INCREMENT PRIMARY KEY,
+    code       VARCHAR(50)  NOT NULL UNIQUE COMMENT '品类码，如 soundbar',
+    name       VARCHAR(100) NOT NULL        COMMENT '显示名称，如 回音壁',
+    created_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='品类受控词表';
+
+INSERT IGNORE INTO categories (code, name) VALUES
+    ('tv',             '电视'),
+    ('monitor',        '显示器'),
+    ('laptop',         '笔记本'),
+    ('tablet',         '智能平板'),
+    ('edu_tablet',     '学习平板'),
+    ('eink_tablet',    '电子纸平板'),
+    ('word_card',      '单词卡'),
+    ('dict_pen',       '词典笔'),
+    ('mind_machine',   '思维机'),
+    ('projector',      '投影仪'),
+    ('mobile_screen',  '移动智慧屏'),
+    ('smart_speaker',  '智能音箱'),
+    ('bt_speaker',     '无线蓝牙音箱'),
+    ('soundbar',       '回音壁'),
+    ('headphone',      '耳机'),
+    ('smart_lock',     '智能门锁'),
+    ('camera',         '监控摄像头'),
+    ('video_doorbell', '可视门铃'),
+    ('router',         '路由器'),
+    ('dashcam',        '行车记录仪'),
+    ('power_bank',     '移动电源'),
+    ('smartwatch',     '智能手表'),
+    ('band',           '手环'),
+    ('vrar',           'VRAR');

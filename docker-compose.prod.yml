@@ -28,6 +28,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.prod
+      args:
+        IMAGE_PREFIX: ${IMAGE_PREFIX:-}
     restart: always
     environment:
       DATABASE_URL: mysql+pymysql://luotu:${MYSQL_PASSWORD:-luotu123}@mysql:3306/luotu
@@ -45,6 +47,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile.prod
+      args:
+        IMAGE_PREFIX: ${IMAGE_PREFIX:-}
     restart: always
     ports:
       - "80:80"

@@ -38,7 +38,7 @@ def _seed(db, *, platform="jd", item_id="12345", item_name="Sony HT-A7000 soundb
     db.flush()
     model = ModelRecord(
         brand_code="SONY",
-        model_code=f"MODEL-{abs(hash(item_name)) % 100000}",
+        model_code=f"MODEL-{item_id}",
         category_name="soundbar",
     )
     db.add(model)
@@ -71,6 +71,7 @@ def test_s02_no_match_when_not_in_table(db):
     mr = db.query(MatchResult).filter(MatchResult.clean_job_id == job_id).first()
     assert mr is not None
     assert mr.match_source != "historical"
+    assert mr.match_status == "pending"
 
 
 def test_s0_takes_precedence_over_s02(db):
@@ -107,3 +108,20 @@ def test_s02_platform_case_insensitive(db):
 
     mr = db.query(MatchResult).filter(MatchResult.clean_job_id == job_id).first()
     assert mr.match_source == "historical"
+
+
+def test_s02_skips_when_item_id_is_none(db):
+    """item_id 为 None 时，S0.2 不崩溃也不匹配"""
+    job_id, model_id = _seed(db, platform="jd", item_id="55555")
+    # Patch the cleaned record's item_id to None after seeding
+    from app.models.schemas import CleanedDataRecord
+    cleaned = db.query(CleanedDataRecord).filter(CleanedDataRecord.clean_job_id == job_id).first()
+    cleaned.item_id = None
+    db.add(HistoricalMapping(platform="jd", item_id="55555", model_id=model_id, import_batch="b1"))
+    db.commit()
+
+    run_match(db, job_id)
+
+    mr = db.query(MatchResult).filter(MatchResult.clean_job_id == job_id).first()
+    assert mr is not None
+    assert mr.match_source != "historical"

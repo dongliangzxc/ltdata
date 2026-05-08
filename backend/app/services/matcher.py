@@ -171,8 +171,11 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
                 continue  # 跳过 S1-S4
 
         # ── S0.2: 历史库精确匹配 ─────────────────────────────────
-        plat_key = (row.platform or "").lower()
-        hist_model_id = hist_map.get((plat_key, row.item_id or ""))
+        if row.item_id:
+            plat_key = (row.platform or "").lower()
+            hist_model_id = hist_map.get((plat_key, row.item_id))
+        else:
+            hist_model_id = None
         if hist_model_id:
             results.append(MatchResult(
                 clean_job_id=clean_job_id,

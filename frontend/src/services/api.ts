@@ -130,6 +130,26 @@ export const queryWorkbenchData = (params: Record<string, unknown>) =>
 export const exportWorkbenchData = (params: Record<string, unknown>) =>
   api.post('/workbench/export', params)
 export const getWorkbenchDownloadUrl = (token: string) => `/api/workbench/download/${token}`
+
+export function fetchItemAttrs(publishedItemId: number): Promise<{ attr_name: string; attr_value: string }[]> {
+  return api.get<{ attr_name: string; attr_value: string }[]>(`/workbench/item-attrs/${publishedItemId}`).then(r => r.data)
+}
+
+export interface WorkbenchExportParams {
+  month?: number
+  platform?: string
+  brand_code?: string
+  model_code?: string
+  category_name?: string
+  keyword?: string
+  statuses?: string[]
+  year?: number
+  quarter?: number
+}
+
+export function exportWorkbench(params: WorkbenchExportParams) {
+  return api.post('/workbench/export', params)
+}
 export const runPublish = (clean_job_id: number) =>
   api.post('/publish/run', { clean_job_id })
 export const listPublishJobs = (clean_job_id?: number) =>

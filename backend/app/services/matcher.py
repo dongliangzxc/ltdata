@@ -47,7 +47,7 @@ brand_identified 标记：S1/S2/S3 任意阶段识别到品牌即置 1，即使�
 支持重复执行：每次运行先删除该 clean_job 的旧结果再重新写入。
 """
 from sqlalchemy.orm import Session
-from app.models.schemas import CleanedDataRecord, ModelRecord, ModelAlias, MatchResult, ItemUrlMapping, MatchRule, HistoricalMapping
+from app.models.schemas import CleanedDataRecord, ModelRecord, ModelAlias, MatchResult, MatchResultCandidate, ItemUrlMapping, MatchRule, HistoricalMapping
 from app.utils.url_utils import extract_item_id
 from app.services.attribute_matcher import run_attribute_matching
 
@@ -61,6 +61,15 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
     progress_cb(processed: int, total: int, matched: int) — 每批次调用一次
     """
     # ── 删除旧结果（支持重跑）────────────────────────────────────
+    old_mr_ids = [
+        r.id for r in db.query(MatchResult.id)
+        .filter(MatchResult.clean_job_id == clean_job_id)
+        .all()
+    ]
+    if old_mr_ids:
+        db.query(MatchResultCandidate).filter(
+            MatchResultCandidate.match_result_id.in_(old_mr_ids)
+        ).delete(synchronize_session=False)
     db.query(MatchResult).filter(MatchResult.clean_job_id == clean_job_id).delete(
         synchronize_session=False
     )
@@ -165,6 +174,36 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
                 best_len = hit_len
         return best
 
+    def _top_candidates(
+        candidates: list[ModelRecord],
+        item_upper: str,
+        match_source: str,
+        allow_alias: bool = True,
+        n: int = 5,
+    ) -> list[tuple]:
+        """返回按 score 降序排列的前 n 个命中候选 (model, score, source)。"""
+        scored = []
+        for m in candidates:
+            mc = _norm(m.model_code)
+            mn = _norm(m.model_name) if m.model_name else None
+            hit_len = 0
+
+            if mc and mc in item_upper:
+                hit_len = len(mc)
+            elif mn and len(mn) >= 3 and mn in item_upper:
+                hit_len = len(mn)
+            elif allow_alias:
+                for alias in alias_map.get(m.id, []):
+                    if alias and len(alias) >= 4 and alias in item_upper:
+                        hit_len = len(alias)
+                        break
+
+            if hit_len > 0:
+                scored.append((m, hit_len, match_source))
+
+        scored.sort(key=lambda x: -x[1])
+        return scored[:n]
+
     # ── 加载清洗数据 ──────────────────────────────────────────────
     cleaned_rows = (
         db.query(CleanedDataRecord)
@@ -176,6 +215,8 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
     matched_count = 0
     BATCH = 500
     total = len(cleaned_rows)
+    # raw_data_id → list of (model, score, source) for S1-S4 hits
+    raw_data_candidates: dict[int, list[tuple]] = {}
 
     for i, row in enumerate(cleaned_rows):
         item_upper = _norm(row.item_name)
@@ -265,15 +306,17 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
         best_model: ModelRecord | None = None
         brand_identified = False
         match_source: str | None = None
+        row_candidates: list[tuple] = []  # (model, score, source) for top candidates
 
         # S1: 用 brand_raw 缩窄候选
         if row.brand_raw:
             candidates = _candidates_by_brand_raw(row.brand_raw)
             if candidates:
                 brand_identified = True
-                m = _best(candidates, item_upper)
-                if m:
-                    best_model = m
+                top = _top_candidates(candidates, item_upper, "s1")
+                row_candidates.extend(top)
+                if top:
+                    best_model = top[0][0]
                     match_source = "s1"
 
         # S2: item_name 里找 brand_code
@@ -281,10 +324,11 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
             for bc, grp in brand_code_index.items():
                 if bc and bc in item_upper:
                     brand_identified = True
-                    m = _best(grp, item_upper)
-                    if m:
-                        if len(_norm(m.model_code)) > len(_norm(best_model.model_code) if best_model else ""):
-                            best_model = m
+                    top = _top_candidates(grp, item_upper, "s2")
+                    row_candidates.extend(top)
+                    if top:
+                        if len(_norm(top[0][0].model_code)) > len(_norm(best_model.model_code) if best_model else ""):
+                            best_model = top[0][0]
                             match_source = "s2"
 
         # S3: item_name 里找 brand_name
@@ -292,17 +336,24 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
             for bn, grp in brand_name_index.items():
                 if len(bn) >= 2 and bn in item_upper:
                     brand_identified = True
-                    m = _best(grp, item_upper)
-                    if m:
-                        if len(_norm(m.model_code)) > len(_norm(best_model.model_code) if best_model else ""):
-                            best_model = m
+                    top = _top_candidates(grp, item_upper, "s3")
+                    row_candidates.extend(top)
+                    if top:
+                        if len(_norm(top[0][0].model_code)) > len(_norm(best_model.model_code) if best_model else ""):
+                            best_model = top[0][0]
                             match_source = "s3"
 
         # S4: 仅在品牌完全未识别时才做全局长码兜底
         if best_model is None and not brand_identified:
-            best_model = _best(long_code_models, item_upper, allow_alias=False)
-            if best_model:
+            top = _top_candidates(long_code_models, item_upper, "s4", allow_alias=False)
+            row_candidates.extend(top)
+            if top:
+                best_model = top[0][0]
                 match_source = "s4"
+
+        # 记录候选（仅当有多于1个候选或best_model有候选时）
+        if row_candidates:
+            raw_data_candidates[row.raw_data_id] = row_candidates
 
         if best_model:
             # url_info 不为 None → URL存在但不在映射表 → 需人工审核
@@ -338,6 +389,38 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
     if results:
         db.bulk_save_objects(results)
         db.commit()
+
+    # ── 写入候选记录 ──────────────────────────────────────────────
+    if raw_data_candidates:
+        # 查询所有新写入的 match_results，以 raw_data_id 为键
+        mr_by_raw: dict[int, int] = {
+            r.raw_data_id: r.id
+            for r in db.query(MatchResult.raw_data_id, MatchResult.id)
+            .filter(MatchResult.clean_job_id == clean_job_id)
+            .all()
+        }
+        candidate_records = []
+        for raw_data_id, cands in raw_data_candidates.items():
+            mr_id = mr_by_raw.get(raw_data_id)
+            if mr_id is None:
+                continue
+            # 去重：同一 model_id 保留最高分
+            seen: dict[int, tuple] = {}
+            for model, score, source in cands:
+                if model.id not in seen or score > seen[model.id][1]:
+                    seen[model.id] = (model, score, source)
+            sorted_cands = sorted(seen.values(), key=lambda x: -x[1])[:5]
+            for rank, (model, score, source) in enumerate(sorted_cands, start=1):
+                candidate_records.append(MatchResultCandidate(
+                    match_result_id=mr_id,
+                    model_id=model.id,
+                    match_source=source,
+                    score=score,
+                    rank=rank,
+                ))
+        if candidate_records:
+            db.bulk_save_objects(candidate_records)
+            db.commit()
 
     # 触发属性匹配（仅对 matched/url_matched 状态）
     matched_result_ids = [

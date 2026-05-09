@@ -77,7 +77,14 @@ def parse_raw_excel(file_path: str | Path) -> tuple[list[dict], str, str]:
     解析原始数据 Excel 文件。
     返回: (records, platform, month_range)
     """
-    df = pd.read_excel(file_path, sheet_name=0, dtype=str)
+    suffix = Path(file_path).suffix.lower()
+    if suffix == ".csv":
+        try:
+            df = pd.read_csv(file_path, dtype=str, encoding="utf-8-sig")
+        except (UnicodeDecodeError, pd.errors.ParserError):
+            df = pd.read_csv(file_path, dtype=str, encoding="gbk")
+    else:
+        df = pd.read_excel(file_path, sheet_name=0, dtype=str)
     df.columns = [str(c).strip() for c in df.columns]
 
     # 推断平台并选择列映射

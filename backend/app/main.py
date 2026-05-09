@@ -8,7 +8,7 @@ from app.models.database import Base, engine, SessionLocal
 from app.models.analytics_db import AnalyticsBase, analytics_engine
 from app.models.schemas import User
 from app.api import upload, rawdata, clean, export, metadata, models_api, match_api, publish_api, auth, workbench_api, url_mapping_api
-from app.api import rules_api, historical_api, categories_api
+from app.api import rules_api, historical_api, categories_api, correction_rules_api
 
 
 # 不需要鉴权的路径（精确匹配或前缀匹配）
@@ -75,6 +75,7 @@ app.include_router(url_mapping_api.router)
 app.include_router(rules_api.router)
 app.include_router(historical_api.router)
 app.include_router(categories_api.router)
+app.include_router(correction_rules_api.router)
 
 
 @app.get("/health")

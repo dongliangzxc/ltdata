@@ -200,6 +200,23 @@ CREATE TABLE IF NOT EXISTS match_results (
     KEY idx_match_model     (model_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='型号匹配结果';
 
+CREATE TABLE IF NOT EXISTS correction_rules (
+    id            INT AUTO_INCREMENT PRIMARY KEY,
+    name          VARCHAR(100) NOT NULL,
+    category_code VARCHAR(100),
+    brand_code    VARCHAR(100),
+    model_id      INT,
+    attr_name     VARCHAR(200),
+    attr_value    VARCHAR(200),
+    target        ENUM('sales_qty', 'sales_amount', 'both') NOT NULL,
+    rule_type     ENUM('multiply', 'offset') NOT NULL,
+    value         DECIMAL(12,4) NOT NULL,
+    priority      INT NOT NULL DEFAULT 100,
+    is_active     TINYINT NOT NULL DEFAULT 1,
+    created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at    DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
 -- 发布任务记录（存于 luotu 处理库）
 CREATE TABLE IF NOT EXISTS publish_jobs (
     id           INT AUTO_INCREMENT PRIMARY KEY,
@@ -346,4 +363,4 @@ CREATE TABLE IF NOT EXISTS alembic_version (
     version_num VARCHAR(32) NOT NULL,
     CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)
 );
-INSERT IGNORE INTO alembic_version (version_num) VALUES ('a1b2c3d4e5f6');
+INSERT IGNORE INTO alembic_version (version_num) VALUES ('b2c3d4e5f6a1');

@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import distinct
 from sqlalchemy.orm import Session
 
-from app.models.analytics_db import get_analytics_db, PublishedItem
+from app.models.analytics_db import get_analytics_db, PublishedItem, PublishedItemSpec
 
 router = APIRouter(prefix="/api/workbench", tags=["workbench"])
 
@@ -169,6 +169,21 @@ def export_data(payload: dict, db: Session = Depends(get_analytics_db)):
 
     _token_map[token] = str(filepath)
     return {"token": token, "filename": filename, "rows": total}
+
+
+@router.get("/item-attrs/{published_item_id}")
+def get_item_attrs(
+    published_item_id: int,
+    db: Session = Depends(get_analytics_db),
+):
+    """按 published_item_id 返回属性列表 [{attr_name, attr_value}]"""
+    specs = (
+        db.query(PublishedItemSpec)
+        .filter(PublishedItemSpec.published_item_id == published_item_id)
+        .order_by(PublishedItemSpec.spec_name)
+        .all()
+    )
+    return [{"attr_name": s.spec_name, "attr_value": s.spec_value} for s in specs]
 
 
 @router.get("/download/{token}")

@@ -1,17 +1,50 @@
 """
 型号匹配引擎
 
-匹配步骤（依次降级）：
-  S0: item_url 精确查 item_url_mappings 表 → 直接命中，跳过文本匹配
-  S1: brand_raw → 精确/包含匹配 brand_code / brand_name → 在候选组里找 model_code/model_name/alias
-  S2: item_name 中包含 brand_code → 在对应品牌组找 model_code/model_name/alias
-  S3: item_name 中包含 brand_name（≥2字符）→ 在对应品牌组找 model_code/model_name/alias
-  S4: 兜底 — model_code（≥5字符）直接出现在 item_name 中（不检查别名，避免短别名误匹配）
+匹配流程为瀑布式降级：每条数据依次尝试各阶段，命中即停止，不再进入后续阶段。
 
-同优先级多候选时取 model_code 最长的，减少短码误匹配。
-支持重复执行：先删旧结果再写入。
+  S0     ── URL精确匹配
+           从宝贝链接提取 (platform, item_id)，查 item_url_mappings 表。
+           人工维护的 URL→型号映射，置信度最高。命中 → url_matched。
 
-text_only：S1-S4 文本命中，但 item_url 存在且不在 url_map → 需人工补录 URL 映射
+  S0.2   ── 历史库匹配
+           同样用 (platform, item_id)，查 historical_mappings 表（批量导入的历史对照）。
+           命中 → matched。
+
+  S0.5   ── 显式规则匹配
+           按 priority 遍历 match_rules 表，对商品名做精确或包含匹配。
+           适用于文本规律明显但 URL 不固定的商品（如套装、礼盒等）。
+           命中 → matched。
+
+  S1     ── brand_raw 缩窄候选
+           用原始品牌字段 brand_raw 定位品牌（依次尝试：精确等于 brand_code →
+           精确等于 brand_name → brand_code 包含于 brand_raw → brand_name 包含于 brand_raw），
+           再在该品牌候选组内搜索商品名（model_code / model_name / alias）。
+           标记 brand_identified=1。
+
+  S2     ── 商品名里找 brand_code
+           S1 品牌未识别时，扫描商品名，找哪个 brand_code 出现其中，
+           再在对应品牌组内搜索型号。标记 brand_identified=1。
+
+  S3     ── 商品名里找 brand_name
+           S2 仍未命中，改用 brand_name（≥2字符）在商品名中匹配，逻辑同 S2。
+           标记 brand_identified=1。
+
+  S4     ── 全局长码兜底（仅限品牌完全未识别时）
+           S1/S2/S3 均未识别出品牌，才触发此阶段。
+           对所有 model_code ≥5 字符的型号，直接检查商品名是否包含该 model_code。
+           不检查别名（别名较短，无品牌约束下容易误匹配）。
+
+型号候选评分规则：多个候选均命中时，取 model_code 最长者（长码更精确，短码误匹配率高）。
+
+text_only 状态：S1-S4 文本命中，但商品有 URL 且该 URL 不在 url_map 中。
+  表示型号已找到，但 URL 映射尚未建立，需在"URL待审"页面人工确认；
+  确认后自动写入 url_mappings，下次同款商品直接走 S0。
+
+brand_identified 标记：S1/S2/S3 任意阶段识别到品牌即置 1，即使最终未找到型号（pending）。
+  用于在匹配确认页过滤"未识别品牌"条目，辅助人工处理。
+
+支持重复执行：每次运行先删除该 clean_job 的旧结果再重新写入。
 """
 from sqlalchemy.orm import Session
 from app.models.schemas import CleanedDataRecord, ModelRecord, ModelAlias, MatchResult, ItemUrlMapping, MatchRule, HistoricalMapping

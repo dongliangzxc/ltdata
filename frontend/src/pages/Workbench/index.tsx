@@ -31,6 +31,9 @@ type DataRow = {
   shop_name: string | null
   ref_price: number | null
   sales_qty: number | null
+  calc_price: number | null
+  corrected_sales_qty: number | null
+  corrected_sales_amount: number | null
   category_name: string | null
   category_lv1: string | null
   category_lv2: string | null
@@ -131,6 +134,18 @@ export default function WorkbenchPage() {
     {
       title: '销量', dataIndex: 'sales_qty', width: 70,
       render: (v: number | null) => v ?? '-',
+    },
+    {
+      title: '计算价格', dataIndex: 'calc_price', width: 85,
+      render: (v: number | null) => v != null ? `¥${v.toFixed(2)}` : '-',
+    },
+    {
+      title: '修正销量', dataIndex: 'corrected_sales_qty', width: 80,
+      render: (v: number | null) => v ?? '-',
+    },
+    {
+      title: '修正销售额', dataIndex: 'corrected_sales_amount', width: 100,
+      render: (v: number | null) => v != null ? `¥${v.toFixed(2)}` : '-',
     },
     {
       title: '品类', dataIndex: 'category_name', width: 110, ellipsis: true,

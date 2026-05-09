@@ -7,7 +7,7 @@ import {
 import { SearchOutlined, DownloadOutlined, ClearOutlined, LinkOutlined, InfoCircleOutlined } from '@ant-design/icons'
 import {
   getWorkbenchFilters, queryWorkbenchData,
-  exportWorkbenchData, getWorkbenchDownloadUrl,
+  getWorkbenchDownloadUrl,
   exportWorkbench, fetchItemAttrs
 } from '../../services/api'
 

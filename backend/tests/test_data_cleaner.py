@@ -141,3 +141,59 @@ def test_row_filtered_count_in_job(db):
     db.refresh(job)
     assert job.row_filtered == 1
     assert job.row_out == 1
+
+
+def test_clean_copies_category_lv0(db):
+    """清洗后的记录应包含 category_lv0"""
+    file_rec = _make_file(db)
+    raw = RawDataRecord(
+        file_id=file_rec.id, platform="jd", month=202602,
+        item_name="测试商品", brand_raw="SONY", shop_name="官方店",
+        item_id="lv0test", sales_qty=100, sales_amount=9900,
+        category_lv0="手机通讯",
+        category_lv1="手机",
+    )
+    db.add(raw)
+    db.flush()
+    job = _make_job(db, file_rec.id)
+    run_clean(db, job.id, [file_rec.id], {})
+    from app.models.schemas import CleanedDataRecord
+    cleaned = db.query(CleanedDataRecord).filter_by(clean_job_id=job.id).first()
+    assert cleaned is not None
+    assert cleaned.category_lv0 == "手机通讯"
+
+
+def test_clean_calc_price(db):
+    """calc_price = sales_amount / sales_qty"""
+    file_rec = _make_file(db)
+    raw = RawDataRecord(
+        file_id=file_rec.id, platform="jd", month=202602,
+        item_name="价格测试", brand_raw="SONY", shop_name="官方店",
+        item_id="calctest", sales_qty=10, sales_amount=1000,
+    )
+    db.add(raw)
+    db.flush()
+    job = _make_job(db, file_rec.id)
+    run_clean(db, job.id, [file_rec.id], {})
+    from app.models.schemas import CleanedDataRecord
+    cleaned = db.query(CleanedDataRecord).filter_by(clean_job_id=job.id).first()
+    assert float(cleaned.calc_price) == 100.0
+    assert cleaned.corrected_sales_qty == 10
+    assert float(cleaned.corrected_sales_amount) == 1000.0
+
+
+def test_clean_calc_price_zero_qty(db):
+    """sales_qty 为 0 时 calc_price 应为 None"""
+    file_rec = _make_file(db)
+    raw = RawDataRecord(
+        file_id=file_rec.id, platform="jd", month=202602,
+        item_name="零销量", brand_raw="SONY", shop_name="官方店",
+        item_id="zeroqty", sales_qty=0, sales_amount=0,
+    )
+    db.add(raw)
+    db.flush()
+    job = _make_job(db, file_rec.id)
+    run_clean(db, job.id, [file_rec.id], {})
+    from app.models.schemas import CleanedDataRecord
+    cleaned = db.query(CleanedDataRecord).filter_by(clean_job_id=job.id).first()
+    assert cleaned.calc_price is None

@@ -101,6 +101,16 @@ def run_clean(db: Session, clean_job_id: int, file_ids: list[int], rules: dict) 
             price=r.price,
             brand_std=brand_std,
             model_std=r.model_std,
+            category_lv0=r.category_lv0,
+            calc_price=(
+                round(float(r.sales_amount) / int(r.sales_qty), 2)
+                if r.sales_amount is not None
+                and r.sales_qty is not None
+                and int(r.sales_qty) > 0
+                else None
+            ),
+            corrected_sales_qty=r.sales_qty,
+            corrected_sales_amount=r.sales_amount,
         ))
 
     # ── 批量写入 ──────────────────────────────────────────────

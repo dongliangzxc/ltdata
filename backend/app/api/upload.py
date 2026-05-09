@@ -15,8 +15,8 @@ router = APIRouter(prefix="/api/upload", tags=["upload"])
 @router.post("", response_model=dict)
 async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db)):
     """上传原始数据 Excel 文件，解析后写入数据库（相同 item_id+month+platform 自动去重）"""
-    if not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(status_code=400, detail="只支持 .xlsx / .xls 格式文件")
+    if not file.filename.endswith((".xlsx", ".xls", ".csv")):
+        raise HTTPException(status_code=400, detail="只支持 .xlsx / .xls / .csv 格式文件")
 
     # 保存文件
     save_path = Path(settings.UPLOAD_DIR) / file.filename

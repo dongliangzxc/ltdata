@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional
 from sqlalchemy import (
     Column, Integer, String, Numeric, Text, DateTime,
-    ForeignKey, JSON, SmallInteger, UniqueConstraint, CheckConstraint
+    ForeignKey, JSON, SmallInteger, UniqueConstraint, CheckConstraint, Enum
 )
 from sqlalchemy.orm import relationship
 from pydantic import BaseModel
@@ -670,5 +670,47 @@ class UserOut(BaseModel):
     username:   str
     is_active:  int
     created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ─────────────────────────── 校正规则 ───────────────────────────
+
+class CorrectionRule(Base):
+    __tablename__ = "correction_rules"
+
+    id            = Column(Integer, primary_key=True, index=True)
+    name          = Column(String(100), nullable=False)
+    category_code = Column(String(100))
+    brand_code    = Column(String(100))
+    model_id      = Column(Integer)
+    attr_name     = Column(String(200))
+    attr_value    = Column(String(200))
+    target        = Column(Enum('sales_qty', 'sales_amount', 'both', name='correction_target'), nullable=False)
+    rule_type     = Column(Enum('multiply', 'offset', name='correction_rule_type'), nullable=False)
+    value         = Column(Numeric(12, 4), nullable=False)
+    priority      = Column(Integer, nullable=False, default=100)
+    is_active     = Column(SmallInteger, nullable=False, default=1)
+    created_at    = Column(DateTime, default=datetime.utcnow)
+    updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class CorrectionRuleIn(BaseModel):
+    name:          str
+    category_code: Optional[str] = None
+    brand_code:    Optional[str] = None
+    model_id:      Optional[int] = None
+    attr_name:     Optional[str] = None
+    attr_value:    Optional[str] = None
+    target:        str  # 'sales_qty' | 'sales_amount' | 'both'
+    rule_type:     str  # 'multiply' | 'offset'
+    value:         float
+    priority:      int = 100
+    is_active:     int = 1
+
+
+class CorrectionRuleOut(CorrectionRuleIn):
+    id: int
+    created_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}

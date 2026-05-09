@@ -36,12 +36,13 @@ def run_publish(luotu_db: Session, analytics_db: Session, clean_job_id: int) -> 
         pending_count_sql, {"clean_job_id": clean_job_id}
     ).scalar() or 0
 
-    # 1. 查询已匹配/已确认的 match_results，JOIN raw_data + models
+    # 1. 查询已匹配/已确认的 match_results，JOIN raw_data + models + cleaned_data
     sql = text("""
         SELECT
             mr.id           AS match_result_id,
             rd.platform,
             rd.month,
+            rd.category_lv0,
             rd.category_lv1,
             rd.category_lv2,
             rd.category_lv3,
@@ -61,11 +62,16 @@ def run_publish(luotu_db: Session, analytics_db: Session, clean_job_id: int) -> 
             m.model_code,
             m.model_name,
             COALESCE(c.name, '') AS category_name,
-            m.id            AS model_id
+            m.id            AS model_id,
+            cd.calc_price,
+            cd.corrected_sales_qty,
+            cd.corrected_sales_amount
         FROM match_results mr
         JOIN raw_data rd  ON rd.id = mr.raw_data_id
         JOIN models m     ON m.id  = mr.model_id
         LEFT JOIN categories c ON c.code = m.category_code
+        LEFT JOIN cleaned_data cd ON cd.raw_data_id = rd.id
+                                  AND cd.clean_job_id = :clean_job_id
         WHERE mr.clean_job_id = :clean_job_id
           AND mr.match_status IN ('url_matched', 'matched', 'confirmed')
           AND mr.is_disabled = 0
@@ -122,64 +128,78 @@ def run_publish(luotu_db: Session, analytics_db: Session, clean_job_id: int) -> 
     upsert_sql = text("""
         INSERT INTO published_items
             (publish_job_id, clean_job_id, match_result_id, platform, month,
+             category_lv0,
              category_lv1, category_lv2, category_lv3, category_lv4, category_lv5,
              item_id, item_name, item_image, item_url, ref_price, shop_name,
              sales_qty, sales_amount, price,
-             brand_code, brand_name, model_code, model_name, category_name, published_at)
+             brand_code, brand_name, model_code, model_name, category_name,
+             calc_price, corrected_sales_qty, corrected_sales_amount,
+             published_at)
         VALUES
             (:publish_job_id, :clean_job_id, :match_result_id, :platform, :month,
+             :category_lv0,
              :category_lv1, :category_lv2, :category_lv3, :category_lv4, :category_lv5,
              :item_id, :item_name, :item_image, :item_url, :ref_price, :shop_name,
              :sales_qty, :sales_amount, :price,
-             :brand_code, :brand_name, :model_code, :model_name, :category_name, :published_at)
+             :brand_code, :brand_name, :model_code, :model_name, :category_name,
+             :calc_price, :corrected_sales_qty, :corrected_sales_amount,
+             :published_at)
         ON DUPLICATE KEY UPDATE
-            publish_job_id  = VALUES(publish_job_id),
-            clean_job_id    = VALUES(clean_job_id),
-            match_result_id = VALUES(match_result_id),
-            item_name       = VALUES(item_name),
-            item_image      = VALUES(item_image),
-            item_url        = VALUES(item_url),
-            ref_price       = VALUES(ref_price),
-            shop_name       = VALUES(shop_name),
-            sales_qty       = VALUES(sales_qty),
-            sales_amount    = VALUES(sales_amount),
-            price           = VALUES(price),
-            brand_code      = VALUES(brand_code),
-            brand_name      = VALUES(brand_name),
-            model_code      = VALUES(model_code),
-            model_name      = VALUES(model_name),
-            category_name   = VALUES(category_name),
-            published_at    = VALUES(published_at)
+            publish_job_id         = VALUES(publish_job_id),
+            clean_job_id           = VALUES(clean_job_id),
+            match_result_id        = VALUES(match_result_id),
+            item_name              = VALUES(item_name),
+            item_image             = VALUES(item_image),
+            item_url               = VALUES(item_url),
+            ref_price              = VALUES(ref_price),
+            shop_name              = VALUES(shop_name),
+            sales_qty              = VALUES(sales_qty),
+            sales_amount           = VALUES(sales_amount),
+            price                  = VALUES(price),
+            brand_code             = VALUES(brand_code),
+            brand_name             = VALUES(brand_name),
+            model_code             = VALUES(model_code),
+            model_name             = VALUES(model_name),
+            category_name          = VALUES(category_name),
+            category_lv0           = VALUES(category_lv0),
+            calc_price             = VALUES(calc_price),
+            corrected_sales_qty    = VALUES(corrected_sales_qty),
+            corrected_sales_amount = VALUES(corrected_sales_amount),
+            published_at           = VALUES(published_at)
     """)
 
     items_to_insert = []
     for r in rows:
         items_to_insert.append({
-            "publish_job_id":  0,   # 占位，稍后回填
-            "clean_job_id":    clean_job_id,
-            "match_result_id": r["match_result_id"],
-            "platform":        r["platform"],
-            "month":           r["month"],
-            "category_lv1":    r["category_lv1"],
-            "category_lv2":    r["category_lv2"],
-            "category_lv3":    r["category_lv3"],
-            "category_lv4":    r["category_lv4"],
-            "category_lv5":    r["category_lv5"],
-            "item_id":         r["item_id"],
-            "item_name":       r["item_name"],
-            "item_image":      r["item_image"],
-            "item_url":        r["item_url"],
-            "ref_price":       r["ref_price"],
-            "shop_name":       r["shop_name"],
-            "sales_qty":       r["sales_qty"],
-            "sales_amount":    r["sales_amount"],
-            "price":           r["price"],
-            "brand_code":      r["brand_code"],
-            "brand_name":      r["brand_name"],
-            "model_code":      r["model_code"],
-            "model_name":      r["model_name"],
-            "category_name":   r["category_name"],
-            "published_at":    datetime.utcnow(),
+            "publish_job_id":          0,   # 占位，稍后回填
+            "clean_job_id":            clean_job_id,
+            "match_result_id":         r["match_result_id"],
+            "platform":                r["platform"],
+            "month":                   r["month"],
+            "category_lv0":            r["category_lv0"],
+            "category_lv1":            r["category_lv1"],
+            "category_lv2":            r["category_lv2"],
+            "category_lv3":            r["category_lv3"],
+            "category_lv4":            r["category_lv4"],
+            "category_lv5":            r["category_lv5"],
+            "item_id":                 r["item_id"],
+            "item_name":               r["item_name"],
+            "item_image":              r["item_image"],
+            "item_url":                r["item_url"],
+            "ref_price":               r["ref_price"],
+            "shop_name":               r["shop_name"],
+            "sales_qty":               r["sales_qty"],
+            "sales_amount":            r["sales_amount"],
+            "price":                   r["price"],
+            "brand_code":              r["brand_code"],
+            "brand_name":              r["brand_name"],
+            "model_code":              r["model_code"],
+            "model_name":              r["model_name"],
+            "category_name":           r["category_name"],
+            "calc_price":              r["calc_price"],
+            "corrected_sales_qty":     r["corrected_sales_qty"] if r["corrected_sales_qty"] is not None else r["sales_qty"],
+            "corrected_sales_amount":  r["corrected_sales_amount"] if r["corrected_sales_amount"] is not None else r["sales_amount"],
+            "published_at":            datetime.utcnow(),
         })
 
     for item_dict in items_to_insert:

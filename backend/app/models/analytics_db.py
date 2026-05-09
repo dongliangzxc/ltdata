@@ -49,8 +49,12 @@ class PublishedItem(AnalyticsBase):
     brand_name        = Column(String(200))
     model_code        = Column(String(100))
     model_name        = Column(String(200))
-    category_name     = Column(String(200))
-    published_at      = Column(DateTime, default=datetime.utcnow)
+    category_name          = Column(String(200))
+    category_lv0           = Column(String(100))
+    calc_price             = Column(Numeric(12, 2))
+    corrected_sales_qty    = Column(Integer)
+    corrected_sales_amount = Column(Numeric(14, 2))
+    published_at           = Column(DateTime, default=datetime.utcnow)
 
 
 class PublishedItemSpec(AnalyticsBase):

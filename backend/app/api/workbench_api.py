@@ -6,18 +6,31 @@ import os
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 from urllib.parse import quote
 
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from sqlalchemy import distinct
 from sqlalchemy.orm import Session
 
 from app.models.analytics_db import get_analytics_db, PublishedItem, PublishedItemSpec
 
 router = APIRouter(prefix="/api/workbench", tags=["workbench"])
+
+
+class WorkbenchExportParams(BaseModel):
+    month:         Optional[int] = None
+    platform:      Optional[str] = None
+    brand_code:    Optional[str] = None
+    model_code:    Optional[str] = None
+    category_name: Optional[str] = None
+    keyword:       Optional[str] = None
+    statuses: List[str] = ["matched", "confirmed", "url_matched"]
+    year:     Optional[int] = None
+    quarter:  Optional[int] = None
 
 _token_map: dict[str, str] = {}
 
@@ -122,10 +135,31 @@ def query_data(
 
 
 @router.post("/export")
-def export_data(payload: dict, db: Session = Depends(get_analytics_db)):
+def export_data(payload: WorkbenchExportParams, db: Session = Depends(get_analytics_db)):
     """全量导出筛选结果为 Excel"""
-    params = {k: v for k, v in payload.items() if v not in (None, "", [])}
+    params = {
+        "month":         payload.month,
+        "platform":      payload.platform,
+        "brand_code":    payload.brand_code,
+        "model_code":    payload.model_code,
+        "category_name": payload.category_name,
+        "keyword":       payload.keyword,
+    }
+    params = {k: v for k, v in params.items() if v not in (None, "", [])}
     q = _build_query(db, params)
+
+    # year + quarter / year-only month range filter
+    if payload.year and payload.quarter:
+        start_month = payload.year * 100 + (payload.quarter - 1) * 3 + 1
+        end_month   = payload.year * 100 + payload.quarter * 3
+        q = q.filter(PublishedItem.month >= start_month, PublishedItem.month <= end_month)
+    elif payload.year:
+        start_month = payload.year * 100 + 1
+        end_month   = payload.year * 100 + 12
+        q = q.filter(PublishedItem.month >= start_month, PublishedItem.month <= end_month)
+
+    # NOTE: PublishedItem has no match_status column; statuses filter is intentionally skipped.
+
     total = q.count()
 
     if total == 0:
@@ -135,6 +169,7 @@ def export_data(payload: dict, db: Session = Depends(get_analytics_db)):
 
     records = [
         {
+            "_id": r.id,
             "月份": r.month,
             "平台": r.platform,
             "宝贝名称": r.item_name,
@@ -157,6 +192,26 @@ def export_data(payload: dict, db: Session = Depends(get_analytics_db)):
     ]
 
     df = pd.DataFrame(records)
+
+    # 追加属性列（来自 published_item_specs）
+    item_ids = [rec["_id"] for rec in records]
+    spec_rows = (
+        db.query(PublishedItemSpec)
+        .filter(PublishedItemSpec.published_item_id.in_(item_ids))
+        .all()
+    )
+    spec_index: dict = {}
+    for s in spec_rows:
+        spec_index.setdefault(s.published_item_id, {})[s.spec_name] = s.spec_value or ""
+    all_attr_names = sorted({name for attrs in spec_index.values() for name in attrs})
+    for attr_name in all_attr_names:
+        df[f"attr_{attr_name}"] = [
+            spec_index.get(rec["_id"], {}).get(attr_name, "")
+            for rec in records
+        ]
+
+    # 删除内部辅助列
+    df.drop(columns=["_id"], inplace=True)
 
     export_dir = Path("/app/exports")
     export_dir.mkdir(parents=True, exist_ok=True)

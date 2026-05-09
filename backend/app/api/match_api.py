@@ -11,7 +11,7 @@ from sqlalchemy import func
 from app.models.schemas import (
     MatchResult, MatchResultOut, MatchSummary,
     CleanJobRecord, RawDataRecord, ModelRecord,
-    MatchResultAttr, ItemUrlMapping,
+    MatchResultAttr, ItemUrlMapping, Category,
     PaginatedResponse,
 )
 from app.services.matcher import run_match
@@ -163,6 +163,8 @@ def list_pending(
     keyword: Optional[str] = Query(None),
     status: str = Query("pending"),
     brand_identified: Optional[int] = Query(None),
+    category_name: Optional[str] = Query(None),
+    sort_by: str = Query("default"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -173,26 +175,34 @@ def list_pending(
         status = "pending"
 
     q = (
-        db.query(MatchResult, RawDataRecord, ModelRecord, func.count(MatchResultAttr.id).label("attr_count"))
+        db.query(MatchResult, RawDataRecord, ModelRecord, Category, func.count(MatchResultAttr.id).label("attr_count"))
         .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
         .outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
+        .outerjoin(Category, ModelRecord.category_code == Category.code)
         .outerjoin(MatchResultAttr, MatchResultAttr.match_result_id == MatchResult.id)
         .filter(
             MatchResult.clean_job_id == clean_job_id,
             MatchResult.match_status == status,
         )
-        .group_by(MatchResult.id, RawDataRecord.id, ModelRecord.id)
+        .group_by(MatchResult.id, RawDataRecord.id, ModelRecord.id, Category.id)
     )
     if keyword:
         q = q.filter(RawDataRecord.item_name.ilike(f"%{keyword}%"))
     if brand_identified is not None:
         q = q.filter(MatchResult.brand_identified == brand_identified)
+    if category_name:
+        q = q.filter(Category.name == category_name)
+
+    if sort_by == "sales_qty_desc":
+        q = q.order_by(RawDataRecord.sales_qty.desc().nullslast())
+    elif sort_by == "sales_qty_asc":
+        q = q.order_by(RawDataRecord.sales_qty.asc().nullslast())
 
     total = q.count()
     rows = q.offset((page - 1) * page_size).limit(page_size).all()
 
     items = []
-    for mr, rd, model, attr_count in rows:
+    for mr, rd, model, cat, attr_count in rows:
         items.append(MatchResultOut(
             id=mr.id,
             clean_job_id=mr.clean_job_id,
@@ -208,6 +218,8 @@ def list_pending(
             model_code=model.model_code if model else None,
             brand_code=model.brand_code if model else None,
             attr_count=attr_count,
+            sales_qty=rd.sales_qty,
+            category_name=cat.name if cat else None,
         ))
 
     return PaginatedResponse(total=total, page=page, page_size=page_size, items=items)
@@ -216,6 +228,8 @@ def list_pending(
 @router.get("/{clean_job_id}/missing-attrs", response_model=PaginatedResponse)
 def list_missing_attrs(
     clean_job_id: int,
+    category_name: Optional[str] = Query(None),
+    sort_by: str = Query("default"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -231,9 +245,10 @@ def list_missing_attrs(
         .exists()
     )
     q = (
-        db.query(MatchResult, RawDataRecord, ModelRecord)
+        db.query(MatchResult, RawDataRecord, ModelRecord, Category)
         .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
         .outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
+        .outerjoin(Category, ModelRecord.category_code == Category.code)
         .filter(
             MatchResult.clean_job_id == clean_job_id,
             MatchResult.match_status.in_(["matched", "confirmed", "url_matched"]),
@@ -241,11 +256,19 @@ def list_missing_attrs(
             ~subq,
         )
     )
+    if category_name:
+        q = q.filter(Category.name == category_name)
+
+    if sort_by == "sales_qty_desc":
+        q = q.order_by(RawDataRecord.sales_qty.desc().nullslast())
+    elif sort_by == "sales_qty_asc":
+        q = q.order_by(RawDataRecord.sales_qty.asc().nullslast())
+
     total = q.count()
     rows = q.offset((page - 1) * page_size).limit(page_size).all()
 
     items = []
-    for mr, rd, model in rows:
+    for mr, rd, model, cat in rows:
         items.append({
             "id": mr.id,
             "raw_data_id": mr.raw_data_id,
@@ -254,7 +277,8 @@ def list_missing_attrs(
             "brand_raw": rd.brand_raw,
             "model_code": model.model_code if model else None,
             "brand_code": model.brand_code if model else None,
-            "category_name": model.category_code if model else None,
+            "sales_qty": rd.sales_qty,
+            "category_name": cat.name if cat else None,
         })
     return PaginatedResponse(total=total, page=page, page_size=page_size, items=items)
 

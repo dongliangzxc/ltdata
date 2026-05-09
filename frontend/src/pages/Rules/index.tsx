@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   Tabs, Card, Table, Button, Input, Select, Space, Popconfirm,
-  Upload, Modal, Form, InputNumber, Tag, message, Alert,
+  Upload, Modal, Form, InputNumber, Tag, message, Alert, Switch,
 } from 'antd'
 import {
   PlusOutlined, DeleteOutlined, UploadOutlined,
@@ -17,6 +17,7 @@ import {
   listCleanJobs, listModels,
   listAttrRuleCategories, listAttrRules, createAttrRule,
   updateAttrRule, deleteAttrRule,
+  listCorrectionRules, createCorrectionRule, updateCorrectionRule, deleteCorrectionRule,
 } from '../../services/api'
 
 // ══════════════════════════════════════════════
@@ -437,6 +438,188 @@ function AttrRuleTab() {
 }
 
 // ══════════════════════════════════════════════
+// Tab 6: 修正规则
+// ══════════════════════════════════════════════
+interface CorrectionRule {
+  id: number
+  name: string
+  category_code: string | null
+  brand_code: string | null
+  model_id: number | null
+  attr_name: string | null
+  attr_value: string | null
+  target: string
+  rule_type: string
+  value: number
+  priority: number
+  is_active: boolean
+}
+
+function CorrectionRulesTab() {
+  const [modalOpen, setModalOpen] = useState(false)
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [form] = Form.useForm()
+  const { data, loading, refresh } = useRequest(() => listCorrectionRules().then(r => r.data))
+
+  const openCreate = () => {
+    setEditingId(null)
+    form.resetFields()
+    form.setFieldsValue({ priority: 100, is_active: true })
+    setModalOpen(true)
+  }
+
+  const openEdit = (row: CorrectionRule) => {
+    setEditingId(row.id)
+    form.setFieldsValue({
+      name: row.name,
+      category_code: row.category_code ?? undefined,
+      brand_code: row.brand_code ?? undefined,
+      model_id: row.model_id ?? undefined,
+      attr_name: row.attr_name ?? undefined,
+      attr_value: row.attr_value ?? undefined,
+      target: row.target,
+      rule_type: row.rule_type,
+      value: row.value,
+      priority: row.priority,
+      is_active: row.is_active,
+    })
+    setModalOpen(true)
+  }
+
+  const handleSubmit = async () => {
+    const vals = await form.validateFields()
+    // convert empty strings to null for optional fields
+    const payload: Record<string, unknown> = {
+      ...vals,
+      category_code: vals.category_code || null,
+      brand_code: vals.brand_code || null,
+      model_id: vals.model_id ?? null,
+      attr_name: vals.attr_name || null,
+      attr_value: vals.attr_value || null,
+    }
+    if (editingId) {
+      await updateCorrectionRule(editingId, payload)
+      message.success('更新成功')
+    } else {
+      await createCorrectionRule(payload)
+      message.success('添加成功')
+    }
+    setModalOpen(false)
+    refresh()
+  }
+
+  const targetLabel = (v: string) =>
+    ({ sales_qty: '销量', sales_amount: '销售额', both: '销量+销售额' }[v] ?? v)
+
+  const ruleTypeLabel = (v: string) =>
+    ({ multiply: '乘系数', offset: '加偏移' }[v] ?? v)
+
+  const columns = [
+    { title: '名称', dataIndex: 'name', ellipsis: true },
+    { title: '品类', dataIndex: 'category_code', width: 100,
+      render: (v: string | null) => v ? <Tag>{v}</Tag> : <Tag color="blue">全局</Tag> },
+    { title: '品牌', dataIndex: 'brand_code', width: 100,
+      render: (v: string | null) => v ?? '—' },
+    { title: '型号ID', dataIndex: 'model_id', width: 80,
+      render: (v: number | null) => v ?? '—' },
+    { title: '属性(name=value)', width: 160,
+      render: (_: unknown, row: CorrectionRule) =>
+        row.attr_name ? `${row.attr_name}=${row.attr_value ?? ''}` : '—' },
+    { title: '目标', dataIndex: 'target', width: 110,
+      render: (v: string) => targetLabel(v) },
+    { title: '类型', dataIndex: 'rule_type', width: 90,
+      render: (v: string) => ruleTypeLabel(v) },
+    { title: '值', dataIndex: 'value', width: 80 },
+    { title: '优先级', dataIndex: 'priority', width: 80,
+      sorter: (a: CorrectionRule, b: CorrectionRule) => a.priority - b.priority },
+    { title: '启用', dataIndex: 'is_active', width: 70,
+      render: (v: boolean) => v ? <Tag color="green">启用</Tag> : <Tag color="default">禁用</Tag> },
+    {
+      title: '操作', width: 120,
+      render: (_: unknown, row: CorrectionRule) => (
+        <Space size={4}>
+          <Button size="small" onClick={() => openEdit(row)}>编辑</Button>
+          <Popconfirm title="确认删除？" onConfirm={async () => { await deleteCorrectionRule(row.id); refresh() }}>
+            <Button size="small" danger icon={<DeleteOutlined />} />
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ]
+
+  return (
+    <>
+      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <Alert type="info" showIcon
+          message="修正规则在发布前对匹配结果的销量/销售额执行系数乘法或偏移量加减。优先级数字越小越先执行，可按品类/品牌/型号/属性组合精细匹配。" />
+        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增规则</Button>
+        <Table
+          dataSource={data ?? []}
+          columns={columns}
+          rowKey="id"
+          size="small"
+          loading={loading}
+          pagination={{ pageSize: 20, showTotal: (t: number) => `共 ${t} 条` }}
+        />
+      </Space>
+
+      <Modal
+        title={editingId ? '编辑修正规则' : '新增修正规则'}
+        open={modalOpen}
+        onOk={handleSubmit}
+        onCancel={() => setModalOpen(false)}
+        okText="保存"
+        cancelText="取消"
+        destroyOnClose
+      >
+        <Form form={form} layout="vertical" style={{ marginTop: 8 }}>
+          <Form.Item label="名称" name="name" rules={[{ required: true, message: '请输入规则名称' }]}>
+            <Input placeholder="规则名称，便于识别" />
+          </Form.Item>
+          <Form.Item label="品类码（留空=全局）" name="category_code">
+            <Input placeholder="如：TV（留空表示不限品类）" />
+          </Form.Item>
+          <Form.Item label="品牌码（留空=不限）" name="brand_code">
+            <Input placeholder="如：SONY" />
+          </Form.Item>
+          <Form.Item label="型号ID（留空=不限）" name="model_id">
+            <InputNumber min={1} style={{ width: '100%' }} placeholder="精确匹配某个型号ID" />
+          </Form.Item>
+          <Form.Item label="属性名（留空=不限）" name="attr_name">
+            <Input placeholder="如：屏幕尺寸" />
+          </Form.Item>
+          <Form.Item label="属性值（留空=不限）" name="attr_value">
+            <Input placeholder="如：65英寸" />
+          </Form.Item>
+          <Form.Item label="目标字段" name="target" initialValue="both" rules={[{ required: true }]}>
+            <Select options={[
+              { value: 'sales_qty', label: '销量' },
+              { value: 'sales_amount', label: '销售额' },
+              { value: 'both', label: '销量 + 销售额' },
+            ]} />
+          </Form.Item>
+          <Form.Item label="规则类型" name="rule_type" initialValue="multiply" rules={[{ required: true }]}>
+            <Select options={[
+              { value: 'multiply', label: '乘系数（value × 系数）' },
+              { value: 'offset', label: '加偏移（value + 偏移量）' },
+            ]} />
+          </Form.Item>
+          <Form.Item label="值（系数或偏移量）" name="value" rules={[{ required: true, message: '请输入数值' }]}>
+            <InputNumber style={{ width: '100%' }} placeholder="如：0.9 或 -100" step={0.01} />
+          </Form.Item>
+          <Form.Item label="优先级（数字越小越先执行）" name="priority" initialValue={100}>
+            <InputNumber min={1} max={9999} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item label="启用" name="is_active" valuePropName="checked" initialValue={true}>
+            <Switch />
+          </Form.Item>
+        </Form>
+      </Modal>
+    </>
+  )
+}
+
+// ══════════════════════════════════════════════
 // 主页面
 // ══════════════════════════════════════════════
 export default function RulesPage() {
@@ -452,11 +635,12 @@ export default function RulesPage() {
           setSearchParams(key !== 'noise' ? { tab: key } : {})
         }}
         items={[
-          { key: 'noise',    label: '干扰词库',   children: <NoiseWordTab /> },
-          { key: 'brand',    label: '品牌写法库', children: <BrandAliasTab /> },
-          { key: 'rules',    label: '匹配规则',   children: <MatchRuleTab /> },
-          { key: 'filtered', label: '干扰项存档', children: <FilteredItemTab /> },
-          { key: 'attr',     label: '属性规则',   children: <AttrRuleTab /> },
+          { key: 'noise',      label: '干扰词库',   children: <NoiseWordTab /> },
+          { key: 'brand',      label: '品牌写法库', children: <BrandAliasTab /> },
+          { key: 'rules',      label: '匹配规则',   children: <MatchRuleTab /> },
+          { key: 'filtered',   label: '干扰项存档', children: <FilteredItemTab /> },
+          { key: 'attr',       label: '属性规则',   children: <AttrRuleTab /> },
+          { key: '6',          label: '修正规则',   children: <CorrectionRulesTab /> },
         ]}
       />
     </Card>

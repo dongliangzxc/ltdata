@@ -252,6 +252,22 @@ export const deleteHistoricalMapping = (id: number) =>
 export const deleteHistoricalBatch = (importBatch: string) =>
   api.delete('/historical/mappings/batch', { data: { import_batch: importBatch } })
 
+// ─── Rules - Correction Rules ───────────────────────────────
+export const listCorrectionRules = () =>
+  api.get('/correction-rules')
+
+export const createCorrectionRule = (payload: Record<string, unknown>) =>
+  api.post('/correction-rules', payload)
+
+export const updateCorrectionRule = (id: number, payload: Record<string, unknown>) =>
+  api.put(`/correction-rules/${id}`, payload)
+
+export const deleteCorrectionRule = (id: number) =>
+  api.delete(`/correction-rules/${id}`)
+
+export const applyCorrectionRules = (cleanJobId: number) =>
+  api.post(`/correction-rules/apply/${cleanJobId}`)
+
 // ─── Categories ─────────────────────────────────────────────
 export const listCategories = () =>
   api.get('/categories')

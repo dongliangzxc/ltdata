@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react'
 import {
   Card, Row, Col, Select, Input, Button, Table,
-  Typography, Tooltip, Form, Statistic, message, Space
+  Typography, Tooltip, Form, Statistic, message, Space,
+  Popover, Spin, List
 } from 'antd'
-import { SearchOutlined, DownloadOutlined, ClearOutlined, LinkOutlined } from '@ant-design/icons'
+import { SearchOutlined, DownloadOutlined, ClearOutlined, LinkOutlined, InfoCircleOutlined } from '@ant-design/icons'
 import {
   getWorkbenchFilters, queryWorkbenchData,
-  exportWorkbenchData, getWorkbenchDownloadUrl
+  exportWorkbenchData, getWorkbenchDownloadUrl,
+  fetchItemAttrs
 } from '../../services/api'
 
 const { Text } = Typography
@@ -39,6 +41,31 @@ type DataRow = {
   category_lv1: string | null
   category_lv2: string | null
   item_url: string | null
+}
+
+function AttrPopoverContent({ itemId }: { itemId: number }) {
+  const [attrs, setAttrs] = useState<{ attr_name: string; attr_value: string }[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    fetchItemAttrs(itemId)
+      .then(setAttrs)
+      .finally(() => setLoading(false))
+  }, [itemId])
+
+  if (loading) return <Spin size="small" />
+  if (attrs.length === 0) return <span style={{ color: '#999' }}>暂无属性</span>
+  return (
+    <List
+      size="small"
+      dataSource={attrs}
+      renderItem={a => (
+        <List.Item style={{ padding: '2px 0' }}>
+          <strong>{a.attr_name}</strong>: {a.attr_value}
+        </List.Item>
+      )}
+    />
+  )
 }
 
 export default function WorkbenchPage() {
@@ -125,7 +152,23 @@ export default function WorkbenchPage() {
           : '-',
     },
     { title: '品牌', dataIndex: 'brand_code', width: 90 },
-    { title: '型号', dataIndex: 'model_code', width: 100 },
+    {
+      title: '型号', dataIndex: 'model_code', width: 100,
+      render: (_: unknown, record: DataRow) => (
+        <span>
+          {record.model_code ?? '-'}
+          {record.model_code && (
+            <Popover
+              title="属性"
+              trigger="click"
+              content={<AttrPopoverContent itemId={record.id} />}
+            >
+              <InfoCircleOutlined style={{ marginLeft: 4, cursor: 'pointer', color: '#8c8c8c' }} />
+            </Popover>
+          )}
+        </span>
+      ),
+    },
     { title: '型号名称', dataIndex: 'model_name', width: 120, ellipsis: true },
     { title: '店铺', dataIndex: 'shop_name', width: 130, ellipsis: true },
     {

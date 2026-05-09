@@ -1,14 +1,14 @@
 """P1: add category_lv0, calc_price, corrected fields to cleaned_data and published_items
 
 Revision ID: a1b2c3d4e5f6
-Revises: d5e6f7a8b9c0
+Revises: f6a7b8c9d0e1
 Create Date: 2026-05-09
 """
 from alembic import op
 import sqlalchemy as sa
 
 revision = 'a1b2c3d4e5f6'
-down_revision = 'd5e6f7a8b9c0'
+down_revision = 'f6a7b8c9d0e1'
 branch_labels = None
 depends_on = None
 

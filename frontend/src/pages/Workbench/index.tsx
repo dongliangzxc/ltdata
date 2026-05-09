@@ -35,6 +35,7 @@ type DataRow = {
   corrected_sales_qty: number | null
   corrected_sales_amount: number | null
   category_name: string | null
+  category_lv0: string | null
   category_lv1: string | null
   category_lv2: string | null
   item_url: string | null
@@ -149,6 +150,10 @@ export default function WorkbenchPage() {
     },
     {
       title: '品类', dataIndex: 'category_name', width: 110, ellipsis: true,
+    },
+    {
+      title: 'LV0类目', dataIndex: 'category_lv0', width: 90,
+      render: (v: string | null) => v ?? '-',
     },
   ]
 

@@ -95,13 +95,13 @@ class CleanedDataRecord(Base):
     sales_amount = Column(Numeric(14, 2))
     price = Column(Numeric(12, 2))
     brand_std = Column(String(100))
-    model_std = Column(String(100))
-    created_at = Column(DateTime, default=datetime.utcnow)
+    model_std              = Column(String(100))
     category_lv0           = Column(String(100))
     calc_price             = Column(Numeric(12, 2))
     corrected_sales_qty    = Column(Integer)
     corrected_sales_amount = Column(Numeric(14, 2))
-    is_recovered = Column(SmallInteger, default=0)
+    created_at             = Column(DateTime, default=datetime.utcnow)
+    is_recovered           = Column(SmallInteger, default=0)
 
     job = relationship("CleanJobRecord", back_populates="cleaned_data")
 

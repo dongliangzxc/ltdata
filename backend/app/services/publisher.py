@@ -196,7 +196,7 @@ def run_publish(luotu_db: Session, analytics_db: Session, clean_job_id: int) -> 
             "model_code":              r["model_code"],
             "model_name":              r["model_name"],
             "category_name":           r["category_name"],
-            "calc_price":              r["calc_price"],
+            "calc_price":              r["calc_price"],  # NULL when no cleaned_data row (pre-P1 data or unmatched) — intentional
             "corrected_sales_qty":     r["corrected_sales_qty"] if r["corrected_sales_qty"] is not None else r["sales_qty"],
             "corrected_sales_amount":  r["corrected_sales_amount"] if r["corrected_sales_amount"] is not None else r["sales_amount"],
             "published_at":            datetime.utcnow(),

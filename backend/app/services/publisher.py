@@ -13,6 +13,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from app.models.analytics_db import AnalyticsBase, analytics_engine, PublishedItemSpec
+from app.services.correction_engine import apply_correction_rules
 
 def _ensure_analytics_tables():
     """确保分析库表已创建（首次运行）"""
@@ -26,6 +27,9 @@ def run_publish(luotu_db: Session, analytics_db: Session, clean_job_id: int) -> 
     返回 {"published_count": N, "skipped_pending_count": N}
     """
     _ensure_analytics_tables()
+
+    # 发布前重新应用修正规则，确保 corrected 字段是最新值
+    apply_correction_rules(luotu_db, clean_job_id)
 
     # 统计本次被跳过的 pending 条目数
     pending_count_sql = text(

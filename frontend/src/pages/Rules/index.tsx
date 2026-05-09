@@ -640,7 +640,7 @@ export default function RulesPage() {
           { key: 'rules',      label: '匹配规则',   children: <MatchRuleTab /> },
           { key: 'filtered',   label: '干扰项存档', children: <FilteredItemTab /> },
           { key: 'attr',       label: '属性规则',   children: <AttrRuleTab /> },
-          { key: '6',          label: '修正规则',   children: <CorrectionRulesTab /> },
+          { key: 'correction', label: '修正规则',   children: <CorrectionRulesTab /> },
         ]}
       />
     </Card>

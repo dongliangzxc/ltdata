@@ -478,6 +478,18 @@ class MatchResult(Base):
     updated_at   = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class MatchResultCandidate(Base):
+    __tablename__ = "match_result_candidates"
+
+    id              = Column(Integer, primary_key=True, autoincrement=True)
+    match_result_id = Column(Integer, ForeignKey("match_results.id"), nullable=False)
+    model_id        = Column(Integer, nullable=False)
+    match_source    = Column(String(20))
+    score           = Column(Integer, nullable=False)
+    rank            = Column(Integer, nullable=False)
+    created_at      = Column(DateTime, default=datetime.utcnow)
+
+
 class MatchResultAttr(Base):
     __tablename__ = "match_result_attrs"
     __table_args__ = (
@@ -490,6 +502,17 @@ class MatchResultAttr(Base):
     attr_value       = Column(String(200), nullable=False)
     rule_id          = Column(Integer, ForeignKey("attr_rules.id"), nullable=True)
     created_at       = Column(DateTime, default=datetime.utcnow)
+
+
+class MatchCandidateOut(BaseModel):
+    model_id:     int
+    model_code:   Optional[str] = None
+    brand_code:   Optional[str] = None
+    match_source: Optional[str] = None
+    score:        int
+    rank:         int
+
+    model_config = {"from_attributes": True}
 
 
 class MatchResultOut(BaseModel):
@@ -510,6 +533,7 @@ class MatchResultOut(BaseModel):
     model_code: Optional[str] = None
     brand_code: Optional[str] = None
     attr_count: int = 0
+    candidates: list[MatchCandidateOut] = []
 
     model_config = {"from_attributes": True}
 

@@ -4,7 +4,7 @@ from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 from app.core.config import settings
 
-analytics_engine = create_engine(settings.ANALYTICS_DATABASE_URL)
+analytics_engine = create_engine(settings.ANALYTICS_DATABASE_URL, pool_pre_ping=True, pool_recycle=3600)
 AnalyticsSession = sessionmaker(autocommit=False, autoflush=False, bind=analytics_engine)
 AnalyticsBase = declarative_base()
 

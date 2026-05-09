@@ -200,6 +200,19 @@ CREATE TABLE IF NOT EXISTS match_results (
     KEY idx_match_model     (model_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='型号匹配结果';
 
+-- P4: 匹配候选型号（top-5，用于多候选展示）
+CREATE TABLE IF NOT EXISTS match_result_candidates (
+    id              INT AUTO_INCREMENT PRIMARY KEY,
+    match_result_id INT NOT NULL                   COMMENT '关联 match_results.id',
+    model_id        INT NOT NULL                   COMMENT '候选型号 models.id',
+    match_source    VARCHAR(20)                    COMMENT '命中阶段 s1/s2/s3/s4',
+    score           INT NOT NULL                   COMMENT '命中长度分值',
+    rank            INT NOT NULL                   COMMENT '排名（1=最优）',
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_mrc_match_result_id (match_result_id),
+    CONSTRAINT fk_mrc_match_result FOREIGN KEY (match_result_id) REFERENCES match_results(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='匹配候选型号';
+
 CREATE TABLE IF NOT EXISTS correction_rules (
     id            INT AUTO_INCREMENT PRIMARY KEY,
     name          VARCHAR(100) NOT NULL,
@@ -363,4 +376,4 @@ CREATE TABLE IF NOT EXISTS alembic_version (
     version_num VARCHAR(32) NOT NULL,
     CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)
 );
-INSERT IGNORE INTO alembic_version (version_num) VALUES ('b2c3d4e5f6a1');
+INSERT IGNORE INTO alembic_version (version_num) VALUES ('p4c3d4e5f6a7');

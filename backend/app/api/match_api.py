@@ -11,7 +11,7 @@ from sqlalchemy import func
 from app.models.schemas import (
     MatchResult, MatchResultOut, MatchSummary,
     CleanJobRecord, RawDataRecord, ModelRecord,
-    MatchResultAttr, ItemUrlMapping,
+    MatchResultAttr, MatchResultCandidate, MatchCandidateOut, ItemUrlMapping,
     PaginatedResponse,
 )
 from app.services.matcher import run_match
@@ -191,6 +191,29 @@ def list_pending(
     total = q.count()
     rows = q.offset((page - 1) * page_size).limit(page_size).all()
 
+    # 批量查询候选
+    mr_ids = [mr.id for mr, *_ in rows]
+    candidates_by_mr: dict[int, list] = {}
+    if mr_ids:
+        cand_rows = (
+            db.query(MatchResultCandidate, ModelRecord)
+            .outerjoin(ModelRecord, MatchResultCandidate.model_id == ModelRecord.id)
+            .filter(MatchResultCandidate.match_result_id.in_(mr_ids))
+            .order_by(MatchResultCandidate.match_result_id, MatchResultCandidate.rank)
+            .all()
+        )
+        for cand, model in cand_rows:
+            candidates_by_mr.setdefault(cand.match_result_id, []).append(
+                MatchCandidateOut(
+                    model_id=cand.model_id,
+                    model_code=model.model_code if model else None,
+                    brand_code=model.brand_code if model else None,
+                    match_source=cand.match_source,
+                    score=cand.score,
+                    rank=cand.rank,
+                )
+            )
+
     items = []
     for mr, rd, model, attr_count in rows:
         items.append(MatchResultOut(
@@ -208,6 +231,7 @@ def list_pending(
             model_code=model.model_code if model else None,
             brand_code=model.brand_code if model else None,
             attr_count=attr_count,
+            candidates=candidates_by_mr.get(mr.id, []),
         ))
 
     return PaginatedResponse(total=total, page=page, page_size=page_size, items=items)

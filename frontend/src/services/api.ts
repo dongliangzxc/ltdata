@@ -268,6 +268,16 @@ export const deleteCorrectionRule = (id: number) =>
 export const applyCorrectionRules = (cleanJobId: number) =>
   api.post(`/correction-rules/apply/${cleanJobId}`)
 
+// ─── Match Types ────────────────────────────────────────────
+export interface MatchCandidateOut {
+  model_id: number
+  model_code: string | null
+  brand_code: string | null
+  match_source: string | null
+  score: number
+  rank: number
+}
+
 // ─── Categories ─────────────────────────────────────────────
 export const listCategories = () =>
   api.get('/categories')

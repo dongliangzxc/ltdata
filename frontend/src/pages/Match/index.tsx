@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
 import {
   Card, Select, Button, Table, Tag, Space, Typography, Input,
-  message, Row, Col, Statistic, Tooltip, Progress, Alert, Popconfirm, InputNumber, Tabs
+  message, Row, Col, Statistic, Tooltip, Progress, Alert, Popconfirm, InputNumber, Tabs,
+  Popover, List,
 } from 'antd'
-import { AimOutlined, CheckOutlined, StopOutlined, CloudUploadOutlined, LoadingOutlined, LinkOutlined } from '@ant-design/icons'
+import { AimOutlined, CheckOutlined, StopOutlined, CloudUploadOutlined, LoadingOutlined, LinkOutlined, SwapOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import { useSearchParams } from 'react-router-dom'
 import {
@@ -12,6 +13,7 @@ import {
   disableMatch, enableMatch, avgPriceDisable, listDisabled,
   applyAttrRules, listMissingAttrs,
 } from '../../services/api'
+import type { MatchCandidateOut } from '../../services/api'
 
 const { Text } = Typography
 
@@ -41,6 +43,7 @@ type PendingItem = {
   category_name?: string
   attr_count?: number
   match_source?: string
+  candidates?: MatchCandidateOut[]
 }
 
 type DisabledItem = {
@@ -300,6 +303,13 @@ export default function MatchPage() {
     }
   }
 
+  const handleSelectCandidate = async (matchId: number, modelId: number) => {
+    await confirmMatch(matchId, { model_id: modelId })
+    message.success('已选用候选型号')
+    refreshPending()
+    getMatchSummary(selectedJobId!).then(r => setSummary(r.data))
+  }
+
   const handlePublish = async () => {
     if (!selectedJobId) { message.warning('请先选择清洗任务'); return }
     if (!summary || (summary.url_matched ?? 0) + summary.matched + summary.confirmed === 0) {
@@ -362,7 +372,39 @@ export default function MatchPage() {
         title: '匹配型号', width: 160,
         render: (_: unknown, row: PendingItem) =>
           row.brand_code && row.model_code
-            ? <Text code style={{ fontSize: 12 }}>[{row.brand_code}] {row.model_code}</Text>
+            ? (
+              <span>
+                <Text code style={{ fontSize: 12 }}>[{row.brand_code}] {row.model_code}</Text>
+                {row.candidates && row.candidates.filter(c => c.rank > 1).length > 0 && (
+                  <Popover
+                    title="其他候选型号"
+                    trigger="click"
+                    content={
+                      <List
+                        size="small"
+                        dataSource={row.candidates.filter(c => c.rank > 1)}
+                        renderItem={(c: MatchCandidateOut) => (
+                          <List.Item
+                            actions={[
+                              <Button
+                                size="small"
+                                onClick={() => handleSelectCandidate(row.id, c.model_id)}
+                              >
+                                选用
+                              </Button>,
+                            ]}
+                          >
+                            {c.model_code ?? '—'} ({c.brand_code ?? '—'}) · {c.match_source ?? '—'}
+                          </List.Item>
+                        )}
+                      />
+                    }
+                  >
+                    <SwapOutlined style={{ marginLeft: 4, cursor: 'pointer', color: '#1677ff' }} />
+                  </Popover>
+                )}
+              </span>
+            )
             : <Text type="secondary">-</Text>
       },
       {
@@ -371,6 +413,45 @@ export default function MatchPage() {
           row.item_url
             ? <a href={row.item_url} target="_blank" rel="noreferrer"><LinkOutlined /> 查看</a>
             : '-'
+      },
+    ] : []),
+    ...(activeTab !== 'text_only' ? [
+      {
+        title: '候选型号', width: 80,
+        render: (_: unknown, row: PendingItem) => {
+          const others = (row.candidates ?? []).filter(c => c.rank > 1)
+          if (others.length === 0) return <Text type="secondary">—</Text>
+          return (
+            <Popover
+              title="候选型号"
+              trigger="click"
+              content={
+                <List
+                  size="small"
+                  dataSource={others}
+                  renderItem={(c: MatchCandidateOut) => (
+                    <List.Item
+                      actions={[
+                        <Button
+                          size="small"
+                          onClick={() => handleSelectCandidate(row.id, c.model_id)}
+                        >
+                          选用
+                        </Button>,
+                      ]}
+                    >
+                      {c.model_code ?? '—'} ({c.brand_code ?? '—'}) · {c.match_source ?? '—'}
+                    </List.Item>
+                  )}
+                />
+              }
+            >
+              <Button size="small" icon={<SwapOutlined />} type="link">
+                {others.length} 个
+              </Button>
+            </Popover>
+          )
+        }
       },
     ] : []),
     {

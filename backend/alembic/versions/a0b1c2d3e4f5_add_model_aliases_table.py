@@ -1,6 +1,6 @@
 """add model_aliases table
 
-Revision ID: a1b2c3d4e5f6
+Revision ID: a0b1c2d3e4f5
 Revises: 8c8de0f7ebf8
 Create Date: 2026-04-29
 
@@ -9,7 +9,7 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
-revision: str = 'a1b2c3d4e5f6'
+revision: str = 'a0b1c2d3e4f5'
 down_revision: Union[str, Sequence[str], None] = '8c8de0f7ebf8'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

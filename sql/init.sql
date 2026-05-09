@@ -90,6 +90,10 @@ CREATE TABLE IF NOT EXISTS cleaned_data (
     price          DECIMAL(12,2),
     brand_std      VARCHAR(100),
     model_std      VARCHAR(100),
+    category_lv0   VARCHAR(100),
+    calc_price     DECIMAL(12,2),
+    corrected_sales_qty    INT,
+    corrected_sales_amount DECIMAL(14,2),
     created_at     DATETIME     DEFAULT CURRENT_TIMESTAMP,
     KEY idx_clean_job_id (clean_job_id),
     CONSTRAINT fk_cleaned_job FOREIGN KEY (clean_job_id) REFERENCES clean_jobs(id) ON DELETE CASCADE
@@ -268,6 +272,11 @@ CREATE TABLE IF NOT EXISTS published_items (
     model_code     VARCHAR(100)                   COMMENT '型号码',
     model_name     VARCHAR(200)                   COMMENT '型号名称',
     category_name  VARCHAR(200)                   COMMENT '型号所属品类',
+    -- P1 扩展字段
+    category_lv0   VARCHAR(100)                   COMMENT '顶级类目',
+    calc_price     DECIMAL(12,2)                  COMMENT '计算价格',
+    corrected_sales_qty    INT                    COMMENT '修正销量',
+    corrected_sales_amount DECIMAL(14,2)          COMMENT '修正销售额',
     -- 发布时间
     published_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     KEY idx_pub_platform  (platform),
@@ -337,4 +346,4 @@ CREATE TABLE IF NOT EXISTS alembic_version (
     version_num VARCHAR(32) NOT NULL,
     CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)
 );
-INSERT IGNORE INTO alembic_version (version_num) VALUES ('d5e6f7a8b9c0');
+INSERT IGNORE INTO alembic_version (version_num) VALUES ('a1b2c3d4e5f6');

@@ -23,7 +23,7 @@ export default function ManualPage() {
             { key: 'upload',      href: '#upload',      title: '数据上传' },
             { key: 'rawdata',     href: '#rawdata',     title: '原始数据' },
             { key: 'categories', href: '#categories', title: '品类管理' },
-            { key: 'metadata',    href: '#metadata',    title: '元数据管理' },
+            { key: 'metadata',    href: '#metadata',    title: '属性管理' },
             { key: 'models',      href: '#models',      title: '型号管理' },
             { key: 'url-mapping', href: '#url-mapping', title: 'URL映射管理' },
             { key: 'historical',  href: '#historical',  title: '历史库' },
@@ -55,7 +55,7 @@ export default function ManualPage() {
             <Col span={12}>
               <Card size="small" title="准备工作（一次性）" style={{ background: '#fafafa' }}>
                 <Paragraph style={{ margin: 0 }}>
-                  <Tag color="purple">1</Tag> 在「元数据管理」导入规格字段定义<br />
+                  <Tag color="purple">1</Tag> 在「属性管理」导入规格字段定义<br />
                   <Tag color="purple">2</Tag> 在「型号管理」导入品牌型号数据<br />
                   <Tag color="purple">3</Tag> 在「规则管理」配置干扰词、品牌写法、匹配规则<br />
                   <Tag color="purple">4</Tag>（可选）在「URL映射管理」配置精确URL→型号映射<br />
@@ -116,24 +116,24 @@ export default function ManualPage() {
           {/* ── 品类管理 ── */}
           <Title level={3} id="categories"><TagsOutlined /> 品类管理</Title>
           <Paragraph>
-            品类库是系统的受控品类词表，型号管理、元数据管理、属性规则均通过品类码与品类库关联。
+            品类库是系统的受控品类词表，型号管理、属性管理、属性规则均通过品类码与品类库关联。
             <S>唯一键：品类码</S>，品类码一旦创建不可修改（避免破坏关联关系）。
           </Paragraph>
           <Paragraph>
             <S>新增品类</S>：点「新增品类」，填写品类码（小写字母/数字/下划线，如 <Text code>soundbar</Text>）
             和品类名称（如「回音壁」）。<br />
             <S>修改名称</S>：点「改名」可修改显示名称，品类码不变。<br />
-            <S>删除品类</S>：若品类下已有型号或元数据规格，系统将拒绝删除（返回提示），需先清理关联数据。
+            <S>删除品类</S>：若品类下已有型号或属性规格，系统将拒绝删除（返回提示），需先清理关联数据。
           </Paragraph>
           <Alert type="info" showIcon style={{ marginBottom: 16 }}
             message="型号 Excel 导入时「品类码」列须为已在品类管理中配置的品类码，否则该行将被跳过并记录错误。" />
 
           <Divider />
 
-          {/* ── 元数据管理 ── */}
-          <Title level={3} id="metadata"><ProfileOutlined /> 元数据管理</Title>
+          {/* ── 属性管理 ── */}
+          <Title level={3} id="metadata"><ProfileOutlined /> 属性管理</Title>
           <Paragraph>
-            元数据定义商品规格字段（如声道数、输出功率），决定最终导出 Excel 中有哪些规格列。
+            属性定义商品规格字段（如声道数、输出功率），决定最终导出 Excel 中有哪些规格列。
             <S>唯一键：品类码 + 规格名称</S>，重复导入自动更新，不产生重复记录。
           </Paragraph>
           <Title level={5}>Excel 批量导入（推荐）</Title>
@@ -142,7 +142,7 @@ export default function ManualPage() {
             确认无误后点「确认导入」正式写入；点「取消」不产生任何修改。
           </Paragraph>
           <Alert type="info" showIcon style={{ marginBottom: 8 }}
-            message={<span>Excel 格式要求：Sheet 名称必须为「元数据」，必须包含列：<Text code>规格名称</Text>、<Text code>规格类型</Text>（数值型/文本型/布尔型）</span>} />
+            message={<span>Excel 格式要求：Sheet 名称必须为「属性」，必须包含列：<Text code>规格名称</Text>、<Text code>规格类型</Text>（数值型/文本型/布尔型）</span>} />
           <Paragraph>
             其他可选列：品类码、规格值（逗号分隔可选项）、必填、单选、保留几位小数。
           </Paragraph>
@@ -157,7 +157,7 @@ export default function ManualPage() {
           </Paragraph>
           <Title level={5}>Excel 批量导入（推荐）</Title>
           <Paragraph>
-            流程同元数据：上传 → 预览确认 → 导入。Excel 需包含两个 Sheet：
+            流程同属性：上传 → 预览确认 → 导入。Excel 需包含两个 Sheet：
           </Paragraph>
           <Paragraph>
             <Tag>Sheet「型号」</Tag>必须包含：<Text code>品牌码</Text>（或「品牌」）、<Text code>型号码</Text>（或「型号」）；
@@ -355,7 +355,7 @@ export default function ManualPage() {
             <Tag color="error">失败 → 悬浮查看原因</Tag>
           </Paragraph>
           <Alert type="info" showIcon style={{ marginBottom: 16 }}
-            message={<span>导出文件结构：每个品类一个 Sheet，列包含平台、月份、销量、销售额、品牌、型号，以及「元数据管理」中定义的所有规格列；待确认商品单独放在「待确认」Sheet。</span>} />
+            message={<span>导出文件结构：每个品类一个 Sheet，列包含平台、月份、销量、销售额、品牌、型号，以及「属性管理」中定义的所有规格列；待确认商品单独放在「待确认」Sheet。</span>} />
 
           <Divider />
 
@@ -380,12 +380,12 @@ export default function ManualPage() {
           <Title level={5}>Q：Excel 导入时提示格式错误？</Title>
           <Paragraph>
             预览弹窗中「错误」折叠面板会精确指出哪一行有问题。常见原因：
-            缺少必要列名；元数据 Sheet 名不是「元数据」；型号 Sheet 名不是「型号」/「型号规格」。
+            缺少必要列名；属性 Sheet 名不是「属性」；型号 Sheet 名不是「型号」/「型号规格」。
           </Paragraph>
 
           <Title level={5}>Q：导出的 Excel 规格列全是空的？</Title>
           <Paragraph>
-            检查「元数据管理」中是否已导入规格定义。规格列名称来自元数据，若元数据为空则导出文件没有规格列。
+            检查「属性管理」中是否已导入规格定义。规格列名称来自属性，若属性为空则导出文件没有规格列。
           </Paragraph>
 
           <Title level={5}>Q：发布后查询工作台看不到数据？</Title>

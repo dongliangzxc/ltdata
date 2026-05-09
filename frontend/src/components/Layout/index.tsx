@@ -26,7 +26,7 @@ const menuItems = [
   { key: '/upload',     icon: <UploadOutlined />,        label: '数据上传' },
   { key: '/rawdata',    icon: <DatabaseOutlined />,      label: '原始数据' },
   { key: '/categories', icon: <TagsOutlined />,       label: '品类管理' },
-  { key: '/metadata',   icon: <ProfileOutlined />,       label: '元数据管理' },
+  { key: '/metadata',   icon: <ProfileOutlined />,       label: '属性管理' },
   { key: '/models',     icon: <AppstoreAddOutlined />,   label: '型号管理' },
   { key: '/url-mappings', icon: <LinkOutlined />,        label: 'URL映射管理' },
   { key: '/historical',   icon: <HistoryOutlined />,     label: '历史库' },

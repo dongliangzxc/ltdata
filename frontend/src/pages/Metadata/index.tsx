@@ -308,7 +308,7 @@ export default function MetadataPage() {
       </Modal>
 
       <Modal
-        title={editingItem ? '编辑元数据规格' : '新增元数据规格'}
+        title={editingItem ? '编辑属性规格' : '新增属性规格'}
         open={modalOpen}
         onOk={handleSubmit}
         onCancel={() => setModalOpen(false)}

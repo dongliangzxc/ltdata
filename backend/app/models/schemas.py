@@ -527,13 +527,15 @@ class MatchResultOut(BaseModel):
     disable_reason: Optional[str] = None
     brand_identified: int = 1
     # 关联字段（join 查询后填充）
-    item_name:  Optional[str] = None
-    item_url:   Optional[str] = None
-    brand_raw:  Optional[str] = None
-    model_code: Optional[str] = None
-    brand_code: Optional[str] = None
-    attr_count: int = 0
-    candidates: list[MatchCandidateOut] = []
+    item_name:     Optional[str] = None
+    item_url:      Optional[str] = None
+    brand_raw:     Optional[str] = None
+    model_code:    Optional[str] = None
+    brand_code:    Optional[str] = None
+    attr_count:    int = 0
+    candidates:    list[MatchCandidateOut] = []
+    sales_qty:     Optional[int] = None
+    category_name: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

@@ -19,6 +19,7 @@ import {
   updateAttrRule, deleteAttrRule,
   listCorrectionRules, createCorrectionRule, updateCorrectionRule, deleteCorrectionRule,
 } from '../../services/api'
+import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 
 // ══════════════════════════════════════════════
 // Tab 1: 干扰词库
@@ -27,7 +28,12 @@ function NoiseWordTab() {
   const [keyword, setKeyword] = useState('')
   const [matchField, setMatchField] = useState('item_name')
   const [adding, setAdding] = useState(false)
-  const { data, loading, refresh } = useRequest(() => listNoiseWords().then(r => r.data))
+  const [categoryCode, setCategoryCode] = useState<string | undefined>()
+  const { options: categoryOptions } = useCategoryOptions()
+  const { data, loading, refresh } = useRequest(
+    () => listNoiseWords(categoryCode ? { category_code: categoryCode } : undefined).then(r => r.data),
+    { refreshDeps: [categoryCode] }
+  )
 
   const handleAdd = async () => {
     if (!keyword.trim()) { message.warning('请输入关键词'); return }
@@ -44,6 +50,8 @@ function NoiseWordTab() {
     { title: '关键词', dataIndex: 'keyword', ellipsis: true },
     { title: '匹配字段', dataIndex: 'match_field', width: 120,
       render: (v: string) => ({ item_name: '商品名称', shop_name: '店铺名称', brand_raw: '原始品牌' }[v] ?? v) },
+    { title: '品类', dataIndex: 'category_code', width: 120,
+      render: (v: string | null) => v ?? '-' },
     { title: '状态', dataIndex: 'is_active', width: 80,
       render: (v: number) => v ? <Tag color="green">启用</Tag> : <Tag color="default">禁用</Tag> },
     {
@@ -75,6 +83,13 @@ function NoiseWordTab() {
             { value: 'brand_raw', label: '原始品牌' },
           ]} />
         <Button type="primary" icon={<PlusOutlined />} loading={adding} onClick={handleAdd}>添加</Button>
+        <Select
+          placeholder="品类筛选"
+          allowClear
+          style={{ width: 140 }}
+          options={categoryOptions}
+          onChange={v => setCategoryCode(v)}
+        />
       </Space>
       <Table dataSource={data ?? []} columns={columns} rowKey="id" size="small" loading={loading}
         pagination={{ pageSize: 20, showTotal: (t: number) => `共 ${t} 条` }} />

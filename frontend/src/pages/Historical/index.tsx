@@ -11,6 +11,7 @@ import {
   deleteHistoricalMapping,
   deleteHistoricalBatch,
 } from '../../services/api'
+import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 
 const { Dragger } = Upload
 
@@ -123,8 +124,10 @@ function MappingTab() {
   const PAGE_SIZE = 20
   const [platform, setPlatform] = useState<string | undefined>()
   const [batch, setBatch] = useState<string | undefined>()
+  const [categoryCode, setCategoryCode] = useState<string | undefined>()
   const [batches, setBatches] = useState<{ batch: string; count: number }[]>([])
   const [loading, setLoading] = useState(false)
+  const { options: categoryOptions } = useCategoryOptions()
 
   const loadBatches = async () => {
     const res = await listHistoricalBatches()
@@ -135,7 +138,7 @@ function MappingTab() {
     setLoading(true)
     try {
       const res = await listHistoricalMappings({
-        platform, import_batch: batch, page, page_size: PAGE_SIZE,
+        platform, import_batch: batch, category_code: categoryCode, page, page_size: PAGE_SIZE,
       })
       setData(res.data.items)
       setTotal(res.data.total)
@@ -145,7 +148,7 @@ function MappingTab() {
   }
 
   useEffect(() => { loadBatches() }, [])
-  useEffect(() => { load() }, [platform, batch, page])
+  useEffect(() => { load() }, [platform, batch, categoryCode, page])
 
   const handleDelete = async (id: number) => {
     await deleteHistoricalMapping(id)
@@ -192,6 +195,13 @@ function MappingTab() {
           style={{ width: 220 }}
           options={batches.map(b => ({ value: b.batch, label: `${b.batch} (${b.count}条)` }))}
           onChange={v => { setBatch(v); setPage(1) }}
+        />
+        <Select
+          placeholder="品类筛选"
+          allowClear
+          style={{ width: 140 }}
+          options={categoryOptions}
+          onChange={v => { setCategoryCode(v); setPage(1) }}
         />
       </Space>
       <Table

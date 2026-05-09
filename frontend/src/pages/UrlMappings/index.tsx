@@ -9,6 +9,7 @@ import {
   listUrlMappings, createUrlMapping, updateUrlMapping,
   deleteUrlMapping, importUrlMappings, listModels,
 } from '../../services/api'
+import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 
 const { Text } = Typography
 
@@ -52,6 +53,7 @@ function buildUrl(platform: string, itemId: string): string | null {
 export default function UrlMappingsPage() {
   const [keyword, setKeyword] = useState('')
   const [platform, setPlatform] = useState<string | undefined>()
+  const [categoryCode, setCategoryCode] = useState<string | undefined>()
   const [page, setPage] = useState(1)
   const [modalOpen, setModalOpen] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
@@ -59,14 +61,16 @@ export default function UrlMappingsPage() {
   const [saving, setSaving] = useState(false)
   const [importing, setImporting] = useState(false)
 
+  const { options: categoryOptions } = useCategoryOptions()
+
   const { data: modelsData } = useRequest(
     () => listModels({ page: 1, page_size: 500 }).then(r => r.data)
   )
   const modelOptions: ModelOption[] = modelsData?.items ?? []
 
   const { data, loading, refresh } = useRequest(
-    () => listUrlMappings({ keyword: keyword || undefined, platform: platform || undefined, page, page_size: 20 }).then(r => r.data),
-    { refreshDeps: [keyword, platform, page] }
+    () => listUrlMappings({ keyword: keyword || undefined, platform: platform || undefined, category_code: categoryCode || undefined, page, page_size: 20 }).then(r => r.data),
+    { refreshDeps: [keyword, platform, categoryCode, page] }
   )
 
   const openCreate = () => {
@@ -187,6 +191,13 @@ export default function UrlMappingsPage() {
             style={{ width: 160 }}
             options={PLATFORM_OPTIONS}
             onChange={v => { setPlatform(v); setPage(1) }}
+          />
+          <Select
+            placeholder="品类筛选"
+            allowClear
+            style={{ width: 140 }}
+            options={categoryOptions}
+            onChange={v => { setCategoryCode(v); setPage(1) }}
           />
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增</Button>
           <Upload

@@ -152,8 +152,8 @@ export const deleteUrlMapping = (id: number) =>
   api.delete(`/url-mappings/${id}`)
 
 // ─── Rules - Noise Words ────────────────────────────────────
-export const listNoiseWords = () =>
-  api.get('/rules/noise-words')
+export const listNoiseWords = (params?: { category_code?: string }) =>
+  api.get('/rules/noise-words', { params })
 
 export const createNoiseWord = (payload: { keyword: string; match_field: string }) =>
   api.post('/rules/noise-words', payload)
@@ -242,6 +242,7 @@ export const listHistoricalBatches = () =>
 export const listHistoricalMappings = (params?: {
   platform?: string
   import_batch?: string
+  category_code?: string
   page?: number
   page_size?: number
 }) => api.get('/historical/mappings', { params })
@@ -281,6 +282,9 @@ export interface MatchCandidateOut {
 // ─── Categories ─────────────────────────────────────────────
 export const listCategories = () =>
   api.get('/categories')
+
+export const fetchCategories = () =>
+  api.get<{ id: number; code: string; name: string }[]>('/categories').then(r => r.data)
 
 export const createCategory = (data: { code: string; name: string }) =>
   api.post('/categories', data)

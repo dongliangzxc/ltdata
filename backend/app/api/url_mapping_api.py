@@ -157,6 +157,7 @@ def import_url_mappings(file: UploadFile = File(...), db: Session = Depends(get_
 def list_url_mappings(
     keyword: Optional[str] = Query(None),
     platform: Optional[str] = Query(None),
+    category_code: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -173,6 +174,10 @@ def list_url_mappings(
                 ModelRecord.brand_code.ilike(kw),
             )
         )
+    elif category_code:
+        q = q.outerjoin(ModelRecord, ItemUrlMapping.model_id == ModelRecord.id)
+    if category_code:
+        q = q.filter(ModelRecord.category_code == category_code)
     total = q.count()
     rows = q.order_by(ItemUrlMapping.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
     return PaginatedResponse(

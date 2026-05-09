@@ -105,6 +105,7 @@ def list_batches(db: Session = Depends(get_db)):
 def list_mappings(
     platform:     Optional[str] = Query(None),
     import_batch: Optional[str] = Query(None),
+    category_code: Optional[str] = Query(None),
     page:         int = Query(1, ge=1),
     page_size:    int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -117,6 +118,8 @@ def list_mappings(
         q = q.filter(HistoricalMapping.platform == platform.lower())
     if import_batch:
         q = q.filter(HistoricalMapping.import_batch == import_batch)
+    if category_code:
+        q = q.filter(ModelRecord.category_code == category_code)
 
     total = q.count()
     rows = (

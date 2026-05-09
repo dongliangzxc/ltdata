@@ -35,11 +35,15 @@ class NoiseWordIn(BaseModel):
 
 
 @router.get("/noise-words")
-def list_noise_words(db: Session = Depends(get_db)):
+def list_noise_words(
+    category_code: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
     rows = db.query(NoiseWord).order_by(NoiseWord.created_at.desc()).all()
     return [
         {"id": r.id, "keyword": r.keyword, "match_field": r.match_field,
-         "is_active": r.is_active, "created_at": r.created_at}
+         "is_active": r.is_active, "created_at": r.created_at,
+         "category_code": None}
         for r in rows
     ]
 

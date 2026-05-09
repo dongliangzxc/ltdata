@@ -14,6 +14,7 @@ import {
   applyAttrRules, listMissingAttrs,
 } from '../../services/api'
 import type { MatchCandidateOut } from '../../services/api'
+import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 
 const { Text } = Typography
 
@@ -44,6 +45,7 @@ type PendingItem = {
   attr_count?: number
   match_source?: string
   candidates?: MatchCandidateOut[]
+  sales_qty?: number | null
 }
 
 type DisabledItem = {
@@ -159,6 +161,8 @@ export default function MatchPage() {
   const [publishing, setPublishing] = useState(false)
   const [summary, setSummary] = useState<MatchSummary | null>(null)
   const [keyword, setKeyword] = useState('')
+  const [categoryName, setCategoryName] = useState<string | undefined>()
+  const [sortBy, setSortBy] = useState<string>('default')
   const [page, setPage] = useState(1)
   const [confirmingIds, setConfirmingIds] = useState<Set<number>>(new Set())
   const [selectedModels, setSelectedModels] = useState<Record<number, number>>({})
@@ -173,6 +177,7 @@ export default function MatchPage() {
   const { data: jobsData } = useRequest(() => listCleanJobs().then(r => r.data))
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
   const [modelSearchLoading, setModelSearchLoading] = useState(false)
+  const { options: categoryOptions } = useCategoryOptions()
 
   const handleModelSearch = async (keyword: string) => {
     if (!keyword.trim()) return
@@ -192,10 +197,12 @@ export default function MatchPage() {
       page_size: 20,
       status: activeTab === 'unidentified_brand' ? 'pending' : activeTab,
       ...(activeTab === 'unidentified_brand' ? { brand_identified: 0 } : {}),
+      category_name: categoryName || undefined,
+      sort_by: sortBy !== 'default' ? sortBy : undefined,
     }).then(r => r.data),
     {
       ready: selectedJobId != null && summary != null && activeTab !== 'missing_attrs' && (summary.pending > 0 || summary.text_only > 0 || (summary.unidentified_brand ?? 0) > 0),
-      refreshDeps: [selectedJobId, keyword, page, activeTab],
+      refreshDeps: [selectedJobId, keyword, page, activeTab, categoryName, sortBy],
     }
   )
 
@@ -367,6 +374,12 @@ export default function MatchPage() {
       render: (v: string) => <Tooltip title={v}><Text style={{ fontSize: 12 }}>{v}</Text></Tooltip>
     },
     { title: '原始品牌', dataIndex: 'brand_raw', width: 120 },
+    {
+      title: '销量', dataIndex: 'sales_qty', width: 80,
+      render: (v: number | null) => v != null ? v.toLocaleString() : '-',
+    },
+    { title: '品类', dataIndex: 'category_name', width: 100,
+      render: (v: string | null) => v ?? '-' },
     ...(activeTab === 'text_only' ? [
       {
         title: '匹配型号', width: 160,
@@ -727,12 +740,31 @@ export default function MatchPage() {
             </Space>
           }
           extra={
-            <Input.Search
-              placeholder="搜索宝贝名称"
-              allowClear
-              style={{ width: 220 }}
-              onSearch={v => { setKeyword(v); setPage(1) }}
-            />
+            <Space>
+              <Select
+                placeholder="品类筛选"
+                allowClear
+                style={{ width: 140 }}
+                options={categoryOptions}
+                onChange={v => { setCategoryName(v); setPage(1) }}
+              />
+              <Select
+                value={sortBy}
+                style={{ width: 130 }}
+                onChange={v => { setSortBy(v); setPage(1) }}
+                options={[
+                  { value: 'default', label: '默认排序' },
+                  { value: 'sales_qty_desc', label: '销量从高到低' },
+                  { value: 'sales_qty_asc', label: '销量从低到高' },
+                ]}
+              />
+              <Input.Search
+                placeholder="搜索宝贝名称"
+                allowClear
+                style={{ width: 220 }}
+                onSearch={v => { setKeyword(v); setPage(1) }}
+              />
+            </Space>
           }
         >
           <Tabs
@@ -741,6 +773,8 @@ export default function MatchPage() {
               setActiveTab(key as 'pending' | 'text_only' | 'unidentified_brand' | 'missing_attrs')
               setPage(1)
               setKeyword('')
+              setCategoryName(undefined)
+              setSortBy('default')
             }}
             items={[
               {

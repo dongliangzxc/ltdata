@@ -2,13 +2,13 @@ import { useState, useEffect } from 'react'
 import {
   Card, Row, Col, Select, Input, Button, Table,
   Typography, Tooltip, Form, Statistic, message, Space,
-  Popover, Spin, List
+  Popover, Spin, List, Checkbox, Modal
 } from 'antd'
 import { SearchOutlined, DownloadOutlined, ClearOutlined, LinkOutlined, InfoCircleOutlined } from '@ant-design/icons'
 import {
   getWorkbenchFilters, queryWorkbenchData,
   exportWorkbenchData, getWorkbenchDownloadUrl,
-  fetchItemAttrs
+  exportWorkbench, fetchItemAttrs
 } from '../../services/api'
 
 const { Text } = Typography
@@ -82,6 +82,10 @@ export default function WorkbenchPage() {
   const [dataSource, setDataSource] = useState<DataRow[]>([])
   const [loading, setLoading] = useState(false)
   const [searched, setSearched] = useState(false)
+  const [exportModalOpen, setExportModalOpen] = useState(false)
+  const [exportStatuses, setExportStatuses] = useState<string[]>(['matched', 'confirmed', 'url_matched'])
+  const [exportYear, setExportYear] = useState<number | undefined>(undefined)
+  const [exportQuarter, setExportQuarter] = useState<number | undefined>(undefined)
 
   // 页面加载时拉取筛选枚举
   useEffect(() => {
@@ -121,9 +125,21 @@ export default function WorkbenchPage() {
   }
 
   const handleExport = async () => {
+    setExportModalOpen(false)
     setExporting(true)
     try {
-      const res = await exportWorkbenchData(queryParams)
+      const vals = form.getFieldsValue()
+      const res = await exportWorkbench({
+        month: vals.month,
+        platform: vals.platform,
+        brand_code: vals.brand_code,
+        model_code: vals.model_code,
+        category_name: vals.category_name,
+        keyword: vals.keyword,
+        statuses: exportStatuses,
+        year: exportYear,
+        quarter: exportQuarter,
+      })
       const { token, filename, rows } = res.data
       message.success(`正在下载：${filename}（共 ${rows} 条）`)
       const a = document.createElement('a')
@@ -300,7 +316,7 @@ export default function WorkbenchPage() {
                   icon={<DownloadOutlined />}
                   loading={exporting}
                   disabled={total === 0}
-                  onClick={handleExport}
+                  onClick={() => setExportModalOpen(true)}
                 >
                   导出全部（{total} 条）
                 </Button>
@@ -327,6 +343,57 @@ export default function WorkbenchPage() {
           />
         </Card>
       )}
+
+      <Modal
+        title="导出配置"
+        open={exportModalOpen}
+        onCancel={() => setExportModalOpen(false)}
+        onOk={handleExport}
+        okButtonProps={{ disabled: exportStatuses.length === 0 }}
+        okText="确认导出"
+      >
+        <Space direction="vertical" style={{ width: '100%' }}>
+          <div>
+            <div style={{ marginBottom: 8, fontWeight: 500 }}>导出范围（状态）</div>
+            <Checkbox.Group
+              value={exportStatuses}
+              onChange={vals => setExportStatuses(vals as string[])}
+              options={[
+                { label: '已匹配', value: 'matched' },
+                { label: '已确认', value: 'confirmed' },
+                { label: 'URL匹配', value: 'url_matched' },
+                { label: '待确认', value: 'pending' },
+              ]}
+            />
+          </div>
+          <div>
+            <div style={{ marginBottom: 8, fontWeight: 500 }}>时间筛选（可选）</div>
+            <Space>
+              <Select
+                allowClear
+                placeholder="年份"
+                style={{ width: 100 }}
+                value={exportYear}
+                onChange={setExportYear}
+                options={[2024, 2025, 2026].map(y => ({ label: String(y), value: y }))}
+              />
+              <Select
+                allowClear
+                placeholder="季度"
+                style={{ width: 100 }}
+                value={exportQuarter}
+                onChange={setExportQuarter}
+                options={[
+                  { label: 'Q1', value: 1 },
+                  { label: 'Q2', value: 2 },
+                  { label: 'Q3', value: 3 },
+                  { label: 'Q4', value: 4 },
+                ]}
+              />
+            </Space>
+          </div>
+        </Space>
+      </Modal>
     </Space>
   )
 }

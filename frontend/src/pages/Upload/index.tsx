@@ -104,7 +104,7 @@ export default function UploadPage() {
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <Card>
         <Dragger
-          accept=".xlsx,.xls"
+          accept=".xlsx,.xls,.csv"
           multiple={false}
           beforeUpload={handleUpload}
           showUploadList={false}
@@ -114,9 +114,9 @@ export default function UploadPage() {
             {uploading ? <Spin /> : <InboxOutlined />}
           </p>
           <p className="ant-upload-text">
-            {uploading ? '正在上传并解析中...' : '点击或拖拽 Excel 文件至此上传'}
+            {uploading ? '正在上传并解析中...' : '点击或拖拽 Excel / CSV 文件至此上传'}
           </p>
-          <p className="ant-upload-hint">支持 .xlsx / .xls 格式，兼容京东 / 天猫 / 淘宝原始数据格式</p>
+          <p className="ant-upload-hint">支持 .xlsx / .xls / .csv 格式，兼容京东 / 天猫 / 淘宝原始数据格式</p>
         </Dragger>
       </Card>
 

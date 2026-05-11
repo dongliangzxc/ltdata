@@ -393,12 +393,13 @@ class NoiseWord(Base):
         UniqueConstraint("keyword", "match_field", name="uq_noise_keyword_field"),
     )
 
-    id          = Column(Integer, primary_key=True, index=True)
-    keyword     = Column(String(200), nullable=False)
-    match_field = Column(String(20),  default="item_name")  # item_name/shop_name/brand_raw
-    is_active   = Column(SmallInteger, default=1)
-    created_by  = Column(String(50))
-    created_at  = Column(DateTime, default=datetime.utcnow)
+    id            = Column(Integer, primary_key=True, index=True)
+    keyword       = Column(String(200), nullable=False)
+    match_field   = Column(String(20),  default="item_name")  # item_name/shop_name/brand_raw
+    is_active     = Column(SmallInteger, default=1)
+    created_by    = Column(String(50))
+    created_at    = Column(DateTime, default=datetime.utcnow)
+    category_code = Column(String(50), nullable=True, index=True)
 
 
 class FilteredItem(Base):

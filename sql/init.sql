@@ -370,10 +370,23 @@ INSERT IGNORE INTO categories (code, name) VALUES
     ('band',           '手环'),
     ('vrar',           'VRAR');
 
+-- 干扰词库（P1 规则引擎）
+CREATE TABLE IF NOT EXISTS noise_words (
+  `id`            INT AUTO_INCREMENT PRIMARY KEY,
+  `keyword`       VARCHAR(200) NOT NULL              COMMENT '干扰关键词',
+  `match_field`   VARCHAR(20)  NOT NULL DEFAULT 'item_name' COMMENT 'item_name/shop_name/brand_raw',
+  `is_active`     TINYINT      NOT NULL DEFAULT 1    COMMENT '1=启用 0=禁用',
+  `created_by`    VARCHAR(50)  DEFAULT NULL          COMMENT '创建人',
+  `created_at`    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `category_code` varchar(50)  DEFAULT NULL          COMMENT '品类码，NULL=全局',
+  UNIQUE KEY uq_noise_keyword_field (keyword, match_field),
+  KEY ix_noise_words_category_code (category_code)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='干扰词库';
+
 -- Alembic 版本记录：与 init.sql 建表结构对应的迁移链终点
 -- 新环境初始化时直接标记为当前最新，后续增量迁移正常执行
 CREATE TABLE IF NOT EXISTS alembic_version (
     version_num VARCHAR(32) NOT NULL,
     CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)
 );
-INSERT IGNORE INTO alembic_version (version_num) VALUES ('p4c3d4e5f6a7');
+INSERT IGNORE INTO alembic_version (version_num) VALUES ('p7a1b2c3d4e5');

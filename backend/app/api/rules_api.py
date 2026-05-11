@@ -32,6 +32,7 @@ router = APIRouter(prefix="/api/rules", tags=["rules"])
 class NoiseWordIn(BaseModel):
     keyword: str
     match_field: str = "item_name"  # item_name / shop_name / brand_raw
+    category_code: Optional[str] = None
 
 
 @router.get("/noise-words")
@@ -39,11 +40,19 @@ def list_noise_words(
     category_code: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ):
-    rows = db.query(NoiseWord).order_by(NoiseWord.created_at.desc()).all()
+    q = db.query(NoiseWord).order_by(NoiseWord.created_at.desc())
+    if category_code:
+        q = q.filter(NoiseWord.category_code == category_code)
+    rows = q.all()
     return [
-        {"id": r.id, "keyword": r.keyword, "match_field": r.match_field,
-         "is_active": r.is_active, "created_at": r.created_at,
-         "category_code": None}
+        {
+            "id": r.id,
+            "keyword": r.keyword,
+            "match_field": r.match_field,
+            "is_active": r.is_active,
+            "created_at": r.created_at,
+            "category_code": r.category_code,
+        }
         for r in rows
     ]
 
@@ -57,7 +66,11 @@ def create_noise_word(body: NoiseWordIn, db: Session = Depends(get_db)):
     ).first()
     if existing:
         raise HTTPException(400, "该关键词已存在")
-    row = NoiseWord(keyword=body.keyword, match_field=body.match_field)
+    row = NoiseWord(
+        keyword=body.keyword,
+        match_field=body.match_field,
+        category_code=body.category_code or None,
+    )
     db.add(row)
     db.commit()
     db.refresh(row)

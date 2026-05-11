@@ -390,3 +390,53 @@ CREATE TABLE IF NOT EXISTS alembic_version (
     CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)
 );
 INSERT IGNORE INTO alembic_version (version_num) VALUES ('p7a1b2c3d4e5');
+
+-- ── P8: Dispatch Tables ──────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS dispatch_rules (
+    id               INT AUTO_INCREMENT PRIMARY KEY,
+    category_code    VARCHAR(50)  NOT NULL,
+    platform         VARCHAR(50),
+    field            VARCHAR(50)  NOT NULL,
+    match_type       VARCHAR(20)  NOT NULL,
+    value            VARCHAR(200) NOT NULL,
+    item_name_keyword VARCHAR(200),
+    priority         INT          NOT NULL DEFAULT 100,
+    is_active        TINYINT      NOT NULL DEFAULT 1,
+    created_at       DATETIME     DEFAULT CURRENT_TIMESTAMP,
+    INDEX ix_dispatch_rules_category_code (category_code),
+    INDEX ix_dispatch_rules_priority (priority)
+);
+
+CREATE TABLE IF NOT EXISTS dispatch_batches (
+    id               INT AUTO_INCREMENT PRIMARY KEY,
+    file_id          INT          NOT NULL,
+    status           VARCHAR(20)  NOT NULL DEFAULT 'running',
+    total_rows       INT,
+    dispatched_rows  INT,
+    unmatched_rows   INT,
+    created_at       DATETIME     DEFAULT CURRENT_TIMESTAMP,
+    finished_at      DATETIME,
+    CONSTRAINT fk_db_file FOREIGN KEY (file_id) REFERENCES upload_files(id),
+    INDEX ix_dispatch_batches_file_id (file_id)
+);
+
+CREATE TABLE IF NOT EXISTS dispatch_items (
+    id               INT AUTO_INCREMENT PRIMARY KEY,
+    batch_id         INT          NOT NULL,
+    raw_data_id      INT          NOT NULL,
+    category_code    VARCHAR(50)  NOT NULL,
+    matched_rule_id  INT,
+    UNIQUE KEY uq_dispatch_items_batch_row (batch_id, raw_data_id),
+    CONSTRAINT fk_di_batch FOREIGN KEY (batch_id) REFERENCES dispatch_batches(id) ON DELETE CASCADE,
+    CONSTRAINT fk_di_raw   FOREIGN KEY (raw_data_id) REFERENCES raw_data(id) ON DELETE CASCADE,
+    INDEX ix_dispatch_items_batch_id (batch_id),
+    INDEX ix_dispatch_items_category_code (category_code)
+);
+
+-- clean_jobs dispatch columns (idempotent)
+ALTER TABLE clean_jobs
+    ADD COLUMN IF NOT EXISTS dispatch_batch_id      INT  NULL,
+    ADD COLUMN IF NOT EXISTS dispatch_category_code VARCHAR(50) NULL;
+
+UPDATE alembic_version SET version_num = 'p8a1b2c3d4e5';

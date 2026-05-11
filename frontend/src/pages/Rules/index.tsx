@@ -29,6 +29,7 @@ function NoiseWordTab() {
   const [matchField, setMatchField] = useState('item_name')
   const [adding, setAdding] = useState(false)
   const [categoryCode, setCategoryCode] = useState<string | undefined>()
+  const [addCategoryCode, setAddCategoryCode] = useState<string | undefined>()
   const { options: categoryOptions } = useCategoryOptions()
   const { data, loading, refresh } = useRequest(
     () => listNoiseWords(categoryCode ? { category_code: categoryCode } : undefined).then(r => r.data),
@@ -39,9 +40,10 @@ function NoiseWordTab() {
     if (!keyword.trim()) { message.warning('请输入关键词'); return }
     setAdding(true)
     try {
-      await createNoiseWord({ keyword: keyword.trim(), match_field: matchField })
+      await createNoiseWord({ keyword: keyword.trim(), match_field: matchField, category_code: addCategoryCode || null })
       message.success('添加成功')
       setKeyword('')
+      setAddCategoryCode(undefined)
       refresh()
     } finally { setAdding(false) }
   }
@@ -82,6 +84,14 @@ function NoiseWordTab() {
             { value: 'shop_name', label: '店铺名称' },
             { value: 'brand_raw', label: '原始品牌' },
           ]} />
+        <Select
+          placeholder="品类（可选）"
+          allowClear
+          style={{ width: 140 }}
+          options={categoryOptions}
+          value={addCategoryCode}
+          onChange={v => setAddCategoryCode(v)}
+        />
         <Button type="primary" icon={<PlusOutlined />} loading={adding} onClick={handleAdd}>添加</Button>
         <Select
           placeholder="品类筛选"
@@ -474,7 +484,12 @@ function CorrectionRulesTab() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [form] = Form.useForm()
-  const { data, loading, refresh } = useRequest(() => listCorrectionRules().then(r => r.data))
+  const [filterCategory, setFilterCategory] = useState<string | undefined>()
+  const { options: categoryOptions } = useCategoryOptions()
+  const { data, loading, refresh } = useRequest(
+    () => listCorrectionRules(filterCategory ? { category_code: filterCategory } : undefined).then(r => r.data),
+    { refreshDeps: [filterCategory] }
+  )
 
   const openCreate = () => {
     setEditingId(null)
@@ -567,7 +582,16 @@ function CorrectionRulesTab() {
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
         <Alert type="info" showIcon
           message="修正规则在发布前对匹配结果的销量/销售额执行系数乘法或偏移量加减。优先级数字越小越先执行，可按品类/品牌/型号/属性组合精细匹配。" />
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增规则</Button>
+        <Space wrap>
+          <Select
+            placeholder="品类筛选"
+            allowClear
+            style={{ width: 140 }}
+            options={categoryOptions}
+            onChange={v => setFilterCategory(v || undefined)}
+          />
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增规则</Button>
+        </Space>
         <Table
           dataSource={data ?? []}
           columns={columns}
@@ -591,8 +615,12 @@ function CorrectionRulesTab() {
           <Form.Item label="名称" name="name" rules={[{ required: true, message: '请输入规则名称' }]}>
             <Input placeholder="规则名称，便于识别" />
           </Form.Item>
-          <Form.Item label="品类码（留空=全局）" name="category_code">
-            <Input placeholder="如：TV（留空表示不限品类）" />
+          <Form.Item label="品类（留空=全局）" name="category_code">
+            <Select
+              allowClear
+              placeholder="选择品类（留空=全局）"
+              options={[{ value: '', label: '全局（不限品类）' }, ...categoryOptions]}
+            />
           </Form.Item>
           <Form.Item label="品牌码（留空=不限）" name="brand_code">
             <Input placeholder="如：SONY" />

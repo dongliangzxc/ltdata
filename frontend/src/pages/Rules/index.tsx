@@ -588,6 +588,7 @@ function CorrectionRulesTab() {
             allowClear
             style={{ width: 140 }}
             options={categoryOptions}
+            value={filterCategory}
             onChange={v => setFilterCategory(v || undefined)}
           />
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增规则</Button>
@@ -619,7 +620,7 @@ function CorrectionRulesTab() {
             <Select
               allowClear
               placeholder="选择品类（留空=全局）"
-              options={[{ value: '', label: '全局（不限品类）' }, ...categoryOptions]}
+              options={categoryOptions}
             />
           </Form.Item>
           <Form.Item label="品牌码（留空=不限）" name="brand_code">

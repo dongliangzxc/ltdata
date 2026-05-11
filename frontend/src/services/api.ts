@@ -48,13 +48,40 @@ export const getRawStats = (params: Record<string, unknown>) => api.get('/rawdat
 export const getRawFilters = () => api.get('/rawdata/filters')
 
 // ─── Clean ─────────────────────────────────────────────────
-export const runCleanJob = (payload: { file_ids: number[]; rules: Record<string, unknown> }) =>
+export const runCleanJob = (payload: {
+  file_ids: number[]
+  rules: Record<string, unknown>
+  dispatch_batch_id?: number
+  dispatch_category_code?: string
+}) =>
   api.post('/clean/run', payload)
 
 export const listCleanJobs = () => api.get('/clean/jobs')
 
 export const previewCleanJob = (jobId: number, params?: Record<string, unknown>) =>
   api.get(`/clean/jobs/${jobId}/preview`, { params })
+
+// ─── Dispatch ──────────────────────────────────────────────
+export const runDispatch = (fileId: number) =>
+  api.post('/dispatch/run', { file_id: fileId })
+
+export const listDispatchBatches = (params?: Record<string, unknown>) =>
+  api.get('/dispatch/batches', { params })
+
+export const getDispatchBatchStats = (batchId: number) =>
+  api.get(`/dispatch/batches/${batchId}/stats`)
+
+export const listDispatchRules = (params?: Record<string, unknown>) =>
+  api.get('/dispatch/rules', { params })
+
+export const createDispatchRule = (data: unknown) =>
+  api.post('/dispatch/rules', data)
+
+export const updateDispatchRule = (id: number, data: unknown) =>
+  api.put(`/dispatch/rules/${id}`, data)
+
+export const deleteDispatchRule = (id: number) =>
+  api.delete(`/dispatch/rules/${id}`)
 
 // ─── Export ────────────────────────────────────────────────
 export const triggerExport = (payload: {

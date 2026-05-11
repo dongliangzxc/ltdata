@@ -1,5 +1,6 @@
 """修正规则 CRUD API"""
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from app.models.database import get_db
 from app.models.schemas import CorrectionRule, CorrectionRuleIn, CorrectionRuleOut
@@ -9,8 +10,14 @@ router = APIRouter(prefix="/api/correction-rules", tags=["correction-rules"])
 
 
 @router.get("", response_model=list[CorrectionRuleOut])
-def list_rules(db: Session = Depends(get_db)):
-    return db.query(CorrectionRule).order_by(CorrectionRule.priority, CorrectionRule.id).all()
+def list_rules(
+    category_code: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    q = db.query(CorrectionRule).order_by(CorrectionRule.priority, CorrectionRule.id)
+    if category_code:
+        q = q.filter(CorrectionRule.category_code == category_code)
+    return q.all()
 
 
 @router.post("", response_model=CorrectionRuleOut, status_code=201)

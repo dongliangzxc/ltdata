@@ -32,6 +32,7 @@ type ModelOption = {
   model_code: string
   brand_name: string | null
   model_name: string | null
+  category_code: string | null
 }
 
 const PLATFORM_OPTIONS = [
@@ -60,6 +61,7 @@ export default function UrlMappingsPage() {
   const [form] = Form.useForm()
   const [saving, setSaving] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [modalCategoryCode, setModalCategoryCode] = useState<string | undefined>()
 
   const { options: categoryOptions } = useCategoryOptions()
 
@@ -76,6 +78,7 @@ export default function UrlMappingsPage() {
   const openCreate = () => {
     setEditingId(null)
     form.resetFields()
+    setModalCategoryCode(undefined)
     setModalOpen(true)
   }
 
@@ -88,6 +91,7 @@ export default function UrlMappingsPage() {
       model_id: record.model_id,
       price: record.price,
     })
+    setModalCategoryCode(undefined)
     setModalOpen(true)
   }
 
@@ -132,6 +136,10 @@ export default function UrlMappingsPage() {
     }
     return false  // prevent default upload
   }
+
+  const filteredModelOptions = modalCategoryCode
+    ? modelOptions.filter(m => m.category_code === modalCategoryCode)
+    : modelOptions
 
   const columns = [
     {
@@ -237,6 +245,18 @@ export default function UrlMappingsPage() {
         destroyOnClose
       >
         <Form form={form} layout="vertical">
+          {/* 品类辅助筛选，不提交 */}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ marginBottom: 4, fontSize: 14 }}>品类（筛选型号用）</div>
+            <Select
+              allowClear
+              placeholder="选择品类可缩小型号列表"
+              style={{ width: '100%' }}
+              options={categoryOptions}
+              value={modalCategoryCode}
+              onChange={v => setModalCategoryCode(v)}
+            />
+          </div>
           <Form.Item name="platform" label="平台" rules={[{ required: true }]}>
             <Select options={PLATFORM_OPTIONS} />
           </Form.Item>
@@ -253,7 +273,7 @@ export default function UrlMappingsPage() {
               filterOption={(input, option) =>
                 (option?.label as string ?? '').toLowerCase().includes(input.toLowerCase())
               }
-              options={modelOptions.map(m => ({
+              options={filteredModelOptions.map(m => ({
                 value: m.id,
                 label: `[${m.brand_code}] ${m.model_code}${m.model_name ? ' ' + m.model_name : ''}`,
               }))}

@@ -1,13 +1,14 @@
 import { useState } from 'react'
 import {
   Card, Checkbox, Switch, Button, Table, Tag, Modal, Row, Col,
-  Space, Typography, message, Alert, Statistic
+  Space, Typography, message, Alert, Statistic, Select
 } from 'antd'
 import { PlayCircleOutlined, EyeOutlined, AimOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import { useNavigate } from 'react-router-dom'
 import {
-  listUploadFiles, listCleanJobs, runCleanJob, previewCleanJob
+  listUploadFiles, listCleanJobs, runCleanJob, previewCleanJob,
+  listDispatchBatches, getDispatchBatchStats
 } from '../../services/api'
 
 const { Text } = Typography
@@ -60,6 +61,9 @@ export default function CleanPage() {
   const [running, setRunning] = useState(false)
   const [previewJobId, setPreviewJobId] = useState<number | null>(null)
   const [previewPage, setPreviewPage] = useState(1)
+  const [dispatchBatchId, setDispatchBatchId] = useState<number | null>(null)
+  const [dispatchCategoryCode, setDispatchCategoryCode] = useState<string | undefined>()
+  const [categoryOptions, setCategoryOptions] = useState<{ value: string; label: string }[]>([])
 
   const { data: filesData } = useRequest(() => listUploadFiles().then(r => r.data))
   const { data: jobsData, refresh: refreshJobs } = useRequest(() => listCleanJobs().then(r => r.data))
@@ -69,11 +73,42 @@ export default function CleanPage() {
     { ready: previewJobId != null, refreshDeps: [previewJobId, previewPage] }
   )
 
+  const handleFileChange = async (ids: number[]) => {
+    setSelectedFileIds(ids)
+    setDispatchCategoryCode(undefined)
+    setCategoryOptions([])
+    setDispatchBatchId(null)
+    if (ids.length === 1) {
+      try {
+        const batchRes = await listDispatchBatches({ file_id: ids[0] })
+        const doneBatch = (batchRes.data as Array<{ id: number; status: string; file_id: number }>)
+          .find(b => b.status === 'done')
+        if (doneBatch) {
+          setDispatchBatchId(doneBatch.id)
+          const statsRes = await getDispatchBatchStats(doneBatch.id)
+          const cats = statsRes.data.categories as Array<{ category_code: string; count: number }>
+          setCategoryOptions(cats.map(c => ({
+            value: c.category_code,
+            label: `${c.category_code}（${c.count.toLocaleString()} 条）`,
+          })))
+        }
+      } catch {
+        // ignore errors — just don't show category selector
+      }
+    }
+  }
+
   const handleRun = async () => {
     if (!selectedFileIds.length) { message.warning('请先选择文件'); return }
     setRunning(true)
     try {
-      await runCleanJob({ file_ids: selectedFileIds, rules: { dedup } })
+      await runCleanJob({
+        file_ids: selectedFileIds,
+        rules: { dedup },
+        ...(dispatchBatchId && dispatchCategoryCode
+          ? { dispatch_batch_id: dispatchBatchId, dispatch_category_code: dispatchCategoryCode }
+          : {}),
+      })
       message.success('清洗完成')
       refreshJobs()
     } finally {
@@ -104,7 +139,7 @@ export default function CleanPage() {
             <Checkbox.Group
               style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}
               value={selectedFileIds}
-              onChange={v => setSelectedFileIds(v as number[])}
+              onChange={v => handleFileChange(v as number[])}
             >
               {(filesData ?? []).map((f: { id: number; filename: string; platform: string; row_count: number }) => (
                 <Checkbox key={f.id} value={f.id}>
@@ -126,6 +161,19 @@ export default function CleanPage() {
                   <Text type="secondary">（同 item_id + 月份 + 店铺保留第一条）</Text>
                 </Space>
               </div>
+              {categoryOptions.length > 0 && (
+                <div style={{ marginTop: 16 }}>
+                  <Text strong>按品类过滤（可选）</Text>
+                  <Select
+                    placeholder="选择品类（不选=全量清洗）"
+                    allowClear
+                    style={{ width: '100%', marginTop: 8 }}
+                    options={categoryOptions}
+                    value={dispatchCategoryCode}
+                    onChange={v => setDispatchCategoryCode(v)}
+                  />
+                </div>
+              )}
               <Button
                 type="primary"
                 icon={<PlayCircleOutlined />}

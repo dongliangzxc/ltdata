@@ -122,14 +122,6 @@ function MissingAttrsTabContent({
 
   return (
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
-      <Select
-        placeholder="品类筛选"
-        allowClear
-        style={{ width: 160 }}
-        options={categoryOptions}
-        value={filterCategory}
-        onChange={v => { setFilterCategory(v); setPage(1) }}
-      />
       <Alert
         type="warning"
         showIcon
@@ -144,6 +136,14 @@ function MissingAttrsTabContent({
             </Button>
           </Space>
         }
+      />
+      <Select
+        placeholder="品类筛选"
+        allowClear
+        style={{ width: 160 }}
+        options={categoryOptions}
+        value={filterCategory}
+        onChange={v => { setFilterCategory(v); setPage(1) }}
       />
       <Table
         dataSource={data?.items ?? []}

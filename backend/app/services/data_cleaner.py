@@ -38,7 +38,14 @@ def _check_noise(item_name: str | None, shop_name: str | None, brand_raw: str | 
     return None
 
 
-def run_clean(db: Session, clean_job_id: int, file_ids: list[int], rules: dict) -> int:
+def run_clean(
+    db: Session,
+    clean_job_id: int,
+    file_ids: list[int],
+    rules: dict,
+    dispatch_batch_id: int | None = None,
+    dispatch_category_code: str | None = None,
+) -> int:
     """执行清洗逻辑，返回写入 cleaned_data 的行数"""
     dedup: bool = rules.get("dedup", True)
 
@@ -46,7 +53,20 @@ def run_clean(db: Session, clean_job_id: int, file_ids: list[int], rules: dict) 
     noise_words = _load_noise_words(db)
     brand_alias_map = _load_brand_alias_map(db)
 
-    records = db.query(RawDataRecord).filter(RawDataRecord.file_id.in_(file_ids)).all()
+    # ── 数据源选取 ─────────────────────────────────────────────
+    if dispatch_batch_id and dispatch_category_code:
+        from app.models.schemas import DispatchItem
+        raw_data_ids = (
+            db.query(DispatchItem.raw_data_id)
+            .filter(
+                DispatchItem.batch_id == dispatch_batch_id,
+                DispatchItem.category_code == dispatch_category_code,
+            )
+            .subquery()
+        )
+        records = db.query(RawDataRecord).filter(RawDataRecord.id.in_(raw_data_ids)).all()
+    else:
+        records = db.query(RawDataRecord).filter(RawDataRecord.file_id.in_(file_ids)).all()
 
     cleaned: list[CleanedDataRecord] = []
     filtered: list[FilteredItem] = []

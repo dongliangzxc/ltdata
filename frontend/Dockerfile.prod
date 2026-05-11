@@ -1,19 +1,8 @@
 ARG IMAGE_PREFIX=
-FROM ${IMAGE_PREFIX}node:20-alpine AS builder
-
-WORKDIR /app
-
-COPY package*.json ./
-RUN npm install --registry=https://registry.npmmirror.com
-
-COPY . .
-RUN NODE_OPTIONS=--max-old-space-size=2048 npm run build
-
-# ── 生产阶段：Nginx 托管静态文件 ──
-ARG IMAGE_PREFIX=
 FROM ${IMAGE_PREFIX}nginx:alpine
 
-COPY --from=builder /app/dist /usr/share/nginx/html
-# nginx 配置由 docker-compose 挂载进来
+# dist/ is pre-built on the host before docker compose build
+# Run: cd frontend && npm run build
+COPY dist/ /usr/share/nginx/html/
 
 EXPOSE 80

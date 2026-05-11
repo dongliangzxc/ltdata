@@ -350,10 +350,11 @@ async def import_models(file: UploadFile = File(...), db: Session = Depends(get_
 
 @router.get("", response_model=PaginatedResponse)
 def list_models(
-    brand_code: Optional[str] = Query(None),
-    keyword:    Optional[str] = Query(None),
-    page:       int = Query(1, ge=1),
-    page_size:  int = Query(20, ge=1, le=2000),
+    brand_code:    Optional[str] = Query(None),
+    keyword:       Optional[str] = Query(None),
+    category_code: Optional[str] = Query(None),
+    page:          int = Query(1, ge=1),
+    page_size:     int = Query(20, ge=1, le=2000),
     db: Session = Depends(get_db),
 ):
     # count query (no join needed)
@@ -366,6 +367,8 @@ def list_models(
             ModelRecord.model_code.ilike(f"%{keyword}%") |
             ModelRecord.brand_name.ilike(f"%{keyword}%")
         )
+    if category_code:
+        cq = cq.filter(ModelRecord.category_code == category_code)
     total = cq.count()
 
     q = db.query(ModelRecord, Category).outerjoin(
@@ -379,6 +382,8 @@ def list_models(
             ModelRecord.model_code.ilike(f"%{keyword}%") |
             ModelRecord.brand_name.ilike(f"%{keyword}%")
         )
+    if category_code:
+        q = q.filter(ModelRecord.category_code == category_code)
     rows = q.order_by(ModelRecord.brand_code, ModelRecord.model_code) \
             .offset((page - 1) * page_size).limit(page_size).all()
 

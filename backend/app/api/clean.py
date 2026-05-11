@@ -12,17 +12,35 @@ router = APIRouter(prefix="/api/clean", tags=["clean"])
 def run_clean_job(payload: dict, db: Session = Depends(get_db)):
     """
     执行数据清洗任务。
-    payload: { "file_ids": [1,2], "rules": { "dedup": true } }
+    payload: {
+      "file_ids": [1,2],
+      "rules": { "dedup": true },
+      "dispatch_batch_id": 1,          // 可选
+      "dispatch_category_code": "SPK"  // 可选
+    }
     """
     file_ids: list[int] = payload.get("file_ids", [])
     rules: dict = payload.get("rules", {"dedup": True})
+    dispatch_batch_id: int | None = payload.get("dispatch_batch_id")
+    dispatch_category_code: str | None = payload.get("dispatch_category_code")
 
     if not file_ids:
         raise HTTPException(status_code=400, detail="file_ids 不能为空")
 
     # 统计输入行数
-    from app.models.schemas import RawDataRecord
-    row_in = db.query(RawDataRecord).filter(RawDataRecord.file_id.in_(file_ids)).count()
+    from app.models.schemas import RawDataRecord, DispatchItem
+    if dispatch_batch_id and dispatch_category_code:
+        raw_data_ids = (
+            db.query(DispatchItem.raw_data_id)
+            .filter(
+                DispatchItem.batch_id == dispatch_batch_id,
+                DispatchItem.category_code == dispatch_category_code,
+            )
+            .subquery()
+        )
+        row_in = db.query(RawDataRecord).filter(RawDataRecord.id.in_(raw_data_ids)).count()
+    else:
+        row_in = db.query(RawDataRecord).filter(RawDataRecord.file_id.in_(file_ids)).count()
 
     # 创建 job 记录
     job = CleanJobRecord(
@@ -31,12 +49,14 @@ def run_clean_job(payload: dict, db: Session = Depends(get_db)):
         status="processing",
         row_in=row_in,
         row_out=0,
+        dispatch_batch_id=dispatch_batch_id,
+        dispatch_category_code=dispatch_category_code,
     )
     db.add(job)
     db.flush()
 
     try:
-        row_out = run_clean(db, job.id, file_ids, rules)
+        row_out = run_clean(db, job.id, file_ids, rules, dispatch_batch_id, dispatch_category_code)
         job.row_out = row_out
         job.status = "done"
         db.commit()

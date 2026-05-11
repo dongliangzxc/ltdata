@@ -191,7 +191,7 @@ def list_pending(
     if brand_identified is not None:
         q = q.filter(MatchResult.brand_identified == brand_identified)
     if category_name:
-        q = q.filter(Category.name == category_name)
+        q = q.filter(Category.code == category_name)
 
     if sort_by == "sales_qty_desc":
         q = q.order_by(RawDataRecord.sales_qty.desc().nullslast())
@@ -281,7 +281,7 @@ def list_missing_attrs(
         )
     )
     if category_name:
-        q = q.filter(Category.name == category_name)
+        q = q.filter(Category.code == category_name)
 
     if sort_by == "sales_qty_desc":
         q = q.order_by(RawDataRecord.sales_qty.desc().nullslast())

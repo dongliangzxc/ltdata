@@ -98,6 +98,7 @@ function NoiseWordTab() {
           allowClear
           style={{ width: 140 }}
           options={categoryOptions}
+          value={categoryCode}
           onChange={v => setCategoryCode(v)}
         />
       </Space>

@@ -82,7 +82,11 @@ export default function CleanPage() {
       try {
         const batchRes = await listDispatchBatches({ file_id: ids[0] })
         const doneBatch = (batchRes.data as Array<{ id: number; status: string; file_id: number }>)
-          .find(b => b.status === 'done')
+          .filter(b => b.status === 'done')
+          .reduce<{ id: number; status: string; file_id: number } | null>(
+            (best, b) => (best === null || b.id > best.id ? b : best),
+            null,
+          )
         if (doneBatch) {
           setDispatchBatchId(doneBatch.id)
           const statsRes = await getDispatchBatchStats(doneBatch.id)

@@ -71,53 +71,58 @@ def run_dispatch(payload: dict, db: Session = Depends(get_db)):
     db.add(batch)
     db.flush()
 
-    # 2. 取该文件所有 raw_data 行
-    rows = db.query(RawDataRecord).filter(RawDataRecord.file_id == file_id).all()
-    total_rows = len(rows)
+    try:
+        # 2. 取该文件所有 raw_data 行
+        rows = db.query(RawDataRecord).filter(RawDataRecord.file_id == file_id).all()
+        total_rows = len(rows)
 
-    # 3. 取匹配平台（或 platform IS NULL）的 active 规则，按 priority ASC
-    rules = (
-        db.query(DispatchRule)
-        .filter(
-            DispatchRule.is_active == 1,
-            (DispatchRule.platform == None) | (DispatchRule.platform == platform),
+        # 3. 取匹配平台（或 platform IS NULL）的 active 规则，按 priority ASC
+        rules = (
+            db.query(DispatchRule)
+            .filter(
+                DispatchRule.is_active == 1,
+                (DispatchRule.platform == None) | (DispatchRule.platform == platform),
+            )
+            .order_by(DispatchRule.priority, DispatchRule.id)
+            .all()
         )
-        .order_by(DispatchRule.priority, DispatchRule.id)
-        .all()
-    )
 
-    # 4. 逐行匹配
-    dispatched_rows = 0
-    unmatched_rows = 0
-    items_to_insert: list[DispatchItem] = []
+        # 4. 逐行匹配
+        dispatched_rows = 0
+        unmatched_rows = 0
+        items_to_insert: list[DispatchItem] = []
 
-    for row in rows:
-        matched = False
-        for rule in rules:
-            if _rule_matches(row, rule):
-                items_to_insert.append(DispatchItem(
-                    batch_id=batch.id,
-                    raw_data_id=row.id,
-                    category_code=rule.category_code,
-                    matched_rule_id=rule.id,
-                ))
-                dispatched_rows += 1
-                matched = True
-                break
-        if not matched:
-            unmatched_rows += 1
+        for row in rows:
+            matched = False
+            for rule in rules:
+                if _rule_matches(row, rule):
+                    items_to_insert.append(DispatchItem(
+                        batch_id=batch.id,
+                        raw_data_id=row.id,
+                        category_code=rule.category_code,
+                        matched_rule_id=rule.id,
+                    ))
+                    dispatched_rows += 1
+                    matched = True
+                    break
+            if not matched:
+                unmatched_rows += 1
 
-    db.bulk_save_objects(items_to_insert)
+        db.bulk_save_objects(items_to_insert)
 
-    # 5. 更新 batch
-    batch.status = "done"
-    batch.total_rows = total_rows
-    batch.dispatched_rows = dispatched_rows
-    batch.unmatched_rows = unmatched_rows
-    batch.finished_at = datetime.utcnow()
-    db.commit()
-    db.refresh(batch)
-    return batch
+        # 5. 更新 batch
+        batch.status = "done"
+        batch.total_rows = total_rows
+        batch.dispatched_rows = dispatched_rows
+        batch.unmatched_rows = unmatched_rows
+        batch.finished_at = datetime.utcnow()
+        db.commit()
+        db.refresh(batch)
+        return batch
+    except Exception:
+        batch.status = "error"
+        db.commit()
+        raise
 
 
 @router.get("/batches", response_model=list[DispatchBatchOut])

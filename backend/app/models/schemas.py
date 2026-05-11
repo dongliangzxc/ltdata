@@ -66,6 +66,8 @@ class CleanJobRecord(Base):
     row_in = Column(Integer, default=0)
     row_out = Column(Integer, default=0)
     row_filtered = Column(Integer, default=0)
+    dispatch_batch_id = Column(Integer, nullable=True)
+    dispatch_category_code = Column(String(50), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     cleaned_data = relationship("CleanedDataRecord", back_populates="job", cascade="all, delete-orphan")
@@ -722,6 +724,51 @@ class CorrectionRule(Base):
     updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+# ─── P8: Dispatch Tables ──────────────────────────────────────
+
+class DispatchRule(Base):
+    __tablename__ = "dispatch_rules"
+
+    id = Column(Integer, primary_key=True, index=True)
+    category_code = Column(String(50), nullable=False, index=True)
+    platform = Column(String(50), nullable=True)
+    field = Column(String(50), nullable=False)
+    match_type = Column(String(20), nullable=False)
+    value = Column(String(200), nullable=False)
+    item_name_keyword = Column(String(200), nullable=True)
+    priority = Column(Integer, nullable=False, default=100)
+    is_active = Column(SmallInteger, nullable=False, default=1)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class DispatchBatch(Base):
+    __tablename__ = "dispatch_batches"
+
+    id = Column(Integer, primary_key=True, index=True)
+    file_id = Column(Integer, ForeignKey("upload_files.id"), nullable=False)
+    status = Column(String(20), nullable=False, default="running")
+    total_rows = Column(Integer, nullable=True)
+    dispatched_rows = Column(Integer, nullable=True)
+    unmatched_rows = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    finished_at = Column(DateTime, nullable=True)
+
+    file = relationship("UploadFileRecord")
+    items = relationship("DispatchItem", back_populates="batch", cascade="all, delete-orphan")
+
+
+class DispatchItem(Base):
+    __tablename__ = "dispatch_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    batch_id = Column(Integer, ForeignKey("dispatch_batches.id", ondelete="CASCADE"), nullable=False, index=True)
+    raw_data_id = Column(Integer, ForeignKey("raw_data.id", ondelete="CASCADE"), nullable=False)
+    category_code = Column(String(50), nullable=False, index=True)
+    matched_rule_id = Column(Integer, nullable=True)
+
+    batch = relationship("DispatchBatch", back_populates="items")
+
+
 class CorrectionRuleIn(BaseModel):
     name:          str
     category_code: Optional[str] = None
@@ -741,3 +788,44 @@ class CorrectionRuleOut(CorrectionRuleIn):
     created_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
+
+
+# ─── P8: Dispatch Pydantic Schemas ───────────────────────────
+
+class DispatchRuleIn(BaseModel):
+    category_code: str
+    platform: Optional[str] = None
+    field: str
+    match_type: str
+    value: str
+    item_name_keyword: Optional[str] = None
+    priority: int = 100
+    is_active: bool = True
+
+
+class DispatchRuleOut(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: int
+    category_code: str
+    platform: Optional[str]
+    field: str
+    match_type: str
+    value: str
+    item_name_keyword: Optional[str]
+    priority: int
+    is_active: int
+    created_at: Optional[datetime]
+
+
+class DispatchBatchOut(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: int
+    file_id: int
+    status: str
+    total_rows: Optional[int]
+    dispatched_rows: Optional[int]
+    unmatched_rows: Optional[int]
+    created_at: Optional[datetime]
+    finished_at: Optional[datetime]

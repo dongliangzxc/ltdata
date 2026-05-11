@@ -263,6 +263,15 @@ export default function ModelsPage() {
           />
         </Col>
         <Col>
+          <Select
+            placeholder="品类筛选"
+            allowClear
+            style={{ width: 140 }}
+            options={categoryOptions}
+            onChange={v => { setSearch(p => ({ ...p, category_code: v || undefined })); setPage(1) }}
+          />
+        </Col>
+        <Col>
           <Input
             placeholder="搜索型号/名称"
             allowClear

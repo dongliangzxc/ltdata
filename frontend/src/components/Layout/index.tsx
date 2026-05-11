@@ -16,6 +16,7 @@ import {
   FilterOutlined,
   HistoryOutlined,
   TagsOutlined,
+  FunnelPlotOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 
@@ -24,6 +25,7 @@ const { Title, Text } = Typography
 
 const menuItems = [
   { key: '/upload',     icon: <UploadOutlined />,        label: '数据上传' },
+  { key: '/dispatch',   icon: <FunnelPlotOutlined />,    label: '数据分发' },
   { key: '/rawdata',    icon: <DatabaseOutlined />,      label: '原始数据' },
   { key: '/categories', icon: <TagsOutlined />,       label: '品类管理' },
   { key: '/metadata',   icon: <ProfileOutlined />,       label: '属性管理' },

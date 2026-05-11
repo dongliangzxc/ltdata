@@ -15,6 +15,7 @@ import UrlMappingsPage from './pages/UrlMappings'
 import RulesPage from './pages/Rules'
 import HistoricalPage from './pages/Historical'
 import CategoriesPage from './pages/Categories'
+import DispatchPage from './pages/Dispatch'
 
 export default function App() {
   return (
@@ -40,6 +41,7 @@ export default function App() {
             <Route path="/url-mappings" element={<UrlMappingsPage />} />
             <Route path="/categories" element={<CategoriesPage />} />
             <Route path="/historical" element={<HistoricalPage />} />
+            <Route path="/dispatch" element={<DispatchPage />} />
           </Route>
         </Route>
       </Routes>

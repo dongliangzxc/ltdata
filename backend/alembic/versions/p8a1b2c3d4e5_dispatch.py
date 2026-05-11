@@ -50,6 +50,7 @@ def upgrade():
         sa.Column('raw_data_id', sa.Integer, sa.ForeignKey('raw_data.id', ondelete='CASCADE'), nullable=False),
         sa.Column('category_code', sa.String(50), nullable=False),
         sa.Column('matched_rule_id', sa.Integer, nullable=True),
+        # soft FK to dispatch_rules.id — intentionally no hard constraint for traceability (rule may be edited/deleted after dispatch)
         sa.UniqueConstraint('batch_id', 'raw_data_id', name='uq_dispatch_items_batch_row'),
     )
     op.create_index('ix_dispatch_items_batch_id', 'dispatch_items', ['batch_id'])

@@ -175,7 +175,7 @@ export const deleteUrlMapping = (id: number) =>
 export const listNoiseWords = (params?: { category_code?: string }) =>
   api.get('/rules/noise-words', { params })
 
-export const createNoiseWord = (payload: { keyword: string; match_field: string }) =>
+export const createNoiseWord = (payload: { keyword: string; match_field: string; category_code?: string | null }) =>
   api.post('/rules/noise-words', payload)
 
 export const toggleNoiseWord = (id: number) =>
@@ -274,8 +274,8 @@ export const deleteHistoricalBatch = (importBatch: string) =>
   api.delete('/historical/mappings/batch', { data: { import_batch: importBatch } })
 
 // ─── Rules - Correction Rules ───────────────────────────────
-export const listCorrectionRules = () =>
-  api.get('/correction-rules')
+export const listCorrectionRules = (params?: Record<string, unknown>) =>
+  api.get('/correction-rules', { params })
 
 export const createCorrectionRule = (payload: Record<string, unknown>) =>
   api.post('/correction-rules', payload)

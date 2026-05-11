@@ -13,6 +13,8 @@ export default defineConfig({
     },
   },
   build: {
+    // esbuild handles transpilation; skip terser to reduce rendering-phase memory
+    minify: 'esbuild',
     rollupOptions: {
       output: {
         manualChunks: {

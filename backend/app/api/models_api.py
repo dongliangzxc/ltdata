@@ -353,7 +353,7 @@ def list_models(
     brand_code: Optional[str] = Query(None),
     keyword:    Optional[str] = Query(None),
     page:       int = Query(1, ge=1),
-    page_size:  int = Query(20, ge=1, le=200),
+    page_size:  int = Query(20, ge=1, le=2000),
     db: Session = Depends(get_db),
 ):
     # count query (no join needed)

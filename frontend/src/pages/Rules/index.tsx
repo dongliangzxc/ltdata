@@ -20,6 +20,7 @@ import {
   listCorrectionRules, createCorrectionRule, updateCorrectionRule, deleteCorrectionRule,
 } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
+import ImportMappingModal from '../../components/ImportMappingModal'
 
 // ══════════════════════════════════════════════
 // Tab 1: 干扰词库
@@ -337,6 +338,7 @@ function FilteredItemTab() {
 // ══════════════════════════════════════════════
 function AttrRuleTab() {
   const [modalOpen, setModalOpen] = useState(false)
+  const [attrImportOpen, setAttrImportOpen] = useState(false)
   const [editing, setEditing] = useState<Record<string, unknown> | null>(null)
   const [filterCategory, setFilterCategory] = useState<string | undefined>(undefined)
   const [form] = Form.useForm()
@@ -427,9 +429,26 @@ function AttrRuleTab() {
           onChange={v => setFilterCategory(v || undefined)}
         />
         <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>添加规则</Button>
+        <Button icon={<UploadOutlined />} onClick={() => setAttrImportOpen(true)}>批量导入</Button>
       </Space>
       <Table dataSource={data ?? []} columns={columns} rowKey="id" size="small" loading={loading}
         pagination={{ pageSize: 20, showTotal: (t: number) => `共 ${t} 条` }} />
+
+      <ImportMappingModal
+        open={attrImportOpen}
+        module="attr"
+        standardFields={[
+          { value: 'keyword', label: '关键词', required: true },
+          { value: 'match_type', label: '匹配方式' },
+          { value: 'attr_name', label: '属性名', required: true },
+          { value: 'attr_value', label: '属性值', required: true },
+          { value: 'priority', label: '优先级' },
+        ]}
+        headersUrl="/rules/attr-rules/headers"
+        confirmUrl="/rules/attr-rules/confirm"
+        onSuccess={() => { refresh() }}
+        onClose={() => setAttrImportOpen(false)}
+      />
 
       <Modal
         title={editing ? '编辑属性规则' : '新增属性规则'}

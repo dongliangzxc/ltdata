@@ -1,15 +1,16 @@
 import { useState } from 'react'
 import {
   Card, Table, Button, Input, Select, Space, Typography,
-  Modal, Form, InputNumber, Upload, message, Popconfirm, Tag,
+  Modal, Form, InputNumber, message, Popconfirm, Tag,
 } from 'antd'
 import { PlusOutlined, UploadOutlined, EditOutlined, DeleteOutlined, LinkOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import {
   listUrlMappings, createUrlMapping, updateUrlMapping,
-  deleteUrlMapping, importUrlMappings, listModels,
+  deleteUrlMapping, listModels,
 } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
+import ImportMappingModal from '../../components/ImportMappingModal'
 
 const { Text } = Typography
 
@@ -60,7 +61,7 @@ export default function UrlMappingsPage() {
   const [editingId, setEditingId] = useState<number | null>(null)
   const [form] = Form.useForm()
   const [saving, setSaving] = useState(false)
-  const [importing, setImporting] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
   const [modalCategoryCode, setModalCategoryCode] = useState<string | undefined>()
 
   const { options: categoryOptions } = useCategoryOptions()
@@ -117,24 +118,6 @@ export default function UrlMappingsPage() {
     await deleteUrlMapping(id)
     message.success('已删除')
     refresh()
-  }
-
-  const handleImport = async (file: File) => {
-    setImporting(true)
-    const fd = new FormData()
-    fd.append('file', file)
-    try {
-      const res = await importUrlMappings(fd)
-      const { imported, skipped, errors } = res.data
-      message.success(`导入完成：写入 ${imported} 条，跳过 ${skipped} 条`)
-      if (errors?.length) {
-        message.warning(`部分行有问题：${errors.slice(0, 3).join('；')}`, 8)
-      }
-      refresh()
-    } finally {
-      setImporting(false)
-    }
-    return false  // prevent default upload
   }
 
   const filteredModelOptions = modalCategoryCode
@@ -208,13 +191,7 @@ export default function UrlMappingsPage() {
             onChange={v => { setCategoryCode(v); setPage(1) }}
           />
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增</Button>
-          <Upload
-            accept=".xlsx,.xls"
-            showUploadList={false}
-            beforeUpload={handleImport}
-          >
-            <Button icon={<UploadOutlined />} loading={importing}>导入 Excel</Button>
-          </Upload>
+          <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>导入 Excel</Button>
         </Space>
       </Card>
 
@@ -235,6 +212,22 @@ export default function UrlMappingsPage() {
           }}
         />
       </Card>
+
+      <ImportMappingModal
+        open={importOpen}
+        module="url"
+        standardFields={[
+          { value: 'platform', label: '平台', required: true },
+          { value: 'item_url', label: '商品链接', required: true },
+          { value: 'brand_code', label: '品牌码', required: true },
+          { value: 'model_code', label: '型号码', required: true },
+          { value: 'price', label: '价格' },
+        ]}
+        headersUrl="/url-mappings/headers"
+        confirmUrl="/url-mappings/confirm"
+        onSuccess={() => { refresh() }}
+        onClose={() => setImportOpen(false)}
+      />
 
       <Modal
         title={editingId ? '编辑映射' : '新增映射'}

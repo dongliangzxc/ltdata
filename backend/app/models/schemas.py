@@ -838,12 +838,13 @@ class DispatchBatchOut(BaseModel):
 
 class ColumnTemplate(Base):
     __tablename__ = "column_templates"
-    __table_args__ = (UniqueConstraint('name', name='uq_template_name'),)
+    __table_args__ = (UniqueConstraint('module', 'name', name='uq_module_template_name'),)
 
-    id              = Column(Integer, primary_key=True, index=True)
+    id              = Column(Integer, primary_key=True, autoincrement=True)
     name            = Column(String(100), nullable=False)
+    module          = Column(String(20), nullable=False, server_default='sales')
     platform        = Column(String(50), nullable=True)
-    col_fingerprint = Column(String(32), nullable=True)
+    col_fingerprint = Column(String(64), nullable=True)
     mapping         = Column(JSON, nullable=False)
     ignore_columns  = Column(JSON, nullable=True)
     is_builtin      = Column(SmallInteger, nullable=False, default=0)
@@ -856,6 +857,7 @@ class ColumnTemplateOut(BaseModel):
 
     id: int
     name: str
+    module: str
     platform: Optional[str]
     col_fingerprint: Optional[str]
     mapping: dict
@@ -866,6 +868,7 @@ class ColumnTemplateOut(BaseModel):
 
 class ColumnTemplateIn(BaseModel):
     name: str
+    module: str = 'sales'
     platform: Optional[str] = None
     mapping: dict
     ignore_columns: list[str] = []

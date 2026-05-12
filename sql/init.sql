@@ -443,15 +443,16 @@ ALTER TABLE clean_jobs
 -- ─── P9: 列模板 ──────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS column_templates (
     id              INT AUTO_INCREMENT PRIMARY KEY,
+    module          VARCHAR(20)  NOT NULL DEFAULT 'sales' COMMENT 'sales/model/url/attr',
     name            VARCHAR(100) NOT NULL            COMMENT '模板名称',
     platform        VARCHAR(50)                      COMMENT 'jd/tmall/taobao/suning/NULL=通用',
-    col_fingerprint CHAR(32)                         COMMENT '列名集合 MD5',
+    col_fingerprint CHAR(64)                         COMMENT '列名集合 MD5',
     mapping         JSON         NOT NULL            COMMENT '{"原始列名": "标准字段"}',
     ignore_columns  JSON                             COMMENT '["列名", ...]',
     is_builtin      SMALLINT     NOT NULL DEFAULT 0  COMMENT '1=内置不可删',
     created_at      DATETIME     DEFAULT CURRENT_TIMESTAMP,
     updated_at      DATETIME     DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE KEY uq_template_name (name)
+    UNIQUE KEY uq_module_template_name (module, name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='列映射模板';
 
 INSERT IGNORE INTO column_templates (name, platform, col_fingerprint, mapping, ignore_columns, is_builtin)
@@ -465,4 +466,4 @@ VALUES
 
 ALTER TABLE upload_files ADD COLUMN IF NOT EXISTS template_id INT NULL COMMENT '本次上传使用的列模板 ID';
 
-UPDATE alembic_version SET version_num = 'p9a1b2c3d4e5';
+UPDATE alembic_version SET version_num = 'p10a1b2c3d4e5';

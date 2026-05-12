@@ -81,3 +81,79 @@ def test_parse_csv_missing_optional_columns(tmp_path):
     assert records[0]["price"] is None
     assert records[0]["brand_std"] is None
     assert records[0]["model_std"] is None
+
+
+from app.services.excel_parser import parse_with_mapping
+
+
+def test_parse_with_mapping_basic(tmp_path):
+    """parse_with_mapping 正确将列名按 mapping 映射到标准字段，未映射列进 extra_data"""
+    import csv
+    tmp = tmp_path / "test.csv"
+    with open(tmp, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=["平台", "月", "宝贝ID", "宝贝名称", "销量", "销售额", "价格", "附加列"])
+        writer.writeheader()
+        writer.writerow({"平台": "京东全部", "月": "202602", "宝贝ID": "111",
+                         "宝贝名称": "测试", "销量": "100", "销售额": "999.0",
+                         "价格": "9.99", "附加列": "extra_val"})
+
+    mapping = {
+        "平台": "platform", "月": "month", "宝贝ID": "item_id",
+        "宝贝名称": "item_name", "销量": "sales_qty",
+        "销售额": "sales_amount", "价格": "price",
+    }
+    records, platform, month_range = parse_with_mapping(tmp, mapping, ignore_columns=[])
+
+    assert len(records) == 1
+    r = records[0]
+    assert r["item_id"] == "111"
+    assert r["platform"] == "jd"
+    assert r["month"] == 202602
+    assert r["sales_qty"] == 100
+    assert r["extra_data"] == {"附加列": "extra_val"}
+    assert platform == "JD"
+    assert month_range == "202602"
+
+
+def test_parse_with_mapping_ignore(tmp_path):
+    """ignore_columns 中的列不出现在 extra_data 里"""
+    import csv
+    tmp = tmp_path / "test.csv"
+    with open(tmp, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=["平台", "月", "宝贝ID", "宝贝名称", "销量", "销售额", "价格", "内部备注"])
+        writer.writeheader()
+        writer.writerow({"平台": "京东全部", "月": "202602", "宝贝ID": "222",
+                         "宝贝名称": "测试2", "销量": "50", "销售额": "500.0",
+                         "价格": "10.0", "内部备注": "忽略我"})
+
+    mapping = {
+        "平台": "platform", "月": "month", "宝贝ID": "item_id",
+        "宝贝名称": "item_name", "销量": "sales_qty",
+        "销售额": "sales_amount", "价格": "price",
+    }
+    records, _, _ = parse_with_mapping(tmp, mapping, ignore_columns=["内部备注"])
+
+    extra = records[0].get("extra_data") or {}
+    assert "内部备注" not in extra
+
+
+def test_parse_with_mapping_ext_explicit(tmp_path):
+    """mapping 值为 __ext__ 的列也进 extra_data"""
+    import csv
+    tmp = tmp_path / "test.csv"
+    with open(tmp, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=["平台", "月", "宝贝ID", "宝贝名称", "销量", "销售额", "价格", "备注"])
+        writer.writeheader()
+        writer.writerow({"平台": "京东全部", "月": "202602", "宝贝ID": "333",
+                         "宝贝名称": "测试3", "销量": "10", "销售额": "100.0",
+                         "价格": "10.0", "备注": "保留进ext"})
+
+    mapping = {
+        "平台": "platform", "月": "month", "宝贝ID": "item_id",
+        "宝贝名称": "item_name", "销量": "sales_qty",
+        "销售额": "sales_amount", "价格": "price",
+        "备注": "__ext__",
+    }
+    records, _, _ = parse_with_mapping(tmp, mapping, ignore_columns=[])
+
+    assert records[0]["extra_data"]["备注"] == "保留进ext"

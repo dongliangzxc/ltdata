@@ -165,3 +165,141 @@ def parse_raw_excel(file_path: str | Path) -> tuple[list[dict], str, str]:
 
     records = [{k: clean_val(v) for k, v in row.items()} for row in raw_records]
     return records, platform, month_range
+
+
+# ─── P9: mapping-based parse ─────────────────────────────────
+
+#: Standard field names that can be targeted by mapping
+STANDARD_FIELD_SET = set(STANDARD_FIELDS)
+
+#: Platform keyword → lowercase standard code
+_PLATFORM_NORM = {"京东": "jd", "天猫": "tmall", "淘宝": "taobao", "苏宁": "suning"}
+
+
+def parse_with_mapping(
+    file_path,
+    mapping: dict,
+    ignore_columns: list,
+) -> tuple:
+    """
+    Parse an Excel/CSV file using a user-defined column mapping.
+
+    Args:
+        file_path: Path to the Excel/CSV file
+        mapping: {"original_col": "standard_field | __ext__"}
+                 Columns not in mapping and not ignored go to extra_data automatically
+        ignore_columns: These columns are discarded entirely
+
+    Returns:
+        (records, platform, month_range)
+        Each record has standard fields + "extra_data": {"col": value}
+    """
+    import math
+    from pathlib import Path as _Path
+
+    fp = _Path(file_path)
+    suffix = fp.suffix.lower()
+    if suffix == ".csv":
+        try:
+            df = pd.read_csv(fp, dtype=str, encoding="utf-8-sig")
+        except (UnicodeDecodeError, Exception):
+            df = pd.read_csv(fp, dtype=str, encoding="gbk")
+    else:
+        df = pd.read_excel(fp, sheet_name=0, dtype=str)
+    df.columns = [str(c).strip() for c in df.columns]
+
+    ignore_set = set(ignore_columns)
+
+    # Categorise columns
+    std_rename: dict = {}   # original col → standard field name
+    ext_cols: list = []     # original col → extra_data
+
+    for col in df.columns:
+        if col in ignore_set:
+            continue
+        target = mapping.get(col)
+        if target and target != "__ext__" and target in STANDARD_FIELD_SET:
+            std_rename[col] = target
+        else:
+            # unmapped or explicitly __ext__
+            ext_cols.append(col)
+
+    # Build standard fields dataframe
+    if std_rename:
+        df_std = df[list(std_rename.keys())].rename(columns=std_rename)
+    else:
+        df_std = pd.DataFrame(index=df.index)
+
+    # Ensure all standard fields exist
+    for field in STANDARD_FIELDS:
+        if field not in df_std.columns:
+            df_std[field] = None
+
+    # Type conversions
+    for num_col in ["sales_qty"]:
+        df_std[num_col] = pd.to_numeric(df_std[num_col], errors="coerce").astype("Int64")
+    for float_col in ["ref_price", "sales_amount", "price"]:
+        df_std[float_col] = pd.to_numeric(df_std[float_col], errors="coerce")
+    for str_col in ["item_id", "platform", "brand_raw", "brand_std", "model_std", "shop_name"]:
+        df_std[str_col] = df_std[str_col].where(df_std[str_col].notna(), None)
+    df_std["month"] = pd.to_numeric(df_std["month"], errors="coerce").astype("Int64")
+
+    # Normalize platform — derive file-level label and per-row lowercase value
+    platform_label = "UNKNOWN"
+    if df_std["platform"].notna().any():
+        first_val = str(df_std["platform"].dropna().iloc[0])
+        for kw, std in _PLATFORM_NORM.items():
+            if kw in first_val:
+                platform_label = std.upper()
+                break
+
+        def _norm_platform(v):
+            if v is None:
+                return None
+            s = str(v)
+            for kw, std_val in _PLATFORM_NORM.items():
+                if kw in s:
+                    return std_val
+            return v
+
+        df_std["platform"] = df_std["platform"].apply(_norm_platform)
+
+    # month_range
+    months = df_std["month"].dropna().unique().tolist()
+    months_sorted = sorted([int(m) for m in months])
+    if len(months_sorted) > 1:
+        month_range = f"{months_sorted[0]}-{months_sorted[-1]}"
+    elif months_sorted:
+        month_range = str(months_sorted[0])
+    else:
+        month_range = ""
+
+    # Build extra_data
+    df_ext = df[ext_cols] if ext_cols else pd.DataFrame(index=df.index)
+
+    def _clean(v):
+        if v is None:
+            return None
+        try:
+            if isinstance(v, float) and math.isnan(v):
+                return None
+        except (TypeError, ValueError):
+            pass
+        try:
+            if pd.isna(v):
+                return None
+        except (TypeError, ValueError):
+            pass
+        return v
+
+    records = []
+    for i in range(len(df_std)):
+        row = {k: _clean(v) for k, v in df_std.iloc[i].items()}
+        extra = {}
+        if ext_cols:
+            extra = {col: _clean(df_ext.iloc[i][col]) for col in ext_cols}
+            extra = {k: v for k, v in extra.items() if v is not None}
+        row["extra_data"] = extra if extra else None
+        records.append(row)
+
+    return records, platform_label, month_range

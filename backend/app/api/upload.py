@@ -164,6 +164,18 @@ def _find_best_template(columns: list, db: Session):
     return best, round(best_score * 100)
 
 
+def _cleanup_old_tmp(tmp_dir: Path, max_age_hours: int = 24) -> None:
+    """Remove temp files older than max_age_hours hours."""
+    import time
+    cutoff = time.time() - max_age_hours * 3600
+    try:
+        for f in tmp_dir.glob("*"):
+            if f.is_file() and f.stat().st_mtime < cutoff:
+                f.unlink(missing_ok=True)
+    except OSError:
+        pass  # best-effort cleanup
+
+
 def _read_columns(file_path) -> list:
     from pathlib import Path as _Path
     import pandas as _pd
@@ -190,6 +202,7 @@ async def upload_headers(
 
     tmp_dir = Path(settings.UPLOAD_DIR) / "tmp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
+    _cleanup_old_tmp(tmp_dir)  # best-effort cleanup of stale temp files
 
     temp_file_id = str(uuid.uuid4())
     safe_filename = Path(file.filename).name  # strips any directory components
@@ -266,23 +279,38 @@ async def upload_confirm(payload: dict, db: Session = Depends(get_db)):
             ColumnTemplate.col_fingerprint == fp,
             ColumnTemplate.is_builtin == 0,
         ).first()
+        if not existing:
+            # Also check by name to avoid IntegrityError
+            existing = db.query(ColumnTemplate).filter(
+                ColumnTemplate.name == save_template_name,
+                ColumnTemplate.is_builtin == 0,
+            ).first()
         if existing:
             existing.name = save_template_name
             existing.mapping = mapping
             existing.ignore_columns = ignore_columns
+            existing.col_fingerprint = fp
             db.flush()
             saved_template_id = existing.id
         else:
-            tmpl = ColumnTemplate(
-                name=save_template_name,
-                col_fingerprint=fp,
-                mapping=mapping,
-                ignore_columns=ignore_columns,
-                is_builtin=0,
-            )
-            db.add(tmpl)
-            db.flush()
-            saved_template_id = tmpl.id
+            from sqlalchemy.exc import IntegrityError
+            try:
+                tmpl = ColumnTemplate(
+                    name=save_template_name,
+                    col_fingerprint=fp,
+                    mapping=mapping,
+                    ignore_columns=ignore_columns,
+                    is_builtin=0,
+                )
+                db.add(tmpl)
+                db.flush()
+                saved_template_id = tmpl.id
+            except IntegrityError:
+                db.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"模板名称「{save_template_name}」已存在，请使用不同的名称"
+                )
 
     # Deduplication
     keys = {

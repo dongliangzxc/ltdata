@@ -49,6 +49,7 @@ const REQUIRED_FIELDS = new Set(['item_id', 'month', 'platform', 'item_name', 's
 const PLATFORM_LABEL: Record<string, string> = {
   JD: '京东', TM: '天猫', TB: '淘宝',
   jd: '京东', tmall: '天猫', taobao: '淘宝', suning: '苏宁',
+  UNKNOWN: '未知平台',
 }
 
 const renderVal = (v: unknown) =>

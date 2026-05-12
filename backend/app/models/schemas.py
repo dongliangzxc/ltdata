@@ -118,6 +118,7 @@ class UploadFileOut(BaseModel):
     month_range: Optional[str]
     row_count: int
     status: str
+    template_id: Optional[int] = None
     uploaded_at: datetime
 
     model_config = {"from_attributes": True}
@@ -143,6 +144,7 @@ class RawDataOut(BaseModel):
     price: Optional[float]
     brand_std: Optional[str]
     model_std: Optional[str]
+    extra_data: Optional[dict] = None
 
     model_config = {"from_attributes": True}
 

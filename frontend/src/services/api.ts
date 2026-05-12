@@ -341,3 +341,56 @@ export const updateCategory = (id: number, data: { name: string }) =>
 
 export const deleteCategory = (id: number) =>
   api.delete(`/categories/${id}`)
+
+// ─── Upload Templates ──────────────────────────────────────
+export const getUploadHeaders = (formData: FormData) =>
+  api.post<{
+    temp_file_id: string
+    filename: string
+    columns: string[]
+    suggested_template: {
+      id: number
+      name: string
+      platform: string | null
+      mapping: Record<string, string>
+      ignore_columns: string[]
+    } | null
+    match_score: number
+  }>('/upload/headers', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+
+export const confirmUpload = (payload: {
+  temp_file_id: string
+  mapping: Record<string, string>
+  ignore_columns: string[]
+  save_template_name?: string
+  template_id?: number
+}) => api.post('/upload/confirm', payload)
+
+export const listUploadTemplates = () =>
+  api.get<Array<{
+    id: number
+    name: string
+    platform: string | null
+    col_fingerprint: string | null
+    mapping: Record<string, string>
+    ignore_columns: string[] | null
+    is_builtin: number
+    updated_at: string | null
+  }>>('/upload/templates')
+
+export const createUploadTemplate = (data: {
+  name: string
+  platform?: string | null
+  mapping: Record<string, string>
+  ignore_columns: string[]
+}) => api.post('/upload/templates', data)
+
+export const updateUploadTemplate = (id: number, data: {
+  name: string
+  platform?: string | null
+  mapping: Record<string, string>
+  ignore_columns: string[]
+}) => api.put(`/upload/templates/${id}`, data)
+
+export const deleteUploadTemplate = (id: number) =>
+  api.delete(`/upload/templates/${id}`)

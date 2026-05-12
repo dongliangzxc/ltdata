@@ -394,3 +394,81 @@ export const updateUploadTemplate = (id: number, data: {
 
 export const deleteUploadTemplate = (id: number) =>
   api.delete(`/upload/templates/${id}`)
+
+// ─── P10: Module Import (Headers + Confirm) ────────────────────────────────
+
+export const getAttrRuleHeaders = (formData: FormData) =>
+  api.post<{
+    temp_file_id: string
+    filename: string
+    columns: string[]
+    suggested_template: {
+      id: number
+      name: string
+      mapping: Record<string, string>
+      ignore_columns: string[]
+    } | null
+    match_score: number
+  }>('/rules/attr-rules/headers', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+
+export const confirmAttrRuleImport = (payload: {
+  temp_file_id: string
+  mapping: Record<string, string>
+  ignore_columns: string[]
+  category_code: string
+  save_template_name?: string
+}) => api.post<{ inserted: number; skipped: number; errors: string[] }>(
+  '/rules/attr-rules/confirm', payload
+)
+
+export const getModelHeaders = (formData: FormData) =>
+  api.post<{
+    temp_file_id: string
+    filename: string
+    columns: string[]
+    suggested_template: {
+      id: number
+      name: string
+      mapping: Record<string, string>
+      ignore_columns: string[]
+    } | null
+    match_score: number
+  }>('/models/headers', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+
+export const confirmModelImport = (payload: {
+  temp_file_id: string
+  mapping: Record<string, string>
+  ignore_columns: string[]
+  category_code: string
+  save_template_name?: string
+}) => api.post<{
+  models_inserted: number
+  models_updated: number
+  specs_inserted: number
+  aliases_inserted: number
+  errors: string[]
+}>('/models/confirm', payload)
+
+export const getUrlMappingHeaders = (formData: FormData) =>
+  api.post<{
+    temp_file_id: string
+    filename: string
+    columns: string[]
+    suggested_template: {
+      id: number
+      name: string
+      mapping: Record<string, string>
+      ignore_columns: string[]
+    } | null
+    match_score: number
+  }>('/url-mappings/headers', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+
+export const confirmUrlMappingImport = (payload: {
+  temp_file_id: string
+  mapping: Record<string, string>
+  ignore_columns: string[]
+  category_code: string
+  save_template_name?: string
+}) => api.post<{ inserted: number; updated: number; skipped: number; errors: string[] }>(
+  '/url-mappings/confirm', payload
+)

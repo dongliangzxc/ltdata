@@ -7,6 +7,7 @@ Create Date: 2026-05-12
 from alembic import op
 import sqlalchemy as sa
 import json
+import hashlib
 
 revision = 'p9a1b2c3d4e5'
 down_revision = 'p8a1b2c3d4e5'
@@ -44,7 +45,6 @@ _TM_MAPPING = {
 
 
 def _fingerprint(mapping: dict) -> str:
-    import hashlib
     cols = sorted(mapping.keys())
     return hashlib.md5(",".join(cols).encode()).hexdigest()
 
@@ -62,6 +62,7 @@ def upgrade():
         sa.Column('created_at', sa.DateTime, server_default=sa.func.now()),
         sa.Column('updated_at', sa.DateTime, server_default=sa.func.now(),
                   onupdate=sa.func.now()),
+        sa.UniqueConstraint('name', name='uq_template_name'),
     )
     op.add_column('upload_files',
         sa.Column('template_id', sa.Integer, nullable=True,

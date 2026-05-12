@@ -448,17 +448,18 @@ CREATE TABLE IF NOT EXISTS column_templates (
     col_fingerprint CHAR(32)                         COMMENT '列名集合 MD5',
     mapping         JSON         NOT NULL            COMMENT '{"原始列名": "标准字段"}',
     ignore_columns  JSON                             COMMENT '["列名", ...]',
-    is_builtin      TINYINT      NOT NULL DEFAULT 0  COMMENT '1=内置不可删',
+    is_builtin      SMALLINT     NOT NULL DEFAULT 0  COMMENT '1=内置不可删',
     created_at      DATETIME     DEFAULT CURRENT_TIMESTAMP,
-    updated_at      DATETIME     DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    updated_at      DATETIME     DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_template_name (name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='列映射模板';
 
 INSERT IGNORE INTO column_templates (name, platform, col_fingerprint, mapping, ignore_columns, is_builtin)
 VALUES
-  ('京东月报', 'jd', MD5('Lv0类目名称(逐月固定),Lv1类目名称(逐月固定),Lv2类目名称(逐月固定),参考价格,品牌,宝贝ID,宝贝名称,宝贝图片,宝贝品牌(bid),宝贝店铺名称,宝贝链接,价格,月,机型,平台,销售额,销量'),
+  ('京东月报', 'jd', NULL,
    '{"平台":"platform","月":"month","Lv0类目名称(逐月固定)":"category_lv0","Lv1类目名称(逐月固定)":"category_lv1","Lv2类目名称(逐月固定)":"category_lv2","宝贝ID":"item_id","宝贝名称":"item_name","宝贝图片":"item_image","宝贝链接":"item_url","参考价格":"ref_price","宝贝品牌(bid)":"brand_raw","宝贝店铺名称":"shop_name","销量":"sales_qty","销售额":"sales_amount","价格":"price","品牌":"brand_std","机型":"model_std"}',
    '[]', 1),
-  ('天猫/淘宝月报', 'tmall', MD5('Lv1类目名称(逐月固定),Lv2类目名称(逐月固定),Lv3类目名称(逐月固定),Lv4类目名称(逐月固定),Lv5类目名称(逐月固定),参考价格,品牌,宝贝ID,宝贝名称,宝贝图片,宝贝品牌,宝贝店铺名称,宝贝链接,价格,月,机型,平台,销售额,销量'),
+  ('天猫/淘宝月报', 'tmall', NULL,
    '{"平台":"platform","月":"month","Lv1类目名称(逐月固定)":"category_lv1","Lv2类目名称(逐月固定)":"category_lv2","Lv3类目名称(逐月固定)":"category_lv3","Lv4类目名称(逐月固定)":"category_lv4","Lv5类目名称(逐月固定)":"category_lv5","宝贝ID":"item_id","宝贝名称":"item_name","宝贝图片":"item_image","宝贝链接":"item_url","参考价格":"ref_price","宝贝品牌":"brand_raw","宝贝店铺名称":"shop_name","销量":"sales_qty","销售额":"sales_amount","价格":"price","品牌":"brand_std","机型":"model_std"}',
    '[]', 1);
 

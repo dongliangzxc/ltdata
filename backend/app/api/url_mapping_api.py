@@ -3,8 +3,12 @@
 from datetime import datetime
 from typing import Optional
 import io
+import os
+from pathlib import Path
 
+import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 import openpyxl
@@ -15,8 +19,11 @@ from app.models.schemas import (
     ModelRecord, PaginatedResponse,
 )
 from app.utils.url_utils import extract_item_id
+from app.services.import_helper import save_tmp_file, read_columns, find_best_template, col_fingerprint
 
 router = APIRouter(prefix="/api/url-mappings", tags=["url-mappings"])
+
+UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "./uploads")
 
 # 渠道名称 → platform 规范值
 _PLATFORM_MAP = {
@@ -42,6 +49,164 @@ def _to_out(m: ItemUrlMapping) -> ItemUrlMappingOut:
         model_name=model.model_name if model else None,
         created_at=m.created_at,
     )
+
+
+class UrlMappingConfirmPayload(BaseModel):
+    temp_file_id: str
+    mapping: dict
+    ignore_columns: list = []
+    category_code: str
+    save_template_name: Optional[str] = None
+
+
+@router.post("/headers")
+async def url_mapping_headers(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    """P10: Step 1 — read columns, suggest mapping template."""
+    temp_file_id, save_path, filename = await save_tmp_file(file, UPLOAD_DIR)
+    columns = read_columns(save_path)
+    best_tmpl, score = find_best_template(columns, "url", db)
+    return {
+        "temp_file_id": temp_file_id,
+        "filename": filename,
+        "columns": columns,
+        "suggested_template": {
+            "id": best_tmpl.id,
+            "name": best_tmpl.name,
+            "mapping": best_tmpl.mapping,
+            "ignore_columns": best_tmpl.ignore_columns or [],
+        } if best_tmpl else None,
+        "match_score": score,
+    }
+
+
+@router.post("/confirm")
+def url_mapping_confirm(
+    payload: UrlMappingConfirmPayload,
+    db: Session = Depends(get_db),
+):
+    """P10: Step 2 — parse file with mapping, upsert item_url_mappings."""
+    from app.models.schemas import ItemUrlMapping, ModelRecord as ModelORM
+
+    tmp_dir = Path(UPLOAD_DIR) / "tmp"
+    candidates = list(tmp_dir.glob(f"*{payload.temp_file_id}*")) if tmp_dir.exists() else []
+    if not candidates:
+        direct = tmp_dir / payload.temp_file_id
+        if direct.exists():
+            candidates = [direct]
+    if not candidates:
+        raise HTTPException(status_code=404, detail="Temp file not found or expired")
+    file_path = candidates[0]
+
+    suffix = file_path.suffix.lower()
+    if suffix == ".csv":
+        try:
+            df = pd.read_csv(file_path, dtype=str, encoding="utf-8-sig")
+        except Exception:
+            df = pd.read_csv(file_path, dtype=str, encoding="gbk")
+    else:
+        df = pd.read_excel(file_path, sheet_name=0, dtype=str)
+    df.columns = [str(c).strip() for c in df.columns]
+
+    ignore_set = set(payload.ignore_columns)
+    rename_map = {
+        col: target
+        for col, target in payload.mapping.items()
+        if col in df.columns and col not in ignore_set
+    }
+    df = df.rename(columns=rename_map)
+
+    inserted = 0
+    updated = 0
+    skipped = 0
+    errors = []
+
+    for i, row in enumerate(df.itertuples(index=False), start=2):
+        row_dict = row._asdict()
+
+        platform_raw = str(row_dict.get("platform") or "").strip()
+        item_url = str(row_dict.get("item_url") or "").strip()
+        brand_code = str(row_dict.get("brand_code") or "").strip()
+        model_code = str(row_dict.get("model_code") or "").strip()
+
+        if not platform_raw or not item_url or not brand_code or not model_code:
+            errors.append(f"Row {i}: missing required field")
+            continue
+
+        # Normalize platform: try map lookup (handles Chinese/uppercase), fallback to lowercase
+        platform = _PLATFORM_MAP.get(platform_raw.upper(), platform_raw.lower())
+
+        # Extract item_id from URL
+        url_info = extract_item_id(item_url)
+        if not url_info:
+            errors.append(f"Row {i}: cannot extract item_id from URL '{item_url}'")
+            continue
+        url_platform, item_id = url_info
+
+        # Lookup model
+        model = (
+            db.query(ModelORM)
+            .filter(ModelORM.brand_code == brand_code, ModelORM.model_code == model_code)
+            .first()
+        )
+        if not model:
+            errors.append(f"Row {i}: model ({brand_code}, {model_code}) not found")
+            continue
+
+        # Category mismatch warning (non-blocking)
+        if model.category_code and payload.category_code and model.category_code != payload.category_code:
+            errors.append(
+                f"Row {i}: warning — model category ({model.category_code}) "
+                f"differs from selected ({payload.category_code})"
+            )
+
+        price_raw = row_dict.get("price")
+        try:
+            price = float(str(price_raw).strip()) if price_raw and str(price_raw).strip() not in ("", "nan", "None") else None
+        except (ValueError, TypeError):
+            price = None
+
+        existing = (
+            db.query(ItemUrlMapping)
+            .filter(ItemUrlMapping.platform == url_platform, ItemUrlMapping.item_id == item_id)
+            .first()
+        )
+        if existing:
+            existing.model_id = model.id
+            if price is not None:
+                existing.price = price
+            updated += 1
+        else:
+            db.add(ItemUrlMapping(
+                platform=url_platform,
+                item_id=item_id,
+                item_url=item_url,
+                model_id=model.id,
+                price=price,
+            ))
+            inserted += 1
+
+    if inserted > 0 or updated > 0:
+        db.commit()
+
+    if payload.save_template_name and (inserted + updated) > 0:
+        from app.models.schemas import ColumnTemplate
+        tmpl = ColumnTemplate(
+            name=payload.save_template_name,
+            module="url",
+            mapping=payload.mapping,
+            ignore_columns=payload.ignore_columns,
+            col_fingerprint=col_fingerprint(list(payload.mapping.keys())),
+        )
+        db.add(tmpl)
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+
+    return {"inserted": inserted, "updated": updated, "skipped": skipped, "errors": errors}
 
 
 @router.post("/import")

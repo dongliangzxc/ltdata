@@ -69,24 +69,19 @@ def upgrade():
                   comment='本次上传使用的列模板 ID'))
 
     # Insert two built-in templates
-    bind = op.get_bind()
-    for row in [
-        {"name": "京东月报", "platform": "jd",
-         "fp": _fingerprint(_JD_MAPPING),
-         "mapping": json.dumps(_JD_MAPPING, ensure_ascii=False),
-         "ignore": json.dumps([])},
-        {"name": "天猫/淘宝月报", "platform": "tmall",
-         "fp": _fingerprint(_TM_MAPPING),
-         "mapping": json.dumps(_TM_MAPPING, ensure_ascii=False),
-         "ignore": json.dumps([])},
-    ]:
-        bind.execute(
-            sa.text(
-                "INSERT INTO column_templates (name, platform, col_fingerprint, mapping, ignore_columns, is_builtin) "
-                "VALUES (:name, :platform, :fp, :mapping, :ignore, 1)"
-            ),
-            row
-        )
+    jd_fp = _fingerprint(_JD_MAPPING)
+    jd_mapping = json.dumps(_JD_MAPPING, ensure_ascii=False).replace("'", "''")
+    tm_fp = _fingerprint(_TM_MAPPING)
+    tm_mapping = json.dumps(_TM_MAPPING, ensure_ascii=False).replace("'", "''")
+
+    op.execute(sa.text(
+        f"INSERT INTO column_templates (name, platform, col_fingerprint, mapping, ignore_columns, is_builtin) "
+        f"VALUES ('京东月报', 'jd', '{jd_fp}', '{jd_mapping}', '[]', 1)"
+    ))
+    op.execute(sa.text(
+        f"INSERT INTO column_templates (name, platform, col_fingerprint, mapping, ignore_columns, is_builtin) "
+        f"VALUES ('天猫/淘宝月报', 'tmall', '{tm_fp}', '{tm_mapping}', '[]', 1)"
+    ))
 
 
 def downgrade():

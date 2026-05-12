@@ -836,6 +836,7 @@ class DispatchBatchOut(BaseModel):
 
 class ColumnTemplate(Base):
     __tablename__ = "column_templates"
+    __table_args__ = (UniqueConstraint('name', name='uq_template_name'),)
 
     id              = Column(Integer, primary_key=True, index=True)
     name            = Column(String(100), nullable=False)

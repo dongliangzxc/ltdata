@@ -4,10 +4,13 @@
 唯一键：brand_code + model_code
 """
 import io
+import os
 import math
 import pandas as pd
+from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy import func
@@ -17,8 +20,159 @@ from app.models.schemas import (
     ModelIn, ModelOut, ModelSpecOut, ModelAliasOut,
     PaginatedResponse, Category,
 )
+from app.services.import_helper import save_tmp_file, read_columns, find_best_template, col_fingerprint
 
 router = APIRouter(prefix="/api/models", tags=["models"])
+
+UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "./uploads")
+
+
+class ModelsConfirmPayload(BaseModel):
+    temp_file_id: str
+    mapping: dict
+    ignore_columns: list = []
+    category_code: str
+    save_template_name: Optional[str] = None
+
+
+@router.post("/headers")
+async def models_headers(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    """P10: Step 1 — read columns from model sheet, suggest template."""
+    temp_file_id, save_path, filename = await save_tmp_file(file, UPLOAD_DIR)
+    columns = read_columns(save_path)
+    best_tmpl, score = find_best_template(columns, "model", db)
+    return {
+        "temp_file_id": temp_file_id,
+        "filename": filename,
+        "columns": columns,
+        "suggested_template": {
+            "id": best_tmpl.id,
+            "name": best_tmpl.name,
+            "mapping": best_tmpl.mapping,
+            "ignore_columns": best_tmpl.ignore_columns or [],
+        } if best_tmpl else None,
+        "match_score": score,
+    }
+
+
+@router.post("/confirm")
+def models_confirm(
+    payload: ModelsConfirmPayload,
+    db: Session = Depends(get_db),
+):
+    """P10: Step 2 — parse model sheet with mapping, upsert models."""
+    tmp_dir = Path(UPLOAD_DIR) / "tmp"
+    # Find temp file (may have uuid prefix)
+    candidates = list(tmp_dir.glob(f"*{payload.temp_file_id}*")) if tmp_dir.exists() else []
+    if not candidates:
+        direct = tmp_dir / payload.temp_file_id
+        if direct.exists():
+            candidates = [direct]
+    if not candidates:
+        raise HTTPException(status_code=404, detail="Temp file not found or expired")
+    file_path = candidates[0]
+
+    suffix = file_path.suffix.lower()
+    if suffix == ".csv":
+        try:
+            df = pd.read_csv(file_path, dtype=str, encoding="utf-8-sig")
+        except Exception:
+            df = pd.read_csv(file_path, dtype=str, encoding="gbk")
+    else:
+        df = pd.read_excel(file_path, sheet_name=0, dtype=str)
+    df.columns = [str(c).strip() for c in df.columns]
+
+    ignore_set = set(payload.ignore_columns)
+    rename_map = {
+        col: target
+        for col, target in payload.mapping.items()
+        if col in df.columns and col not in ignore_set
+    }
+    df = df.rename(columns=rename_map)
+
+    models_inserted = 0
+    models_updated = 0
+    errors = []
+
+    for i, row in enumerate(df.itertuples(index=False), start=2):
+        row_dict = row._asdict()
+
+        brand_code = str(row_dict.get("brand_code") or "").strip()
+        model_code = str(row_dict.get("model_code") or "").strip()
+        if not brand_code or not model_code:
+            errors.append(f"Row {i}: missing brand_code or model_code")
+            continue
+
+        # category_code: from Excel if present and non-empty, else fallback
+        cat_val = str(row_dict.get("category_code") or "").strip()
+        category_code = cat_val if cat_val else payload.category_code
+
+        existing = (
+            db.query(ModelRecord)
+            .filter(ModelRecord.brand_code == brand_code, ModelRecord.model_code == model_code)
+            .first()
+        )
+        optional_fields = {
+            k: str(row_dict.get(k) or "").strip() or None
+            for k in ["brand_name", "model_name", "url"]
+        }
+        int_fields = {}
+        for k in ["launch_year", "launch_month", "launch_week"]:
+            v = row_dict.get(k)
+            try:
+                int_fields[k] = int(str(v).strip()) if v and str(v).strip() else None
+            except (ValueError, TypeError):
+                int_fields[k] = None
+        price_raw = row_dict.get("launch_price")
+        try:
+            launch_price = float(str(price_raw).strip()) if price_raw and str(price_raw).strip() else None
+        except (ValueError, TypeError):
+            launch_price = None
+
+        if existing:
+            for attr, val in {**optional_fields, **int_fields, "launch_price": launch_price, "category_code": category_code}.items():
+                if val is not None:
+                    setattr(existing, attr, val)
+            models_updated += 1
+        else:
+            db.add(ModelRecord(
+                brand_code=brand_code,
+                model_code=model_code,
+                category_code=category_code,
+                **optional_fields,
+                **int_fields,
+                launch_price=launch_price,
+            ))
+            models_inserted += 1
+
+    if models_inserted > 0 or models_updated > 0:
+        db.commit()
+
+    if payload.save_template_name and (models_inserted + models_updated) > 0:
+        from app.models.schemas import ColumnTemplate
+        tmpl = ColumnTemplate(
+            name=payload.save_template_name,
+            module="model",
+            mapping=payload.mapping,
+            ignore_columns=payload.ignore_columns,
+            col_fingerprint=col_fingerprint(list(payload.mapping.keys())),
+        )
+        db.add(tmpl)
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+
+    return {
+        "models_inserted": models_inserted,
+        "models_updated": models_updated,
+        "specs_inserted": 0,
+        "aliases_inserted": 0,
+        "errors": errors,
+    }
 
 
 def _clean_val(v):
@@ -486,10 +640,7 @@ def delete_model(model_id: int, db: Session = Depends(get_db)):
 
 # ─── 别名 CRUD ────────────────────────────────────────────────
 
-from pydantic import BaseModel as _BaseModel
-
-
-class _AliasIn(_BaseModel):
+class _AliasIn(BaseModel):
     alias_code: str
 
 

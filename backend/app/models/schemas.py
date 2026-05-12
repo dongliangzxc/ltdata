@@ -20,6 +20,7 @@ class UploadFileRecord(Base):
     month_range = Column(String(20))        # e.g. "202507-202509"
     row_count = Column(Integer, default=0)
     status = Column(String(20), default="done")  # pending/processing/done/error
+    template_id  = Column(Integer, nullable=True)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
 
     raw_data = relationship("RawDataRecord", back_populates="file", cascade="all, delete-orphan")
@@ -829,3 +830,39 @@ class DispatchBatchOut(BaseModel):
     unmatched_rows: Optional[int]
     created_at: Optional[datetime]
     finished_at: Optional[datetime]
+
+
+# ─── P9: Column Templates ─────────────────────────────────────
+
+class ColumnTemplate(Base):
+    __tablename__ = "column_templates"
+
+    id              = Column(Integer, primary_key=True, index=True)
+    name            = Column(String(100), nullable=False)
+    platform        = Column(String(50), nullable=True)
+    col_fingerprint = Column(String(32), nullable=True)
+    mapping         = Column(JSON, nullable=False)
+    ignore_columns  = Column(JSON, nullable=True)
+    is_builtin      = Column(SmallInteger, nullable=False, default=0)
+    created_at      = Column(DateTime, default=datetime.utcnow)
+    updated_at      = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ColumnTemplateOut(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: int
+    name: str
+    platform: Optional[str]
+    col_fingerprint: Optional[str]
+    mapping: dict
+    ignore_columns: Optional[list]
+    is_builtin: int
+    updated_at: Optional[datetime]
+
+
+class ColumnTemplateIn(BaseModel):
+    name: str
+    platform: Optional[str] = None
+    mapping: dict
+    ignore_columns: list[str] = []

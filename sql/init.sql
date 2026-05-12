@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS upload_files (
     month_range  VARCHAR(20)                     COMMENT '月份范围, 如 202501-202503',
     row_count    INT          DEFAULT 0          COMMENT '实际入库行数',
     status       VARCHAR(20)  DEFAULT 'done'     COMMENT 'pending/processing/done/error',
+    template_id  INT                             COMMENT '本次上传使用的列模板 ID',
     uploaded_at  DATETIME     DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='上传文件记录';
 
@@ -439,4 +440,28 @@ ALTER TABLE clean_jobs
     ADD COLUMN IF NOT EXISTS dispatch_batch_id      INT  NULL,
     ADD COLUMN IF NOT EXISTS dispatch_category_code VARCHAR(50) NULL;
 
-UPDATE alembic_version SET version_num = 'p8a1b2c3d4e5';
+-- ─── P9: 列模板 ──────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS column_templates (
+    id              INT AUTO_INCREMENT PRIMARY KEY,
+    name            VARCHAR(100) NOT NULL            COMMENT '模板名称',
+    platform        VARCHAR(50)                      COMMENT 'jd/tmall/taobao/suning/NULL=通用',
+    col_fingerprint CHAR(32)                         COMMENT '列名集合 MD5',
+    mapping         JSON         NOT NULL            COMMENT '{"原始列名": "标准字段"}',
+    ignore_columns  JSON                             COMMENT '["列名", ...]',
+    is_builtin      TINYINT      NOT NULL DEFAULT 0  COMMENT '1=内置不可删',
+    created_at      DATETIME     DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME     DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='列映射模板';
+
+INSERT IGNORE INTO column_templates (name, platform, col_fingerprint, mapping, ignore_columns, is_builtin)
+VALUES
+  ('京东月报', 'jd', MD5('Lv0类目名称(逐月固定),Lv1类目名称(逐月固定),Lv2类目名称(逐月固定),参考价格,品牌,宝贝ID,宝贝名称,宝贝图片,宝贝品牌(bid),宝贝店铺名称,宝贝链接,价格,月,机型,平台,销售额,销量'),
+   '{"平台":"platform","月":"month","Lv0类目名称(逐月固定)":"category_lv0","Lv1类目名称(逐月固定)":"category_lv1","Lv2类目名称(逐月固定)":"category_lv2","宝贝ID":"item_id","宝贝名称":"item_name","宝贝图片":"item_image","宝贝链接":"item_url","参考价格":"ref_price","宝贝品牌(bid)":"brand_raw","宝贝店铺名称":"shop_name","销量":"sales_qty","销售额":"sales_amount","价格":"price","品牌":"brand_std","机型":"model_std"}',
+   '[]', 1),
+  ('天猫/淘宝月报', 'tmall', MD5('Lv1类目名称(逐月固定),Lv2类目名称(逐月固定),Lv3类目名称(逐月固定),Lv4类目名称(逐月固定),Lv5类目名称(逐月固定),参考价格,品牌,宝贝ID,宝贝名称,宝贝图片,宝贝品牌,宝贝店铺名称,宝贝链接,价格,月,机型,平台,销售额,销量'),
+   '{"平台":"platform","月":"month","Lv1类目名称(逐月固定)":"category_lv1","Lv2类目名称(逐月固定)":"category_lv2","Lv3类目名称(逐月固定)":"category_lv3","Lv4类目名称(逐月固定)":"category_lv4","Lv5类目名称(逐月固定)":"category_lv5","宝贝ID":"item_id","宝贝名称":"item_name","宝贝图片":"item_image","宝贝链接":"item_url","参考价格":"ref_price","宝贝品牌":"brand_raw","宝贝店铺名称":"shop_name","销量":"sales_qty","销售额":"sales_amount","价格":"price","品牌":"brand_std","机型":"model_std"}',
+   '[]', 1);
+
+ALTER TABLE upload_files ADD COLUMN IF NOT EXISTS template_id INT NULL COMMENT '本次上传使用的列模板 ID';
+
+UPDATE alembic_version SET version_num = 'p9a1b2c3d4e5';

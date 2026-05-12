@@ -21,7 +21,8 @@ async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db
         raise HTTPException(status_code=400, detail="只支持 .xlsx / .xls / .csv 格式文件")
 
     # 保存文件
-    save_path = Path(settings.UPLOAD_DIR) / file.filename
+    safe_filename = Path(file.filename).name  # strips any directory components
+    save_path = Path(settings.UPLOAD_DIR) / safe_filename
     with open(save_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
@@ -191,7 +192,8 @@ async def upload_headers(
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
     temp_file_id = str(uuid.uuid4())
-    save_path = tmp_dir / f"{temp_file_id}_{file.filename}"
+    safe_filename = Path(file.filename).name  # strips any directory components
+    save_path = tmp_dir / f"{temp_file_id}_{safe_filename}"
     with open(save_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
@@ -309,7 +311,7 @@ async def upload_confirm(payload: dict, db: Session = Depends(get_db)):
         filename=original_filename,
         platform=platform,
         month_range=month_range,
-        row_count=len(to_insert),
+        row_count=len(records),
         status="done",
         template_id=saved_template_id,
     )

@@ -1,7 +1,6 @@
 import os
 import shutil
 import uuid
-import hashlib
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
 from sqlalchemy import tuple_
@@ -10,6 +9,12 @@ from app.models.database import get_db
 from app.models.schemas import UploadFileRecord, RawDataRecord, UploadFileOut, RawDataOut, ColumnTemplate
 from app.services.excel_parser import parse_raw_excel, parse_with_mapping
 from app.core.config import settings
+from app.services.import_helper import (
+    col_fingerprint as _ih_col_fingerprint,
+    read_columns as _ih_read_columns,
+    find_best_template as _ih_find_best_template,
+    cleanup_old_tmp as _ih_cleanup_old_tmp,
+)
 
 router = APIRouter(prefix="/api/upload", tags=["upload"])
 
@@ -133,62 +138,22 @@ REQUIRED_FIELDS = {"item_id", "month", "platform", "item_name", "sales_qty", "sa
 
 
 def _col_fingerprint(columns: list) -> str:
-    return hashlib.md5(",".join(sorted(columns)).encode()).hexdigest()
+    return _ih_col_fingerprint(columns)
 
-
-def _jaccard(set_a: set, set_b: set) -> float:
-    if not set_a and not set_b:
-        return 1.0
-    union = set_a | set_b
-    return len(set_a & set_b) / len(union)
 
 
 def _find_best_template(columns: list, db: Session):
     """Return (best_template, match_score 0-100). Tries exact fingerprint first, then Jaccard."""
-    fp = _col_fingerprint(columns)
-    exact = db.query(ColumnTemplate).filter(ColumnTemplate.col_fingerprint == fp).first()
-    if exact:
-        return exact, 100
-
-    templates = db.query(ColumnTemplate).all()
-    if not templates:
-        return None, 0
-
-    col_set = set(columns)
-    best, best_score = None, 0.0
-    for tmpl in templates:
-        tmpl_cols = set(tmpl.mapping.keys())
-        score = _jaccard(col_set, tmpl_cols)
-        if score > best_score:
-            best, best_score = tmpl, score
-    return best, round(best_score * 100)
+    return _ih_find_best_template(columns, "sales", db)
 
 
 def _cleanup_old_tmp(tmp_dir: Path, max_age_hours: int = 24) -> None:
     """Remove temp files older than max_age_hours hours."""
-    import time
-    cutoff = time.time() - max_age_hours * 3600
-    try:
-        for f in tmp_dir.glob("*"):
-            if f.is_file() and f.stat().st_mtime < cutoff:
-                f.unlink(missing_ok=True)
-    except OSError:
-        pass  # best-effort cleanup
+    _ih_cleanup_old_tmp(tmp_dir, max_age_hours)
 
 
 def _read_columns(file_path) -> list:
-    from pathlib import Path as _Path
-    import pandas as _pd
-    fp = _Path(file_path)
-    suffix = fp.suffix.lower()
-    if suffix == ".csv":
-        try:
-            df = _pd.read_csv(fp, dtype=str, encoding="utf-8-sig", nrows=0)
-        except (UnicodeDecodeError, _pd.errors.ParserError):
-            df = _pd.read_csv(fp, dtype=str, encoding="gbk", nrows=0)
-    else:
-        df = _pd.read_excel(fp, sheet_name=0, dtype=str, nrows=0)
-    return [str(c).strip() for c in df.columns]
+    return _ih_read_columns(Path(file_path))
 
 
 @router.post("/headers")

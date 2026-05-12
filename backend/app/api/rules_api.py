@@ -4,8 +4,11 @@
 - /api/rules/brand-aliases   品牌写法库
 - /api/rules/match-rules     显式匹配规则
 - /api/rules/filtered-items  干扰项存档（含恢复）
+- /api/rules/attr-rules      属性关键词规则（含 P10 批量导入）
 """
+import os
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 import pandas as pd
@@ -21,6 +24,9 @@ from app.models.schemas import (
     AttrRuleIn, AttrRuleOut,
     Category,
 )
+from app.services.import_helper import save_tmp_file, read_columns, find_best_template, col_fingerprint
+
+UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "./uploads")
 
 router = APIRouter(prefix="/api/rules", tags=["rules"])
 
@@ -475,3 +481,138 @@ def delete_attr_rule(rule_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "规则不存在")
     db.delete(row)
     db.commit()
+
+
+# ─── P10: Attr-Rules Import ──────────────────────────────────────────────────
+
+@router.post("/attr-rules/headers")
+async def attr_rules_headers(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    """Step 1: save temp file, read columns, suggest mapping template."""
+    temp_file_id, save_path, filename = await save_tmp_file(file, UPLOAD_DIR)
+    columns = read_columns(save_path)
+    best_tmpl, score = find_best_template(columns, "attr", db)
+    return {
+        "temp_file_id": temp_file_id,
+        "filename": filename,
+        "columns": columns,
+        "suggested_template": {
+            "id": best_tmpl.id,
+            "name": best_tmpl.name,
+            "mapping": best_tmpl.mapping,
+            "ignore_columns": best_tmpl.ignore_columns or [],
+        } if best_tmpl else None,
+        "match_score": score,
+    }
+
+
+class AttrRulesConfirmPayload(BaseModel):
+    temp_file_id: str
+    mapping: dict
+    ignore_columns: list = []
+    category_code: str
+    save_template_name: Optional[str] = None
+
+
+@router.post("/attr-rules/confirm")
+def attr_rules_confirm(
+    payload: AttrRulesConfirmPayload,
+    db: Session = Depends(get_db),
+):
+    """Step 2: parse file using mapping, insert attr_rules rows."""
+    tmp_dir = Path(UPLOAD_DIR) / "tmp"
+    # temp_file_id is the UUID prefix; find the actual file via glob
+    matches = list(tmp_dir.glob(f"{payload.temp_file_id}_*"))
+    if not matches:
+        raise HTTPException(status_code=404, detail="临时文件不存在或已过期，请重新上传")
+    file_path = matches[0]
+
+    # Read file
+    suffix = file_path.suffix.lower()
+    if suffix == ".csv":
+        try:
+            df = pd.read_csv(file_path, dtype=str, encoding="utf-8-sig")
+        except Exception:
+            df = pd.read_csv(file_path, dtype=str, encoding="gbk")
+    else:
+        df = pd.read_excel(file_path, sheet_name=0, dtype=str)
+    df.columns = [str(c).strip() for c in df.columns]
+
+    # Apply column mapping (skip ignored columns)
+    ignore_set = set(payload.ignore_columns)
+    rename_map = {
+        col: target
+        for col, target in payload.mapping.items()
+        if col in df.columns and col not in ignore_set
+    }
+    df = df.rename(columns=rename_map)
+
+    inserted = 0
+    skipped = 0
+    errors = []
+
+    for i, row in enumerate(df.itertuples(index=False), start=2):
+        row_dict = row._asdict()
+
+        keyword = str(row_dict.get("keyword") or "").strip()
+        attr_name = str(row_dict.get("attr_name") or "").strip()
+        attr_value = str(row_dict.get("attr_value") or "").strip()
+
+        if not keyword or not attr_name or not attr_value:
+            errors.append(f"Row {i}: missing required field (keyword/attr_name/attr_value)")
+            skipped += 1
+            continue
+
+        # Dedup: skip if (keyword, attr_name, category_code) already exists
+        existing = (
+            db.query(AttrRule)
+            .filter(
+                AttrRule.keyword == keyword,
+                AttrRule.attr_name == attr_name,
+                AttrRule.category_code == payload.category_code,
+            )
+            .first()
+        )
+        if existing:
+            skipped += 1
+            continue
+
+        match_type = str(row_dict.get("match_type") or "contains").strip() or "contains"
+        priority_raw = row_dict.get("priority")
+        try:
+            priority = int(priority_raw) if priority_raw not in (None, "nan", "") else 0
+        except (ValueError, TypeError):
+            priority = 0
+
+        db.add(AttrRule(
+            keyword=keyword,
+            match_type=match_type,
+            attr_name=attr_name,
+            attr_value=attr_value,
+            category_code=payload.category_code,
+            priority=priority,
+        ))
+        inserted += 1
+
+    if inserted > 0:
+        db.commit()
+
+    # Save template if requested
+    if payload.save_template_name and inserted > 0:
+        from app.models.schemas import ColumnTemplate
+        tmpl = ColumnTemplate(
+            name=payload.save_template_name,
+            module="attr",
+            mapping=payload.mapping,
+            ignore_columns=payload.ignore_columns,
+            col_fingerprint=col_fingerprint(list(payload.mapping.keys())),
+        )
+        db.add(tmpl)
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+
+    return {"inserted": inserted, "skipped": skipped, "errors": errors}

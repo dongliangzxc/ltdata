@@ -105,3 +105,129 @@ def test_has_attributes_all_none():
 def test_has_attributes_all_empty_string():
     row = {col: "" for col in ATTR_COLS}
     assert has_attributes(row, ATTR_COLS) is False
+
+
+# ── import_model_db 集成测试（SQLite 内存 DB）──────────────────
+import os
+import openpyxl
+from app.models.schemas import ModelRecord, ModelSpec, ItemUrlMapping
+
+
+def _make_excel(rows: list, tmp_path) -> str:
+    """生成测试用 Excel 文件，列顺序与耳机数据库一致。"""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet2"
+    headers = [
+        "平台", "宝贝名称", "宝贝链接", "销量", "销售额", "ASP", "品牌", "型号",
+        "佩戴类型", "In-ear Type", "开放式外观", "Power Type", "Bluetooth Version",
+        "Sport", "Gaming", "HIFI", "ANC", "ENC", "Fast Charging", "IP Marking",
+        "Health Monitoring", "Touch Screen Monitor", "骨传导", "AI", "AI+功能",
+    ]
+    ws.append(headers)
+    for row in rows:
+        ws.append(row)
+    path = os.path.join(str(tmp_path), "test.xlsx")
+    wb.save(path)
+    return path
+
+
+def _valid_row(platform="JD", brand="EDIFIER/漫步者", model="G2 无线版",
+               url="https://item.jd.com/100001.html"):
+    """构造一条完整有效行（25列）。"""
+    return [
+        platform, "商品名称", url, 10, 2500, 250, brand, model,
+        "Headband", "Over Ear", "NULL", "Hybrid", "5.4",
+        "NO", "YES", "NO", "NO", "YES", "NO", "NO", "NO", "NO", "NO", "YES", "AI降噪",
+    ]
+
+
+def _seed_category(db, code="headphone"):
+    from app.models.schemas import Category
+    cat = Category(code=code, name="耳机")
+    db.add(cat)
+    db.flush()
+
+
+def test_import_creates_model_and_specs(db, tmp_path):
+    from app.services.model_db_importer import import_model_db
+    _seed_category(db)
+    path = _make_excel([_valid_row()], tmp_path)
+
+    stats = import_model_db(path, "headphone", db)
+
+    assert stats["models_new"] == 1
+    assert stats["urls_new"] == 1
+
+    model = db.query(ModelRecord).filter_by(
+        brand_code="EDIFIER/漫步者", model_code="G2 无线版"
+    ).first()
+    assert model is not None
+    assert model.category_code == "headphone"
+
+    spec_names = {s.spec_name for s in db.query(ModelSpec).filter_by(model_id=model.id).all()}
+    assert "wearing_type" in spec_names
+    assert "gaming" in spec_names
+    assert "ai_features" in spec_names
+
+
+def test_dirty_rows_are_skipped(db, tmp_path):
+    from app.services.model_db_importer import import_model_db
+    _seed_category(db)
+    rows = [
+        _valid_row(model="id:12345"),           # dirty model
+        _valid_row(brand="华恒智能数码科技经营部"),  # dirty brand (9 Chinese chars)
+        _valid_row(url=None),                   # no URL
+    ]
+    path = _make_excel(rows, tmp_path)
+    stats = import_model_db(path, "headphone", db)
+
+    assert stats["models_new"] == 0
+    assert stats["skip_model"] >= 1
+    assert stats["skip_brand"] >= 1
+    assert stats["skip_url"] >= 1
+
+
+def test_dry_run_writes_nothing(db, tmp_path):
+    from app.services.model_db_importer import import_model_db
+    _seed_category(db)
+    path = _make_excel([_valid_row()], tmp_path)
+
+    stats = import_model_db(path, "headphone", db, dry_run=True)
+
+    assert stats["unique_models"] == 1
+    assert db.query(ModelRecord).count() == 0
+
+
+def test_invalid_category_raises(db, tmp_path):
+    from app.services.model_db_importer import import_model_db
+    path = _make_excel([_valid_row()], tmp_path)
+    with pytest.raises(ValueError, match="Category 'nonexistent' not found"):
+        import_model_db(path, "nonexistent", db)
+
+
+def test_same_model_two_urls(db, tmp_path):
+    from app.services.model_db_importer import import_model_db
+    _seed_category(db)
+    rows = [
+        _valid_row(url="https://item.jd.com/100001.html"),
+        _valid_row(url="https://item.jd.com/100002.html"),
+    ]
+    path = _make_excel(rows, tmp_path)
+    stats = import_model_db(path, "headphone", db)
+
+    assert stats["models_new"] == 1   # 同一型号只建一条
+    assert stats["urls_new"] == 2     # 两条 URL 映射
+
+
+def test_idempotent_rerun(db, tmp_path):
+    from app.services.model_db_importer import import_model_db
+    _seed_category(db)
+    path = _make_excel([_valid_row()], tmp_path)
+
+    import_model_db(path, "headphone", db)
+    stats2 = import_model_db(path, "headphone", db)
+
+    assert stats2["models_new"] == 0
+    assert stats2["models_existing"] == 1
+    assert db.query(ModelRecord).count() == 1   # 不重复创建

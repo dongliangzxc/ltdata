@@ -277,25 +277,27 @@ async def upload_confirm(payload: dict, db: Session = Depends(get_db)):
                     detail=f"模板名称「{save_template_name}」已存在，请使用不同的名称"
                 )
 
-    # Deduplication
-    keys = {
+    # Deduplication — batch the IN query to avoid oversized SQL (max 500 tuples/batch)
+    keys = [
         (str(r.get("item_id")), r.get("month"), r.get("platform"))
         for r in records
         if r.get("item_id") is not None
-    }
+    ]
+    existing_set: set = set()
     if keys:
-        existing_rows = db.query(
-            RawDataRecord.item_id, RawDataRecord.month, RawDataRecord.platform
-        ).filter(
-            tuple_(RawDataRecord.item_id, RawDataRecord.month, RawDataRecord.platform).in_(keys)
-        ).all()
-        existing_set = {(e.item_id, e.month, e.platform) for e in existing_rows}
-        to_insert = [
-            r for r in records
-            if (str(r.get("item_id")), r.get("month"), r.get("platform")) not in existing_set
-        ]
-    else:
-        to_insert = records
+        DEDUP_BATCH = 500
+        for i in range(0, len(keys), DEDUP_BATCH):
+            chunk = keys[i: i + DEDUP_BATCH]
+            rows = db.query(
+                RawDataRecord.item_id, RawDataRecord.month, RawDataRecord.platform
+            ).filter(
+                tuple_(RawDataRecord.item_id, RawDataRecord.month, RawDataRecord.platform).in_(chunk)
+            ).all()
+            existing_set.update((e.item_id, e.month, e.platform) for e in rows)
+    to_insert = [
+        r for r in records
+        if (str(r.get("item_id")), r.get("month"), r.get("platform")) not in existing_set
+    ]
 
     skipped = len(records) - len(to_insert)
 
@@ -311,34 +313,38 @@ async def upload_confirm(payload: dict, db: Session = Depends(get_db)):
     db.add(file_record)
     db.flush()
 
-    # Write raw_data
-    batch = []
-    for r in to_insert:
-        batch.append(RawDataRecord(
-            file_id=file_record.id,
-            platform=r.get("platform"),
-            month=r.get("month"),
-            category_lv0=r.get("category_lv0"),
-            category_lv1=r.get("category_lv1"),
-            category_lv2=r.get("category_lv2"),
-            category_lv3=r.get("category_lv3"),
-            category_lv4=r.get("category_lv4"),
-            category_lv5=r.get("category_lv5"),
-            item_id=str(r.get("item_id")) if r.get("item_id") else None,
-            item_name=r.get("item_name"),
-            item_image=r.get("item_image"),
-            item_url=r.get("item_url"),
-            ref_price=r.get("ref_price"),
-            brand_raw=r.get("brand_raw"),
-            shop_name=r.get("shop_name"),
-            sales_qty=r.get("sales_qty"),
-            sales_amount=r.get("sales_amount"),
-            price=r.get("price"),
-            brand_std=r.get("brand_std"),
-            model_std=r.get("model_std"),
-            extra_data=r.get("extra_data"),
-        ))
-    db.bulk_save_objects(batch)
+    # Write raw_data — use Core bulk INSERT for speed
+    if to_insert:
+        db.execute(
+            RawDataRecord.__table__.insert(),
+            [
+                {
+                    "file_id": file_record.id,
+                    "platform": r.get("platform"),
+                    "month": r.get("month"),
+                    "category_lv0": r.get("category_lv0"),
+                    "category_lv1": r.get("category_lv1"),
+                    "category_lv2": r.get("category_lv2"),
+                    "category_lv3": r.get("category_lv3"),
+                    "category_lv4": r.get("category_lv4"),
+                    "category_lv5": r.get("category_lv5"),
+                    "item_id": str(r.get("item_id")) if r.get("item_id") else None,
+                    "item_name": r.get("item_name"),
+                    "item_image": r.get("item_image"),
+                    "item_url": r.get("item_url"),
+                    "ref_price": r.get("ref_price"),
+                    "brand_raw": r.get("brand_raw"),
+                    "shop_name": r.get("shop_name"),
+                    "sales_qty": r.get("sales_qty"),
+                    "sales_amount": r.get("sales_amount"),
+                    "price": r.get("price"),
+                    "brand_std": r.get("brand_std"),
+                    "model_std": r.get("model_std"),
+                    "extra_data": r.get("extra_data"),
+                }
+                for r in to_insert
+            ],
+        )
     db.commit()
     db.refresh(file_record)
 

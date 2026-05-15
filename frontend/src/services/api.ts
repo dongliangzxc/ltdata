@@ -364,7 +364,7 @@ export const confirmUpload = (payload: {
   ignore_columns: string[]
   save_template_name?: string
   template_id?: number
-}) => api.post('/upload/confirm', payload)
+}) => api.post('/upload/confirm', payload, { timeout: 300000 })
 
 export const listUploadTemplates = () =>
   api.get<Array<{

@@ -4,7 +4,6 @@ import {
   Table, Alert, Collapse, Space, Typography, Spin, message,
 } from 'antd'
 import { InboxOutlined } from '@ant-design/icons'
-import type { UploadFile } from 'antd'
 import CategorySelect from '../CategorySelect'
 
 const { Dragger } = Upload
@@ -43,7 +42,7 @@ interface HeadersResponse {
 }
 
 export default function ImportMappingModal({
-  open, module, standardFields, headersUrl, confirmUrl, onSuccess, onClose,
+  open, module: _module, standardFields, headersUrl, confirmUrl, onSuccess, onClose,
 }: Props) {
   const [step, setStep] = useState<Step>('category')
   const [categoryCode, setCategoryCode] = useState<string>('')

@@ -114,9 +114,10 @@ def import_model_db(
     """
     import openpyxl
 
-    # 校验品类存在
-    if db.query(Category).filter(Category.code == category_code).first() is None:
-        raise ValueError(f"Category '{category_code}' not found in database")
+    # 校验品类存在（dry-run 模式跳过，不需要 DB 连接）
+    if not dry_run:
+        if db.query(Category).filter(Category.code == category_code).first() is None:
+            raise ValueError(f"Category '{category_code}' not found in database")
 
     wb = openpyxl.load_workbook(excel_path, read_only=True, data_only=True)
     ws = wb.active

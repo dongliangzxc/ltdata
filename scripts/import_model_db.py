@@ -69,7 +69,8 @@ def main() -> None:
         print(f"错误：文件不存在 — {args.excel_path}", file=sys.stderr)
         sys.exit(1)
 
-    db = SessionLocal()
+    # dry-run 不需要真实 DB 连接（品类校验会跳过）
+    db = SessionLocal() if not args.dry_run else None
     try:
         stats = import_model_db(
             excel_path=args.excel_path,
@@ -82,7 +83,8 @@ def main() -> None:
         print(f"错误：{e}", file=sys.stderr)
         sys.exit(1)
     finally:
-        db.close()
+        if db is not None:
+            db.close()
 
 
 if __name__ == "__main__":

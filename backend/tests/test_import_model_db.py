@@ -220,6 +220,15 @@ def test_same_model_two_urls(db, tmp_path):
     assert stats["urls_new"] == 2     # 两条 URL 映射
 
 
+def test_dry_run_skips_category_check(tmp_path):
+    """dry-run 不连数据库，不校验品类是否存在，不应报错。"""
+    from app.services.model_db_importer import import_model_db
+    path = _make_excel([_valid_row()], tmp_path)
+    # db=None, dry_run=True — 即使 category 不存在也不应抛异常
+    stats = import_model_db(path, "nonexistent_category", db=None, dry_run=True)
+    assert stats["unique_models"] == 1
+
+
 def test_idempotent_rerun(db, tmp_path):
     from app.services.model_db_importer import import_model_db
     _seed_category(db)

@@ -14,33 +14,32 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Drop the old CASCADE FK
-    op.drop_constraint('fk_di_raw', 'dispatch_items', type_='foreignkey')
-    # Make column nullable
-    op.alter_column(
-        'dispatch_items', 'raw_data_id',
-        existing_type=sa.Integer(),
-        nullable=True,
-    )
-    # Re-add FK with SET NULL
-    op.create_foreign_key(
-        'fk_di_raw',
-        'dispatch_items', 'raw_data',
-        ['raw_data_id'], ['id'],
-        ondelete='SET NULL',
-    )
+    with op.batch_alter_table('dispatch_items', recreate='always') as batch_op:
+        batch_op.alter_column(
+            'raw_data_id',
+            existing_type=sa.Integer(),
+            nullable=True,
+        )
+        batch_op.drop_constraint('fk_di_raw', type_='foreignkey')
+        batch_op.create_foreign_key(
+            'fk_di_raw',
+            'raw_data',
+            ['raw_data_id'], ['id'],
+            ondelete='SET NULL',
+        )
 
 
 def downgrade() -> None:
-    op.drop_constraint('fk_di_raw', 'dispatch_items', type_='foreignkey')
-    op.alter_column(
-        'dispatch_items', 'raw_data_id',
-        existing_type=sa.Integer(),
-        nullable=False,
-    )
-    op.create_foreign_key(
-        'fk_di_raw',
-        'dispatch_items', 'raw_data',
-        ['raw_data_id'], ['id'],
-        ondelete='CASCADE',
-    )
+    with op.batch_alter_table('dispatch_items', recreate='always') as batch_op:
+        batch_op.drop_constraint('fk_di_raw', type_='foreignkey')
+        batch_op.alter_column(
+            'raw_data_id',
+            existing_type=sa.Integer(),
+            nullable=False,
+        )
+        batch_op.create_foreign_key(
+            'fk_di_raw',
+            'raw_data',
+            ['raw_data_id'], ['id'],
+            ondelete='CASCADE',
+        )

@@ -425,12 +425,12 @@ CREATE TABLE IF NOT EXISTS dispatch_batches (
 CREATE TABLE IF NOT EXISTS dispatch_items (
     id               INT AUTO_INCREMENT PRIMARY KEY,
     batch_id         INT          NOT NULL,
-    raw_data_id      INT          NOT NULL,
+    raw_data_id      INT          NULL,
     category_code    VARCHAR(50)  NOT NULL,
     matched_rule_id  INT,
     UNIQUE KEY uq_dispatch_items_batch_row (batch_id, raw_data_id),
     CONSTRAINT fk_di_batch FOREIGN KEY (batch_id) REFERENCES dispatch_batches(id) ON DELETE CASCADE,
-    CONSTRAINT fk_di_raw   FOREIGN KEY (raw_data_id) REFERENCES raw_data(id) ON DELETE CASCADE,
+    CONSTRAINT fk_di_raw   FOREIGN KEY (raw_data_id) REFERENCES raw_data(id) ON DELETE SET NULL,
     INDEX ix_dispatch_items_batch_id (batch_id),
     INDEX ix_dispatch_items_category_code (category_code)
 );
@@ -466,4 +466,4 @@ VALUES
 
 ALTER TABLE upload_files ADD COLUMN IF NOT EXISTS template_id INT NULL COMMENT '本次上传使用的列模板 ID';
 
-UPDATE alembic_version SET version_num = 'p10a1b2c3d4e5';
+UPDATE alembic_version SET version_num = 'p11a1b2c3d4e5';

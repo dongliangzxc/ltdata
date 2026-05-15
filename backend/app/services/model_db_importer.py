@@ -183,6 +183,10 @@ def import_model_db(
         return stats
 
     # ── 写库 ────────────────────────────────────────────────────
+    # 同一 Excel 中同一 item_id 可能出现在多个 (brand, model) 分组；
+    # session 内未 flush 的记录对后续 query 不可见，用 set 防止重复 INSERT。
+    url_cache: set[tuple] = set()
+
     for (brand, model_code), group in groups.items():
         # 1. models — INSERT IGNORE 语义
         existing = db.query(ModelRecord).filter_by(
@@ -221,6 +225,9 @@ def import_model_db(
 
         # 3. item_url_mappings — upsert
         for u in group["urls"]:
+            key = (u["platform"], u["item_id"])
+            if key in url_cache:
+                continue  # 本次 session 已处理，跳过（同一 item 出现在多个分组）
             existing_url = db.query(ItemUrlMapping).filter_by(
                 platform=u["platform"], item_id=u["item_id"]
             ).first()
@@ -235,6 +242,7 @@ def import_model_db(
                     model_id=model_id,
                 ))
                 stats["urls_new"] += 1
+            url_cache.add(key)
 
     db.commit()
     return stats

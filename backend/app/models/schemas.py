@@ -23,7 +23,7 @@ class UploadFileRecord(Base):
     template_id  = Column(Integer, nullable=True)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
 
-    raw_data = relationship("RawDataRecord", back_populates="file", cascade="all, delete-orphan")
+    raw_data = relationship("RawDataRecord", back_populates="file", cascade="save-update, merge")
 
 
 class RawDataRecord(Base):
@@ -765,7 +765,7 @@ class DispatchItem(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     batch_id = Column(Integer, ForeignKey("dispatch_batches.id", ondelete="CASCADE"), nullable=False, index=True)
-    raw_data_id = Column(Integer, ForeignKey("raw_data.id", ondelete="CASCADE"), nullable=False)
+    raw_data_id = Column(Integer, ForeignKey("raw_data.id", ondelete="SET NULL"), nullable=True)
     category_code = Column(String(50), nullable=False, index=True)
     matched_rule_id = Column(Integer, nullable=True)
 

@@ -3,7 +3,7 @@ import shutil
 import uuid
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
-from sqlalchemy import tuple_
+from sqlalchemy import tuple_, text
 from sqlalchemy.orm import Session
 from app.models.database import get_db
 from app.models.schemas import UploadFileRecord, RawDataRecord, UploadFileOut, RawDataOut, ColumnTemplate
@@ -123,12 +123,18 @@ def list_upload_files(db: Session = Depends(get_db)):
 
 @router.delete("/files/{file_id}")
 def delete_upload_file(file_id: int, db: Session = Depends(get_db)):
-    """删除上传文件记录及其原始数据"""
+    """删除上传文件记录及其原始数据（保留下游清洗/派发数据）"""
     record = db.query(UploadFileRecord).filter(UploadFileRecord.id == file_id).first()
     if not record:
         raise HTTPException(status_code=404, detail="文件记录不存在")
+
+    # Batch-delete raw_data in one SQL — avoids 7000+ ORM cascade operations
+    db.execute(text("DELETE FROM raw_data WHERE file_id = :fid"), {"fid": file_id})
+
+    # Delete file record (raw_data already gone, no cascade pressure)
     db.delete(record)
     db.commit()
+
     return {"message": "已删除"}
 
 

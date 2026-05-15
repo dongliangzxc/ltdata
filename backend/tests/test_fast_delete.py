@@ -128,3 +128,36 @@ def test_delete_removes_raw_data_rows(db):
     # Verify all RawDataRecord rows linked to this file are gone
     after = db.query(RawDataRecord).filter(RawDataRecord.file_id == record.id).count()
     assert after == 0, f"Expected 0 RawDataRecord rows after delete, found {after}"
+
+
+def test_delete_nullifies_dispatch_batch_file_id():
+    """DELETE /upload/files/{id} sets dispatch_batches.file_id to NULL (preserves dispatch data)."""
+    from app.models.schemas import DispatchBatch
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    db = TestingSessionLocal()
+
+    file_record = UploadFileRecord(filename="f.xlsx", platform="jd", month_range="2024-01", row_count=0, status="done")
+    db.add(file_record)
+    db.commit()
+    db.refresh(file_record)
+
+    batch = DispatchBatch(file_id=file_record.id, status="done")
+    db.add(batch)
+    db.commit()
+    db.refresh(batch)
+    batch_id = batch.id
+
+    app.dependency_overrides[get_db] = _override_db(db)
+    client2 = TestClient(app, headers=_AUTH_HEADERS)
+    resp = client2.delete(f"/api/upload/files/{file_record.id}")
+    app.dependency_overrides.clear()
+    db.close()
+
+    assert resp.status_code == 200
+    db2 = TestingSessionLocal()
+    updated_batch = db2.query(DispatchBatch).filter(DispatchBatch.id == batch_id).first()
+    db2.close()
+    assert updated_batch is not None
+    assert updated_batch.file_id is None

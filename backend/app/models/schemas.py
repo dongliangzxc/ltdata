@@ -748,7 +748,7 @@ class DispatchBatch(Base):
     __tablename__ = "dispatch_batches"
 
     id = Column(Integer, primary_key=True, index=True)
-    file_id = Column(Integer, ForeignKey("upload_files.id"), nullable=False)
+    file_id = Column(Integer, ForeignKey("upload_files.id", ondelete="SET NULL"), nullable=True)
     status = Column(String(20), nullable=False, default="running")
     total_rows = Column(Integer, nullable=True)
     dispatched_rows = Column(Integer, nullable=True)

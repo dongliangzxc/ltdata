@@ -411,14 +411,14 @@ CREATE TABLE IF NOT EXISTS dispatch_rules (
 
 CREATE TABLE IF NOT EXISTS dispatch_batches (
     id               INT AUTO_INCREMENT PRIMARY KEY,
-    file_id          INT          NOT NULL,
+    file_id          INT          NULL,
     status           VARCHAR(20)  NOT NULL DEFAULT 'running',
     total_rows       INT,
     dispatched_rows  INT,
     unmatched_rows   INT,
     created_at       DATETIME     DEFAULT CURRENT_TIMESTAMP,
     finished_at      DATETIME,
-    CONSTRAINT fk_db_file FOREIGN KEY (file_id) REFERENCES upload_files(id),
+    CONSTRAINT fk_db_file FOREIGN KEY (file_id) REFERENCES upload_files(id) ON DELETE SET NULL,
     INDEX ix_dispatch_batches_file_id (file_id)
 );
 

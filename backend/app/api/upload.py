@@ -131,7 +131,10 @@ def delete_upload_file(file_id: int, db: Session = Depends(get_db)):
     # Batch-delete raw_data in one SQL — avoids 7000+ ORM cascade operations
     db.execute(text("DELETE FROM raw_data WHERE file_id = :fid"), {"fid": file_id})
 
-    # Delete file record (raw_data already gone, no cascade pressure)
+    # Null out dispatch_batches.file_id to release FK before deleting the file record
+    db.execute(text("UPDATE dispatch_batches SET file_id = NULL WHERE file_id = :fid"), {"fid": file_id})
+
+    # Delete file record
     db.delete(record)
     db.commit()
 

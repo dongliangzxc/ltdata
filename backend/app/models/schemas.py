@@ -825,7 +825,7 @@ class DispatchBatchOut(BaseModel):
     model_config = {"from_attributes": True}
 
     id: int
-    file_id: int
+    file_id: Optional[int]
     status: str
     total_rows: Optional[int]
     dispatched_rows: Optional[int]

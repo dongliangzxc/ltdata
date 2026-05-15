@@ -33,6 +33,9 @@ docs/superpowers/
 
 # 平台文档（不提交）
 平台文档/
+
+# 平台元数据（原始数据文件，不提交）
+平台元数据/
 *.rar
 .DS_Store
 .AppleDouble

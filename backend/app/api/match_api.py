@@ -12,6 +12,7 @@ from app.models.schemas import (
     MatchResult, MatchResultOut, MatchSummary,
     CleanJobRecord, RawDataRecord, ModelRecord,
     MatchResultAttr, MatchResultCandidate, MatchCandidateOut, ItemUrlMapping, Category,
+    DispatchItem,
     PaginatedResponse,
 )
 from app.services.matcher import run_match
@@ -174,11 +175,25 @@ def list_pending(
     if status not in allowed_statuses:
         status = "pending"
 
+    # 获取 clean_job 的 dispatch_batch_id，用于关联 dispatch_items 取类目
+    clean_job = db.query(CleanJobRecord).filter(CleanJobRecord.id == clean_job_id).first()
+    dispatch_batch_id = clean_job.dispatch_batch_id if clean_job else None
+
+    # 构建 dispatch_items join 条件（仅在有 dispatch_batch_id 时关联）
+    if dispatch_batch_id is not None:
+        di_join_cond = (
+            (DispatchItem.raw_data_id == MatchResult.raw_data_id) &
+            (DispatchItem.batch_id == dispatch_batch_id)
+        )
+    else:
+        di_join_cond = (DispatchItem.raw_data_id == None)  # noqa: E711 — 无派发批次时不关联
+
     q = (
         db.query(MatchResult, RawDataRecord, ModelRecord, Category, func.count(MatchResultAttr.id).label("attr_count"))
         .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
         .outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
-        .outerjoin(Category, ModelRecord.category_code == Category.code)
+        .outerjoin(DispatchItem, di_join_cond)
+        .outerjoin(Category, DispatchItem.category_code == Category.code)
         .outerjoin(MatchResultAttr, MatchResultAttr.match_result_id == MatchResult.id)
         .filter(
             MatchResult.clean_job_id == clean_job_id,
@@ -194,9 +209,10 @@ def list_pending(
         q = q.filter(Category.code == category_name)
 
     if sort_by == "sales_qty_desc":
-        q = q.order_by(RawDataRecord.sales_qty.desc().nullslast())
+        # MySQL 旧版不支持 NULLS LAST 语法，用 ISNULL() 模拟（NULL 排末尾）
+        q = q.order_by(func.isnull(RawDataRecord.sales_qty).asc(), RawDataRecord.sales_qty.desc())
     elif sort_by == "sales_qty_asc":
-        q = q.order_by(RawDataRecord.sales_qty.asc().nullslast())
+        q = q.order_by(func.isnull(RawDataRecord.sales_qty).asc(), RawDataRecord.sales_qty.asc())
 
     total = q.count()
     rows = q.offset((page - 1) * page_size).limit(page_size).all()
@@ -284,9 +300,10 @@ def list_missing_attrs(
         q = q.filter(Category.code == category_name)
 
     if sort_by == "sales_qty_desc":
-        q = q.order_by(RawDataRecord.sales_qty.desc().nullslast())
+        # MySQL 旧版不支持 NULLS LAST 语法，用 ISNULL() 模拟（NULL 排末尾）
+        q = q.order_by(func.isnull(RawDataRecord.sales_qty).asc(), RawDataRecord.sales_qty.desc())
     elif sort_by == "sales_qty_asc":
-        q = q.order_by(RawDataRecord.sales_qty.asc().nullslast())
+        q = q.order_by(func.isnull(RawDataRecord.sales_qty).asc(), RawDataRecord.sales_qty.asc())
 
     total = q.count()
     rows = q.offset((page - 1) * page_size).limit(page_size).all()

@@ -1,7 +1,5 @@
 """Tests for model_db_importer cleaning utilities."""
-import os
 import pytest
-import openpyxl
 from app.services.model_db_importer import (
     is_dirty_model, is_dirty_brand, normalize_platform,
     extract_item_id, has_attributes, ATTR_COL_MAP,

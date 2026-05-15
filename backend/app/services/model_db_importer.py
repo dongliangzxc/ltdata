@@ -3,7 +3,6 @@ model_db_importer.py
 从品类数据库 Excel 清洗并批量写入 models / model_specs / item_url_mappings。
 """
 import re
-from collections import defaultdict
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -39,6 +38,8 @@ def is_dirty_model(model) -> bool:
     if model is None:
         return True
     s = str(model).strip()
+    if s in _NULL_VALUES:
+        return True
     if len(s) <= 2:
         return True
     if s.isdigit():
@@ -53,6 +54,8 @@ def is_dirty_brand(brand) -> bool:
     if brand is None:
         return True
     s = str(brand).strip()
+    if s in _NULL_VALUES:
+        return True
     if len(s) <= 2:
         return True
     chinese_count = sum(1 for c in s if "\u4e00" <= c <= "\u9fff")

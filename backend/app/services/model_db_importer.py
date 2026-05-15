@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session
 from app.models.schemas import Category, ModelRecord, ModelSpec, ItemUrlMapping
 
 # Excel 属性列名 → model_specs.spec_name 映射
+# 注意：当前映射为耳机品类（headphone）专用列名；
+# 导入其他品类时需扩展此映射或改为按品类动态加载。
 ATTR_COL_MAP: dict[str, str] = {
     "佩戴类型": "wearing_type",
     "In-ear Type": "inear_type",
@@ -199,7 +201,8 @@ def import_model_db(
             model_id = rec.id
             stats["models_new"] += 1
 
-        # 2. model_specs — 删旧插新（幂等）
+        # 2. model_specs — 删旧插新（有意为之：简单实现保证幂等；
+        #    当前 model_specs.id 无外键依赖，重跑安全）
         db.query(ModelSpec).filter(ModelSpec.model_id == model_id).delete()
         attrs_row = group["attrs_row"]
         for col, spec_name in ATTR_COL_MAP.items():

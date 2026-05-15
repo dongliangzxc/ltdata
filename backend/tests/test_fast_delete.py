@@ -1,6 +1,5 @@
 """Tests for P11 fast file deletion."""
 import pytest
-from unittest.mock import MagicMock, patch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -96,3 +95,36 @@ def test_delete_executes_batch_sql(db):
     assert len(execute_calls) >= 1, "db.execute should have been called at least once"
     batch_calls = [c for c in execute_calls if "raw_data" in c.lower() or "DELETE" in c]
     assert len(batch_calls) >= 1, f"Expected a batch DELETE on raw_data, got calls: {execute_calls}"
+
+
+def test_delete_removes_raw_data_rows(db):
+    """DELETE /upload/files/{id} actually removes associated RawDataRecord rows from DB."""
+    record = UploadFileRecord(filename="raw_delete_test.xlsx", platform="jd", month_range="202501")
+    db.add(record)
+    db.commit()
+
+    for i in range(3):
+        raw = RawDataRecord(
+            file_id=record.id,
+            platform="jd",
+            item_id=f"RAW{i}",
+            item_name=f"Product {i}",
+            month=202501,
+        )
+        db.add(raw)
+    db.commit()
+
+    # Confirm rows exist before deletion
+    before = db.query(RawDataRecord).filter(RawDataRecord.file_id == record.id).count()
+    assert before == 3
+
+    app.dependency_overrides[get_db] = _override_db(db)
+    client = TestClient(app, headers=_AUTH_HEADERS)
+    resp = client.delete(f"/api/upload/files/{record.id}")
+    app.dependency_overrides.clear()
+
+    assert resp.status_code == 200
+
+    # Verify all RawDataRecord rows linked to this file are gone
+    after = db.query(RawDataRecord).filter(RawDataRecord.file_id == record.id).count()
+    assert after == 0, f"Expected 0 RawDataRecord rows after delete, found {after}"

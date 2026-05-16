@@ -311,6 +311,7 @@ def _run_upload_confirm_thread(
             "platform":    platform,
             "month_range": month_range,
             "row_count":   len(records),
+            "total_rows":  len(records),
             "inserted":    len(to_insert),
             "skipped":     skipped,
             "preview":     records[:50],

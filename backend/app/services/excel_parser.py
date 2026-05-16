@@ -280,15 +280,21 @@ def parse_with_mapping(
     def _clean(v):
         if v is None:
             return None
+        # pandas NA / numpy nan → None（最初にチェック）
+        try:
+            if pd.isna(v):
+                return None
+        except (TypeError, ValueError):
+            pass
         try:
             if isinstance(v, float) and math.isnan(v):
                 return None
         except (TypeError, ValueError):
             pass
+        # numpy.int64 / numpy.float64 / pandas Int64 → Python ネイティブ型
         try:
-            if pd.isna(v):
-                return None
-        except (TypeError, ValueError):
+            return v.item()
+        except AttributeError:
             pass
         return v
 

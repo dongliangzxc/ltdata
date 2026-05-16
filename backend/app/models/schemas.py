@@ -685,6 +685,32 @@ class ExportJobOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class WorkbenchExportJob(Base):
+    __tablename__ = "workbench_export_jobs"
+
+    id          = Column(Integer, primary_key=True, index=True)
+    status      = Column(String(20), default="pending")   # pending/running/done/error
+    progress    = Column(SmallInteger, default=0)          # 0-100
+    file_token  = Column(String(64), nullable=True)
+    filename    = Column(String(500), nullable=True)
+    error_msg   = Column(Text, nullable=True)
+    created_at  = Column(DateTime, default=datetime.utcnow)
+    finished_at = Column(DateTime, nullable=True)
+
+
+class UploadConfirmJob(Base):
+    __tablename__ = "upload_confirm_jobs"
+
+    id          = Column(Integer, primary_key=True, index=True)
+    file_id     = Column(Integer, nullable=True)
+    status      = Column(String(20), default="pending")   # pending/running/done/error
+    progress    = Column(SmallInteger, default=0)
+    result_data = Column(JSON, nullable=True)   # 完成后存 {file_id, filename, platform, ...}
+    error_msg   = Column(Text, nullable=True)
+    created_at  = Column(DateTime, default=datetime.utcnow)
+    finished_at = Column(DateTime, nullable=True)
+
+
 # ─────────────────────────── 用户（登录） ───────────────────────────
 
 class User(Base):

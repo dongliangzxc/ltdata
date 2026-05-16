@@ -702,7 +702,7 @@ class UploadConfirmJob(Base):
     __tablename__ = "upload_confirm_jobs"
 
     id          = Column(Integer, primary_key=True, index=True)
-    file_id     = Column(Integer, nullable=True)
+    file_id     = Column(Integer, nullable=True)   # set by background thread after file record is created
     status      = Column(String(20), default="pending")   # pending/running/done/error
     progress    = Column(SmallInteger, default=0)
     result_data = Column(JSON, nullable=True)   # 完成后存 {file_id, filename, platform, ...}

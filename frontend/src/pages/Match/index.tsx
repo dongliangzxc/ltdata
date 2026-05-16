@@ -4,7 +4,7 @@ import {
   message, Row, Col, Statistic, Tooltip, Progress, Alert, Popconfirm, InputNumber, Tabs,
   Popover, List,
 } from 'antd'
-import { AimOutlined, CheckOutlined, StopOutlined, CloudUploadOutlined, LoadingOutlined, LinkOutlined, SwapOutlined } from '@ant-design/icons'
+import { AimOutlined, CheckOutlined, StopOutlined, CloudUploadOutlined, LoadingOutlined, LinkOutlined, SwapOutlined, DownloadOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import { useSearchParams } from 'react-router-dom'
 import {
@@ -12,9 +12,11 @@ import {
   confirmMatch, listModels, runPublish, listPublishJobs,
   disableMatch, enableMatch, avgPriceDisable, listDisabled,
   applyAttrRules, listMissingAttrs,
+  triggerExport, getExportJob, getDownloadUrl,
 } from '../../services/api'
 import type { MatchCandidateOut } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
+import ProgressModal from '../../components/ProgressModal'
 
 const { Text } = Typography
 
@@ -172,6 +174,11 @@ export default function MatchPage() {
   const [matchProgress, setMatchProgress] = useState<MatchProgress | null>(null)
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [publishing, setPublishing] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [exportProgress, setExportProgress] = useState(0)
+  const [exportError, setExportError] = useState('')
+  const [exportProgressVisible, setExportProgressVisible] = useState(false)
+  const exportPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [summary, setSummary] = useState<MatchSummary | null>(null)
   const [keyword, setKeyword] = useState('')
   const [categoryName, setCategoryName] = useState<string | undefined>()
@@ -225,6 +232,15 @@ export default function MatchPage() {
       if (pollTimerRef.current) {
         clearInterval(pollTimerRef.current)
         pollTimerRef.current = null
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (exportPollRef.current) {
+        clearInterval(exportPollRef.current)
+        exportPollRef.current = null
       }
     }
   }, [])
@@ -351,6 +367,63 @@ export default function MatchPage() {
       listPublishJobs(selectedJobId).then(r => setPublishJobs(r.data.data ?? []))
     } finally {
       setPublishing(false)
+    }
+  }
+
+  const stopExportPoll = () => {
+    if (exportPollRef.current) {
+      clearInterval(exportPollRef.current)
+      exportPollRef.current = null
+    }
+  }
+
+  const handleExport = async () => {
+    if (exportPollRef.current) return
+    if (!selectedJobId) { message.warning('请先选择清洗任务'); return }
+    setExporting(true)
+    setExportProgress(0)
+    setExportError('')
+    setExportProgressVisible(true)
+    try {
+      const res = await triggerExport({ clean_job_id: selectedJobId, filename_prefix: '匹配结果' })
+      const { job_id: jobId } = res.data as { job_id: number }
+
+      let pollFailCount = 0
+      exportPollRef.current = setInterval(async () => {
+        try {
+          const jobRes = await getExportJob(jobId)
+          const job = jobRes.data as {
+            status: string; token?: string | null; error_msg?: string | null; rows?: number
+          }
+          pollFailCount = 0
+          if (job.status === 'running') setExportProgress(50)
+          if (job.status === 'done' && job.token) {
+            stopExportPoll()
+            setExportProgress(100)
+            setTimeout(() => {
+              setExportProgressVisible(false)
+              setExporting(false)
+              const a = document.createElement('a')
+              a.href = getDownloadUrl(job.token!)
+              a.click()
+            }, 800)
+          } else if (job.status === 'error') {
+            stopExportPoll()
+            setExportError(job.error_msg || '导出失败，请重试')
+            setExporting(false)
+          }
+        } catch {
+          pollFailCount++
+          if (pollFailCount >= 10) {
+            stopExportPoll()
+            setExportError('网络异常，请刷新后重试')
+            setExporting(false)
+          }
+        }
+      }, 1000)
+    } catch {
+      setExportProgressVisible(false)
+      setExporting(false)
     }
   }
 
@@ -631,6 +704,16 @@ export default function MatchPage() {
               style={{ borderColor: '#52c41a', color: '#52c41a' }}
             >
               发布到分析库
+            </Button>
+          </Col>
+          <Col>
+            <Button
+              icon={<DownloadOutlined />}
+              loading={exporting}
+              onClick={handleExport}
+              disabled={!selectedJobId}
+            >
+              导出
             </Button>
           </Col>
         </Row>
@@ -959,6 +1042,13 @@ export default function MatchPage() {
           />
         </Card>
       )}
+
+      <ProgressModal
+        visible={exportProgressVisible}
+        title="正在导出数据..."
+        progress={exportProgress}
+        errorMsg={exportError}
+      />
     </Space>
   )
 }

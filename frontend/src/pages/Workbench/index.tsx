@@ -1,15 +1,16 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import {
   Card, Row, Col, Select, Input, Button, Table,
-  Typography, Tooltip, Form, Statistic, message, Space,
+  Typography, Tooltip, Form, Statistic, Space,
   Popover, Spin, List, Checkbox, Modal
 } from 'antd'
 import { SearchOutlined, DownloadOutlined, ClearOutlined, LinkOutlined, InfoCircleOutlined } from '@ant-design/icons'
 import {
   getWorkbenchFilters, queryWorkbenchData,
-  getWorkbenchDownloadUrl,
+  getWorkbenchExportJob,
   exportWorkbench, fetchItemAttrs
 } from '../../services/api'
+import ProgressModal from '../../components/ProgressModal'
 
 const { Text } = Typography
 
@@ -78,6 +79,10 @@ export default function WorkbenchPage() {
   const [pageSize, setPageSize] = useState(20)
   const [queryParams, setQueryParams] = useState<Record<string, unknown>>({})
   const [exporting, setExporting] = useState(false)
+  const [exportProgress, setExportProgress] = useState(0)
+  const [exportError, setExportError] = useState('')
+  const [exportProgressVisible, setExportProgressVisible] = useState(false)
+  const exportPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [total, setTotal] = useState(0)
   const [dataSource, setDataSource] = useState<DataRow[]>([])
   const [loading, setLoading] = useState(false)
@@ -124,9 +129,19 @@ export default function WorkbenchPage() {
     setTotal(0)
   }
 
+  const stopExportPoll = () => {
+    if (exportPollRef.current) {
+      clearInterval(exportPollRef.current)
+      exportPollRef.current = null
+    }
+  }
+
   const handleExport = async () => {
     setExportModalOpen(false)
     setExporting(true)
+    setExportProgress(0)
+    setExportError('')
+    setExportProgressVisible(true)
     try {
       const vals = form.getFieldsValue()
       const res = await exportWorkbench({
@@ -140,13 +155,34 @@ export default function WorkbenchPage() {
         year: exportYear,
         quarter: exportQuarter,
       })
-      const { token, filename, rows } = res.data
-      message.success(`正在下载：${filename}（共 ${rows} 条）`)
-      const a = document.createElement('a')
-      a.href = getWorkbenchDownloadUrl(token)
-      a.download = filename
-      a.click()
-    } finally {
+      const { job_id } = res.data as { job_id: number }
+
+      exportPollRef.current = setInterval(async () => {
+        try {
+          const jobRes = await getWorkbenchExportJob(job_id)
+          const { status, progress, download_url, error_msg } = jobRes.data
+          setExportProgress(progress)
+          if (status === 'done' && download_url) {
+            stopExportPoll()
+            setExportProgress(100)
+            setTimeout(() => {
+              setExportProgressVisible(false)
+              setExporting(false)
+              const a = document.createElement('a')
+              a.href = download_url
+              a.click()
+            }, 800)
+          } else if (status === 'error') {
+            stopExportPoll()
+            setExportError(error_msg || '导出失败，请重试')
+            setExporting(false)
+          }
+        } catch {
+          // 忽略轮询网络错误
+        }
+      }, 1000)
+    } catch {
+      setExportProgressVisible(false)
       setExporting(false)
     }
   }
@@ -394,6 +430,13 @@ export default function WorkbenchPage() {
           </div>
         </Space>
       </Modal>
+
+      <ProgressModal
+        visible={exportProgressVisible}
+        title="正在导出数据..."
+        progress={exportProgress}
+        errorMsg={exportError}
+      />
     </Space>
   )
 }

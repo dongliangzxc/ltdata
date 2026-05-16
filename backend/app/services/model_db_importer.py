@@ -8,7 +8,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from app.models.schemas import Category, ModelRecord, ModelSpec, ItemUrlMapping
+from app.models.schemas import Category, ModelRecord, ModelSpec, ItemUrlMapping, MetadataSpec
 
 # Excel 属性列名 → model_specs.spec_name 映射
 # 注意：当前映射为耳机品类（headphone）专用列名；
@@ -32,6 +32,66 @@ ATTR_COL_MAP: dict[str, str] = {
     "AI": "ai",
     "AI+功能": "ai_features",
 }
+
+# Excel spec_name → spec_type 映射（与 ATTR_COL_MAP 一一对应）
+ATTR_SPEC_TYPES: dict[str, str] = {
+    "wearing_type":       "text",
+    "inear_type":         "text",
+    "open_back":          "text",
+    "power_type":         "text",
+    "bluetooth_version":  "number",
+    "sport":              "text",
+    "gaming":             "text",
+    "hifi":               "text",
+    "anc":                "text",
+    "enc":                "text",
+    "fast_charging":      "text",
+    "ip_marking":         "text",
+    "health_monitoring":  "text",
+    "touch_screen":       "text",
+    "bone_conduction":    "text",
+    "ai":                 "text",
+    "ai_features":        "text",
+}
+
+_DECIMAL_PLACES: dict[str, int] = {
+    "bluetooth_version": 1,
+}
+
+
+def parse_brand(brand_str: str) -> tuple[str, str]:
+    """
+    将原始品牌字符串拆分为 (brand_code, brand_name)。
+
+    'EDIFIER/漫步者' → ('EDIFIER', '漫步者')
+    'JBL'           → ('JBL', 'JBL')
+    'Sony/索尼/X'   → ('Sony', '索尼/X')  # 只按第一个 / 拆分
+    """
+    s = (brand_str or "").strip()
+    if "/" in s:
+        code, name = s.split("/", 1)
+        return code.strip(), name.strip()
+    return s, s
+
+
+def _upsert_metadata_specs(db: Session, category_code: str) -> None:
+    """为品类补全 metadata_specs 定义（已存在则跳过，幂等）。"""
+    existing = {
+        s.spec_name
+        for s in db.query(MetadataSpec).filter_by(category_code=category_code).all()
+    }
+    for spec_name, spec_type in ATTR_SPEC_TYPES.items():
+        if spec_name in existing:
+            continue
+        db.add(MetadataSpec(
+            category_code=category_code,
+            spec_name=spec_name,
+            spec_type=spec_type,
+            required=0,
+            single_select=1,
+            decimal_places=_DECIMAL_PLACES.get(spec_name),
+        ))
+
 
 _NULL_VALUES = {"", "NULL", "nan", "None", "none"}
 
@@ -123,6 +183,7 @@ def import_model_db(
     if not dry_run:
         if db.query(Category).filter(Category.code == category_code).first() is None:
             raise ValueError(f"Category '{category_code}' not found in database")
+        _upsert_metadata_specs(db, category_code)
     headers = list(all_rows[0])
     attr_cols = [c for c in headers if c in ATTR_COL_MAP]
 
@@ -191,17 +252,19 @@ def import_model_db(
 
     for batch_start, ((brand, model_code), group) in enumerate(groups.items()):
         # 1. models — INSERT IGNORE 语义
+        brand_code, brand_name = parse_brand(brand)
         existing = db.query(ModelRecord).filter_by(
-            brand_code=brand, model_code=model_code
+            brand_code=brand_code, model_code=model_code
         ).first()
         if existing:
             stats["models_existing"] += 1
             model_id = existing.id
         else:
             rec = ModelRecord(
-                brand_code=brand,
+                brand_code=brand_code,
                 model_code=model_code,
                 category_code=category_code,
+                brand_name=brand_name,
             )
             db.add(rec)
             db.flush()

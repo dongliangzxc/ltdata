@@ -7,7 +7,7 @@ import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 from urllib.parse import quote
 
 import pandas as pd
@@ -31,7 +31,6 @@ class WorkbenchExportParams(BaseModel):
     model_code:    Optional[str] = None
     category_name: Optional[str] = None
     keyword:       Optional[str] = None
-    statuses: List[str] = ["matched", "confirmed", "url_matched"]
     year:     Optional[int] = None
     quarter:  Optional[int] = None
 
@@ -265,7 +264,7 @@ def query_data(
     return {"total": total, "page": page, "page_size": page_size, "items": items}
 
 
-@router.post("/export")
+@router.post("/export", status_code=202)
 def export_data(payload: WorkbenchExportParams, db: Session = Depends(get_db)):
     """异步触发工作台导出，立即返回 job_id。"""
     params = {
@@ -278,7 +277,6 @@ def export_data(payload: WorkbenchExportParams, db: Session = Depends(get_db)):
         "year":          payload.year,
         "quarter":       payload.quarter,
     }
-    # NOTE: payload.statuses is intentionally omitted — PublishedItem has no match_status column.
     params = {k: v for k, v in params.items() if v not in (None, "", [])}
 
     job = WorkbenchExportJob(status="pending")

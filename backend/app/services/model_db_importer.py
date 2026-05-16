@@ -72,7 +72,7 @@ def normalize_platform(platform) -> str:
     mapping = {
         "jd": "jd", "JD": "jd", "京东": "jd",
         "淘宝": "taobao", "taobao": "taobao",
-        "天猫": "tmall", "tmall": "tmall",
+        "天猫": "tmall", "tmall": "tmall", "天猫全部": "tmall",
     }
     raw = str(platform).strip()
     return mapping.get(raw, raw.lower())

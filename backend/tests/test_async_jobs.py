@@ -191,7 +191,7 @@ def test_upload_confirm_returns_job_id(db, monkeypatch, tmp_path):
     )
     app.dependency_overrides.clear()
 
-    assert resp.status_code == 200
+    assert resp.status_code == 202
     body = resp.json()
     assert "job_id" in body
     assert body["status"] == "pending"

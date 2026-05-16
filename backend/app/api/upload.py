@@ -164,6 +164,7 @@ def _run_upload_confirm_thread(
 ):
     """后台线程：解析 Excel、去重、写库，更新 job 状态。"""
     db = SessionLocal()
+    job = None
     try:
         job = db.query(UploadConfirmJob).filter_by(id=job_id).first()
         if not job:
@@ -207,19 +208,22 @@ def _run_upload_confirm_thread(
                 db.flush()
                 saved_template_id = existing.id
             else:
+                tmpl = ColumnTemplate(
+                    name=save_template_name,
+                    col_fingerprint=fp,
+                    mapping=mapping,
+                    ignore_columns=ignore_columns,
+                    is_builtin=0,
+                )
+                db.add(tmpl)
+                nested = db.begin_nested()
                 try:
-                    tmpl = ColumnTemplate(
-                        name=save_template_name,
-                        col_fingerprint=fp,
-                        mapping=mapping,
-                        ignore_columns=ignore_columns,
-                        is_builtin=0,
-                    )
-                    db.add(tmpl)
                     db.flush()
+                    nested.commit()
                     saved_template_id = tmpl.id
                 except IntegrityError:
-                    db.rollback()
+                    nested.rollback()
+                    db.expunge(tmpl)
         _upload_progress[job_id] = 50
 
         # 3. 去重（50→60%）
@@ -300,8 +304,7 @@ def _run_upload_confirm_thread(
 
         # 6. 移动临时文件（90→95%）
         final_path = Path(settings.UPLOAD_DIR) / original_filename
-        import shutil as _shutil
-        _shutil.move(str(tmp_path), str(final_path))
+        shutil.move(str(tmp_path), str(final_path))
         _upload_progress[job_id] = 95
 
         # 7. 写 done（95→100%）
@@ -404,7 +407,7 @@ async def upload_headers(
     }
 
 
-@router.post("/confirm")
+@router.post("/confirm", status_code=202)
 async def upload_confirm(payload: dict, db: Session = Depends(get_db)):
     """Phase 2: 异步处理——立即返回 job_id，后台线程解析+写库。"""
     temp_file_id: str = payload.get("temp_file_id", "")

@@ -160,10 +160,11 @@ def test_import_creates_model_and_specs(db, tmp_path):
     assert stats["urls_new"] == 1
 
     model = db.query(ModelRecord).filter_by(
-        brand_code="EDIFIER/漫步者", model_code="G2 无线版"
+        brand_code="EDIFIER", model_code="G2 无线版"
     ).first()
     assert model is not None
     assert model.category_code == "headphone"
+    assert model.brand_name == "漫步者"
 
     spec_names = {s.spec_name for s in db.query(ModelSpec).filter_by(model_id=model.id).all()}
     assert "wearing_type" in spec_names

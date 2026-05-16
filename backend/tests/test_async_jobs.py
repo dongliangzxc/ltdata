@@ -48,3 +48,85 @@ def test_upload_confirm_job_with_result(db):
     db.flush()
     fetched = db.query(UploadConfirmJob).filter_by(id=job.id).first()
     assert fetched.result_data["row_count"] == 500
+
+
+# ── workbench export API ────────────────────────────────────────
+import threading
+from contextlib import asynccontextmanager
+from fastapi.testclient import TestClient
+
+
+@asynccontextmanager
+async def _noop_lifespan(application):
+    yield
+
+
+def _patch_app(db, monkeypatch):
+    """Apply test-time patches: DB overrides, auth bypass, lifespan stub."""
+    from app.main import app
+    from app.models.database import get_db
+    from app.models.analytics_db import get_analytics_db
+
+    def override_db():
+        yield db
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_analytics_db] = override_db
+
+    # Bypass JWT auth middleware
+    monkeypatch.setattr("app.core.security.verify_token", lambda token: "test_user")
+    monkeypatch.setattr("app.main.verify_token", lambda token: "test_user")
+
+    # Stub out lifespan so TestClient doesn't connect to MySQL
+    monkeypatch.setattr(app.router, "lifespan_context", _noop_lifespan)
+
+    return app
+
+
+def test_wb_export_returns_job_id(db, monkeypatch):
+    """POST /workbench/export 应立即返回 job_id，不阻塞。"""
+    # Prevent the background thread from actually running (which would connect to MySQL)
+    monkeypatch.setattr(
+        "app.api.workbench_api._run_wb_export_thread",
+        lambda job_id, params: None,
+    )
+    started = []
+    original_thread = threading.Thread
+
+    class FakeThread:
+        def __init__(self, target=None, args=(), daemon=None, **kwargs):
+            self._target = target
+            self._args = args
+
+        def start(self):
+            started.append(True)
+            # Do NOT call target — it would connect to MySQL
+
+    monkeypatch.setattr(threading, "Thread", FakeThread)
+
+    app = _patch_app(db, monkeypatch)
+    client = TestClient(app, raise_server_exceptions=True)
+    resp = client.post(
+        "/api/workbench/export",
+        json={},
+        headers={"Authorization": "Bearer test_token"},
+    )
+    app.dependency_overrides.clear()
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "job_id" in body
+    assert body["status"] == "pending"
+    assert started
+
+
+def test_wb_export_job_not_found(db, monkeypatch):
+    app = _patch_app(db, monkeypatch)
+    client = TestClient(app, raise_server_exceptions=True)
+    resp = client.get(
+        "/api/workbench/export/jobs/99999",
+        headers={"Authorization": "Bearer test_token"},
+    )
+    app.dependency_overrides.clear()
+
+    assert resp.status_code == 404

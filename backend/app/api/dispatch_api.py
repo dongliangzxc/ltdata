@@ -29,6 +29,8 @@ def _field_value(row: RawDataRecord, field: str) -> str:
         "category_lv1": row.category_lv1,
         "category_lv2": row.category_lv2,
         "category_lv3": row.category_lv3,
+        "category_lv4": row.category_lv4,
+        "category_lv5": row.category_lv5,
         "item_name": row.item_name,
     }
     return (field_map.get(field) or "")

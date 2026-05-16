@@ -122,7 +122,7 @@ def parse_raw_excel(file_path: str | Path) -> tuple[list[dict], str, str]:
         month_range = ""
 
     # 推断并标准化 platform 值（从数据中读取，统一写成小写标准值）
-    _PLATFORM_NORM = {"京东": "jd", "天猫": "tmall", "淘宝": "taobao", "苏宁": "suning"}
+    _PLATFORM_NORM = {"京东": "jd", "天猫": "tmall", "淘宝": "taobao", "苏宁": "suning", "抖音": "douyin"}
     if "platform" in df.columns and df["platform"].notna().any():
         platform_val = df["platform"].dropna().iloc[0]
         platform_str = str(platform_val)
@@ -173,7 +173,7 @@ def parse_raw_excel(file_path: str | Path) -> tuple[list[dict], str, str]:
 STANDARD_FIELD_SET = set(STANDARD_FIELDS)
 
 #: Platform keyword → lowercase standard code
-_PLATFORM_NORM = {"京东": "jd", "天猫": "tmall", "淘宝": "taobao", "苏宁": "suning"}
+_PLATFORM_NORM = {"京东": "jd", "天猫": "tmall", "淘宝": "taobao", "苏宁": "suning", "抖音": "douyin"}
 
 
 def parse_with_mapping(

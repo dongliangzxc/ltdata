@@ -177,6 +177,14 @@ export interface WorkbenchExportParams {
 export function exportWorkbench(params: WorkbenchExportParams) {
   return api.post('/workbench/export', params)
 }
+export const getWorkbenchExportJob = (jobId: number) =>
+  api.get<{
+    job_id: number
+    status: 'pending' | 'running' | 'done' | 'error'
+    progress: number
+    download_url: string | null
+    error_msg: string | null
+  }>(`/workbench/export/jobs/${jobId}`)
 export const runPublish = (clean_job_id: number) =>
   api.post('/publish/run', { clean_job_id })
 export const listPublishJobs = (clean_job_id?: number) =>
@@ -365,6 +373,23 @@ export const confirmUpload = (payload: {
   save_template_name?: string
   template_id?: number
 }) => api.post('/upload/confirm', payload, { timeout: 300000 })
+
+export const getUploadConfirmJob = (jobId: number) =>
+  api.get<{
+    job_id: number
+    status: 'pending' | 'running' | 'done' | 'error'
+    progress: number
+    error_msg: string | null
+    // 以下字段仅 status=done 时存在
+    file_id?: number
+    filename?: string
+    platform?: string
+    month_range?: string
+    row_count?: number
+    inserted?: number
+    skipped?: number
+    preview?: Record<string, unknown>[]
+  }>(`/upload/confirm/jobs/${jobId}`)
 
 export const listUploadTemplates = () =>
   api.get<Array<{

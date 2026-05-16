@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import {
   Card, Upload, Table, Tag, Button, Popconfirm, Select, Checkbox,
   message, Space, Typography, Spin, Alert, Tabs, Switch, Input,
@@ -14,7 +14,9 @@ import {
   listUploadFiles, deleteUploadFile,
   listUploadTemplates,
   updateUploadTemplate, deleteUploadTemplate,
+  getUploadConfirmJob,
 } from '../../services/api'
+import ProgressModal from '../../components/ProgressModal'
 
 const { Text } = Typography
 const { Option } = Select
@@ -151,6 +153,10 @@ function MappingCard({
     suggested_template?.id
   )
   const [confirming, setConfirming] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
+  const [uploadError, setUploadError] = useState('')
+  const [uploadProgressVisible, setUploadProgressVisible] = useState(false)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const applyTemplate = (tmpl: TemplateRow) => {
     const newMap: Record<string, string> = {}
@@ -168,12 +174,32 @@ function MappingCard({
     Object.values(mapping).includes(f)
   )
 
+  const stopPoll = () => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+      }
+    }
+  }, [])
+
   const handleConfirm = async () => {
+    if (pollRef.current) return
     if (!allRequiredMapped) {
       message.warning('还有必填字段未完成映射')
       return
     }
     setConfirming(true)
+    setUploadProgress(0)
+    setUploadError('')
+    setUploadProgressVisible(true)
     try {
       const res = await confirmUpload({
         temp_file_id,
@@ -182,10 +208,39 @@ function MappingCard({
         save_template_name: saveSwitch && saveName ? saveName : undefined,
         template_id: selectedTemplateId,
       })
-      onSuccess(res.data as Record<string, unknown>)
+      const { job_id } = res.data as { job_id: number }
+
+      let pollFailCount = 0
+      pollRef.current = setInterval(async () => {
+        try {
+          const jobRes = await getUploadConfirmJob(job_id)
+          const { status, progress, error_msg } = jobRes.data
+          pollFailCount = 0  // reset on success
+          setUploadProgress(progress)
+          if (status === 'done') {
+            stopPoll()
+            setUploadProgress(100)
+            setTimeout(() => {
+              setUploadProgressVisible(false)
+              setConfirming(false)
+              onSuccess(jobRes.data as Record<string, unknown>)
+            }, 600)
+          } else if (status === 'error') {
+            stopPoll()
+            setUploadError(error_msg || '处理失败，请重试')
+            setConfirming(false)
+          }
+        } catch {
+          pollFailCount++
+          if (pollFailCount >= 10) {
+            stopPoll()
+            setUploadError('网络异常，请刷新后重试')
+            setConfirming(false)
+          }
+        }
+      }, 1000)
     } catch {
-      // error handled by interceptor
-    } finally {
+      setUploadProgressVisible(false)
       setConfirming(false)
     }
   }
@@ -259,72 +314,80 @@ function MappingCard({
   ]
 
   return (
-    <Card
-      title={
-        <Space>
-          <span>列映射确认：{filename}</span>
-          {match_score < 70 && (
-            <Tag color="warning">未找到高度匹配的模板，请仔细核对映射</Tag>
-          )}
-        </Space>
-      }
-      extra={
-        <Space>
-          <Text type="secondary">切换模板：</Text>
-          <Select
-            value={selectedTemplateId}
-            style={{ width: 200 }}
-            allowClear
-            placeholder="选择已有模板…"
-            onChange={(id: number) => {
-              const tmpl = templates.find(t => t.id === id)
-              if (tmpl) applyTemplate(tmpl)
-            }}
-          >
-            {templates.map(t => (
-              <Option key={t.id} value={t.id}>
-                {t.is_builtin ? '★ ' : ''}{t.name}
-              </Option>
-            ))}
-          </Select>
-        </Space>
-      }
-    >
-      <Table
-        dataSource={columns.map(col => ({ col }))}
-        columns={mappingTableCols}
-        rowKey="col"
-        size="small"
-        pagination={false}
-        scroll={{ y: 400 }}
-      />
-
-      <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
-        <Switch checked={saveSwitch} onChange={setSaveSwitch} />
-        <Text>保存为模板</Text>
-        {saveSwitch && (
-          <Input
-            value={saveName}
-            onChange={e => setSaveName(e.target.value)}
-            placeholder="模板名称"
-            style={{ width: 200 }}
-          />
-        )}
-        <div style={{ marginLeft: 'auto' }}>
+    <>
+      <Card
+        title={
           <Space>
-            <Button onClick={onCancel}>取消</Button>
-            <Button
-              type="primary"
-              onClick={handleConfirm}
-              loading={confirming}
-              disabled={!allRequiredMapped}
-            >
-              确认入库
-            </Button>
+            <span>列映射确认：{filename}</span>
+            {match_score < 70 && (
+              <Tag color="warning">未找到高度匹配的模板，请仔细核对映射</Tag>
+            )}
           </Space>
+        }
+        extra={
+          <Space>
+            <Text type="secondary">切换模板：</Text>
+            <Select
+              value={selectedTemplateId}
+              style={{ width: 200 }}
+              allowClear
+              placeholder="选择已有模板…"
+              onChange={(id: number) => {
+                const tmpl = templates.find(t => t.id === id)
+                if (tmpl) applyTemplate(tmpl)
+              }}
+            >
+              {templates.map(t => (
+                <Option key={t.id} value={t.id}>
+                  {t.is_builtin ? '★ ' : ''}{t.name}
+                </Option>
+              ))}
+            </Select>
+          </Space>
+        }
+      >
+        <Table
+          dataSource={columns.map(col => ({ col }))}
+          columns={mappingTableCols}
+          rowKey="col"
+          size="small"
+          pagination={false}
+          scroll={{ y: 400 }}
+        />
+
+        <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
+          <Switch checked={saveSwitch} onChange={setSaveSwitch} />
+          <Text>保存为模板</Text>
+          {saveSwitch && (
+            <Input
+              value={saveName}
+              onChange={e => setSaveName(e.target.value)}
+              placeholder="模板名称"
+              style={{ width: 200 }}
+            />
+          )}
+          <div style={{ marginLeft: 'auto' }}>
+            <Space>
+              <Button onClick={onCancel}>取消</Button>
+              <Button
+                type="primary"
+                onClick={handleConfirm}
+                loading={confirming}
+                disabled={!allRequiredMapped}
+              >
+                确认入库
+              </Button>
+            </Space>
+          </div>
         </div>
-      </div>
-    </Card>
+      </Card>
+      <ProgressModal
+        visible={uploadProgressVisible}
+        title="正在处理文件..."
+        progress={uploadProgress}
+        errorMsg={uploadError}
+      />
+    </>
   )
 }
 

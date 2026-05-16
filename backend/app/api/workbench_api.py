@@ -278,6 +278,7 @@ def export_data(payload: WorkbenchExportParams, db: Session = Depends(get_db)):
         "year":          payload.year,
         "quarter":       payload.quarter,
     }
+    # NOTE: payload.statuses is intentionally omitted — PublishedItem has no match_status column.
     params = {k: v for k, v in params.items() if v not in (None, "", [])}
 
     job = WorkbenchExportJob(status="pending")

@@ -167,6 +167,7 @@ def generate_sql(rules: list[dict]) -> str:
         "-- ============================================================",
         "-- 分发规则导入 SQL（由 generate_dispatch_rules.py 自动生成）",
         "-- ============================================================",
+        "SET NAMES utf8mb4;",
         "",
         "-- 1. 品类表更新",
         "INSERT IGNORE INTO categories (code, name) VALUES ('live_camera', '直播摄像头');",
@@ -175,14 +176,14 @@ def generate_sql(rules: list[dict]) -> str:
         "",
         f"-- 2. 分发规则（共 {len(rules)} 条）",
         "INSERT INTO dispatch_rules",
-        "    (category_code, platform, field, match_type, value, item_name_keyword, priority)",
+        "    (category_code, platform, field, match_type, value, item_name_keyword, priority, is_active)",
         "VALUES",
     ]
 
     value_rows = []
     for r in rules:
         value_rows.append(
-            "  ({}, {}, {}, {}, {}, {}, {})".format(
+            "  ({}, {}, {}, {}, {}, {}, {}, 1)".format(
                 sql_str(r["category_code"]),
                 sql_str(r["platform"]),
                 sql_str(r["field"]),

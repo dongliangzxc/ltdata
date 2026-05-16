@@ -130,3 +130,85 @@ def test_wb_export_job_not_found(db, monkeypatch):
     app.dependency_overrides.clear()
 
     assert resp.status_code == 404
+
+
+# ── upload confirm API ──────────────────────────────────────────
+def test_upload_confirm_returns_job_id(db, monkeypatch, tmp_path):
+    """POST /upload/confirm 应立即返回 job_id，不阻塞。"""
+    import threading
+    from app.models.database import get_db
+
+    # Prevent background thread from running (would connect to MySQL)
+    monkeypatch.setattr(
+        "app.api.upload._run_upload_confirm_thread",
+        lambda *args, **kwargs: None,
+    )
+    started = []
+    original_thread = threading.Thread
+
+    class FakeThread:
+        def __init__(self, target=None, args=(), daemon=None, **kwargs):
+            self._target = target
+            self._args = args
+
+        def start(self):
+            started.append(True)
+            # Do NOT call target — it would connect to MySQL
+
+    monkeypatch.setattr(threading, "Thread", FakeThread)
+
+    # 创建假的临时文件
+    fake_id = "testfakeid123"
+    fake_filename = "test.xlsx"
+    upload_tmp = tmp_path / "tmp"
+    upload_tmp.mkdir()
+    (upload_tmp / f"{fake_id}_{fake_filename}").write_bytes(b"fake")
+
+    # monkeypatch UPLOAD_DIR
+    from app.core import config
+    monkeypatch.setattr(config.settings, "UPLOAD_DIR", str(tmp_path))
+
+    app = _patch_app(db, monkeypatch)
+    app.dependency_overrides[get_db] = lambda: (yield db)
+
+    client = TestClient(app, raise_server_exceptions=True)
+    resp = client.post(
+        "/api/upload/confirm",
+        json={
+            "temp_file_id": fake_id,
+            "mapping": {
+                "col_item_id":   "item_id",
+                "col_month":     "month",
+                "col_platform":  "platform",
+                "col_item_name": "item_name",
+                "col_sales_qty": "sales_qty",
+                "col_amount":    "sales_amount",
+                "col_price":     "price",
+            },
+            "ignore_columns": [],
+        },
+        headers={"Authorization": "Bearer test_token"},
+    )
+    app.dependency_overrides.clear()
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "job_id" in body
+    assert body["status"] == "pending"
+    assert started
+
+
+def test_upload_confirm_job_not_found(db, monkeypatch):
+    from app.models.database import get_db
+
+    app = _patch_app(db, monkeypatch)
+    app.dependency_overrides[get_db] = lambda: (yield db)
+
+    client = TestClient(app, raise_server_exceptions=True)
+    resp = client.get(
+        "/api/upload/confirm/jobs/99999",
+        headers={"Authorization": "Bearer test_token"},
+    )
+    app.dependency_overrides.clear()
+
+    assert resp.status_code == 404

@@ -15,6 +15,13 @@ from app.services.import_helper import (
     find_best_template as _ih_find_best_template,
     cleanup_old_tmp as _ih_cleanup_old_tmp,
 )
+import threading
+from datetime import datetime
+from app.models.database import SessionLocal
+from app.models.schemas import UploadConfirmJob
+
+# 内存进度表：job_id → 0-100，线程结束后清除
+_upload_progress: dict[int, int] = {}
 
 router = APIRouter(prefix="/api/upload", tags=["upload"])
 
@@ -146,6 +153,191 @@ def delete_upload_file(file_id: int, db: Session = Depends(get_db)):
 REQUIRED_FIELDS = {"item_id", "month", "platform", "item_name", "sales_qty", "sales_amount", "price"}
 
 
+def _run_upload_confirm_thread(
+    job_id: int,
+    tmp_path: str,
+    original_filename: str,
+    mapping: dict,
+    ignore_columns: list,
+    save_template_name,
+    template_id_use,
+):
+    """后台线程：解析 Excel、去重、写库，更新 job 状态。"""
+    db = SessionLocal()
+    try:
+        job = db.query(UploadConfirmJob).filter_by(id=job_id).first()
+        if not job:
+            return
+        job.status = "running"
+        db.commit()
+        _upload_progress[job_id] = 5
+
+        # 1. 解析 Excel（5→40%）
+        try:
+            records, platform, month_range = parse_with_mapping(
+                tmp_path, mapping, ignore_columns
+            )
+        except Exception as e:
+            job.status = "error"
+            job.error_msg = f"文件解析失败: {e}"
+            job.finished_at = datetime.utcnow()
+            db.commit()
+            return
+        _upload_progress[job_id] = 40
+
+        # 2. 可选保存模板（40→50%）
+        saved_template_id = template_id_use
+        if save_template_name:
+            from sqlalchemy.exc import IntegrityError
+            fp = _col_fingerprint(list(mapping.keys()))
+            existing = db.query(ColumnTemplate).filter(
+                ColumnTemplate.col_fingerprint == fp,
+                ColumnTemplate.is_builtin == 0,
+            ).first()
+            if not existing:
+                existing = db.query(ColumnTemplate).filter(
+                    ColumnTemplate.name == save_template_name,
+                    ColumnTemplate.is_builtin == 0,
+                ).first()
+            if existing:
+                existing.name = save_template_name
+                existing.mapping = mapping
+                existing.ignore_columns = ignore_columns
+                existing.col_fingerprint = fp
+                db.flush()
+                saved_template_id = existing.id
+            else:
+                try:
+                    tmpl = ColumnTemplate(
+                        name=save_template_name,
+                        col_fingerprint=fp,
+                        mapping=mapping,
+                        ignore_columns=ignore_columns,
+                        is_builtin=0,
+                    )
+                    db.add(tmpl)
+                    db.flush()
+                    saved_template_id = tmpl.id
+                except IntegrityError:
+                    db.rollback()
+        _upload_progress[job_id] = 50
+
+        # 3. 去重（50→60%）
+        keys = [
+            (str(r.get("item_id")), r.get("month"), r.get("platform"))
+            for r in records
+            if r.get("item_id") is not None
+        ]
+        existing_set: set = set()
+        if keys:
+            DEDUP_BATCH = 500
+            for i in range(0, len(keys), DEDUP_BATCH):
+                chunk = keys[i: i + DEDUP_BATCH]
+                rows = db.query(
+                    RawDataRecord.item_id, RawDataRecord.month, RawDataRecord.platform
+                ).filter(
+                    tuple_(RawDataRecord.item_id, RawDataRecord.month, RawDataRecord.platform).in_(chunk)
+                ).all()
+                existing_set.update((e.item_id, e.month, e.platform) for e in rows)
+        to_insert = [
+            r for r in records
+            if (str(r.get("item_id")), r.get("month"), r.get("platform")) not in existing_set
+        ]
+        skipped = len(records) - len(to_insert)
+        _upload_progress[job_id] = 60
+
+        # 4. 写 upload_files 记录（60→65%）
+        file_record = UploadFileRecord(
+            filename=original_filename,
+            platform=platform,
+            month_range=month_range,
+            row_count=len(records),
+            status="done",
+            template_id=saved_template_id,
+        )
+        db.add(file_record)
+        db.flush()
+
+        # 5. 批量写入 raw_data（65→90%）
+        if to_insert:
+            batch_size = 1000
+            for i in range(0, len(to_insert), batch_size):
+                chunk = to_insert[i: i + batch_size]
+                db.execute(
+                    RawDataRecord.__table__.insert(),
+                    [
+                        {
+                            "file_id":      file_record.id,
+                            "platform":     r.get("platform"),
+                            "month":        r.get("month"),
+                            "category_lv0": r.get("category_lv0"),
+                            "category_lv1": r.get("category_lv1"),
+                            "category_lv2": r.get("category_lv2"),
+                            "category_lv3": r.get("category_lv3"),
+                            "category_lv4": r.get("category_lv4"),
+                            "category_lv5": r.get("category_lv5"),
+                            "item_id":      str(r.get("item_id")) if r.get("item_id") else None,
+                            "item_name":    r.get("item_name"),
+                            "item_image":   r.get("item_image"),
+                            "item_url":     r.get("item_url"),
+                            "ref_price":    r.get("ref_price"),
+                            "brand_raw":    r.get("brand_raw"),
+                            "shop_name":    r.get("shop_name"),
+                            "sales_qty":    r.get("sales_qty"),
+                            "sales_amount": r.get("sales_amount"),
+                            "price":        r.get("price"),
+                            "brand_std":    r.get("brand_std"),
+                            "model_std":    r.get("model_std"),
+                            "extra_data":   r.get("extra_data"),
+                        }
+                        for r in chunk
+                    ],
+                )
+                _upload_progress[job_id] = 65 + int(25 * min(i + batch_size, len(to_insert)) / max(len(to_insert), 1))
+        db.commit()
+        db.refresh(file_record)
+        _upload_progress[job_id] = 90
+
+        # 6. 移动临时文件（90→95%）
+        final_path = Path(settings.UPLOAD_DIR) / original_filename
+        import shutil as _shutil
+        _shutil.move(str(tmp_path), str(final_path))
+        _upload_progress[job_id] = 95
+
+        # 7. 写 done（95→100%）
+        result = {
+            "file_id":     file_record.id,
+            "filename":    original_filename,
+            "platform":    platform,
+            "month_range": month_range,
+            "row_count":   len(records),
+            "inserted":    len(to_insert),
+            "skipped":     skipped,
+            "preview":     records[:50],
+        }
+        job.file_id     = file_record.id
+        job.status      = "done"
+        job.progress    = 100
+        job.result_data = result
+        job.finished_at = datetime.utcnow()
+        db.commit()
+        _upload_progress[job_id] = 100
+
+    except Exception as e:
+        try:
+            job = db.query(UploadConfirmJob).filter_by(id=job_id).first()
+            if job:
+                job.status    = "error"
+                job.error_msg = str(e)
+                job.finished_at = datetime.utcnow()
+                db.commit()
+        except Exception:
+            pass
+    finally:
+        _upload_progress.pop(job_id, None)
+        db.close()
+
+
 def _col_fingerprint(columns: list) -> str:
     return _ih_col_fingerprint(columns)
 
@@ -213,7 +405,7 @@ async def upload_headers(
 
 @router.post("/confirm")
 async def upload_confirm(payload: dict, db: Session = Depends(get_db)):
-    """Phase 2: Parse temp file with confirmed mapping and store data."""
+    """Phase 2: 异步处理——立即返回 job_id，后台线程解析+写库。"""
     temp_file_id: str = payload.get("temp_file_id", "")
     mapping: dict = payload.get("mapping", {})
     ignore_columns: list = payload.get("ignore_columns", [])
@@ -223,7 +415,7 @@ async def upload_confirm(payload: dict, db: Session = Depends(get_db)):
     if not temp_file_id:
         raise HTTPException(status_code=400, detail="temp_file_id 不能为空")
 
-    # Find temporary file
+    # 找临时文件（同步检查，快）
     tmp_dir = Path(settings.UPLOAD_DIR) / "tmp"
     matches = list(tmp_dir.glob(f"{temp_file_id}_*"))
     if not matches:
@@ -231,7 +423,7 @@ async def upload_confirm(payload: dict, db: Session = Depends(get_db)):
     tmp_path = matches[0]
     original_filename = tmp_path.name[len(temp_file_id) + 1:]
 
-    # Validate required fields are mapped
+    # 校验必填字段映射（同步校验，快）
     mapped_targets = {v for v in mapping.values() if v != "__ext__"}
     missing = REQUIRED_FIELDS - mapped_targets
     if missing:
@@ -240,135 +432,44 @@ async def upload_confirm(payload: dict, db: Session = Depends(get_db)):
             detail=f"以下必填字段未映射：{', '.join(sorted(missing))}"
         )
 
-    try:
-        records, platform, month_range = parse_with_mapping(tmp_path, mapping, ignore_columns)
-    except Exception as e:
-        raise HTTPException(status_code=422, detail=f"文件解析失败: {e}")
-
-    # Optionally save/update template
-    saved_template_id = template_id_use
-    if save_template_name:
-        fp = _col_fingerprint(list(mapping.keys()))
-        existing = db.query(ColumnTemplate).filter(
-            ColumnTemplate.col_fingerprint == fp,
-            ColumnTemplate.is_builtin == 0,
-        ).first()
-        if not existing:
-            # Also check by name to avoid IntegrityError
-            existing = db.query(ColumnTemplate).filter(
-                ColumnTemplate.name == save_template_name,
-                ColumnTemplate.is_builtin == 0,
-            ).first()
-        if existing:
-            existing.name = save_template_name
-            existing.mapping = mapping
-            existing.ignore_columns = ignore_columns
-            existing.col_fingerprint = fp
-            db.flush()
-            saved_template_id = existing.id
-        else:
-            from sqlalchemy.exc import IntegrityError
-            try:
-                tmpl = ColumnTemplate(
-                    name=save_template_name,
-                    col_fingerprint=fp,
-                    mapping=mapping,
-                    ignore_columns=ignore_columns,
-                    is_builtin=0,
-                )
-                db.add(tmpl)
-                db.flush()
-                saved_template_id = tmpl.id
-            except IntegrityError:
-                db.rollback()
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"模板名称「{save_template_name}」已存在，请使用不同的名称"
-                )
-
-    # Deduplication — batch the IN query to avoid oversized SQL (max 500 tuples/batch)
-    keys = [
-        (str(r.get("item_id")), r.get("month"), r.get("platform"))
-        for r in records
-        if r.get("item_id") is not None
-    ]
-    existing_set: set = set()
-    if keys:
-        DEDUP_BATCH = 500
-        for i in range(0, len(keys), DEDUP_BATCH):
-            chunk = keys[i: i + DEDUP_BATCH]
-            rows = db.query(
-                RawDataRecord.item_id, RawDataRecord.month, RawDataRecord.platform
-            ).filter(
-                tuple_(RawDataRecord.item_id, RawDataRecord.month, RawDataRecord.platform).in_(chunk)
-            ).all()
-            existing_set.update((e.item_id, e.month, e.platform) for e in rows)
-    to_insert = [
-        r for r in records
-        if (str(r.get("item_id")), r.get("month"), r.get("platform")) not in existing_set
-    ]
-
-    skipped = len(records) - len(to_insert)
-
-    # Write upload_files record
-    file_record = UploadFileRecord(
-        filename=original_filename,
-        platform=platform,
-        month_range=month_range,
-        row_count=len(records),
-        status="done",
-        template_id=saved_template_id,
-    )
-    db.add(file_record)
-    db.flush()
-
-    # Write raw_data — use Core bulk INSERT for speed
-    if to_insert:
-        db.execute(
-            RawDataRecord.__table__.insert(),
-            [
-                {
-                    "file_id": file_record.id,
-                    "platform": r.get("platform"),
-                    "month": r.get("month"),
-                    "category_lv0": r.get("category_lv0"),
-                    "category_lv1": r.get("category_lv1"),
-                    "category_lv2": r.get("category_lv2"),
-                    "category_lv3": r.get("category_lv3"),
-                    "category_lv4": r.get("category_lv4"),
-                    "category_lv5": r.get("category_lv5"),
-                    "item_id": str(r.get("item_id")) if r.get("item_id") else None,
-                    "item_name": r.get("item_name"),
-                    "item_image": r.get("item_image"),
-                    "item_url": r.get("item_url"),
-                    "ref_price": r.get("ref_price"),
-                    "brand_raw": r.get("brand_raw"),
-                    "shop_name": r.get("shop_name"),
-                    "sales_qty": r.get("sales_qty"),
-                    "sales_amount": r.get("sales_amount"),
-                    "price": r.get("price"),
-                    "brand_std": r.get("brand_std"),
-                    "model_std": r.get("model_std"),
-                    "extra_data": r.get("extra_data"),
-                }
-                for r in to_insert
-            ],
-        )
+    # 创建 job 记录
+    job = UploadConfirmJob(status="pending")
+    db.add(job)
     db.commit()
-    db.refresh(file_record)
+    db.refresh(job)
 
-    # Move temp file to permanent directory
-    final_path = Path(settings.UPLOAD_DIR) / original_filename
-    shutil.move(str(tmp_path), str(final_path))
+    t = threading.Thread(
+        target=_run_upload_confirm_thread,
+        args=(
+            job.id,
+            str(tmp_path),
+            original_filename,
+            mapping,
+            ignore_columns,
+            save_template_name,
+            template_id_use,
+        ),
+        daemon=True,
+    )
+    t.start()
 
-    preview = records[:50]
-    return {
-        "file_id": file_record.id,
-        "filename": original_filename,
-        "platform": platform,
-        "month_range": month_range,
-        "row_count": len(records),
-        "inserted": len(to_insert),
-        "skipped": skipped,
-        "preview": preview,
+    return {"job_id": job.id, "status": "pending"}
+
+
+@router.get("/confirm/jobs/{job_id}")
+def get_upload_confirm_job(job_id: int, db: Session = Depends(get_db)):
+    """轮询上传确认任务状态和进度。"""
+    job = db.query(UploadConfirmJob).filter_by(id=job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    progress = _upload_progress.get(job_id, job.progress)
+    resp: dict = {
+        "job_id":   job.id,
+        "status":   job.status,
+        "progress": progress,
+        "error_msg": job.error_msg,
     }
+    if job.status == "done" and job.result_data:
+        resp.update(job.result_data)
+    return resp

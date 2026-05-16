@@ -38,6 +38,8 @@ BASE_COLS = [
     ("price",         "价格"),
     ("brand_std",     "品牌"),
     ("model_code",    "型号"),
+    ("brand_name",    "品牌名称"),
+    ("model_name",    "型号名称"),
 ]
 
 BASE_FIELD_NAMES = [f for f, _ in BASE_COLS]
@@ -73,6 +75,7 @@ def export_match_job(
         .filter(
             MatchResult.clean_job_id == clean_job_id,
             MatchResult.match_status.in_(["url_matched", "matched", "confirmed"]),
+            MatchResult.is_disabled == 0,
         )
         .all()
     )
@@ -99,6 +102,10 @@ def export_match_job(
                 row[field] = rd.brand_std or rd.brand_raw or ""
             elif field == "model_code":
                 row[field] = m.model_code or ""
+            elif field == "brand_name":
+                row[field] = m.brand_name or ""
+            elif field == "model_name":
+                row[field] = m.model_name or ""
             else:
                 row[field] = getattr(rd, field, None)
 

@@ -114,14 +114,15 @@ def import_model_db(
     """
     import openpyxl
 
+    # 先读 Excel（耗时），再开 DB 事务，避免长时间空闲导致连接断开
+    wb = openpyxl.load_workbook(excel_path, read_only=True, data_only=True)
+    ws = wb.active
+    all_rows = list(ws.iter_rows(values_only=True))
+
     # 校验品类存在（dry-run 模式跳过，不需要 DB 连接）
     if not dry_run:
         if db.query(Category).filter(Category.code == category_code).first() is None:
             raise ValueError(f"Category '{category_code}' not found in database")
-
-    wb = openpyxl.load_workbook(excel_path, read_only=True, data_only=True)
-    ws = wb.active
-    all_rows = list(ws.iter_rows(values_only=True))
     headers = list(all_rows[0])
     attr_cols = [c for c in headers if c in ATTR_COL_MAP]
 
@@ -186,8 +187,9 @@ def import_model_db(
     # 同一 Excel 中同一 item_id 可能出现在多个 (brand, model) 分组；
     # session 内未 flush 的记录对后续 query 不可见，用 set 防止重复 INSERT。
     url_cache: set[tuple] = set()
+    COMMIT_BATCH = 500  # 每处理 500 个型号提交一次，避免长事务导致 MySQL 断连
 
-    for (brand, model_code), group in groups.items():
+    for batch_start, ((brand, model_code), group) in enumerate(groups.items()):
         # 1. models — INSERT IGNORE 语义
         existing = db.query(ModelRecord).filter_by(
             brand_code=brand, model_code=model_code
@@ -243,6 +245,9 @@ def import_model_db(
                 ))
                 stats["urls_new"] += 1
             url_cache.add(key)
+
+        if (batch_start + 1) % COMMIT_BATCH == 0:
+            db.commit()
 
     db.commit()
     return stats

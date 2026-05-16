@@ -136,7 +136,17 @@ export default function WorkbenchPage() {
     }
   }
 
+  useEffect(() => {
+    return () => {
+      if (exportPollRef.current) {
+        clearInterval(exportPollRef.current)
+        exportPollRef.current = null
+      }
+    }
+  }, [])
+
   const handleExport = async () => {
+    if (exportPollRef.current) return
     setExportModalOpen(false)
     setExporting(true)
     setExportProgress(0)
@@ -157,10 +167,12 @@ export default function WorkbenchPage() {
       })
       const { job_id } = res.data as { job_id: number }
 
+      let pollFailCount = 0
       exportPollRef.current = setInterval(async () => {
         try {
           const jobRes = await getWorkbenchExportJob(job_id)
           const { status, progress, download_url, error_msg } = jobRes.data
+          pollFailCount = 0  // reset on success
           setExportProgress(progress)
           if (status === 'done' && download_url) {
             stopExportPoll()
@@ -178,7 +190,12 @@ export default function WorkbenchPage() {
             setExporting(false)
           }
         } catch {
-          // 忽略轮询网络错误
+          pollFailCount++
+          if (pollFailCount >= 10) {
+            stopExportPoll()
+            setExportError('网络异常，请刷新后重试')
+            setExporting(false)
+          }
         }
       }, 1000)
     } catch {

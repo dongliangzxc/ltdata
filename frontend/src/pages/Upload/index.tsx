@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import {
   Card, Upload, Table, Tag, Button, Popconfirm, Select, Checkbox,
   message, Space, Typography, Spin, Alert, Tabs, Switch, Input,
@@ -181,7 +181,17 @@ function MappingCard({
     }
   }
 
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+      }
+    }
+  }, [])
+
   const handleConfirm = async () => {
+    if (pollRef.current) return
     if (!allRequiredMapped) {
       message.warning('还有必填字段未完成映射')
       return
@@ -200,10 +210,12 @@ function MappingCard({
       })
       const { job_id } = res.data as { job_id: number }
 
+      let pollFailCount = 0
       pollRef.current = setInterval(async () => {
         try {
           const jobRes = await getUploadConfirmJob(job_id)
           const { status, progress, error_msg } = jobRes.data
+          pollFailCount = 0  // reset on success
           setUploadProgress(progress)
           if (status === 'done') {
             stopPoll()
@@ -219,7 +231,12 @@ function MappingCard({
             setConfirming(false)
           }
         } catch {
-          // 忽略轮询网络错误
+          pollFailCount++
+          if (pollFailCount >= 10) {
+            stopPoll()
+            setUploadError('网络异常，请刷新后重试')
+            setConfirming(false)
+          }
         }
       }, 1000)
     } catch {

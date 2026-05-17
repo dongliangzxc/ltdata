@@ -140,8 +140,36 @@ def export_match_job(
                 row[field] = getattr(rd, field, None)
         pending_data.append(row)
 
+    # ── 5b. 查待审核条目（text_only：文本匹配到型号，但有新 URL）────
+    text_only_rows = (
+        db.query(MatchResult, RawDataRecord, ModelRecord)
+        .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
+        .join(ModelRecord,   MatchResult.model_id     == ModelRecord.id)
+        .filter(
+            MatchResult.clean_job_id == clean_job_id,
+            MatchResult.match_status == "text_only",
+            MatchResult.is_disabled == 0,
+        )
+        .all()
+    )
+    text_only_data: list[dict] = []
+    for mr, rd, m in text_only_rows:
+        row = {}
+        for field in BASE_FIELD_NAMES:
+            if field == "brand_std":
+                row[field] = rd.brand_std or rd.brand_raw or ""
+            elif field == "model_code":
+                row[field] = m.model_code or ""
+            elif field == "brand_name":
+                row[field] = m.brand_name or ""
+            elif field == "model_name":
+                row[field] = m.model_name or ""
+            else:
+                row[field] = getattr(rd, field, None)
+        text_only_data.append(row)
+
     # ── 6. 写 Excel（多 Sheet）────────────────────────────────────
-    if not category_data and not pending_data:
+    if not category_data and not pending_data and not text_only_data:
         return []
 
     export_dir = Path(settings.EXPORT_DIR)
@@ -159,6 +187,11 @@ def export_match_job(
             df = pd.DataFrame(rows, columns=BASE_FIELD_NAMES + cat_spec_names)
             df.columns = BASE_CN_NAMES + cat_spec_names
             df.to_excel(writer, sheet_name=cat[:31], index=False)
+
+        if text_only_data:
+            df_text_only = pd.DataFrame(text_only_data, columns=BASE_FIELD_NAMES)
+            df_text_only.columns = BASE_CN_NAMES
+            df_text_only.to_excel(writer, sheet_name="待审核", index=False)
 
         if pending_data:
             df_pending = pd.DataFrame(pending_data, columns=BASE_FIELD_NAMES)

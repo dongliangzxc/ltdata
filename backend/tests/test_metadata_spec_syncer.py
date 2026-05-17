@@ -3,7 +3,7 @@ metadata_spec_syncer.py 单元测试。
 """
 import pytest
 from app.services.metadata_spec_syncer import sync_spec_values
-from app.models.schemas import Category, MetadataSpec, ModelRecord, ModelSpec
+from app.models.schemas import MetadataSpec, ModelRecord, ModelSpec
 
 
 def _add_model(db, category_code: str, model_code: str) -> ModelRecord:

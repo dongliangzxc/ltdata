@@ -2,7 +2,8 @@ import os
 import shutil
 import uuid
 from pathlib import Path
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
+from typing import Optional
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Query
 from sqlalchemy import tuple_, text
 from sqlalchemy.orm import Session
 from app.models.database import get_db
@@ -123,9 +124,21 @@ async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db
 
 
 @router.get("/files", response_model=list[UploadFileOut])
-def list_upload_files(db: Session = Depends(get_db)):
-    """获取上传历史列表"""
-    return db.query(UploadFileRecord).order_by(UploadFileRecord.uploaded_at.desc()).all()
+def list_upload_files(
+    data_region: Optional[str] = Query(None),
+    data_year: Optional[int] = Query(None),
+    data_month: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """获取上传历史列表，支持按维度过滤"""
+    q = db.query(UploadFileRecord).order_by(UploadFileRecord.uploaded_at.desc())
+    if data_region is not None:
+        q = q.filter(UploadFileRecord.data_region == data_region)
+    if data_year is not None:
+        q = q.filter(UploadFileRecord.data_year == data_year)
+    if data_month is not None:
+        q = q.filter(UploadFileRecord.data_month == data_month)
+    return q.all()
 
 
 @router.delete("/files/{file_id}")
@@ -161,6 +174,9 @@ def _run_upload_confirm_thread(
     ignore_columns: list,
     save_template_name,
     template_id_use,
+    data_region: str | None = None,
+    data_year: int | None = None,
+    data_month: int | None = None,
 ):
     """后台线程：解析 Excel、去重、写库，更新 job 状态。"""
     db = SessionLocal()
@@ -258,6 +274,9 @@ def _run_upload_confirm_thread(
             row_count=len(records),
             status="done",
             template_id=saved_template_id,
+            data_region=data_region,
+            data_year=data_year,
+            data_month=data_month,
         )
         db.add(file_record)
         db.flush()
@@ -415,6 +434,11 @@ async def upload_confirm(payload: dict, db: Session = Depends(get_db)):
     ignore_columns: list = payload.get("ignore_columns", [])
     save_template_name = payload.get("save_template_name")
     template_id_use = payload.get("template_id")
+    data_region: str | None = payload.get("data_region")
+    data_year_raw = payload.get("data_year")
+    data_year: int | None = int(data_year_raw) if data_year_raw is not None else None
+    data_month_raw = payload.get("data_month")
+    data_month: int | None = int(data_month_raw) if data_month_raw is not None else None
 
     if not temp_file_id:
         raise HTTPException(status_code=400, detail="temp_file_id 不能为空")
@@ -452,6 +476,9 @@ async def upload_confirm(payload: dict, db: Session = Depends(get_db)):
             ignore_columns,
             save_template_name,
             template_id_use,
+            data_region,
+            data_year,
+            data_month,
         ),
         daemon=True,
     )

@@ -507,6 +507,7 @@ def list_models(
     brand_code:    Optional[str] = Query(None),
     keyword:       Optional[str] = Query(None),
     category_code: Optional[str] = Query(None),
+    status:        Optional[str] = Query(None),
     page:          int = Query(1, ge=1),
     page_size:     int = Query(20, ge=1, le=2000),
     db: Session = Depends(get_db),
@@ -523,6 +524,8 @@ def list_models(
         )
     if category_code:
         cq = cq.filter(ModelRecord.category_code == category_code)
+    if status:
+        cq = cq.filter(ModelRecord.status == status)
     total = cq.count()
 
     q = db.query(ModelRecord, Category).outerjoin(
@@ -538,6 +541,8 @@ def list_models(
         )
     if category_code:
         q = q.filter(ModelRecord.category_code == category_code)
+    if status:
+        q = q.filter(ModelRecord.status == status)
     rows = q.order_by(ModelRecord.brand_code, ModelRecord.model_code) \
             .offset((page - 1) * page_size).limit(page_size).all()
 
@@ -584,6 +589,8 @@ def create_model(payload: ModelIn, db: Session = Depends(get_db)):
         launch_week=payload.launch_week,
         launch_price=payload.launch_price,
         url=payload.url,
+        status=payload.status,
+        operator=payload.operator,
     )
     db.add(obj)
     db.flush()
@@ -615,6 +622,8 @@ def update_model(model_id: int, payload: ModelIn, db: Session = Depends(get_db))
     obj.launch_week   = payload.launch_week
     obj.launch_price  = payload.launch_price
     obj.url           = payload.url
+    obj.status        = payload.status
+    obj.operator      = payload.operator
 
     db.query(ModelSpec).filter(ModelSpec.model_id == model_id).delete()
     for s in payload.specs:

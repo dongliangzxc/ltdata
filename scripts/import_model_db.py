@@ -31,7 +31,7 @@ def print_report(stats: dict, dry_run: bool, excel_path: str, category: str) -> 
     print(f"读取总行数:        {stats['total']:>10,}")
     print()
     print("─── 过滤（跳过） ───")
-    print(f"  型号脏数据:       {stats['skip_model']:>10,} 行")
+    print(f"  型号脏数据:       {stats['skip_model']:>10,} 行（其中捕获URL: {stats.get('urls_from_dirty_model', 0):,} 条）")
     print(f"  品牌脏数据:       {stats['skip_brand']:>10,} 行")
     print(f"  无链接:           {stats['skip_url']:>10,} 行")
     print(f"  无属性:           {stats['skip_no_attr']:>10,} 行")
@@ -41,11 +41,13 @@ def print_report(stats: dict, dry_run: bool, excel_path: str, category: str) -> 
     print("─── 入库结果 ───")
     if dry_run:
         print("  (dry-run 模式，未写库)")
+        print(f"  可捕获 URL-only:  {stats.get('urls_from_dirty_model', 0):>8,} 条")
     else:
         print(f"  models 新增:        {stats['models_new']:>8,} 条")
         print(f"  models 已存在:      {stats['models_existing']:>8,} 条")
         print(f"  model_specs 写入:   {stats['specs_written']:>8,} 条")
         print(f"  url_mappings 新增:  {stats['urls_new']:>8,} 条")
+        print(f"    其中 URL-only:    {stats.get('urls_from_dirty_model', 0):>8,} 条")
         print(f"  url 提取失败跳过:   {stats['url_extract_fail']:>8,} 条")
     print()
 

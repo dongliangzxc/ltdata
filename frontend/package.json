@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node --max-old-space-size=3072 node_modules/.bin/tsc --noEmit && node --max-old-space-size=3072 node_modules/.bin/vite build",
+    "build": "tsc && vite build",
     "preview": "vite preview"
   },
   "dependencies": {

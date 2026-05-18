@@ -3,20 +3,22 @@ set -e
 
 cd "$(dirname "$0")"
 
-echo ">>> 拉取最新代码..."
-git pull
+SERVER="root@47.94.230.225"
+SERVER_DIR="/root/luotu/ltdata"
 
-echo ">>> 构建前端静态文件（在宿主机执行，避免容器内存不足）..."
+echo ">>> 推送代码到远端..."
+git push origin main
+
+echo ">>> 本地构建前端静态文件..."
 cd frontend
-npm install --registry=https://registry.npmmirror.com
+npm install
 npm run build
 cd ..
 
-echo ">>> 重新构建并启动服务（迁移由容器 entrypoint 自动执行）..."
-docker compose -f docker-compose.prod.yml up -d --build
+echo ">>> 上传 dist 到服务器..."
+scp -r frontend/dist "$SERVER:$SERVER_DIR/frontend/dist"
 
-echo ">>> 清理旧镜像..."
-docker image prune -f
+echo ">>> 服务器拉取代码并重启服务..."
+ssh "$SERVER" "cd $SERVER_DIR && git pull && bash deploy-server.sh"
 
-echo ">>> 部署完成！当前容器状态："
-docker compose -f docker-compose.prod.yml ps
+echo ">>> 部署完成！"

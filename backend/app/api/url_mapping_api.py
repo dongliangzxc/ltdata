@@ -43,7 +43,7 @@ def _to_out(m: ItemUrlMapping) -> ItemUrlMappingOut:
         item_url=m.item_url,
         model_id=m.model_id,
         price=float(m.price) if m.price is not None else None,
-        brand_code=model.brand_code if model else None,
+        brand_code=model.brand_code if model else m.brand_code,   # fallback to direct field
         model_code=model.model_code if model else None,
         brand_name=model.brand_name if model else None,
         model_name=model.model_name if model else None,
@@ -327,7 +327,7 @@ def list_url_mappings(
     page_size: int = Query(20, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
-    q = db.query(ItemUrlMapping).filter(ItemUrlMapping.model_id.isnot(None))
+    q = db.query(ItemUrlMapping).filter(ItemUrlMapping.brand_code.isnot(None))
     if platform:
         q = q.filter(ItemUrlMapping.platform == platform)
     if keyword:
@@ -353,7 +353,8 @@ def list_url_mappings(
 
 @router.post("", response_model=ItemUrlMappingOut)
 def create_url_mapping(payload: ItemUrlMappingIn, db: Session = Depends(get_db)):
-    if not db.query(ModelRecord).filter_by(id=payload.model_id).first():
+    model_for_brand = db.query(ModelRecord).filter_by(id=payload.model_id).first() if payload.model_id else None
+    if not model_for_brand:
         raise HTTPException(404, "型号不存在")
     existing = db.query(ItemUrlMapping).filter_by(
         platform=payload.platform, item_id=payload.item_id
@@ -364,6 +365,7 @@ def create_url_mapping(payload: ItemUrlMappingIn, db: Session = Depends(get_db))
         platform=payload.platform,
         item_id=payload.item_id,
         item_url=payload.item_url,
+        brand_code=model_for_brand.brand_code if model_for_brand else payload.brand_code,
         model_id=payload.model_id,
         price=payload.price,
     )
@@ -378,11 +380,13 @@ def update_url_mapping(mapping_id: int, payload: ItemUrlMappingIn, db: Session =
     m = db.query(ItemUrlMapping).filter_by(id=mapping_id).first()
     if not m:
         raise HTTPException(404, "映射记录不存在")
-    if not db.query(ModelRecord).filter_by(id=payload.model_id).first():
+    model_for_brand = db.query(ModelRecord).filter_by(id=payload.model_id).first() if payload.model_id else None
+    if not model_for_brand:
         raise HTTPException(404, "型号不存在")
     m.platform = payload.platform
     m.item_id = payload.item_id
     m.item_url = payload.item_url
+    m.brand_code = model_for_brand.brand_code if model_for_brand else payload.brand_code
     m.model_id = payload.model_id
     m.price = payload.price
     m.updated_at = datetime.utcnow()

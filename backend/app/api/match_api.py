@@ -362,6 +362,7 @@ def confirm_match(match_id: int, payload: dict, db: Session = Depends(get_db)):
                 if existing_mapping and existing_mapping.model_id is None:
                     existing_mapping.model_id = model_id
                     existing_mapping.item_url = rd_for_url.item_url
+                    existing_mapping.brand_code = m.brand_code  # m is the ModelRecord queried above
                 elif not existing_mapping and prev_status == "text_only":
                     db.add(ItemUrlMapping(
                         platform=rd_for_url.platform,

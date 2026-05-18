@@ -152,7 +152,7 @@ def export_match_job(
         )
         .all()
     )
-    text_only_data: list[dict] = []
+    text_only_data: dict[str, list[dict]] = {}  # cat_name → rows
     for mr, rd, m in text_only_rows:
         row = {}
         for field in BASE_FIELD_NAMES:
@@ -166,10 +166,12 @@ def export_match_job(
                 row[field] = m.model_name or ""
             else:
                 row[field] = getattr(rd, field, None)
-        text_only_data.append(row)
+        cat_code = m.category_code or ""
+        cat = cat_map.get(cat_code, cat_code) or "未知品类"
+        text_only_data.setdefault(cat, []).append(row)
 
     # ── 6. 写 Excel（多 Sheet）────────────────────────────────────
-    if not category_data and not pending_data and not text_only_data:
+    if not category_data and not pending_data and not any(text_only_data.values()):
         return []
 
     export_dir = Path(settings.EXPORT_DIR)
@@ -186,12 +188,14 @@ def export_match_job(
             cat_spec_names = category_spec_names.get(cat_code, [])
             df = pd.DataFrame(rows, columns=BASE_FIELD_NAMES + cat_spec_names)
             df.columns = BASE_CN_NAMES + cat_spec_names
-            df.to_excel(writer, sheet_name=cat[:31], index=False)
+            sheet_name = f"{cat}-已处理"[:31]
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
 
-        if text_only_data:
-            df_text_only = pd.DataFrame(text_only_data, columns=BASE_FIELD_NAMES)
+        for cat, rows in text_only_data.items():
+            sheet_name = f"{cat}-待审核"[:31]
+            df_text_only = pd.DataFrame(rows, columns=BASE_FIELD_NAMES)
             df_text_only.columns = BASE_CN_NAMES
-            df_text_only.to_excel(writer, sheet_name="待审核", index=False)
+            df_text_only.to_excel(writer, sheet_name=sheet_name, index=False)
 
         if pending_data:
             df_pending = pd.DataFrame(pending_data, columns=BASE_FIELD_NAMES)

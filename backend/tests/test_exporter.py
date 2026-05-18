@@ -65,7 +65,7 @@ def test_brand_name_and_model_name_in_export(db):
     result = export_match_job(db, clean_job_id)
     assert result, "导出结果不应为空"
 
-    xl = pd.read_excel(result[0]["path"], sheet_name="耳机")
+    xl = pd.read_excel(result[0]["path"], sheet_name="耳机-已处理")
     assert "品牌名称" in xl.columns, "缺少品牌名称列"
     assert "型号名称" in xl.columns, "缺少型号名称列"
     assert xl["品牌名称"].iloc[0] == "索尼"

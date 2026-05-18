@@ -322,7 +322,8 @@ def import_model_db(
         if (batch_start + 1) % COMMIT_BATCH == 0:
             db.commit()
 
-    # ── URL-only 条目：model_id=NULL，upsert ────────────────
+    # ── URL-only 条目：model_id=NULL，upsert（分批提交防 OOM）────
+    url_batch_count = 0
     for (plat, iid), iurl in url_only_map.items():
         existing = db.query(ItemUrlMapping).filter_by(
             platform=plat, item_id=iid
@@ -338,6 +339,9 @@ def import_model_db(
                 model_id=None,
             ))
             stats["urls_new"] += 1
+        url_batch_count += 1
+        if url_batch_count % COMMIT_BATCH == 0:
+            db.commit()
 
     db.commit()
     return stats

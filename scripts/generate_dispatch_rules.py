@@ -170,6 +170,19 @@ def parse_rules(excel_path: str) -> list[dict]:
             else:
                 add_rule(field, "equals", deepest_val, None, base_priority)
 
+    # 耳机：淘宝类目结构与天猫相同，xlsx 未单独列出——复制天猫耳机规则给淘宝
+    taobao_rules = []
+    taobao_seen: set[tuple] = set()
+    for r in rules:
+        if r["platform"] != "tmall" or r["category_code"] != "headphone":
+            continue
+        key = (r["category_code"], "taobao", r["field"], r["value"], r["item_name_keyword"])
+        if key in taobao_seen:
+            continue
+        taobao_seen.add(key)
+        taobao_rules.append({**r, "platform": "taobao"})
+    rules.extend(taobao_rules)
+
     return rules
 
 

@@ -8,7 +8,7 @@ INSERT IGNORE INTO categories (code, name) VALUES ('live_camera', '直播摄像�
 UPDATE categories SET name='智能手表手环' WHERE code='smartwatch';
 UPDATE categories SET name='智能眼镜'    WHERE code='vrar';
 
--- 2. 分发规则（共 370 条）
+-- 2. 分发规则（共 374 条）
 INSERT INTO dispatch_rules
     (category_code, platform, field, match_type, value, item_name_keyword, priority, is_active)
 VALUES
@@ -381,4 +381,8 @@ VALUES
   ('monitor', 'douyin', 'category_lv2', 'equals', '智慧白板', NULL, 10, 1),
   ('monitor', 'douyin', 'category_lv2', 'equals', '直播一体机', NULL, 10, 1),
   ('monitor', 'douyin', 'category_lv2', 'equals', '智慧屏', NULL, 10, 1),
-  ('monitor', 'jd', 'category_lv2', 'equals', '平板电视', '会议电视', 10, 1);
+  ('monitor', 'jd', 'category_lv2', 'equals', '平板电视', '会议电视', 10, 1),
+  ('headphone', 'taobao', 'category_lv2', 'equals', '手机耳机', NULL, 10, 1),
+  ('headphone', 'taobao', 'category_lv2', 'equals', '头戴耳机', NULL, 10, 1),
+  ('headphone', 'taobao', 'category_lv2', 'equals', '无线耳机', NULL, 10, 1),
+  ('headphone', 'taobao', 'category_lv2', 'equals', '有线耳机', NULL, 10, 1);

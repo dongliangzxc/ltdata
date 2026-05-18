@@ -8,7 +8,7 @@ matcher.py 单元测试
 """
 from app.models.schemas import (
     UploadFileRecord, RawDataRecord, CleanJobRecord, CleanedDataRecord,
-    ModelRecord, ModelAlias, MatchResult, MatchRule,
+    ModelRecord, ModelAlias, MatchResult, MatchRule, ItemUrlMapping,
 )
 from app.services.matcher import run_match
 
@@ -262,3 +262,115 @@ def test_brand_identified_false_when_brand_unknown(db):
 
     result = db.query(MatchResult).filter(MatchResult.clean_job_id == job.id).first()
     assert result.brand_identified == 0
+
+
+# ── S0 url_brand_hint 测试 ──────────────────────────────────────
+
+
+def test_s0_url_brand_hint_pending_skips_s4(db):
+    """
+    URL 在 item_url_mappings 中有 brand_code 但无 model_id：
+    - brand_identified=1（品牌已由 URL 映射确认）
+    - match_status=pending（该品牌下无型号命中）
+    - 不走 S4：OTHER/NOMATCH12345 不应被误匹配
+    """
+    from app.models.schemas import ItemUrlMapping
+
+    _seed(db, brand_code="LANBIAO", model_code="LB-2023", brand_name="岚比鸥")
+    _seed(db, brand_code="OTHER", model_code="NOMATCH12345")  # S4 候选，不应命中
+
+    db.add(ItemUrlMapping(
+        platform="tmall", item_id="909868962326",
+        item_url="https://detail.tmall.com/item.htm?id=909868962326",
+        brand_code="LANBIAO", model_id=None,
+    ))
+
+    upload = UploadFileRecord(filename="t.xlsx", platform="tmall", month_range="202507", row_count=1)
+    db.add(upload)
+    db.flush()
+
+    raw = RawDataRecord(
+        file_id=upload.id, platform="tmall", month=202507,
+        item_name="岚比鸥 蓝牙耳机 新款",
+        brand_raw="岚比鸥",
+        item_id="909868962326",
+        item_url="https://detail.tmall.com/item.htm?id=909868962326",
+    )
+    db.add(raw)
+    db.flush()
+
+    job = CleanJobRecord(file_ids=[upload.id], rules={}, status="done", row_in=1, row_out=1)
+    db.add(job)
+    db.flush()
+
+    cleaned = CleanedDataRecord(
+        raw_data_id=raw.id, clean_job_id=job.id,
+        platform="tmall", month=202507,
+        item_name="岚比鸥 蓝牙耳机 新款",
+        brand_raw="岚比鸥",
+        item_id="909868962326",
+        item_url="https://detail.tmall.com/item.htm?id=909868962326",
+    )
+    db.add(cleaned)
+    db.commit()
+
+    run_match(db, job.id)
+
+    result = db.query(MatchResult).filter(MatchResult.clean_job_id == job.id).first()
+    assert result.brand_identified == 1, "品牌应由 URL 映射识别"
+    assert result.match_status == "pending", f"期望 pending，实际 {result.match_status}"
+    assert result.model_id is None
+    assert result.match_source != "s4", "有品牌线索时不应走 S4 兜底"
+
+
+def test_s0_url_brand_hint_with_model_match(db):
+    """
+    URL 在 item_url_mappings 中有 brand_code 但无 model_id，
+    且 item_name 含型号码 → text_only（URL 待确认），brand_identified=1。
+    """
+    from app.models.schemas import ItemUrlMapping
+
+    model = _seed(db, brand_code="LANBIAO", model_code="LB-X1", brand_name="岚比鸥")
+
+    db.add(ItemUrlMapping(
+        platform="tmall", item_id="111222333",
+        item_url="https://detail.tmall.com/item.htm?id=111222333",
+        brand_code="LANBIAO", model_id=None,
+    ))
+
+    upload = UploadFileRecord(filename="t.xlsx", platform="tmall", month_range="202507", row_count=1)
+    db.add(upload)
+    db.flush()
+
+    raw = RawDataRecord(
+        file_id=upload.id, platform="tmall", month=202507,
+        item_name="岚比鸥 LB-X1 真无线耳机",
+        brand_raw="岚比鸥",
+        item_id="111222333",
+        item_url="https://detail.tmall.com/item.htm?id=111222333",
+    )
+    db.add(raw)
+    db.flush()
+
+    job = CleanJobRecord(file_ids=[upload.id], rules={}, status="done", row_in=1, row_out=1)
+    db.add(job)
+    db.flush()
+
+    cleaned = CleanedDataRecord(
+        raw_data_id=raw.id, clean_job_id=job.id,
+        platform="tmall", month=202507,
+        item_name="岚比鸥 LB-X1 真无线耳机",
+        brand_raw="岚比鸥",
+        item_id="111222333",
+        item_url="https://detail.tmall.com/item.htm?id=111222333",
+    )
+    db.add(cleaned)
+    db.commit()
+
+    run_match(db, job.id)
+
+    result = db.query(MatchResult).filter(MatchResult.clean_job_id == job.id).first()
+    assert result.match_status == "text_only", f"期望 text_only，实际 {result.match_status}"
+    assert result.model_id == model.id
+    assert result.brand_identified == 1
+    assert result.match_source == "s1"

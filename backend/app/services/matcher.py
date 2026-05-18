@@ -75,10 +75,13 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
     )
 
     # ── S0: 预加载 URL 映射表 ─────────────────────────────────────
-    # key=(platform, item_id), value=model_id
-    url_map: dict[tuple[str, str], int] = {}
+    url_map: dict[tuple[str, str], int] = {}        # model_id 已知的条目
+    url_brand_map: dict[tuple[str, str], str] = {}  # 品牌已知但 model_id=NULL 的条目
     for um in db.query(ItemUrlMapping).all():
-        url_map[(um.platform, um.item_id)] = um.model_id
+        if um.model_id:
+            url_map[(um.platform, um.item_id)] = um.model_id
+        elif um.brand_code:
+            url_brand_map[(um.platform, um.item_id)] = um.brand_code
 
     # ── S0.5: 预加载显式匹配规则（按 priority 升序）────────────────
     explicit_rules = (
@@ -223,6 +226,7 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
 
         # ── S0: URL精确匹配 ────────────────────────────────────
         url_info = extract_item_id(row.item_url) if row.item_url else None
+        url_brand_hint: str | None = None
         if url_info:
             platform, item_id = url_info
             url_model_id = url_map.get((platform, item_id))
@@ -243,6 +247,8 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
                         progress_cb(i + 1, total, matched_count)
                     results = []
                 continue  # 跳过 S1-S4
+            # model_id=NULL 但 brand_code 有值：作为 S1 品牌线索
+            url_brand_hint = url_brand_map.get((platform, item_id))
 
         # ── S0.2: 历史库精确匹配 ─────────────────────────────────
         hist_key = ((row.platform or "").lower(), row.item_id) if row.item_id else None
@@ -324,11 +330,11 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
         best_model: ModelRecord | None = None
         brand_identified = False
         match_source: str | None = None
-        row_candidates: list[tuple] = []  # (model, score, source) for top candidates
+        row_candidates: list[tuple] = []
 
-        # S1: 用 brand_raw 缩窄候选
-        if row.brand_raw:
-            candidates = _candidates_by_brand_raw(row.brand_raw)
+        if url_brand_hint:
+            # URL 映射中有品牌线索：只在该品牌下查型号，跳过 S2/S3/S4
+            candidates = _candidates_by_brand_raw(url_brand_hint)
             if candidates:
                 brand_identified = True
                 top = _top_candidates(candidates, item_upper, "s1")
@@ -336,38 +342,49 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
                 if top:
                     best_model = top[0][0]
                     match_source = "s1"
-
-        # S2: item_name 里找 brand_code
-        if best_model is None:
-            for bc, grp in brand_code_index.items():
-                if bc and bc in item_upper:
+        else:
+            # S1: 用 brand_raw 缩窄候选
+            if row.brand_raw:
+                candidates = _candidates_by_brand_raw(row.brand_raw)
+                if candidates:
                     brand_identified = True
-                    top = _top_candidates(grp, item_upper, "s2")
+                    top = _top_candidates(candidates, item_upper, "s1")
                     row_candidates.extend(top)
                     if top:
-                        if len(_norm(top[0][0].model_code)) > len(_norm(best_model.model_code) if best_model else ""):
-                            best_model = top[0][0]
-                            match_source = "s2"
+                        best_model = top[0][0]
+                        match_source = "s1"
 
-        # S3: item_name 里找 brand_name
-        if best_model is None:
-            for bn, grp in brand_name_index.items():
-                if len(bn) >= 2 and bn in item_upper:
-                    brand_identified = True
-                    top = _top_candidates(grp, item_upper, "s3")
-                    row_candidates.extend(top)
-                    if top:
-                        if len(_norm(top[0][0].model_code)) > len(_norm(best_model.model_code) if best_model else ""):
-                            best_model = top[0][0]
-                            match_source = "s3"
+            # S2: item_name 里找 brand_code
+            if best_model is None:
+                for bc, grp in brand_code_index.items():
+                    if bc and bc in item_upper:
+                        brand_identified = True
+                        top = _top_candidates(grp, item_upper, "s2")
+                        row_candidates.extend(top)
+                        if top:
+                            if len(_norm(top[0][0].model_code)) > len(_norm(best_model.model_code) if best_model else ""):
+                                best_model = top[0][0]
+                                match_source = "s2"
 
-        # S4: 仅在品牌完全未识别时才做全局长码兜底
-        if best_model is None and not brand_identified:
-            top = _top_candidates(long_code_models, item_upper, "s4", allow_alias=False)
-            row_candidates.extend(top)
-            if top:
-                best_model = top[0][0]
-                match_source = "s4"
+            # S3: item_name 里找 brand_name
+            if best_model is None:
+                for bn, grp in brand_name_index.items():
+                    if len(bn) >= 2 and bn in item_upper:
+                        brand_identified = True
+                        top = _top_candidates(grp, item_upper, "s3")
+                        row_candidates.extend(top)
+                        if top:
+                            if len(_norm(top[0][0].model_code)) > len(_norm(best_model.model_code) if best_model else ""):
+                                best_model = top[0][0]
+                                match_source = "s3"
+
+            # S4: 仅在品牌完全未识别时才做全局长码兜底
+            if best_model is None and not brand_identified:
+                top = _top_candidates(long_code_models, item_upper, "s4", allow_alias=False)
+                row_candidates.extend(top)
+                if top:
+                    best_model = top[0][0]
+                    match_source = "s4"
 
         # 记录候选（仅当有多于1个候选或best_model有候选时）
         if row_candidates:

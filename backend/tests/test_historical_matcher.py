@@ -125,3 +125,42 @@ def test_s02_skips_when_item_id_is_none(db):
     assert mr is not None
     assert mr.match_source != "historical"
     assert mr.match_source in ("s1", "s2", "s3", "s4", None)
+
+
+def test_import_null_model_code_is_accepted(db):
+    """model_code 为空时，historical_mapping 写入 model_id=None，不报 error"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.historical_api import router as historical_router
+    from app.models.database import get_db
+    import io, openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["platform", "item_id", "model_code"])
+    ws.append(["jd", "ITEM-NULL-001", ""])
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    def override_db():
+        yield db
+
+    test_app = FastAPI()
+    test_app.include_router(historical_router)
+    test_app.dependency_overrides[get_db] = override_db
+    client = TestClient(test_app)
+    resp = client.post(
+        "/api/historical/import",
+        files={"file": ("test.xlsx", buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] == 1
+    assert data.get("imported_no_model", 0) == 1
+    assert data["errors"] == []
+
+    mapping = db.query(HistoricalMapping).filter_by(platform="jd", item_id="ITEM-NULL-001").first()
+    assert mapping is not None
+    assert mapping.model_id is None

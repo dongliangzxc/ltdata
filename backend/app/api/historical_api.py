@@ -51,20 +51,26 @@ def import_historical_mappings(
     }
 
     success, errors = 0, []
+    imported_no_model = 0
 
     for idx, row in df.iterrows():
         platform   = str(row.get("platform",   "")).strip().lower()
         item_id    = str(row.get("item_id",    "")).strip()
-        model_code = str(row.get("model_code", "")).strip()
+        raw_mc     = row.get("model_code", "")
+        model_code = "" if pd.isna(raw_mc) else str(raw_mc).strip()
 
-        if not platform or not item_id or not model_code:
-            errors.append({"row": int(idx) + 2, "reason": "platform / item_id / model_code 不能为空"})
+        if not platform or not item_id:
+            errors.append({"row": int(idx) + 2, "reason": "platform / item_id 不能为空"})
             continue
 
-        model_id = model_map.get(model_code)
-        if model_id is None:
-            errors.append({"row": int(idx) + 2, "reason": f"model_code '{model_code}' 在型号库中不存在"})
-            continue
+        if not model_code:
+            model_id = None
+            imported_no_model += 1
+        else:
+            model_id = model_map.get(model_code)
+            if model_id is None:
+                errors.append({"row": int(idx) + 2, "reason": f"model_code '{model_code}' 在型号库中不存在"})
+                continue
 
         existing = db.query(HistoricalMapping).filter_by(
             platform=platform, item_id=item_id
@@ -83,7 +89,7 @@ def import_historical_mappings(
         success += 1
 
     db.commit()
-    return {"success": success, "errors": errors, "import_batch": import_batch}
+    return {"success": success, "errors": errors, "import_batch": import_batch, "imported_no_model": imported_no_model}
 
 
 # ── 批次列表 ──────────────────────────────────────────────────────────────────

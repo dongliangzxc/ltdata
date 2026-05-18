@@ -371,6 +371,7 @@ class ItemUrlMappingIn(BaseModel):
     item_id:  str
     item_url: Optional[str] = None
     model_id: Optional[int] = None
+    price:    Optional[float] = None
 
 
 class ItemUrlMappingOut(BaseModel):

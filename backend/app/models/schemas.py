@@ -280,6 +280,8 @@ class ModelRecord(Base):
     launch_week   = Column(Integer)
     launch_price  = Column(Numeric(12, 2))
     url           = Column(Text)
+    status    = Column(String(20), nullable=False, default='active')
+    operator  = Column(String(100), nullable=True)
     created_at    = Column(DateTime, default=datetime.utcnow)
     updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -597,6 +599,8 @@ class ModelIn(BaseModel):
     launch_week:   Optional[int] = None
     launch_price:  Optional[float] = None
     url:           Optional[str] = None
+    status:        str = 'active'
+    operator:      Optional[str] = None
     specs:         list[ModelSpecIn] = []
 
 
@@ -613,6 +617,8 @@ class ModelOut(BaseModel):
     launch_week:   Optional[int]
     launch_price:  Optional[float]
     url:           Optional[str]
+    status:        str
+    operator:      Optional[str]
     specs:         list[ModelSpecOut] = []
     aliases:       list[ModelAliasOut] = []
     created_at:    datetime

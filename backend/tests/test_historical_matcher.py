@@ -238,3 +238,46 @@ def test_s04_still_runs_when_item_not_in_historical(db):
     assert mr is not None
     assert mr.match_source == "s4"
     assert mr.model_id == long_model.id
+
+
+def test_confirm_historical_pending_writes_back_to_hist_map(db):
+    """
+    人工确认 match_source='historical' 的 pending 条目时，
+    historical_mappings.model_id 应同步更新。
+    """
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.models.database import get_db
+    from app.core.security import create_access_token
+
+    job_id, model_id = _seed(db, platform="jd", item_id="HIST-WRITEBACK-01")
+    hist = HistoricalMapping(
+        platform="jd", item_id="HIST-WRITEBACK-01",
+        model_id=None, import_batch="test_batch"
+    )
+    db.add(hist)
+    db.commit()
+
+    run_match(db, job_id)
+
+    mr = db.query(MatchResult).filter(MatchResult.clean_job_id == job_id).first()
+    assert mr.match_status == "pending"
+    assert mr.match_source == "historical"
+
+    def override_db():
+        yield db
+
+    token = create_access_token("testuser")
+    app.dependency_overrides[get_db] = override_db
+    client = TestClient(app)
+    resp = client.put(
+        f"/api/match/confirm/{mr.id}",
+        json={"model_id": model_id},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    app.dependency_overrides.clear()
+
+    assert resp.status_code == 200
+
+    db.refresh(hist)
+    assert hist.model_id == model_id

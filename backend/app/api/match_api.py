@@ -14,6 +14,7 @@ from app.models.schemas import (
     MatchResultAttr, MatchResultCandidate, MatchCandidateOut, ItemUrlMapping, Category,
     DispatchItem,
     PaginatedResponse,
+    HistoricalMapping,
 )
 from app.services.matcher import run_match
 
@@ -367,6 +368,17 @@ def confirm_match(match_id: int, payload: dict, db: Session = Depends(get_db)):
                         model_id=model_id,
                         price=rd_for_url.price,
                     ))
+
+        # historical pending 确认时回写历史库 model_id
+        if prev_status == "pending" and mr.match_source == "historical" and mr.raw_data_id:
+            rd_for_hist = db.query(RawDataRecord).filter(RawDataRecord.id == mr.raw_data_id).first()
+            if rd_for_hist and rd_for_hist.platform and rd_for_hist.item_id:
+                hist_entry = db.query(HistoricalMapping).filter_by(
+                    platform=rd_for_hist.platform.lower(),
+                    item_id=rd_for_hist.item_id,
+                ).first()
+                if hist_entry and hist_entry.model_id is None:
+                    hist_entry.model_id = model_id
     else:
         raise HTTPException(status_code=400, detail="需提供 model_id 或 excluded=true")
 

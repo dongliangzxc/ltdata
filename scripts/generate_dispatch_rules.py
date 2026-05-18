@@ -69,9 +69,19 @@ def parse_keywords(note: str) -> list[str]:
 
 
 def parse_rules(excel_path: str) -> list[dict]:
-    wb = openpyxl.load_workbook(excel_path, read_only=True, data_only=True)
+    # 不用 read_only，以便正确展开合并单元格
+    wb = openpyxl.load_workbook(excel_path, data_only=True)
     ws = wb.active
-    all_rows = list(ws.iter_rows(values_only=True))
+
+    # 展开合并单元格：将合并区域内每格填充为锚点格（左上角）的值
+    for merge_range in list(ws.merged_cells.ranges):
+        top_left_val = ws.cell(merge_range.min_row, merge_range.min_col).value
+        ws.unmerge_cells(str(merge_range))
+        for row in range(merge_range.min_row, merge_range.max_row + 1):
+            for col in range(merge_range.min_col, merge_range.max_col + 1):
+                ws.cell(row, col).value = top_left_val
+
+    all_rows = [[cell.value for cell in row] for row in ws.iter_rows()]
     data_rows = all_rows[2:]   # 跳过两行表头
 
     rules: list[dict] = []

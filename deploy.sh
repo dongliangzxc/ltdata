@@ -16,7 +16,8 @@ npm run build
 cd ..
 
 echo ">>> 上传 dist 到服务器..."
-scp -r frontend/dist/ "$SERVER:$SERVER_DIR/frontend/dist/"
+ssh "$SERVER" "rm -rf $SERVER_DIR/frontend/dist"
+scp -r frontend/dist "$SERVER:$SERVER_DIR/frontend/"
 
 echo ">>> 服务器拉取代码并重启服务..."
 ssh "$SERVER" "cd $SERVER_DIR && git pull && bash deploy-server.sh"

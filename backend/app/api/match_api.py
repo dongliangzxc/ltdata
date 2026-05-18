@@ -369,6 +369,7 @@ def confirm_match(match_id: int, payload: dict, db: Session = Depends(get_db)):
                         item_id=rd_for_url.item_id,
                         item_url=rd_for_url.item_url,
                         model_id=model_id,
+                        brand_code=m.brand_code,
                         price=rd_for_url.price,
                     ))
 

@@ -350,17 +350,19 @@ def confirm_match(match_id: int, payload: dict, db: Session = Depends(get_db)):
         mr.match_status = "confirmed"
         mr.matched_by = "manual"
 
-        # 方案 A：text_only 条目确认时，自动将 item_url 写入 URL 映射管理
-        if prev_status == "text_only" and mr.raw_data_id:
+        # 确认时更新 URL 映射：
+        #   · 已存在且 model_id=NULL → 回写（适用于从耳机数据库 URL-only 导入的条目）
+        #   · 不存在且 prev_status==text_only → 新建（保留原有行为）
+        if mr.raw_data_id:
             rd_for_url = db.query(RawDataRecord).filter(RawDataRecord.id == mr.raw_data_id).first()
             if rd_for_url and rd_for_url.item_url and rd_for_url.platform and rd_for_url.item_id:
                 existing_mapping = db.query(ItemUrlMapping).filter_by(
                     platform=rd_for_url.platform, item_id=rd_for_url.item_id
                 ).first()
-                if existing_mapping:
+                if existing_mapping and existing_mapping.model_id is None:
                     existing_mapping.model_id = model_id
                     existing_mapping.item_url = rd_for_url.item_url
-                else:
+                elif not existing_mapping and prev_status == "text_only":
                     db.add(ItemUrlMapping(
                         platform=rd_for_url.platform,
                         item_id=rd_for_url.item_id,

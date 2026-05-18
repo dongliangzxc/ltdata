@@ -200,7 +200,11 @@ def import_model_db(
         "specs_written": 0,
         "urls_new": 0,
         "url_extract_fail": 0,
+        "urls_from_dirty_model": 0,   # ← 新增
     }
+
+    # (platform, item_id) → item_url：型号脏但 URL 有效的行，不建 model，只建 url_mapping
+    url_only_map: dict[tuple, str] = {}
 
     # ── 收集有效行，按 (brand, model) 分组 ──────────────────────
     groups: dict[tuple, dict] = defaultdict(lambda: {"attrs_row": None, "urls": []})
@@ -214,6 +218,11 @@ def import_model_db(
 
         if is_dirty_model(model):
             stats["skip_model"] += 1
+            # 型号脏但品牌+URL有效：仍捕获 URL（model_id=NULL），跳过建 model/spec
+            if not is_dirty_brand(brand) and url and url not in _NULL_VALUES:
+                item_id_dirty = extract_item_id(url, platform)
+                if item_id_dirty:
+                    url_only_map[(platform, item_id_dirty)] = url
             continue
         if is_dirty_brand(brand):
             stats["skip_brand"] += 1
@@ -240,6 +249,7 @@ def import_model_db(
             stats["url_extract_fail"] += 1
 
     stats["unique_models"] = len(groups)
+    stats["urls_from_dirty_model"] = len(url_only_map)
 
     if dry_run:
         return stats
@@ -311,6 +321,23 @@ def import_model_db(
 
         if (batch_start + 1) % COMMIT_BATCH == 0:
             db.commit()
+
+    # ── URL-only 条目：model_id=NULL，upsert ────────────────
+    for (plat, iid), iurl in url_only_map.items():
+        existing = db.query(ItemUrlMapping).filter_by(
+            platform=plat, item_id=iid
+        ).first()
+        if existing:
+            if existing.model_id is None:
+                existing.item_url = iurl   # 更新 URL，model_id 仍 NULL
+        else:
+            db.add(ItemUrlMapping(
+                platform=plat,
+                item_id=iid,
+                item_url=iurl,
+                model_id=None,
+            ))
+            stats["urls_new"] += 1
 
     db.commit()
     return stats

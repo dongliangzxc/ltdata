@@ -108,3 +108,52 @@ def test_attr_spec_types_covers_all_attr_col_map():
     from app.services.model_db_importer import ATTR_COL_MAP
     for spec_name in ATTR_COL_MAP.values():
         assert spec_name in ATTR_SPEC_TYPES, f"ATTR_SPEC_TYPES 缺少 {spec_name}"
+
+
+# ── 型号脏数据行仍捕获 URL ─────────────────────────────────
+
+@pytest.fixture
+def dirty_model_excel(tmp_path):
+    """品牌有效、型号为空、URL有效的一行数据"""
+    path = tmp_path / "dirty_model.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    headers = [
+        "平台", "宝贝名称", "宝贝链接", "销量", "销售额", "ASP",
+        "品牌", "型号", "佩戴类型", "In-ear Type", "开放式外观",
+        "Power Type", "Bluetooth Version", "Sport", "Gaming", "HIFI",
+        "ANC", "ENC", "Fast Charging", "IP Marking", "Health Monitoring",
+        "Touch Screen Monitor", "骨传导", "AI", "AI+功能",
+    ]
+    ws.append(headers)
+    ws.append([
+        "JD", "某品牌耳机", "https://item.jd.com/99999.html",
+        50, 10000, 200,
+        "Sony/索尼", "",          # ← 型号为空
+        "Headband", "Over Ear", "NULL", "Hybrid", 5.0,
+        "NO", "NO", "NO", "YES", "NO", "NO", "NO", "NO", "NO", "NO", "NO", "",
+    ])
+    wb.save(path)
+    return str(path)
+
+
+def test_dirty_model_row_creates_url_mapping(db, dirty_model_excel):
+    """型号为空但品牌+URL有效时，应建 ItemUrlMapping(model_id=None)"""
+    from app.models.schemas import ItemUrlMapping
+    db.add(Category(code="headphone", name="耳机"))
+    db.commit()
+
+    stats = import_model_db(dirty_model_excel, "headphone", db, dry_run=False)
+
+    url_mapping = db.query(ItemUrlMapping).filter_by(
+        platform="jd", item_id="99999"
+    ).first()
+    assert url_mapping is not None
+    assert url_mapping.model_id is None
+    assert stats["urls_from_dirty_model"] == 1
+
+
+def test_dirty_model_dry_run_counts_urls(dirty_model_excel):
+    """dry-run 模式也要统计 urls_from_dirty_model"""
+    stats = import_model_db(dirty_model_excel, "headphone", db=None, dry_run=True)
+    assert stats["urls_from_dirty_model"] == 1

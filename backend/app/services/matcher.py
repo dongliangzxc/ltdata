@@ -90,7 +90,7 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
 
     # ── S0.2: 预加载历史库映射 ────────────────────────────────────
     # key=(platform_lower, item_id), value=model_id
-    hist_map: dict[tuple[str, str], int] = {}
+    hist_map: dict[tuple[str, str], int | None] = {}
     for hm in db.query(HistoricalMapping).all():
         hist_map[(hm.platform.lower(), hm.item_id)] = hm.model_id
 
@@ -245,29 +245,47 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
                 continue  # 跳过 S1-S4
 
         # ── S0.2: 历史库精确匹配 ─────────────────────────────────
-        if row.item_id:
-            plat_key = (row.platform or "").lower()
-            hist_model_id = hist_map.get((plat_key, row.item_id))
-        else:
-            hist_model_id = None
-        if hist_model_id:
-            results.append(MatchResult(
-                clean_job_id=clean_job_id,
-                raw_data_id=row.raw_data_id,
-                model_id=hist_model_id,
-                match_status="matched",
-                matched_by="auto",
-                match_source="historical",
-                brand_identified=1,
-            ))
-            matched_count += 1
-            if len(results) >= BATCH:
-                db.bulk_save_objects(results)
-                db.commit()
-                if progress_cb:
-                    progress_cb(i + 1, total, matched_count)
-                results = []
-            continue  # 跳过 S0.5 / S1-S4
+        hist_key = ((row.platform or "").lower(), row.item_id) if row.item_id else None
+        hist_hit = hist_key in hist_map if hist_key else False
+        if hist_hit:
+            hist_model_id = hist_map[hist_key]
+            if hist_model_id:
+                # 已知商品且有型号 → matched
+                results.append(MatchResult(
+                    clean_job_id=clean_job_id,
+                    raw_data_id=row.raw_data_id,
+                    model_id=hist_model_id,
+                    match_status="matched",
+                    matched_by="auto",
+                    match_source="historical",
+                    brand_identified=1,
+                ))
+                matched_count += 1
+                if len(results) >= BATCH:
+                    db.bulk_save_objects(results)
+                    db.commit()
+                    if progress_cb:
+                        progress_cb(i + 1, total, matched_count)
+                    results = []
+                continue  # 跳过 S0.5 / S1-S4
+            else:
+                # 已知商品但无型号 → pending，跳过 S1-S4（防止 S4 误匹配）
+                results.append(MatchResult(
+                    clean_job_id=clean_job_id,
+                    raw_data_id=row.raw_data_id,
+                    model_id=None,
+                    match_status="pending",
+                    matched_by="auto",
+                    match_source="historical",
+                    brand_identified=1,
+                ))
+                if len(results) >= BATCH:
+                    db.bulk_save_objects(results)
+                    db.commit()
+                    if progress_cb:
+                        progress_cb(i + 1, total, matched_count)
+                    results = []
+                continue  # 跳过 S0.5 / S1-S4
 
         # ── S0.5: 显式规则匹配 ─────────────────────────────────────
         s05_model_id: int | None = None

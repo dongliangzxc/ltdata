@@ -164,3 +164,77 @@ def test_import_null_model_code_is_accepted(db):
     mapping = db.query(HistoricalMapping).filter_by(platform="jd", item_id="ITEM-NULL-001").first()
     assert mapping is not None
     assert mapping.model_id is None
+
+
+def test_s02_null_model_goes_to_pending_skips_s4(db):
+    """
+    historical_mappings 中 item 存在但 model_id=None 时：
+    - match_status = 'pending'
+    - match_source = 'historical'
+    - brand_identified = 1
+    - 不触发 S4（不误匹配 decoy_model）
+    """
+    decoy_model = ModelRecord(brand_code="FAKE", model_code="Pro5sX", category_code="headphone")
+    db.add(decoy_model)
+    db.flush()
+
+    job_id, _ = _seed(db, platform="tmall", item_id="909868962326",
+                      item_name="新款Pro5sX无线蓝牙耳机山寨品牌")
+
+    db.add(HistoricalMapping(
+        platform="tmall", item_id="909868962326",
+        model_id=None, import_batch="headphone_db"
+    ))
+    db.commit()
+
+    run_match(db, job_id)
+
+    mr = db.query(MatchResult).filter(MatchResult.clean_job_id == job_id).first()
+    assert mr is not None
+    assert mr.match_status == "pending"
+    assert mr.match_source == "historical"
+    assert mr.brand_identified == 1
+    assert mr.model_id is None
+
+
+def test_s04_still_runs_when_item_not_in_historical(db):
+    """
+    item 完全不在历史库时，S4 正常执行（兜底行为不受影响）。
+    使用 brand_raw=None 确保 S1/S2/S3 不识别品牌，让 S4 兜底触发。
+    """
+    long_model = ModelRecord(brand_code="XNCO", model_code="XM1000X", category_code="headphone")
+    db.add(long_model)
+    db.flush()
+
+    upload = UploadFileRecord(filename="t.xlsx", status="done", row_count=1)
+    db.add(upload)
+    db.flush()
+    raw = RawDataRecord(
+        file_id=upload.id,
+        platform="tmall",
+        item_id="NEW-ITEM-999",
+        item_name="新款XM1000X无线蓝牙耳机未知品牌",
+        brand_raw=None,
+    )
+    db.add(raw)
+    db.flush()
+    job = CleanJobRecord(file_ids=[upload.id], rules={}, status="done", row_in=1, row_out=1)
+    db.add(job)
+    db.flush()
+    cleaned = CleanedDataRecord(
+        raw_data_id=raw.id,
+        clean_job_id=job.id,
+        platform="tmall",
+        item_id="NEW-ITEM-999",
+        item_name="新款XM1000X无线蓝牙耳机未知品牌",
+        brand_raw=None,
+    )
+    db.add(cleaned)
+    db.commit()
+
+    run_match(db, job.id)
+
+    mr = db.query(MatchResult).filter(MatchResult.clean_job_id == job.id).first()
+    assert mr is not None
+    assert mr.match_source == "s4"
+    assert mr.model_id == long_model.id

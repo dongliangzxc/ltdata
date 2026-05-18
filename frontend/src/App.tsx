@@ -16,6 +16,7 @@ import RulesPage from './pages/Rules'
 import HistoricalPage from './pages/Historical'
 import CategoriesPage from './pages/Categories'
 import DispatchPage from './pages/Dispatch'
+import BrandsPage from './pages/Brands'
 
 export default function App() {
   return (
@@ -42,6 +43,7 @@ export default function App() {
             <Route path="/categories" element={<CategoriesPage />} />
             <Route path="/historical" element={<HistoricalPage />} />
             <Route path="/dispatch" element={<DispatchPage />} />
+            <Route path="/brands" element={<BrandsPage />} />
           </Route>
         </Route>
       </Routes>

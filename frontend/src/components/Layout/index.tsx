@@ -17,6 +17,7 @@ import {
   HistoryOutlined,
   TagsOutlined,
   FunnelPlotOutlined,
+  ShopOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 
@@ -27,17 +28,18 @@ const menuItems = [
   { key: '/upload',     icon: <UploadOutlined />,        label: '数据上传' },
   { key: '/dispatch',   icon: <FunnelPlotOutlined />,    label: '数据分发' },
   { key: '/rawdata',    icon: <DatabaseOutlined />,      label: '原始数据' },
-  { key: '/categories', icon: <TagsOutlined />,       label: '品类管理' },
-  { key: '/metadata',   icon: <ProfileOutlined />,       label: '属性管理' },
-  { key: '/models',     icon: <AppstoreAddOutlined />,   label: '型号管理' },
-  { key: '/url-mappings', icon: <LinkOutlined />,        label: 'URL映射管理' },
+  { key: '/categories', icon: <TagsOutlined />,          label: '品类管理' },
+  { key: '/metadata',   icon: <ProfileOutlined />,       label: '产品字段定义' },
+  { key: '/models',     icon: <AppstoreAddOutlined />,   label: '产品属性管理' },
+  { key: '/brands',     icon: <ShopOutlined />,          label: '品牌管理' },
+  { key: '/url-mappings', icon: <LinkOutlined />,        label: '映射管理' },
   { key: '/historical',   icon: <HistoryOutlined />,     label: '历史库' },
   { key: '/clean',      icon: <ClearOutlined />,         label: '数据清洗' },
   { key: '/rules',      icon: <FilterOutlined />,        label: '规则管理' },
   { key: '/match',      icon: <AimOutlined />,           label: '匹配确认' },
-  { key: '/workbench',  icon: <FundOutlined />,            label: '查询工作台' },
-  { key: '/export',     icon: <ExportOutlined />,          label: '数据导出' },
-  { key: '/manual',     icon: <QuestionCircleOutlined />,  label: '使用手册' },
+  { key: '/workbench',  icon: <FundOutlined />,          label: '查询工作台' },
+  { key: '/export',     icon: <ExportOutlined />,        label: '数据导出' },
+  { key: '/manual',     icon: <QuestionCircleOutlined />, label: '使用手册' },
 ]
 
 interface Props {

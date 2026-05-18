@@ -13,7 +13,8 @@ from collections import Counter
 PRODUCT_MAP = {
     "智能投影":   "projector",
     "智能手表手环": "smartwatch",
-    "智能眼镜":   "vrar",
+    "智能眼镜":     "vrar",
+    "XR和智能眼镜": "vrar",
     "移动电源":   "power_bank",
     "行车记录仪": "dashcam",
     "监控摄像头": "camera",

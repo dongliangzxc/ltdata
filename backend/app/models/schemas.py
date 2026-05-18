@@ -20,8 +20,11 @@ class UploadFileRecord(Base):
     month_range = Column(String(20))        # e.g. "202507-202509"
     row_count = Column(Integer, default=0)
     status = Column(String(20), default="done")  # pending/processing/done/error
-    template_id  = Column(Integer, nullable=True)
-    uploaded_at = Column(DateTime, default=datetime.utcnow)
+    template_id  = Column(Integer,       nullable=True)
+    data_region  = Column(String(20),    nullable=True, comment='domestic/overseas')
+    data_year    = Column(SmallInteger,  nullable=True, comment='数据年份')
+    data_month   = Column(SmallInteger,  nullable=True, comment='数据月份 1-12')
+    uploaded_at  = Column(DateTime,      default=datetime.utcnow)
 
     raw_data = relationship("RawDataRecord", back_populates="file", cascade="save-update, merge")
 
@@ -119,6 +122,9 @@ class UploadFileOut(BaseModel):
     row_count: int
     status: str
     template_id: Optional[int] = None
+    data_region:  Optional[str] = None
+    data_year:    Optional[int] = None
+    data_month:   Optional[int] = None
     uploaded_at: datetime
 
     model_config = {"from_attributes": True}

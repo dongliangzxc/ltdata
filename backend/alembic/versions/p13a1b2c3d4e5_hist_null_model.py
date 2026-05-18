@@ -22,6 +22,8 @@ def upgrade():
 
 
 def downgrade():
+    # WARNING: This will fail if any historical_mappings rows have model_id IS NULL.
+    # Back-fill or delete those rows before running this downgrade.
     op.alter_column(
         'historical_mappings', 'model_id',
         existing_type=sa.Integer(),

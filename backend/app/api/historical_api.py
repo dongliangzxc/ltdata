@@ -112,7 +112,7 @@ def list_mappings(
 ):
     q = (
         db.query(HistoricalMapping, ModelRecord)
-        .join(ModelRecord, HistoricalMapping.model_id == ModelRecord.id)
+        .outerjoin(ModelRecord, HistoricalMapping.model_id == ModelRecord.id)
     )
     if platform:
         q = q.filter(HistoricalMapping.platform == platform.lower())
@@ -135,8 +135,8 @@ def list_mappings(
             "platform":     hm.platform,
             "item_id":      hm.item_id,
             "model_id":     hm.model_id,
-            "model_code":   m.model_code,
-            "brand_code":   m.brand_code,
+            "model_code":   m.model_code if m else None,
+            "brand_code":   m.brand_code if m else None,
             "import_batch": hm.import_batch,
             "updated_at":   hm.updated_at,
         }

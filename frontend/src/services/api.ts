@@ -36,7 +36,25 @@ export default api
 export const uploadFile = (formData: FormData) =>
   api.post('/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
 
-export const listUploadFiles = () => api.get('/upload/files')
+interface UploadFileItem {
+  id: number
+  filename: string
+  platform: string | null
+  month_range: string | null
+  row_count: number
+  status: string
+  template_id: number | null
+  uploaded_at: string
+  data_region: string | null
+  data_year: number | null
+  data_month: number | null
+}
+
+export const listUploadFiles = (params?: {
+  data_region?: string
+  data_year?: number
+  data_month?: number
+}) => api.get<UploadFileItem[]>('/upload/files', { params })
 
 export const deleteUploadFile = (fileId: number) => api.delete(`/upload/files/${fileId}`)
 
@@ -372,6 +390,9 @@ export const confirmUpload = (payload: {
   ignore_columns: string[]
   save_template_name?: string
   template_id?: number
+  data_region?: string
+  data_year?: number
+  data_month?: number
 }) => api.post('/upload/confirm', payload, { timeout: 300000 })
 
 export const getUploadConfirmJob = (jobId: number) =>

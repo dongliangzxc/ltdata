@@ -357,7 +357,7 @@ class HistoricalMapping(Base):
     id           = Column(Integer, primary_key=True, index=True)
     platform     = Column(String(50),  nullable=False)
     item_id      = Column(String(200), nullable=False)
-    model_id     = Column(Integer, ForeignKey("models.id"), nullable=False)
+    model_id     = Column(Integer, ForeignKey("models.id"), nullable=True)
     import_batch = Column(String(100), nullable=True)
     created_at   = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at   = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)

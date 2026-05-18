@@ -41,6 +41,9 @@ type ModelItem = {
   launch_week?: number | null
   launch_price?: number | null
   url?: string | null
+  status: string
+  operator?: string | null
+  updated_at?: string | null
   specs: ModelSpec[]
   aliases: ModelAlias[]
 }
@@ -95,6 +98,8 @@ export default function ModelsPage() {
         launch_week:   full.launch_week,
         launch_price:  full.launch_price,
         url:           full.url,
+        status:        full.status ?? 'active',
+        operator:      full.operator,
         specs:         full.specs,
       })
       const aliasRes = await listModelAliases(item.id)
@@ -184,6 +189,22 @@ export default function ModelsPage() {
       render: (v: string | null) => v ? <a href={v} target="_blank" rel="noreferrer">查看</a> : '-'
     },
     {
+      title: '状态', dataIndex: 'status', width: 70,
+      render: (v: string) => (
+        <span style={{ color: v === 'active' ? '#52c41a' : '#ff4d4f' }}>
+          {v === 'active' ? '启用' : '停用'}
+        </span>
+      )
+    },
+    {
+      title: '操作人', dataIndex: 'operator', width: 90,
+      render: (v: string | null) => v || '-'
+    },
+    {
+      title: '修改时间', dataIndex: 'updated_at', width: 140,
+      render: (v: string | null) => v ? new Date(v).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }).slice(0, 16) : '-'
+    },
+    {
       title: '操作', width: 90, fixed: 'right' as const,
       render: (_: unknown, row: ModelItem) => (
         <Space size={4}>
@@ -229,6 +250,18 @@ export default function ModelsPage() {
             onChange={e => { setSearch(p => ({ ...p, keyword: e.target.value || undefined })); setPage(1) }}
           />
         </Col>
+        <Col>
+          <Select
+            placeholder="状态筛选"
+            allowClear
+            style={{ width: 110 }}
+            options={[
+              { value: 'active', label: '启用' },
+              { value: 'inactive', label: '停用' },
+            ]}
+            onChange={v => { setSearch(p => ({ ...p, status: v || undefined })); setPage(1) }}
+          />
+        </Col>
         <Col flex="auto" />
         <Col>
           <Space>
@@ -244,7 +277,7 @@ export default function ModelsPage() {
         rowKey="id"
         size="small"
         loading={loading}
-        scroll={{ x: 800 }}
+        scroll={{ x: 1100 }}
         expandable={{
           onExpand: handleExpand,
           expandedRowRender: (record: ModelItem) => {
@@ -360,6 +393,21 @@ export default function ModelsPage() {
           <Form.Item label="网址" name="url">
             <Input placeholder="https://..." />
           </Form.Item>
+          <Row gutter={12}>
+            <Col span={8}>
+              <Form.Item label="状态" name="status" initialValue="active">
+                <Select options={[
+                  { value: 'active', label: '启用' },
+                  { value: 'inactive', label: '停用' },
+                ]} />
+              </Form.Item>
+            </Col>
+            <Col span={16}>
+              <Form.Item label="操作人" name="operator">
+                <Input placeholder="如 alice" />
+              </Form.Item>
+            </Col>
+          </Row>
 
           <Divider orientation="left" plain style={{ fontSize: 13, color: '#666' }}>规格参数</Divider>
           <Form.List name="specs">

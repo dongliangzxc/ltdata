@@ -339,6 +339,7 @@ class ItemUrlMapping(Base):
     platform   = Column(String(20), nullable=False)
     item_id    = Column(String(100), nullable=False)
     item_url   = Column(String(500), nullable=True)
+    brand_code = Column(String(100), nullable=True)          # 品牌已知但型号未知时填充
     model_id   = Column(Integer, ForeignKey("models.id"), nullable=True)
     price      = Column(Numeric(10, 2), nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
@@ -367,11 +368,12 @@ class HistoricalMapping(Base):
 
 class ItemUrlMappingIn(BaseModel):
 
-    platform: str
-    item_id:  str
-    item_url: Optional[str] = None
-    model_id: Optional[int] = None
-    price:    Optional[float] = None
+    platform:   str
+    item_id:    str
+    item_url:   Optional[str] = None
+    brand_code: Optional[str] = None   # 品牌已知但型号未知时填充
+    model_id:   Optional[int] = None
+    price:      Optional[float] = None
 
 
 class ItemUrlMappingOut(BaseModel):

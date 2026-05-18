@@ -138,7 +138,7 @@ def dirty_model_excel(tmp_path):
 
 
 def test_dirty_model_row_creates_url_mapping(db, dirty_model_excel):
-    """型号为空但品牌+URL有效时，应建 ItemUrlMapping(model_id=None)"""
+    """型号为空但品牌+URL有效时，应建 ItemUrlMapping(model_id=None, brand_code='Sony')"""
     from app.models.schemas import ItemUrlMapping
     db.add(Category(code="headphone", name="耳机"))
     db.commit()
@@ -150,6 +150,7 @@ def test_dirty_model_row_creates_url_mapping(db, dirty_model_excel):
     ).first()
     assert url_mapping is not None
     assert url_mapping.model_id is None
+    assert url_mapping.brand_code == "Sony"   # ← new assertion
     assert stats["urls_from_dirty_model"] == 1
 
 

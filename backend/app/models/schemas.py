@@ -370,8 +370,7 @@ class ItemUrlMappingIn(BaseModel):
     platform: str
     item_id:  str
     item_url: Optional[str] = None
-    model_id: int
-    price:    Optional[float] = None
+    model_id: Optional[int] = None
 
 
 class ItemUrlMappingOut(BaseModel):
@@ -379,7 +378,7 @@ class ItemUrlMappingOut(BaseModel):
     platform:   str
     item_id:    str
     item_url:   Optional[str] = None
-    model_id:   int
+    model_id:   Optional[int] = None
     price:      Optional[float]
     brand_code: Optional[str] = None
     model_code: Optional[str] = None

@@ -17,4 +17,6 @@ def upgrade():
 
 
 def downgrade():
+    # 警告：若 item_url_mappings 中已有 model_id IS NULL 的行，此操作会失败
+    # 执行前需先确认无 NULL 数据
     op.alter_column('item_url_mappings', 'model_id', nullable=False)

@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from 'react'
 import {
-  Card, Table, Select, Input, Row, Col, Statistic, Space, Tag, Button
+  Card, Table, Select, Input, Row, Col, Statistic, Space, Tag, Button, message
 } from 'antd'
 import type { TableProps, TableColumnType } from 'antd'
 import {
@@ -119,13 +119,19 @@ export default function DataListPage() {
   }
 
   const handleExport = async () => {
-    const res = await exportRawData(filters)
-    const url = window.URL.createObjectURL(new Blob([res.data]))
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'rawdata_export.xlsx'
-    a.click()
-    window.URL.revokeObjectURL(url)
+    try {
+      const res = await exportRawData(filters)
+      const url = window.URL.createObjectURL(new Blob([res.data]))
+      const a = document.createElement('a')
+      document.body.appendChild(a)
+      a.href = url
+      a.download = 'rawdata_export.xlsx'
+      a.click()
+      document.body.removeChild(a)
+      setTimeout(() => window.URL.revokeObjectURL(url), 100)
+    } catch {
+      message.error('导出失败，请重试')
+    }
   }
 
   const handleTableChange: TableProps<Record<string, unknown>>['onChange'] = (_pagination, _filters, sorter) => {

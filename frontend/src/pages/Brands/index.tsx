@@ -12,6 +12,7 @@ import {
 
 function AliasPanel({ brandCode, onAliasChange }: { brandCode: string; onAliasChange: () => void }) {
   const [addOpen, setAddOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [form] = Form.useForm()
 
   const { data: aliases, loading, refresh } = useRequest(
@@ -20,19 +21,30 @@ function AliasPanel({ brandCode, onAliasChange }: { brandCode: string; onAliasCh
 
   const handleAdd = async () => {
     const values = await form.validateFields()
-    await createBrandAliasForCode(brandCode, { alias_name: values.alias_name })
-    message.success('别名添加成功')
-    form.resetFields()
-    setAddOpen(false)
-    refresh()
-    onAliasChange()
+    setSaving(true)
+    try {
+      await createBrandAliasForCode(brandCode, { alias_name: values.alias_name })
+      message.success('别名添加成功')
+      form.resetFields()
+      setAddOpen(false)
+      refresh()
+      onAliasChange()
+    } catch {
+      // errors shown by axios interceptor
+    } finally {
+      setSaving(false)
+    }
   }
 
   const handleDelete = async (alias: BrandAliasItem) => {
-    await deleteBrandAliasById(brandCode, alias.id)
-    message.success('已删除')
-    refresh()
-    onAliasChange()
+    try {
+      await deleteBrandAliasById(brandCode, alias.id)
+      message.success('已删除')
+      refresh()
+      onAliasChange()
+    } catch {
+      // errors shown by axios interceptor
+    }
   }
 
   const columns = [
@@ -72,6 +84,7 @@ function AliasPanel({ brandCode, onAliasChange }: { brandCode: string; onAliasCh
         title={`为 ${brandCode} 添加写法别名`}
         open={addOpen}
         onOk={handleAdd}
+        confirmLoading={saving}
         onCancel={() => { setAddOpen(false); form.resetFields() }}
         okText="保存"
         cancelText="取消"

@@ -97,6 +97,7 @@ export default function DataListPage() {
   const [sortBy, setSortBy] = useState<string | undefined>()
   const [sortOrder, setSortOrder] = useState<string>('desc')
   const [colWidths, setColWidths] = useState<Record<string, number>>({})
+  const [exporting, setExporting] = useState(false)
 
   const { data: filterOptions } = useRequest(() => getRawFilters().then(r => r.data))
   const { data: filesData } = useRequest(() => listUploadFiles().then(r => r.data))
@@ -119,9 +120,10 @@ export default function DataListPage() {
   }
 
   const handleExport = async () => {
+    setExporting(true)
     try {
       const res = await exportRawData(filters)
-      const url = window.URL.createObjectURL(new Blob([res.data]))
+      const url = window.URL.createObjectURL(new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
       const a = document.createElement('a')
       document.body.appendChild(a)
       a.href = url
@@ -131,6 +133,8 @@ export default function DataListPage() {
       setTimeout(() => window.URL.revokeObjectURL(url), 100)
     } catch {
       message.error('导出失败，请重试')
+    } finally {
+      setExporting(false)
     }
   }
 
@@ -208,7 +212,7 @@ export default function DataListPage() {
             <Input placeholder="搜索商品名称" allowClear onChange={e => updateFilter('item_name', e.target.value)} />
           </Col>
           <Col span={2} style={{ textAlign: 'right' }}>
-            <Button onClick={handleExport}>导出 Excel</Button>
+            <Button onClick={handleExport} loading={exporting}>导出 Excel</Button>
           </Col>
         </Row>
 

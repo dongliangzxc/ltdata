@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import {
   Card, Upload, Table, Tag, Button, Popconfirm, Select, Checkbox,
   message, Space, Typography, Spin, Alert, Tabs, Switch, Input,
-  Modal, Form,
+  Modal, Form, InputNumber,
 } from 'antd'
 import {
   InboxOutlined, DeleteOutlined, ReloadOutlined,
@@ -66,6 +66,27 @@ const historyColumns = (onDelete: (id: number) => void) => [
     render: (v: string) => <Tag color="blue">{PLATFORM_LABEL[v] ?? v}</Tag>,
   },
   { title: '月份范围', dataIndex: 'month_range', width: 130 },
+  {
+    title: '国内/海外',
+    dataIndex: 'data_region',
+    width: 90,
+    render: (v: string | null) =>
+      v === 'domestic' ? <Tag color="blue">国内</Tag>
+      : v === 'overseas' ? <Tag color="orange">海外</Tag>
+      : <span style={{ color: '#ccc' }}>—</span>,
+  },
+  {
+    title: '年份',
+    dataIndex: 'data_year',
+    width: 70,
+    render: (v: number | null) => v ?? '—',
+  },
+  {
+    title: '月份',
+    dataIndex: 'data_month',
+    width: 70,
+    render: (v: number | null) => v != null ? `${v} 月` : '—',
+  },
   { title: '数据量', dataIndex: 'row_count', width: 80 },
   {
     title: '状态', dataIndex: 'status', width: 80,
@@ -124,11 +145,17 @@ function MappingCard({
   templates,
   onSuccess,
   onCancel,
+  dataRegion,
+  dataYear,
+  dataMonth,
 }: {
   headersResult: HeadersResult
   templates: TemplateRow[]
   onSuccess: (result: Record<string, unknown>) => void
   onCancel: () => void
+  dataRegion?: string
+  dataYear?: number
+  dataMonth?: number
 }) {
   const { columns, suggested_template, match_score, temp_file_id, filename } = headersResult
 
@@ -207,6 +234,9 @@ function MappingCard({
         ignore_columns: [...ignoreSet],
         save_template_name: saveSwitch && saveName ? saveName : undefined,
         template_id: selectedTemplateId,
+        data_region: dataRegion,
+        data_year: dataYear,
+        data_month: dataMonth,
       })
       const { job_id } = res.data as { job_id: number }
 
@@ -598,9 +628,17 @@ export default function UploadPage() {
   } | null>(null)
   const [uploading, setUploading] = useState(false)
 
+  const [dataRegion, setDataRegion] = useState<string | undefined>(undefined)
+  const [dataYear, setDataYear] = useState<number>(new Date().getFullYear())
+  const [dataMonth, setDataMonth] = useState<number>(new Date().getMonth() + 1)
+
+  const [filterRegion, setFilterRegion] = useState<string | undefined>(undefined)
+  const [filterYear, setFilterYear] = useState<number | undefined>(undefined)
+  const [filterMonth, setFilterMonth] = useState<number | undefined>(undefined)
+
   const { data: filesData, loading: filesLoading, refresh: refreshFiles } = useRequest(
-    () => listUploadFiles().then(r => r.data),
-    { refreshDeps: [] }
+    () => listUploadFiles({ data_region: filterRegion, data_year: filterYear, data_month: filterMonth }).then(r => r.data),
+    { refreshDeps: [filterRegion, filterYear, filterMonth] }
   )
 
   const { data: templatesData, loading: templatesLoading, refresh: refreshTemplates } = useRequest(
@@ -700,12 +738,52 @@ export default function UploadPage() {
 
       {/* Step 2: Mapping confirmation */}
       {step === 'mapping' && headersResult && (
-        <MappingCard
-          headersResult={headersResult}
-          templates={templates}
-          onSuccess={handleMappingSuccess}
-          onCancel={() => setStep('upload')}
-        />
+        <>
+          <Card style={{ marginBottom: 12 }}>
+            <Space size="large">
+              <span style={{ fontWeight: 500 }}>数据维度</span>
+              <Select
+                placeholder="国内 / 海外"
+                value={dataRegion}
+                onChange={setDataRegion}
+                style={{ width: 120 }}
+                options={[
+                  { value: 'domestic', label: '国内' },
+                  { value: 'overseas', label: '海外' },
+                ]}
+                allowClear
+                onClear={() => setDataRegion(undefined)}
+              />
+              <InputNumber
+                placeholder="年份"
+                value={dataYear}
+                onChange={(v) => v !== null && v !== undefined && setDataYear(v)}
+                min={2020}
+                max={2099}
+                style={{ width: 100 }}
+              />
+              <Select
+                placeholder="月份"
+                value={dataMonth}
+                onChange={setDataMonth}
+                style={{ width: 90 }}
+                options={Array.from({ length: 12 }, (_, i) => ({
+                  value: i + 1,
+                  label: `${i + 1} 月`,
+                }))}
+              />
+            </Space>
+          </Card>
+          <MappingCard
+            headersResult={headersResult}
+            templates={templates}
+            onSuccess={handleMappingSuccess}
+            onCancel={() => setStep('upload')}
+            dataRegion={dataRegion}
+            dataYear={dataYear}
+            dataMonth={dataMonth}
+          />
+        </>
       )}
 
       {/* Step 3: Ingestion preview */}
@@ -760,14 +838,53 @@ export default function UploadPage() {
               key: 'history',
               label: '上传历史',
               children: (
-                <Table
-                  dataSource={(filesData as { id: number }[] | undefined) ?? []}
-                  columns={historyColumns(handleDelete)}
-                  rowKey="id"
-                  size="small"
-                  loading={filesLoading}
-                  pagination={{ pageSize: 10 }}
-                />
+                <>
+                  <Space style={{ marginBottom: 12 }} wrap>
+                    <Select
+                      placeholder="国内 / 海外"
+                      value={filterRegion}
+                      onChange={setFilterRegion}
+                      style={{ width: 120 }}
+                      options={[
+                        { value: 'domestic', label: '国内' },
+                        { value: 'overseas', label: '海外' },
+                      ]}
+                      allowClear
+                      onClear={() => setFilterRegion(undefined)}
+                    />
+                    <InputNumber
+                      placeholder="年份"
+                      value={filterYear}
+                      onChange={(v) => setFilterYear(v ?? undefined)}
+                      min={2020}
+                      max={2099}
+                      style={{ width: 100 }}
+                    />
+                    <Select
+                      placeholder="月份"
+                      value={filterMonth}
+                      onChange={setFilterMonth}
+                      style={{ width: 90 }}
+                      options={Array.from({ length: 12 }, (_, i) => ({
+                        value: i + 1,
+                        label: `${i + 1} 月`,
+                      }))}
+                      allowClear
+                      onClear={() => setFilterMonth(undefined)}
+                    />
+                    <Button onClick={() => { setFilterRegion(undefined); setFilterYear(undefined); setFilterMonth(undefined) }}>
+                      重置
+                    </Button>
+                  </Space>
+                  <Table
+                    dataSource={(filesData as { id: number }[] | undefined) ?? []}
+                    columns={historyColumns(handleDelete)}
+                    rowKey="id"
+                    size="small"
+                    loading={filesLoading}
+                    pagination={{ pageSize: 10 }}
+                  />
+                </>
               ),
             },
             {

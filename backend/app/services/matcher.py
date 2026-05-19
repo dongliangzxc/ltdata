@@ -50,6 +50,7 @@ from sqlalchemy.orm import Session
 from app.models.schemas import CleanedDataRecord, ModelRecord, ModelAlias, MatchResult, MatchResultCandidate, ItemUrlMapping, MatchRule, HistoricalMapping
 from app.utils.url_utils import extract_item_id
 from app.services.attribute_matcher import run_attribute_matching
+from app.services.price_auditor import audit_price
 
 
 def _norm(s: str | None) -> str:
@@ -468,5 +469,6 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
     ]
     if matched_result_ids:
         run_attribute_matching(db, matched_result_ids)
+        audit_price(db, matched_result_ids)
 
     return {"total": total, "matched": matched_count, "pending": total - matched_count}

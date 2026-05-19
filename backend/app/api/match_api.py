@@ -17,6 +17,7 @@ from app.models.schemas import (
     HistoricalMapping,
 )
 from app.services.matcher import run_match
+from app.services.price_auditor import audit_price
 
 router = APIRouter(prefix="/api/match", tags=["match"])
 
@@ -390,10 +391,11 @@ def confirm_match(match_id: int, payload: dict, db: Session = Depends(get_db)):
 
     db.commit()
 
-    # 型号确认后触发属性匹配
+    # 型号确认后触发属性匹配和量价审核
     if mr.match_status in ("confirmed", "matched") and mr.model_id:
         from app.services.attribute_matcher import run_attribute_matching
         run_attribute_matching(db, [mr.id])
+        audit_price(db, [mr.id])
 
     db.refresh(mr)
 
@@ -407,10 +409,14 @@ def confirm_match(match_id: int, payload: dict, db: Session = Depends(get_db)):
         model_id=mr.model_id,
         match_status=mr.match_status,
         matched_by=mr.matched_by,
+        price_flag=mr.price_flag,
+        price_ref=mr.price_ref,
+        sales_coefficient=mr.sales_coefficient,
         item_name=rd.item_name if rd else None,
         brand_raw=rd.brand_raw if rd else None,
         model_code=model_info.model_code if model_info else None,
         brand_code=model_info.brand_code if model_info else None,
+        sales_qty=rd.sales_qty if rd else None,
     )
 
 

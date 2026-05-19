@@ -7,6 +7,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.models.analytics_db import AnalyticsBase, PublishedItem
 from app.models.schemas import (
+    CleanedDataRecord,
     CleanJobRecord,
     MatchResult,
     ModelRecord,
@@ -165,3 +166,74 @@ def test_audit_price_marks_no_history_when_current_price_missing(db, analytics_d
     assert result == {"audited": 1}
     assert match_result.price_flag == "no_history"
     assert match_result.price_ref is None
+
+
+def test_run_match_triggers_price_audit_for_auto_matched_result(db, analytics_db):
+    from app.services.matcher import run_match
+
+    _seed_history(
+        analytics_db,
+        model_code="AUD100",
+        months=(202510, 202511, 202512, 202601, 202602, 202603),
+        price=Decimal("100.00"),
+    )
+
+    upload = UploadFileRecord(
+        filename="price-audit-match.xlsx",
+        platform="jd",
+        month_range="202604",
+        row_count=1,
+    )
+    db.add(upload)
+    db.flush()
+
+    model = ModelRecord(
+        brand_code="AUD",
+        model_code="AUD100",
+        brand_name="Audit Brand",
+        model_name="Audit Model 100",
+        category_code="test",
+    )
+    db.add(model)
+    db.flush()
+
+    raw = RawDataRecord(
+        file_id=upload.id,
+        platform="jd",
+        month=202604,
+        item_id="audit-current-202604",
+        item_name="Audit Brand AUD100 current item",
+        brand_raw="AUD",
+        price=Decimal("121.00"),
+    )
+    db.add(raw)
+    db.flush()
+
+    job = CleanJobRecord(
+        file_ids=[upload.id],
+        rules={},
+        status="done",
+        row_in=1,
+        row_out=1,
+    )
+    db.add(job)
+    db.flush()
+
+    db.add(CleanedDataRecord(
+        raw_data_id=raw.id,
+        clean_job_id=job.id,
+        platform="jd",
+        month=202604,
+        item_id="audit-current-202604",
+        item_name="Audit Brand AUD100 current item",
+        brand_raw="AUD",
+        price=Decimal("121.00"),
+    ))
+    db.commit()
+
+    result = run_match(db, job.id)
+
+    match_result = db.query(MatchResult).filter(MatchResult.clean_job_id == job.id).one()
+    assert result == {"total": 1, "matched": 1, "pending": 0}
+    assert match_result.price_flag == "high"
+    assert match_result.price_ref == Decimal("100.00")

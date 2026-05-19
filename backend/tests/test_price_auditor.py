@@ -265,8 +265,11 @@ def test_confirm_match_triggers_price_audit_and_returns_audit_fields(db, analyti
     persisted = db.get(MatchResult, match_result.id)
     assert response.price_flag == "high"
     assert response.price_ref == 100.0
+    assert response.sales_coefficient is None
+    assert response.sales_qty == 10
     assert persisted.price_flag == "high"
     assert persisted.price_ref == Decimal("100.00")
+    assert persisted.sales_coefficient is None
 
 
 def _seed_aud100_pending_match_context(db):
@@ -297,6 +300,7 @@ def _seed_aud100_pending_match_context(db):
         item_name="Manual confirm AUD100 current item",
         brand_raw="AUD",
         price=Decimal("121.00"),
+        sales_qty=10,
     )
     db.add(raw)
     db.flush()
@@ -312,6 +316,15 @@ def _seed_aud100_pending_match_context(db):
     db.flush()
 
     return upload, model, raw, job
+
+
+def _assert_session_accepts_write(db):
+    job = CleanJobRecord(file_ids=[], rules={}, status="done")
+    db.add(job)
+    db.commit()
+
+    assert job.id is not None
+    assert db.get(CleanJobRecord, job.id) is not None
 
 
 def test_run_match_keeps_persisted_results_when_price_audit_fails(db, monkeypatch):
@@ -342,6 +355,7 @@ def test_run_match_keeps_persisted_results_when_price_audit_fails(db, monkeypatc
     assert match_result.model_id == model.id
     assert match_result.match_status == "matched"
     assert db.query(MatchResult).count() == 1
+    _assert_session_accepts_write(db)
 
 
 def test_confirm_match_keeps_confirmation_when_price_audit_fails(db, monkeypatch):
@@ -371,3 +385,4 @@ def test_confirm_match_keeps_confirmation_when_price_audit_fails(db, monkeypatch
     assert persisted.match_status == "confirmed"
     assert persisted.model_id == model.id
     assert db.query(MatchResult).count() == 1
+    _assert_session_accepts_write(db)

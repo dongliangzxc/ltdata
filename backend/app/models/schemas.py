@@ -560,8 +560,6 @@ class MatchResultOut(BaseModel):
     price_flag: Optional[str] = None
     price_ref: Optional[float] = None
     sales_coefficient: Optional[float] = None
-    corrected_sales_qty: Optional[int] = None
-    adjusted_sales_qty: Optional[int] = None
     # 关联字段（join 查询后填充）
     item_name:     Optional[str] = None
     item_url:      Optional[str] = None

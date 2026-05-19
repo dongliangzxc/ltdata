@@ -1,6 +1,7 @@
 """
 型号匹配 API
 """
+import logging
 import time
 from threading import Thread
 from typing import Optional
@@ -20,6 +21,7 @@ from app.services.matcher import run_match
 from app.services.price_auditor import audit_price
 
 router = APIRouter(prefix="/api/match", tags=["match"])
+logger = logging.getLogger(__name__)
 
 # ── 进度状态（内存，key=clean_job_id）────────────────────────────────
 # {
@@ -395,7 +397,11 @@ def confirm_match(match_id: int, payload: dict, db: Session = Depends(get_db)):
     if mr.match_status in ("confirmed", "matched") and mr.model_id:
         from app.services.attribute_matcher import run_attribute_matching
         run_attribute_matching(db, [mr.id])
-        audit_price(db, [mr.id])
+        try:
+            audit_price(db, [mr.id])
+        except Exception:
+            logger.exception("Price audit failed after confirming match_id=%s", mr.id)
+            db.rollback()
 
     db.refresh(mr)
 

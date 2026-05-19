@@ -46,11 +46,15 @@ brand_identified 标记：S1/S2/S3 任意阶段识别到品牌即置 1，即使�
 
 支持重复执行：每次运行先删除该 clean_job 的旧结果再重新写入。
 """
+import logging
+
 from sqlalchemy.orm import Session
 from app.models.schemas import CleanedDataRecord, ModelRecord, ModelAlias, MatchResult, MatchResultCandidate, ItemUrlMapping, MatchRule, HistoricalMapping
 from app.utils.url_utils import extract_item_id
 from app.services.attribute_matcher import run_attribute_matching
 from app.services.price_auditor import audit_price
+
+logger = logging.getLogger(__name__)
 
 
 def _norm(s: str | None) -> str:
@@ -469,6 +473,10 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
     ]
     if matched_result_ids:
         run_attribute_matching(db, matched_result_ids)
-        audit_price(db, matched_result_ids)
+        try:
+            audit_price(db, matched_result_ids)
+        except Exception:
+            logger.exception("Price audit failed after matching clean_job_id=%s", clean_job_id)
+            db.rollback()
 
     return {"total": total, "matched": matched_count, "pending": total - matched_count}

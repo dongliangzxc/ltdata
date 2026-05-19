@@ -237,3 +237,73 @@ def test_run_match_triggers_price_audit_for_auto_matched_result(db, analytics_db
     assert result == {"total": 1, "matched": 1, "pending": 0}
     assert match_result.price_flag == "high"
     assert match_result.price_ref == Decimal("100.00")
+
+
+def test_confirm_match_triggers_price_audit_and_returns_audit_fields(db, analytics_db):
+    from app.api.match_api import confirm_match
+
+    _seed_history(
+        analytics_db,
+        model_code="AUD100",
+        months=(202510, 202511, 202512, 202601, 202602, 202603),
+        price=Decimal("100.00"),
+    )
+
+    upload = UploadFileRecord(
+        filename="price-audit-confirm.xlsx",
+        platform="jd",
+        month_range="202604",
+        row_count=1,
+    )
+    db.add(upload)
+    db.flush()
+
+    model = ModelRecord(
+        brand_code="AUD",
+        model_code="AUD100",
+        brand_name="Audit Brand",
+        model_name="Audit Model 100",
+        category_code="test",
+    )
+    db.add(model)
+    db.flush()
+
+    raw = RawDataRecord(
+        file_id=upload.id,
+        platform="jd",
+        month=202604,
+        item_id="audit-confirm-202604",
+        item_name="Manual confirm AUD100 current item",
+        brand_raw="AUD",
+        price=Decimal("121.00"),
+    )
+    db.add(raw)
+    db.flush()
+
+    job = CleanJobRecord(
+        file_ids=[upload.id],
+        rules={},
+        status="done",
+        row_in=1,
+        row_out=1,
+    )
+    db.add(job)
+    db.flush()
+
+    match_result = MatchResult(
+        clean_job_id=job.id,
+        raw_data_id=raw.id,
+        model_id=None,
+        match_status="pending",
+        matched_by="auto",
+    )
+    db.add(match_result)
+    db.commit()
+
+    response = confirm_match(match_result.id, {"model_id": model.id}, db)
+
+    persisted = db.get(MatchResult, match_result.id)
+    assert response.price_flag == "high"
+    assert response.price_ref == 100.0
+    assert persisted.price_flag == "high"
+    assert persisted.price_ref == Decimal("100.00")

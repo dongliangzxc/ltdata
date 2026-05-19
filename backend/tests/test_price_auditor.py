@@ -249,6 +249,27 @@ def test_confirm_match_triggers_price_audit_and_returns_audit_fields(db, analyti
         price=Decimal("100.00"),
     )
 
+    upload, model, raw, job = _seed_aud100_pending_match_context(db)
+    match_result = MatchResult(
+        clean_job_id=job.id,
+        raw_data_id=raw.id,
+        model_id=None,
+        match_status="pending",
+        matched_by="auto",
+    )
+    db.add(match_result)
+    db.commit()
+
+    response = confirm_match(match_result.id, {"model_id": model.id}, db)
+
+    persisted = db.get(MatchResult, match_result.id)
+    assert response.price_flag == "high"
+    assert response.price_ref == 100.0
+    assert persisted.price_flag == "high"
+    assert persisted.price_ref == Decimal("100.00")
+
+
+def _seed_aud100_pending_match_context(db):
     upload = UploadFileRecord(
         filename="price-audit-confirm.xlsx",
         platform="jd",
@@ -290,6 +311,43 @@ def test_confirm_match_triggers_price_audit_and_returns_audit_fields(db, analyti
     db.add(job)
     db.flush()
 
+    return upload, model, raw, job
+
+
+def test_run_match_keeps_persisted_results_when_price_audit_fails(db, monkeypatch):
+    from app.services.matcher import run_match
+
+    upload, model, raw, job = _seed_aud100_pending_match_context(db)
+    db.add(CleanedDataRecord(
+        raw_data_id=raw.id,
+        clean_job_id=job.id,
+        platform="jd",
+        month=202604,
+        item_id="audit-current-202604",
+        item_name="Audit Brand AUD100 current item",
+        brand_raw="AUD",
+        price=Decimal("121.00"),
+    ))
+    db.commit()
+
+    def fail_audit(_db, _match_result_ids):
+        raise RuntimeError("audit unavailable")
+
+    monkeypatch.setattr("app.services.matcher.audit_price", fail_audit)
+
+    result = run_match(db, job.id)
+
+    match_result = db.query(MatchResult).filter(MatchResult.clean_job_id == job.id).one()
+    assert result == {"total": 1, "matched": 1, "pending": 0}
+    assert match_result.model_id == model.id
+    assert match_result.match_status == "matched"
+    assert db.query(MatchResult).count() == 1
+
+
+def test_confirm_match_keeps_confirmation_when_price_audit_fails(db, monkeypatch):
+    from app.api.match_api import confirm_match
+
+    upload, model, raw, job = _seed_aud100_pending_match_context(db)
     match_result = MatchResult(
         clean_job_id=job.id,
         raw_data_id=raw.id,
@@ -300,10 +358,16 @@ def test_confirm_match_triggers_price_audit_and_returns_audit_fields(db, analyti
     db.add(match_result)
     db.commit()
 
+    def fail_audit(_db, _match_result_ids):
+        raise RuntimeError("audit unavailable")
+
+    monkeypatch.setattr("app.api.match_api.audit_price", fail_audit)
+
     response = confirm_match(match_result.id, {"model_id": model.id}, db)
 
     persisted = db.get(MatchResult, match_result.id)
-    assert response.price_flag == "high"
-    assert response.price_ref == 100.0
-    assert persisted.price_flag == "high"
-    assert persisted.price_ref == Decimal("100.00")
+    assert response.match_status == "confirmed"
+    assert response.model_id == model.id
+    assert persisted.match_status == "confirmed"
+    assert persisted.model_id == model.id
+    assert db.query(MatchResult).count() == 1

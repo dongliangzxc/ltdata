@@ -25,7 +25,12 @@ def create_category(payload: CategoryCreate, db: Session = Depends(get_db)):
     existing = db.query(Category).filter(Category.code == payload.code).first()
     if existing:
         raise HTTPException(status_code=409, detail=f"品类码 {payload.code} 已存在")
-    cat = Category(code=payload.code.strip(), name=payload.name.strip())
+    cat = Category(
+        code=payload.code.strip(),
+        name=payload.name.strip(),
+        parent_code=payload.parent_code,
+        sort_order=payload.sort_order,
+    )
     db.add(cat)
     try:
         db.commit()

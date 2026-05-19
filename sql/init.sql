@@ -196,7 +196,7 @@ CREATE TABLE IF NOT EXISTS match_results (
     match_source VARCHAR(20)           COMMENT 's1/s2/s3/s4=自动匹配步骤 manual=人工',
     price_flag VARCHAR(20) NULL COMMENT 'ok/high/low/no_history',
     price_ref DECIMAL(10,2) NULL COMMENT '参考均价',
-    sales_coefficient DECIMAL(6,4) NULL COMMENT '销量调整系数，NULL=不调整',
+    sales_coefficient DECIMAL(6,4) NULL COMMENT '销量调整系数',
     created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     KEY idx_match_clean_job (clean_job_id),

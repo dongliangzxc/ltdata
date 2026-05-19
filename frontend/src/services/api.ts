@@ -356,16 +356,28 @@ export interface MatchCandidateOut {
 }
 
 // ─── Categories ─────────────────────────────────────────────
+export type CategoryTreeNode = {
+  id: number
+  code: string
+  name: string
+  parent_code: string | null
+  sort_order: number
+  children: CategoryTreeNode[]
+}
+
 export const listCategories = () =>
   api.get('/categories')
 
 export const fetchCategories = () =>
   api.get<{ id: number; code: string; name: string }[]>('/categories').then(r => r.data)
 
-export const createCategory = (data: { code: string; name: string }) =>
+export const getCategoryTree = () =>
+  api.get<CategoryTreeNode[]>('/categories/tree')
+
+export const createCategory = (data: { code: string; name: string; parent_code?: string | null; sort_order?: number }) =>
   api.post('/categories', data)
 
-export const updateCategory = (id: number, data: { name: string }) =>
+export const updateCategory = (id: number, data: { name?: string; parent_code?: string | null; sort_order?: number }) =>
   api.put(`/categories/${id}`, data)
 
 export const deleteCategory = (id: number) =>

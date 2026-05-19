@@ -636,10 +636,15 @@ export default function UploadPage() {
   const [filterYear, setFilterYear] = useState<number | undefined>(undefined)
   const [filterMonth, setFilterMonth] = useState<number | undefined>(undefined)
 
-  const { data: filesData, loading: filesLoading, refresh: refreshFiles } = useRequest(
-    () => listUploadFiles({ data_region: filterRegion, data_year: filterYear, data_month: filterMonth }).then(r => r.data),
-    { refreshDeps: [filterRegion, filterYear, filterMonth] }
+  const { data: filesData, loading: filesLoading, run: runFilesQuery } = useRequest(
+    (params?: { data_region?: string; data_year?: number; data_month?: number }) =>
+      listUploadFiles(params).then(r => r.data),
+    { manual: true }
   )
+
+  useEffect(() => {
+    runFilesQuery({ data_region: filterRegion, data_year: filterYear, data_month: filterMonth })
+  }, [filterRegion, filterYear, filterMonth])
 
   const { data: templatesData, loading: templatesLoading, refresh: refreshTemplates } = useRequest(
     () => listUploadTemplates().then(r => r.data),
@@ -676,7 +681,7 @@ export default function UploadPage() {
       skipped: Number(result.skipped ?? 0),
     })
     setStep('preview')
-    refreshFiles()
+    runFilesQuery({ data_region: filterRegion, data_year: filterYear, data_month: filterMonth })
     refreshTemplates()
   }
 
@@ -703,7 +708,7 @@ export default function UploadPage() {
     try {
       await deleteUploadFile(id)
       message.success('已删除')
-      refreshFiles()
+      runFilesQuery({ data_region: filterRegion, data_year: filterYear, data_month: filterMonth })
     } catch {
       // handled
     }
@@ -752,7 +757,6 @@ export default function UploadPage() {
                   { value: 'overseas', label: '海外' },
                 ]}
                 allowClear
-                onClear={() => setDataRegion(undefined)}
               />
               <InputNumber
                 placeholder="年份"
@@ -828,7 +832,7 @@ export default function UploadPage() {
           tabBarExtraContent={
             <Button
               icon={<ReloadOutlined />}
-              onClick={() => { refreshFiles(); refreshTemplates() }}
+              onClick={() => { runFilesQuery({ data_region: filterRegion, data_year: filterYear, data_month: filterMonth }); refreshTemplates() }}
             >
               刷新
             </Button>
@@ -850,7 +854,6 @@ export default function UploadPage() {
                         { value: 'overseas', label: '海外' },
                       ]}
                       allowClear
-                      onClear={() => setFilterRegion(undefined)}
                     />
                     <InputNumber
                       placeholder="年份"
@@ -870,7 +873,6 @@ export default function UploadPage() {
                         label: `${i + 1} 月`,
                       }))}
                       allowClear
-                      onClear={() => setFilterMonth(undefined)}
                     />
                     <Button onClick={() => { setFilterRegion(undefined); setFilterYear(undefined); setFilterMonth(undefined) }}>
                       重置

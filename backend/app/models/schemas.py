@@ -502,6 +502,9 @@ class MatchResult(Base):
     is_disabled    = Column(SmallInteger, nullable=False, default=0)
     disable_reason = Column(String(100), nullable=True)
     brand_identified = Column(SmallInteger, default=1)
+    price_flag = Column(String(20), nullable=True)
+    price_ref = Column(Numeric(10, 2), nullable=True)
+    sales_coefficient = Column(Numeric(6, 4), nullable=True)
     created_at     = Column(DateTime, default=datetime.utcnow)
     updated_at   = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -554,6 +557,11 @@ class MatchResultOut(BaseModel):
     is_disabled:    int = 0
     disable_reason: Optional[str] = None
     brand_identified: int = 1
+    price_flag: Optional[str] = None
+    price_ref: Optional[float] = None
+    sales_coefficient: Optional[float] = None
+    corrected_sales_qty: Optional[int] = None
+    adjusted_sales_qty: Optional[int] = None
     # 关联字段（join 查询后填充）
     item_name:     Optional[str] = None
     item_url:      Optional[str] = None

@@ -5,6 +5,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from app.models.database import Base
 from app.models.schemas import Category, CategoryOut
+from fastapi.testclient import TestClient
+from fastapi import FastAPI
+from app.models.database import get_db
+from app.api.categories_api import router as cat_router
 
 
 @pytest.fixture
@@ -56,3 +60,91 @@ def test_category_out_pydantic_roundtrip(db):
     out = CategoryOut.model_validate(c)
     assert out.parent_code == "display"
     assert out.sort_order == 5
+
+
+# ─────────────────────────── API Tests (TestClient) ───────────────────────────
+
+@pytest.fixture(scope="function")
+def client_and_db():
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    db = Session()
+    app = FastAPI()
+    app.include_router(cat_router)
+    def override_db():
+        yield db
+    app.dependency_overrides[get_db] = override_db
+    yield TestClient(app), db
+    db.close()
+
+
+def test_tree_returns_nested_children(client_and_db):
+    """GET /api/categories/tree returns parent nodes with children nested."""
+    client, db = client_and_db
+    db.add(Category(code="audio", name="音频", sort_order=0))
+    db.add(Category(code="headphones", name="耳机", parent_code="audio", sort_order=0))
+    db.add(Category(code="speakers",   name="音箱", parent_code="audio", sort_order=1))
+    db.commit()
+    r = client.get("/api/categories/tree")
+    assert r.status_code == 200
+    tree = r.json()
+    assert len(tree) == 1
+    assert tree[0]["code"] == "audio"
+    codes = {c["code"] for c in tree[0]["children"]}
+    assert codes == {"headphones", "speakers"}
+
+
+def test_tree_root_nodes_only_at_top(client_and_db):
+    """Nodes with no parent appear only at top level."""
+    client, db = client_and_db
+    db.add(Category(code="video", name="视频", sort_order=0))
+    db.add(Category(code="audio", name="音频", sort_order=1))
+    db.commit()
+    r = client.get("/api/categories/tree")
+    tree = r.json()
+    assert len(tree) == 2
+    for node in tree:
+        assert node["children"] == []
+
+
+def test_flat_list_includes_parent_code(client_and_db):
+    """GET /api/categories returns parent_code and sort_order on each item."""
+    client, db = client_and_db
+    db.add(Category(code="audio", name="音频"))
+    db.add(Category(code="headphones", name="耳机", parent_code="audio", sort_order=3))
+    db.commit()
+    r = client.get("/api/categories")
+    items = r.json()
+    hp = next(i for i in items if i["code"] == "headphones")
+    assert hp["parent_code"] == "audio"
+    assert hp["sort_order"] == 3
+
+
+def test_create_category_with_parent_code(client_and_db):
+    """POST /api/categories accepts and stores parent_code."""
+    client, db = client_and_db
+    db.add(Category(code="audio", name="音频"))
+    db.commit()
+    r = client.post("/api/categories", json={"code": "headphones", "name": "耳机", "parent_code": "audio", "sort_order": 1})
+    assert r.status_code == 201
+    body = r.json()
+    assert body["parent_code"] == "audio"
+    assert body["sort_order"] == 1
+
+
+def test_update_category_parent_and_sort(client_and_db):
+    """PUT /api/categories/{id} accepts parent_code and sort_order."""
+    client, db = client_and_db
+    cat = Category(code="headphones", name="耳机")
+    db.add(cat)
+    db.add(Category(code="audio", name="音频"))
+    db.commit()
+    r = client.put(f"/api/categories/{cat.id}", json={"parent_code": "audio", "sort_order": 5})
+    assert r.status_code == 200
+    assert r.json()["parent_code"] == "audio"
+    assert r.json()["sort_order"] == 5

@@ -83,11 +83,11 @@ def update_category(category_id: int, payload: CategoryUpdate, db: Session = Dep
     cat = db.query(Category).filter(Category.id == category_id).first()
     if not cat:
         raise HTTPException(status_code=404, detail="品类不存在")
-    if payload.name is not None:
+    if "name" in payload.model_fields_set:
         cat.name = payload.name.strip()
-    if payload.parent_code is not None:
-        cat.parent_code = payload.parent_code
-    if payload.sort_order is not None:
+    if "parent_code" in payload.model_fields_set:
+        cat.parent_code = payload.parent_code   # handles null → None correctly
+    if "sort_order" in payload.model_fields_set:
         cat.sort_order = payload.sort_order
     db.commit()
     db.refresh(cat)

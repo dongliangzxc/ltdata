@@ -17,6 +17,28 @@ function flattenTree(nodes: CategoryTreeNode[]): CategoryTreeNode[] {
   return nodes.flatMap(n => [n, ...flattenTree(n.children)])
 }
 
+function getDescendantCodes(treeNodes: CategoryTreeNode[], targetCode: string): Set<string> {
+  const descendants = new Set<string>()
+  function walk(nodes: CategoryTreeNode[]) {
+    for (const n of nodes) {
+      if (n.code === targetCode) {
+        // collect all children recursively
+        function collectAll(children: CategoryTreeNode[]) {
+          for (const c of children) {
+            descendants.add(c.code)
+            collectAll(c.children)
+          }
+        }
+        collectAll(n.children)
+      } else {
+        walk(n.children)
+      }
+    }
+  }
+  walk(treeNodes)
+  return descendants
+}
+
 export default function CategoriesPage() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<CategoryTreeNode | null>(null)
@@ -27,6 +49,7 @@ export default function CategoriesPage() {
   )
 
   const flatAll = flattenTree(treeData ?? [])
+  const descendantCodes = editing ? getDescendantCodes(treeData ?? [], editing.code) : new Set<string>()
 
   const openAdd = () => {
     setEditing(null)
@@ -135,7 +158,14 @@ export default function CategoriesPage() {
       >
         <Form form={form} layout="vertical">
           {!editing && (
-            <Form.Item name="code" label="品类码" rules={[{ required: true, message: '请输入品类码' }]}>
+            <Form.Item
+              name="code"
+              label="品类码"
+              rules={[
+                { required: true, message: '请输入品类码' },
+                { pattern: /^[a-z0-9_-]+$/, message: '只能包含小写字母、数字、下划线、连字符' }
+              ]}
+            >
               <Input placeholder="e.g. headphones" />
             </Form.Item>
           )}
@@ -147,7 +177,7 @@ export default function CategoriesPage() {
               allowClear
               placeholder="选择父品类"
               options={flatAll
-                .filter(c => !editing || c.code !== editing.code)
+                .filter(c => !editing || (c.code !== editing.code && !descendantCodes.has(c.code)))
                 .map(c => ({ value: c.code, label: `${c.name} (${c.code})` }))}
             />
           </Form.Item>

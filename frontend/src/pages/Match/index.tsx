@@ -10,15 +10,39 @@ import { useSearchParams } from 'react-router-dom'
 import {
   listCleanJobs, runMatch, getMatchProgress, getMatchSummary, listPendingMatches,
   confirmMatch, listModels, runPublish, listPublishJobs,
+  listReviewedMatches, updateMatchCoefficient,
   disableMatch, enableMatch, avgPriceDisable, listDisabled,
   applyAttrRules, listMissingAttrs,
   triggerExport, getExportJob, getDownloadUrl,
 } from '../../services/api'
-import type { MatchCandidateOut } from '../../services/api'
+import type { MatchCandidateOut, ReviewedMatchResultOut, PriceFlag } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 import ProgressModal from '../../components/ProgressModal'
 
 const { Text } = Typography
+
+const priceFlagMeta: Record<PriceFlag, { label: string; color: string }> = {
+  ok: { label: '正常', color: 'green' },
+  high: { label: '偏高', color: 'red' },
+  low: { label: '偏低', color: 'orange' },
+  no_history: { label: '无历史', color: 'default' },
+}
+
+const formatNumber = (value?: number | null) => (
+  value != null ? value.toLocaleString() : '-'
+)
+
+const getBaseSalesQty = (row: ReviewedMatchResultOut) => row.corrected_sales_qty ?? row.sales_qty ?? null
+
+const getAdjustedSalesQty = (row: ReviewedMatchResultOut, draftCoefficient?: number | null) => {
+  if (draftCoefficient !== undefined) {
+    const base = getBaseSalesQty(row)
+    return base != null && draftCoefficient != null ? Math.round(base * draftCoefficient) : base
+  }
+  if (row.adjusted_sales_qty != null) return row.adjusted_sales_qty
+  const base = getBaseSalesQty(row)
+  return base != null && row.sales_coefficient != null ? Math.round(base * row.sales_coefficient) : base
+}
 
 type MatchSummary = {
   clean_job_id: number
@@ -184,6 +208,7 @@ export default function MatchPage() {
   const [categoryName, setCategoryName] = useState<string | undefined>()
   const [sortBy, setSortBy] = useState<string>('default')
   const [page, setPage] = useState(1)
+  const [reviewedPage, setReviewedPage] = useState(1)
   const [confirmingIds, setConfirmingIds] = useState<Set<number>>(new Set())
   const [selectedModels, setSelectedModels] = useState<Record<number, number>>({})
   const [publishJobs, setPublishJobs] = useState<PublishJob[]>([])
@@ -193,11 +218,14 @@ export default function MatchPage() {
   const [disabledLoading, setDisabledLoading] = useState(false)
   const [avgPriceThreshold, setAvgPriceThreshold] = useState(200)
   const [disableReasonMap, setDisableReasonMap] = useState<Record<number, string>>({})
+  const [coefficientDrafts, setCoefficientDrafts] = useState<Record<number, number | null>>({})
+  const [savingCoefficientIds, setSavingCoefficientIds] = useState<Set<number>>(new Set())
   const [activeTab, setActiveTab] = useState<'pending' | 'text_only' | 'unidentified_brand' | 'missing_attrs'>('text_only')
   const { data: jobsData } = useRequest(() => listCleanJobs().then(r => r.data))
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
   const [modelSearchLoading, setModelSearchLoading] = useState(false)
   const { options: categoryOptions } = useCategoryOptions()
+  const readyCount = summary ? (summary?.url_matched ?? 0) + summary.matched + summary.confirmed : 0
 
   const handleModelSearch = async (keyword: string) => {
     if (!keyword.trim()) return
@@ -223,6 +251,26 @@ export default function MatchPage() {
     {
       ready: selectedJobId != null && summary != null && activeTab !== 'missing_attrs' && (summary.pending > 0 || summary.text_only > 0 || (summary.unidentified_brand ?? 0) > 0),
       refreshDeps: [selectedJobId, keyword, page, activeTab, categoryName, sortBy],
+    }
+  )
+
+  const { data: reviewedData, loading: reviewedLoading, refresh: refreshReviewed } = useRequest(
+    () => listReviewedMatches(selectedJobId!, {
+      page: reviewedPage,
+      page_size: 20,
+    }).then(r => r.data),
+    {
+      ready: selectedJobId != null && summary != null && readyCount > 0,
+      refreshDeps: [selectedJobId, reviewedPage],
+      onSuccess: data => {
+        setCoefficientDrafts(prev => {
+          const next = { ...prev }
+          data.items.forEach((item: ReviewedMatchResultOut) => {
+            if (!(item.id in next)) next[item.id] = item.sales_coefficient ?? null
+          })
+          return next
+        })
+      },
     }
   )
 
@@ -280,6 +328,7 @@ export default function MatchPage() {
           message.success(`匹配完成：已匹配 ${p.matched} 条，待确认 ${p.total - p.matched} 条`)
           getMatchSummary(jobId).then(r => setSummary(r.data))
           refreshPending()
+          refreshReviewed()
         } else if (p.status === 'error') {
           clearInterval(pollTimerRef.current!)
           pollTimerRef.current = null
@@ -321,6 +370,7 @@ export default function MatchPage() {
       await confirmMatch(matchId, { model_id: modelId })
       message.success('已确认')
       refreshPending()
+      refreshReviewed()
       getMatchSummary(selectedJobId!).then(r => setSummary(r.data))
     } finally {
       setConfirmingIds(prev => { const s = new Set(prev); s.delete(matchId); return s })
@@ -333,6 +383,7 @@ export default function MatchPage() {
       await confirmMatch(matchId, { excluded: true })
       message.success('已排除')
       refreshPending()
+      refreshReviewed()
       getMatchSummary(selectedJobId!).then(r => setSummary(r.data))
     } finally {
       setConfirmingIds(prev => { const s = new Set(prev); s.delete(matchId); return s })
@@ -343,7 +394,21 @@ export default function MatchPage() {
     await confirmMatch(matchId, { model_id: modelId })
     message.success('已选用候选型号')
     refreshPending()
+    refreshReviewed()
     getMatchSummary(selectedJobId!).then(r => setSummary(r.data))
+  }
+
+  const handleSaveCoefficient = async (matchId: number) => {
+    const coefficient = coefficientDrafts[matchId] ?? null
+    setSavingCoefficientIds(prev => new Set(prev).add(matchId))
+    try {
+      const res = await updateMatchCoefficient(matchId, coefficient)
+      setCoefficientDrafts(prev => ({ ...prev, [matchId]: res.data.sales_coefficient ?? null }))
+      message.success(coefficient == null ? '已清除调整系数' : '已保存调整系数')
+      refreshReviewed()
+    } finally {
+      setSavingCoefficientIds(prev => { const s = new Set(prev); s.delete(matchId); return s })
+    }
   }
 
   const handlePublish = async () => {
@@ -447,6 +512,7 @@ export default function MatchPage() {
       await disableMatch(matchId, reason || undefined)
       message.success('已禁用')
       refreshPending()
+      refreshReviewed()
       getMatchSummary(selectedJobId!).then(r => setSummary(r.data))
       loadDisabled()
     } finally {
@@ -649,6 +715,76 @@ export default function MatchPage() {
     },
   ]
 
+  const reviewedColumns = [
+    {
+      title: '宝贝名称', dataIndex: 'item_name', ellipsis: true,
+      render: (v: string | null) => v ? <Tooltip title={v}><Text style={{ fontSize: 12 }}>{v}</Text></Tooltip> : '-'
+    },
+    { title: '品牌', dataIndex: 'brand_raw', width: 110, render: (v: string | null) => v ?? '-' },
+    {
+      title: '匹配型号', width: 160,
+      render: (_: unknown, row: ReviewedMatchResultOut) =>
+        row.brand_code && row.model_code
+          ? <Text code style={{ fontSize: 12 }}>[{row.brand_code}] {row.model_code}</Text>
+          : <Text type="secondary">-</Text>
+    },
+    {
+      title: '价格预警', width: 110,
+      render: (_: unknown, row: ReviewedMatchResultOut) => {
+        const flag = row.price_flag
+        if (!flag) return <Tag color="default">-</Tag>
+        const meta = priceFlagMeta[flag]
+        return <Tag color={meta.color}>{meta.label}</Tag>
+      },
+    },
+    {
+      title: '参考均价', dataIndex: 'price_ref', width: 100,
+      render: (v: number | null) => v != null ? `¥${v.toLocaleString()}` : '-'
+    },
+    {
+      title: '原销量', dataIndex: 'sales_qty', width: 90,
+      render: (v: number | null) => formatNumber(v),
+    },
+    {
+      title: '修正销量', dataIndex: 'corrected_sales_qty', width: 90,
+      render: (_: number | null, row: ReviewedMatchResultOut) => formatNumber(getBaseSalesQty(row)),
+    },
+    {
+      title: '调整系数', width: 180,
+      render: (_: unknown, row: ReviewedMatchResultOut) => (
+        <Space size={4}>
+          <InputNumber
+            size="small"
+            min={0}
+            max={999.9999}
+            precision={4}
+            placeholder="不调整"
+            value={coefficientDrafts[row.id] ?? null}
+            onChange={v => setCoefficientDrafts(prev => ({ ...prev, [row.id]: v == null ? null : Number(v) }))}
+            style={{ width: 100 }}
+          />
+          <Button
+            size="small"
+            loading={savingCoefficientIds.has(row.id)}
+            onClick={() => handleSaveCoefficient(row.id)}
+          >保存</Button>
+        </Space>
+      ),
+    },
+    {
+      title: '调整后销量', width: 100,
+      render: (_: unknown, row: ReviewedMatchResultOut) => formatNumber(getAdjustedSalesQty(row, coefficientDrafts[row.id])),
+    },
+    {
+      title: '状态', dataIndex: 'match_status', width: 90,
+      render: (v: string) => <Tag color={v === 'confirmed' ? 'blue' : 'green'}>{v}</Tag>,
+    },
+    {
+      title: '来源', width: 90,
+      render: (_: unknown, row: ReviewedMatchResultOut) => row.match_source ? <Tag>{row.match_source}</Tag> : '-'
+    },
+  ]
+
   const publishColumns = [
     { title: '发布ID', dataIndex: 'id', width: 70 },
     { title: '写入条数', dataIndex: 'published_count', width: 90 },
@@ -663,7 +799,6 @@ export default function MatchPage() {
   ]
 
   const doneJobs = (jobsData ?? []).filter((j: { status: string }) => j.status === 'done')
-  const readyCount = summary ? (summary?.url_matched ?? 0) + summary.matched + summary.confirmed : 0
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -677,7 +812,7 @@ export default function MatchPage() {
               style={{ width: '100%' }}
               placeholder="选择任务"
               value={selectedJobId}
-              onChange={v => { setSelectedJobId(v); setSummary(null); setPage(1); setPublishJobs([]) }}
+              onChange={v => { setSelectedJobId(v); setSummary(null); setPage(1); setReviewedPage(1); setPublishJobs([]); setCoefficientDrafts({}) }}
               options={doneJobs.map((j: { id: number; created_at: string; row_out: number }) => ({
                 value: j.id,
                 label: `任务#${j.id}（${j.row_out}条，${new Date(j.created_at).toLocaleDateString('zh-CN')}）`,
@@ -973,6 +1108,35 @@ export default function MatchPage() {
               }}
             />
           )}
+        </Card>
+      )}
+
+      {summary && readyCount > 0 && (
+        <Card
+          title={
+            <Space>
+              <span>已匹配 / 已确认条目</span>
+              <span style={{ fontSize: 12, color: '#8c8c8c' }}>
+                价格预警仅提示，不影响确认或发布
+              </span>
+            </Space>
+          }
+        >
+          <Table
+            dataSource={reviewedData?.items ?? []}
+            columns={reviewedColumns}
+            rowKey="id"
+            size="small"
+            loading={reviewedLoading}
+            scroll={{ x: 1200 }}
+            pagination={{
+              current: reviewedPage,
+              pageSize: 20,
+              total: reviewedData?.total ?? 0,
+              onChange: setReviewedPage,
+              showTotal: t => `共 ${t} 条`,
+            }}
+          />
         </Card>
       )}
 

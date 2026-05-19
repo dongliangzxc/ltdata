@@ -355,6 +355,33 @@ export interface MatchCandidateOut {
   rank: number
 }
 
+// ─── Brands ───────────────────────────────────────────────────────────────────
+export type BrandItem = {
+  brand_code: string
+  brand_name: string | null
+  model_count: number
+  alias_count: number
+}
+
+export type BrandAliasItem = {
+  id: number
+  alias_name: string
+  brand_code: string
+  is_active: number
+}
+
+export const listBrands = () =>
+  api.get<BrandItem[]>('/brands')
+
+export const listBrandAliasesByCode = (brandCode: string) =>
+  api.get<BrandAliasItem[]>(`/brands/${brandCode}/aliases`)
+
+export const createBrandAliasForCode = (brandCode: string, payload: { alias_name: string }) =>
+  api.post<BrandAliasItem>(`/brands/${brandCode}/aliases`, payload)
+
+export const deleteBrandAliasById = (brandCode: string, aliasId: number) =>
+  api.delete(`/brands/${brandCode}/aliases/${aliasId}`)
+
 // ─── Categories ─────────────────────────────────────────────
 export type CategoryTreeNode = {
   id: number

@@ -145,7 +145,7 @@ export default function CleanPage() {
               value={selectedFileIds}
               onChange={v => handleFileChange(v as number[])}
             >
-              {(filesData ?? []).map((f: { id: number; filename: string; platform: string; row_count: number }) => (
+              {(filesData ?? []).map((f: { id: number; filename: string; platform: string | null; row_count: number }) => (
                 <Checkbox key={f.id} value={f.id}>
                   <Space>
                     <Tag color="blue">{f.platform}</Tag>

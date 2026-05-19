@@ -877,6 +877,7 @@ export default function MatchPage() {
                 const res = await avgPriceDisable(selectedJobId, avgPriceThreshold)
                 message.success(`均价禁用完成，共禁用 ${res.data.disabled_count} 条`)
                 getMatchSummary(selectedJobId).then(r => setSummary(r.data))
+                refreshReviewed()
                 loadDisabled()
               }}
             >

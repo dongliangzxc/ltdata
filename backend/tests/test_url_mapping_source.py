@@ -4,7 +4,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from app.models.database import Base
-from app.models.schemas import ItemUrlMapping
+from app.models.schemas import ItemUrlMapping, ItemUrlMappingOut
 
 
 @pytest.fixture
@@ -36,7 +36,7 @@ def test_url_mapping_source_defaults_none(db):
 
 
 def test_url_mapping_stores_source_and_dims(db):
-    """source, data_year, data_month are stored and retrieved."""
+    """source, data_year, data_month are stored and retrieved; Pydantic round-trip works."""
     m = ItemUrlMapping(
         platform="jd", item_id="99999", brand_code="JBL",
         source="url_import", data_year=2026, data_month=5,
@@ -47,3 +47,8 @@ def test_url_mapping_stores_source_and_dims(db):
     assert m.source == "url_import"
     assert m.data_year == 2026
     assert m.data_month == 5
+    # Pydantic round-trip
+    out = ItemUrlMappingOut.model_validate(m)
+    assert out.source == "url_import"
+    assert out.data_year == 2026
+    assert out.data_month == 5

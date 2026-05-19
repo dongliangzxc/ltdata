@@ -159,3 +159,17 @@ def test_update_category_clears_parent_code(client_and_db):
     r = client.put(f"/api/categories/{cat.id}", json={"parent_code": None})
     assert r.status_code == 200
     assert r.json()["parent_code"] is None
+
+
+def test_update_category_rejects_indirect_cycle(client_and_db):
+    """PUT /categories/{id} rejects a parent assignment that would create an indirect cycle."""
+    client, db = client_and_db
+    # chain: C -> B -> A (C is child of B, B is child of A)
+    db.add(Category(code="A", name="A"))
+    db.add(Category(code="B", name="B", parent_code="A"))
+    db.add(Category(code="C", name="C", parent_code="B"))
+    db.commit()
+    # Try to set A's parent to C — would create A -> C -> B -> A
+    a = db.query(Category).filter(Category.code == "A").first()
+    r = client.put(f"/api/categories/{a.id}", json={"parent_code": "C"})
+    assert r.status_code == 422

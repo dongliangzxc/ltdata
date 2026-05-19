@@ -339,10 +339,12 @@ ALTER TABLE luotu.match_results
 USE luotu;
 
 CREATE TABLE IF NOT EXISTS categories (
-    id         INT AUTO_INCREMENT PRIMARY KEY,
-    code       VARCHAR(50)  NOT NULL UNIQUE COMMENT '品类码，如 soundbar',
-    name       VARCHAR(100) NOT NULL        COMMENT '显示名称，如 回音壁',
-    created_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
+    id          INT AUTO_INCREMENT PRIMARY KEY,
+    code        VARCHAR(50)  NOT NULL UNIQUE COMMENT '品类码，如 soundbar',
+    name        VARCHAR(100) NOT NULL        COMMENT '显示名称，如 回音壁',
+    parent_code VARCHAR(50)  NULL            COMMENT '父品类码，NULL 表示顶级品类',
+    sort_order  INT          NOT NULL DEFAULT 0 COMMENT '排序值，越小越靠前',
+    created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='品类受控词表';
 
 INSERT IGNORE INTO categories (code, name) VALUES

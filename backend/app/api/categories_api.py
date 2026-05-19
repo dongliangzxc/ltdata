@@ -83,10 +83,24 @@ def update_category(category_id: int, payload: CategoryUpdate, db: Session = Dep
     cat = db.query(Category).filter(Category.id == category_id).first()
     if not cat:
         raise HTTPException(status_code=404, detail="品类不存在")
-    if "name" in payload.model_fields_set:
+    if "name" in payload.model_fields_set and payload.name is not None:
         cat.name = payload.name.strip()
     if "parent_code" in payload.model_fields_set:
         cat.parent_code = payload.parent_code   # handles null → None correctly
+        # Cycle check: walk up from the proposed parent, ensure we never reach cat.code
+        if payload.parent_code:
+            all_cats = {c.code: c for c in db.query(Category).all()}
+            cursor = payload.parent_code
+            visited: set = set()
+            while cursor:
+                if cursor == cat.code:
+                    db.rollback()
+                    raise HTTPException(status_code=422, detail="不能将品类设为自身的后代")
+                if cursor in visited:
+                    break
+                visited.add(cursor)
+                parent = all_cats.get(cursor)
+                cursor = parent.parent_code if parent else None
     if "sort_order" in payload.model_fields_set:
         cat.sort_order = payload.sort_order
     db.commit()

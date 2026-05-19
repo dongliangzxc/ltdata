@@ -148,3 +148,14 @@ def test_update_category_parent_and_sort(client_and_db):
     assert r.status_code == 200
     assert r.json()["parent_code"] == "audio"
     assert r.json()["sort_order"] == 5
+
+
+def test_update_category_clears_parent_code(client_and_db):
+    """PUT /categories/{id} with parent_code: null clears the parent (promotes to root)."""
+    client, db = client_and_db
+    cat = Category(code="headphones", name="耳机", parent_code="audio")
+    db.add(cat)
+    db.commit()
+    r = client.put(f"/api/categories/{cat.id}", json={"parent_code": None})
+    assert r.status_code == 200
+    assert r.json()["parent_code"] is None

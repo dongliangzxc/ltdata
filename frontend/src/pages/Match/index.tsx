@@ -34,14 +34,11 @@ const formatNumber = (value?: number | null) => (
 
 const getBaseSalesQty = (row: ReviewedMatchResultOut) => row.corrected_sales_qty ?? row.sales_qty ?? null
 
-const getAdjustedSalesQty = (row: ReviewedMatchResultOut, draftCoefficient?: number | null) => {
-  if (draftCoefficient !== undefined) {
-    const base = getBaseSalesQty(row)
-    return base != null && draftCoefficient != null ? Math.round(base * draftCoefficient) : base
-  }
-  if (row.adjusted_sales_qty != null) return row.adjusted_sales_qty
+const getAdjustedSalesQty = (row: ReviewedMatchResultOut, draftCoefficient?: number | null, hasLocalEdit = false) => {
+  if (!hasLocalEdit && row.adjusted_sales_qty != null) return row.adjusted_sales_qty
+  const coefficient = hasLocalEdit ? draftCoefficient ?? null : row.sales_coefficient ?? null
   const base = getBaseSalesQty(row)
-  return base != null && row.sales_coefficient != null ? Math.round(base * row.sales_coefficient) : base
+  return base != null && coefficient != null ? Math.round(base * coefficient) : base
 }
 
 type MatchSummary = {
@@ -219,6 +216,7 @@ export default function MatchPage() {
   const [avgPriceThreshold, setAvgPriceThreshold] = useState(200)
   const [disableReasonMap, setDisableReasonMap] = useState<Record<number, string>>({})
   const [coefficientDrafts, setCoefficientDrafts] = useState<Record<number, number | null>>({})
+  const [editedCoefficientIds, setEditedCoefficientIds] = useState<Set<number>>(new Set())
   const [savingCoefficientIds, setSavingCoefficientIds] = useState<Set<number>>(new Set())
   const [activeTab, setActiveTab] = useState<'pending' | 'text_only' | 'unidentified_brand' | 'missing_attrs'>('text_only')
   const { data: jobsData } = useRequest(() => listCleanJobs().then(r => r.data))
@@ -404,6 +402,7 @@ export default function MatchPage() {
     try {
       const res = await updateMatchCoefficient(matchId, coefficient)
       setCoefficientDrafts(prev => ({ ...prev, [matchId]: res.data.sales_coefficient ?? null }))
+      setEditedCoefficientIds(prev => { const s = new Set(prev); s.delete(matchId); return s })
       message.success(coefficient == null ? '已清除调整系数' : '已保存调整系数')
       refreshReviewed()
     } finally {
@@ -760,7 +759,10 @@ export default function MatchPage() {
             precision={4}
             placeholder="不调整"
             value={coefficientDrafts[row.id] ?? null}
-            onChange={v => setCoefficientDrafts(prev => ({ ...prev, [row.id]: v == null ? null : Number(v) }))}
+            onChange={v => {
+              setCoefficientDrafts(prev => ({ ...prev, [row.id]: v == null ? null : Number(v) }))
+              setEditedCoefficientIds(prev => new Set(prev).add(row.id))
+            }}
             style={{ width: 100 }}
           />
           <Button
@@ -773,7 +775,9 @@ export default function MatchPage() {
     },
     {
       title: '调整后销量', width: 100,
-      render: (_: unknown, row: ReviewedMatchResultOut) => formatNumber(getAdjustedSalesQty(row, coefficientDrafts[row.id])),
+      render: (_: unknown, row: ReviewedMatchResultOut) => formatNumber(
+        getAdjustedSalesQty(row, coefficientDrafts[row.id], editedCoefficientIds.has(row.id))
+      ),
     },
     {
       title: '状态', dataIndex: 'match_status', width: 90,
@@ -812,7 +816,7 @@ export default function MatchPage() {
               style={{ width: '100%' }}
               placeholder="选择任务"
               value={selectedJobId}
-              onChange={v => { setSelectedJobId(v); setSummary(null); setPage(1); setReviewedPage(1); setPublishJobs([]); setCoefficientDrafts({}) }}
+              onChange={v => { setSelectedJobId(v); setSummary(null); setPage(1); setReviewedPage(1); setPublishJobs([]); setCoefficientDrafts({}); setEditedCoefficientIds(new Set()) }}
               options={doneJobs.map((j: { id: number; created_at: string; row_out: number }) => ({
                 value: j.id,
                 label: `任务#${j.id}（${j.row_out}条，${new Date(j.created_at).toLocaleDateString('zh-CN')}）`,

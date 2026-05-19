@@ -1,5 +1,9 @@
+import io
 from typing import Optional
+from urllib.parse import quote
+import pandas as pd
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, distinct, asc, desc
 from app.models.database import get_db
@@ -29,6 +33,52 @@ def build_query(db, file_id, platform, month, brand_std, brand_raw=None, item_na
     if item_name and item_name.strip():
         q = q.filter(RawDataRecord.item_name.ilike(f"%{item_name.strip()}%"))
     return q
+
+
+EXPORT_COLUMNS = [
+    ("platform",     "平台"),
+    ("month",        "月份"),
+    ("category_lv0", "一级品类"),
+    ("brand_raw",    "品牌原始值"),
+    ("brand_std",    "标准品牌"),
+    ("model_std",    "型号"),
+    ("item_name",    "宝贝名称"),
+    ("shop_name",    "店铺"),
+    ("item_id",      "商品ID"),
+    ("item_url",     "商品链接"),
+    ("sales_qty",    "销量"),
+    ("sales_amount", "销售额"),
+    ("price",        "价格"),
+    ("ref_price",    "参考价"),
+]
+
+
+@router.get("/export")
+def export_raw_data(
+    file_id: Optional[int] = Query(None),
+    platform: Optional[str] = Query(None),
+    month: Optional[int] = Query(None),
+    brand_std: Optional[str] = Query(None),
+    brand_raw: Optional[str] = Query(None),
+    item_name: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """导出原始数据为 Excel，支持与列表相同的过滤参数。"""
+    rows = build_query(db, file_id, platform, month, brand_std, brand_raw, item_name).order_by(RawDataRecord.id).all()
+    data = [
+        {label: getattr(r, field, None) for field, label in EXPORT_COLUMNS}
+        for r in rows
+    ]
+    df = pd.DataFrame(data, columns=[label for _, label in EXPORT_COLUMNS])
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="原始数据")
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote('rawdata_export.xlsx')}"},
+    )
 
 
 @router.get("", response_model=PaginatedResponse)

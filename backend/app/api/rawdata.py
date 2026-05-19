@@ -18,16 +18,16 @@ def build_query(db, file_id, platform, month, brand_std, brand_raw=None, item_na
     q = db.query(RawDataRecord)
     if file_id is not None:
         q = q.filter(RawDataRecord.file_id == file_id)
-    if platform:
-        q = q.filter(RawDataRecord.platform.ilike(f"%{platform}%"))
+    if platform and platform.strip():
+        q = q.filter(RawDataRecord.platform.ilike(f"%{platform.strip()}%"))
     if month is not None:
         q = q.filter(RawDataRecord.month == month)
-    if brand_std:
-        q = q.filter(RawDataRecord.brand_std.ilike(f"%{brand_std}%"))
-    if brand_raw:
-        q = q.filter(RawDataRecord.brand_raw.ilike(f"%{brand_raw}%"))
-    if item_name:
-        q = q.filter(RawDataRecord.item_name.ilike(f"%{item_name}%"))
+    if brand_std and brand_std.strip():
+        q = q.filter(RawDataRecord.brand_std.ilike(f"%{brand_std.strip()}%"))
+    if brand_raw and brand_raw.strip():
+        q = q.filter(RawDataRecord.brand_raw.ilike(f"%{brand_raw.strip()}%"))
+    if item_name and item_name.strip():
+        q = q.filter(RawDataRecord.item_name.ilike(f"%{item_name.strip()}%"))
     return q
 
 

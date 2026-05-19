@@ -10,8 +10,8 @@ from app.api.rawdata import router
 from app.models.schemas import RawDataRecord
 
 
-@pytest.fixture
-def client():
+@pytest.fixture(scope="function")
+def client_and_db():
     engine = create_engine(
         "sqlite:///:memory:",
         connect_args={"check_same_thread": False},
@@ -19,42 +19,25 @@ def client():
     )
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
+    db = Session()
 
     app = FastAPI()
     app.include_router(router)
 
     def override_db():
-        s = Session()
-        try:
-            yield s
-        finally:
-            s.rollback()
-            s.close()
+        yield db
 
     app.dependency_overrides[get_db] = override_db
-    return TestClient(app)
+    yield TestClient(app), db
+    db.close()
 
 
-def _seed(client, records):
-    """Seed records into the test client's in-memory db."""
-    from app.models.database import get_db as real_get_db
-    gen = client.app.dependency_overrides[real_get_db]()
-    db = next(gen)
-    for r in records:
-        db.add(r)
-    db.commit()
-    try:
-        next(gen)
-    except StopIteration:
-        pass
-
-
-def test_filter_by_brand_raw(client):
+def test_filter_by_brand_raw(client_and_db):
     """GET /api/rawdata?brand_raw=SONY returns only matching rows."""
-    _seed(client, [
-        RawDataRecord(file_id=1, platform="jd", brand_raw="SONY WH-1000XM5", item_name="Sony headphone"),
-        RawDataRecord(file_id=1, platform="jd", brand_raw="JBL FLIP6", item_name="JBL speaker"),
-    ])
+    client, db = client_and_db
+    db.add(RawDataRecord(file_id=1, platform="jd", brand_raw="SONY WH-1000XM5", item_name="Sony headphone"))
+    db.add(RawDataRecord(file_id=1, platform="jd", brand_raw="JBL FLIP6", item_name="JBL speaker"))
+    db.commit()
     r = client.get("/api/rawdata?brand_raw=SONY")
     assert r.status_code == 200
     items = r.json()["items"]
@@ -62,12 +45,12 @@ def test_filter_by_brand_raw(client):
     assert "SONY" in items[0]["brand_raw"]
 
 
-def test_filter_by_item_name(client):
+def test_filter_by_item_name(client_and_db):
     """GET /api/rawdata?item_name=speaker returns only matching rows."""
-    _seed(client, [
-        RawDataRecord(file_id=1, platform="jd", brand_raw="SONY", item_name="Sony headphone premium"),
-        RawDataRecord(file_id=1, platform="jd", brand_raw="JBL", item_name="JBL portable speaker"),
-    ])
+    client, db = client_and_db
+    db.add(RawDataRecord(file_id=1, platform="jd", brand_raw="SONY", item_name="Sony headphone premium"))
+    db.add(RawDataRecord(file_id=1, platform="jd", brand_raw="JBL", item_name="JBL portable speaker"))
+    db.commit()
     r = client.get("/api/rawdata?item_name=speaker")
     assert r.status_code == 200
     items = r.json()["items"]

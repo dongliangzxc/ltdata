@@ -569,6 +569,8 @@ class MatchResultOut(BaseModel):
     attr_count:    int = 0
     candidates:    list[MatchCandidateOut] = []
     sales_qty:     Optional[int] = None
+    corrected_sales_qty: Optional[int] = None
+    adjusted_sales_qty: Optional[int] = None
     category_name: Optional[str] = None
 
     model_config = {"from_attributes": True}

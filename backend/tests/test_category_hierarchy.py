@@ -173,3 +173,22 @@ def test_update_category_rejects_indirect_cycle(client_and_db):
     a = db.query(Category).filter(Category.code == "A").first()
     r = client.put(f"/api/categories/{a.id}", json={"parent_code": "C"})
     assert r.status_code == 422
+
+
+def test_delete_category_blocked_by_children(client_and_db):
+    """DELETE /categories/{id} returns 409 when the category has children."""
+    client, db = client_and_db
+    parent = Category(code="audio", name="音频")
+    child = Category(code="headphones", name="耳机", parent_code="audio")
+    db.add(parent)
+    db.add(child)
+    db.commit()
+    r = client.delete(f"/api/categories/{parent.id}")
+    assert r.status_code == 409
+
+
+def test_create_category_rejects_nonexistent_parent(client_and_db):
+    """POST /categories returns 404 when parent_code does not exist."""
+    client, db = client_and_db
+    r = client.post("/api/categories", json={"code": "headphones", "name": "耳机", "parent_code": "nonexistent"})
+    assert r.status_code == 404

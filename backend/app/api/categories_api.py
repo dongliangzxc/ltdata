@@ -62,6 +62,9 @@ def list_categories(db: Session = Depends(get_db)):
 def create_category(payload: CategoryCreate, db: Session = Depends(get_db)):
     if db.query(Category).filter(Category.code == payload.code).first():
         raise HTTPException(status_code=409, detail=f"品类码 {payload.code} 已存在")
+    if payload.parent_code:
+        if not db.query(Category).filter(Category.code == payload.parent_code).first():
+            raise HTTPException(status_code=404, detail=f"父品类码 '{payload.parent_code}' 不存在")
     cat = Category(
         code=payload.code.strip(),
         name=payload.name.strip(),
@@ -86,6 +89,10 @@ def update_category(category_id: int, payload: CategoryUpdate, db: Session = Dep
     if "name" in payload.model_fields_set and payload.name is not None:
         cat.name = payload.name.strip()
     if "parent_code" in payload.model_fields_set:
+        # Validate proposed parent exists BEFORE cycle check
+        if payload.parent_code:
+            if not db.query(Category).filter(Category.code == payload.parent_code).first():
+                raise HTTPException(status_code=404, detail=f"父品类码 '{payload.parent_code}' 不存在")
         # Cycle check BEFORE assignment (uses clean DB state)
         if payload.parent_code:
             all_cats = {c.code: c for c in db.query(Category).all()}
@@ -113,6 +120,9 @@ def delete_category(category_id: int, db: Session = Depends(get_db)):
     cat = db.query(Category).filter(Category.id == category_id).first()
     if not cat:
         raise HTTPException(status_code=404, detail="品类不存在")
+    child_count = db.query(Category).filter(Category.parent_code == cat.code).count()
+    if child_count:
+        raise HTTPException(status_code=409, detail=f"品类下存在 {child_count} 个子品类，请先处理")
     model_count = db.query(ModelRecord).filter(ModelRecord.category_code == cat.code).count()
     if model_count:
         raise HTTPException(status_code=409, detail=f"品类下存在 {model_count} 个型号，请先处理")

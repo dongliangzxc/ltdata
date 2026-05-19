@@ -25,6 +25,9 @@ type UrlMapping = {
   model_code: string | null
   brand_name: string | null
   model_name: string | null
+  source: string | null
+  data_year: number | null
+  data_month: number | null
 }
 
 type ModelOption = {
@@ -64,6 +67,11 @@ export default function UrlMappingsPage() {
   const [importOpen, setImportOpen] = useState(false)
   const [modalCategoryCode, setModalCategoryCode] = useState<string | undefined>()
 
+  const [filterYear, setFilterYear] = useState<number | undefined>()
+  const [filterMonth, setFilterMonth] = useState<number | undefined>()
+  const [importYear, setImportYear] = useState<number | undefined>()
+  const [importMonth, setImportMonth] = useState<number | undefined>()
+
   const { options: categoryOptions } = useCategoryOptions()
 
   const { data: modelsData } = useRequest(
@@ -72,8 +80,16 @@ export default function UrlMappingsPage() {
   const modelOptions: ModelOption[] = modelsData?.items ?? []
 
   const { data, loading, refresh } = useRequest(
-    () => listUrlMappings({ keyword: keyword || undefined, platform: platform || undefined, category_code: categoryCode || undefined, page, page_size: 20 }).then(r => r.data),
-    { refreshDeps: [keyword, platform, categoryCode, page] }
+    () => listUrlMappings({
+      keyword: keyword || undefined,
+      platform: platform || undefined,
+      category_code: categoryCode || undefined,
+      year: filterYear,
+      month: filterMonth,
+      page,
+      page_size: 20,
+    }).then(r => r.data),
+    { refreshDeps: [keyword, platform, categoryCode, filterYear, filterMonth, page] }
   )
 
   const openCreate = () => {
@@ -154,6 +170,23 @@ export default function UrlMappingsPage() {
       render: (v: number | null) => v != null ? `¥${v}` : '-'
     },
     {
+      title: '判断类型',
+      dataIndex: 'source',
+      width: 110,
+      render: (v: string | null) => {
+        const SOURCE_LABELS: Record<string, { label: string; color: string }> = {
+          model_db_import: { label: '型号库导入', color: 'purple' },
+          url_import:      { label: 'URL导入',   color: 'blue'   },
+          match_confirm:   { label: '匹配确认',   color: 'green'  },
+          manual:          { label: '手动创建',   color: 'orange' },
+        }
+        const cfg = v ? SOURCE_LABELS[v] : null
+        return cfg
+          ? <Tag color={cfg.color}>{cfg.label}</Tag>
+          : <span style={{ color: '#ccc' }}>—</span>
+      },
+    },
+    {
       title: '操作', width: 120, fixed: 'right' as const,
       render: (_: unknown, record: UrlMapping) => (
         <Space size={4}>
@@ -190,7 +223,39 @@ export default function UrlMappingsPage() {
             options={categoryOptions}
             onChange={v => { setCategoryCode(v); setPage(1) }}
           />
+          <InputNumber
+            placeholder="年份"
+            value={filterYear}
+            onChange={v => { setFilterYear(v ?? undefined); setPage(1) }}
+            min={2020}
+            max={2099}
+            style={{ width: 100 }}
+          />
+          <Select
+            placeholder="月份"
+            value={filterMonth}
+            onChange={v => { setFilterMonth(v); setPage(1) }}
+            allowClear
+            style={{ width: 90 }}
+            options={Array.from({ length: 12 }, (_, i) => ({ value: i + 1, label: `${i + 1} 月` }))}
+          />
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增</Button>
+          <InputNumber
+            placeholder="导入年份"
+            value={importYear}
+            onChange={v => setImportYear(v ?? undefined)}
+            min={2020}
+            max={2099}
+            style={{ width: 100 }}
+          />
+          <Select
+            placeholder="导入月份"
+            value={importMonth}
+            onChange={setImportMonth}
+            allowClear
+            style={{ width: 90 }}
+            options={Array.from({ length: 12 }, (_, i) => ({ value: i + 1, label: `${i + 1} 月` }))}
+          />
           <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>导入 Excel</Button>
         </Space>
       </Card>
@@ -225,6 +290,7 @@ export default function UrlMappingsPage() {
         ]}
         headersUrl="/url-mappings/headers"
         confirmUrl="/url-mappings/confirm"
+        extraPayload={{ data_year: importYear, data_month: importMonth }}
         onSuccess={() => { refresh() }}
         onClose={() => setImportOpen(false)}
       />

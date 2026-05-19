@@ -22,6 +22,7 @@ export interface Props {
   standardFields: FieldDef[]
   headersUrl: string
   confirmUrl: string
+  extraPayload?: Record<string, unknown>
   onSuccess: (result: Record<string, unknown>) => void
   onClose: () => void
 }
@@ -42,7 +43,7 @@ interface HeadersResponse {
 }
 
 export default function ImportMappingModal({
-  open, module: _module, standardFields, headersUrl, confirmUrl, onSuccess, onClose,
+  open, module: _module, standardFields, headersUrl, confirmUrl, extraPayload, onSuccess, onClose,
 }: Props) {
   const [step, setStep] = useState<Step>('category')
   const [categoryCode, setCategoryCode] = useState<string>('')
@@ -140,6 +141,7 @@ export default function ImportMappingModal({
         mapping,
         ignore_columns: Array.from(ignoreColumns),
         category_code: categoryCode,
+        ...extraPayload,
       }
       if (saveTemplate && templateName.trim()) {
         payload.save_template_name = templateName.trim()

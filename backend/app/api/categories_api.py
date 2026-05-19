@@ -18,7 +18,20 @@ class CategoryUpdate(BaseModel):
     sort_order:  Optional[int] = None
 
 
-@router.get("/tree")
+class CategoryTreeNode(BaseModel):
+    id:          int
+    code:        str
+    name:        str
+    parent_code: Optional[str] = None
+    sort_order:  int = 0
+    children:    list["CategoryTreeNode"] = []
+
+    model_config = {"from_attributes": True}
+
+CategoryTreeNode.model_rebuild()
+
+
+@router.get("/tree", response_model=list[CategoryTreeNode])
 def get_category_tree(db: Session = Depends(get_db)):
     """返回品类嵌套树，父→子结构。"""
     cats = db.query(Category).order_by(Category.sort_order, Category.name).all()

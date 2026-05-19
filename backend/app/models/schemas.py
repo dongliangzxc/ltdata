@@ -202,24 +202,30 @@ class PaginatedResponse(BaseModel):
 class Category(Base):
     __tablename__ = "categories"
 
-    id         = Column(Integer, primary_key=True, index=True)
-    code       = Column(String(50),  nullable=False, unique=True)
-    name       = Column(String(100), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    id          = Column(Integer, primary_key=True, index=True)
+    code        = Column(String(50),  nullable=False, unique=True)
+    name        = Column(String(100), nullable=False)
+    parent_code = Column(String(50),  nullable=True,  comment='父品类码，NULL 表示顶级品类')
+    sort_order  = Column(Integer,     nullable=False,  default=0, server_default='0', comment='排序值')
+    created_at  = Column(DateTime, default=datetime.utcnow)
 
 
 class CategoryOut(BaseModel):
-    id:         int
-    code:       str
-    name:       str
-    created_at: datetime
+    id:          int
+    code:        str
+    name:        str
+    parent_code: Optional[str] = None
+    sort_order:  int = 0
+    created_at:  datetime
 
     model_config = {"from_attributes": True}
 
 
 class CategoryCreate(BaseModel):
-    code: str
-    name: str
+    code:        str
+    name:        str
+    parent_code: Optional[str] = None
+    sort_order:  int = 0
 
 
 # ─────────────────────────── 元数据规格 ───────────────────────────

@@ -240,6 +240,12 @@ def test_patch_coefficient_sets_updates_and_clears_quantity_preview(db, match_cl
     assert response.json()["adjusted_sales_qty"] == 11
 
 
+def test_sales_coefficient_persistence_precision_matches_api_limit():
+    column_type = MatchResult.__table__.c.sales_coefficient.type
+    assert column_type.precision == 7
+    assert column_type.scale == 4
+
+
 def test_patch_coefficient_validation_rejects_out_of_range_and_accepts_zero(db, match_client):
     upload = UploadFileRecord(filename="validation.xlsx", status="done")
     db.add(upload)
@@ -260,6 +266,11 @@ def test_patch_coefficient_validation_rejects_out_of_range_and_accepts_zero(db, 
     assert match_client.patch(f"/api/match/{mr.id}/coefficient", json={"coefficient": -0.1}).status_code == 400
     assert match_client.patch(f"/api/match/{mr.id}/coefficient", json={"coefficient": 1000}).status_code == 400
     assert match_client.patch(f"/api/match/{mr.id}/coefficient", json={"coefficient": "1.2"}).status_code == 400
+
+    response = match_client.patch(f"/api/match/{mr.id}/coefficient", json={"coefficient": 999.9999})
+    assert response.status_code == 200
+    assert response.json()["sales_coefficient"] == 999.9999
+    assert response.json()["adjusted_sales_qty"] == 10000
 
     response = match_client.patch(f"/api/match/{mr.id}/coefficient", json={"coefficient": 0})
     assert response.status_code == 200

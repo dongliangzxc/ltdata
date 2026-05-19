@@ -23,7 +23,7 @@ def upgrade():
         comment='参考均价',
     ))
     op.add_column('match_results', sa.Column(
-        'sales_coefficient', sa.Numeric(6, 4), nullable=True,
+        'sales_coefficient', sa.Numeric(7, 4), nullable=True,
         comment='销量调整系数',
     ))
 

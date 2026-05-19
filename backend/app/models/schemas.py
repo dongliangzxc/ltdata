@@ -504,7 +504,7 @@ class MatchResult(Base):
     brand_identified = Column(SmallInteger, default=1)
     price_flag = Column(String(20), nullable=True)
     price_ref = Column(Numeric(10, 2), nullable=True)
-    sales_coefficient = Column(Numeric(6, 4), nullable=True)
+    sales_coefficient = Column(Numeric(7, 4), nullable=True)
     created_at     = Column(DateTime, default=datetime.utcnow)
     updated_at   = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

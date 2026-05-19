@@ -14,7 +14,7 @@ SORTABLE_FIELDS = {
     "month": RawDataRecord.month,
 }
 
-def build_query(db, file_id, platform, month, brand_std):
+def build_query(db, file_id, platform, month, brand_std, brand_raw=None, item_name=None):
     q = db.query(RawDataRecord)
     if file_id is not None:
         q = q.filter(RawDataRecord.file_id == file_id)
@@ -24,6 +24,10 @@ def build_query(db, file_id, platform, month, brand_std):
         q = q.filter(RawDataRecord.month == month)
     if brand_std:
         q = q.filter(RawDataRecord.brand_std.ilike(f"%{brand_std}%"))
+    if brand_raw:
+        q = q.filter(RawDataRecord.brand_raw.ilike(f"%{brand_raw}%"))
+    if item_name:
+        q = q.filter(RawDataRecord.item_name.ilike(f"%{item_name}%"))
     return q
 
 
@@ -33,13 +37,15 @@ def list_raw_data(
     platform: Optional[str] = Query(None),
     month: Optional[int] = Query(None),
     brand_std: Optional[str] = Query(None),
+    brand_raw: Optional[str] = Query(None),
+    item_name: Optional[str] = Query(None),
     sort_by: Optional[str] = Query(None),
     sort_order: Optional[str] = Query("desc"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
-    q = build_query(db, file_id, platform, month, brand_std)
+    q = build_query(db, file_id, platform, month, brand_std, brand_raw, item_name)
     total = q.count()
 
     # 排序
@@ -64,9 +70,11 @@ def get_stats(
     platform: Optional[str] = Query(None),
     month: Optional[int] = Query(None),
     brand_std: Optional[str] = Query(None),
+    brand_raw: Optional[str] = Query(None),
+    item_name: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ):
-    q = build_query(db, file_id, platform, month, brand_std)
+    q = build_query(db, file_id, platform, month, brand_std, brand_raw, item_name)
     result = q.with_entities(
         func.sum(RawDataRecord.sales_qty).label("total_qty"),
         func.sum(RawDataRecord.sales_amount).label("total_amount"),

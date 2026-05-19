@@ -1,13 +1,13 @@
 import { useState, useRef, useCallback } from 'react'
 import {
-  Card, Table, Select, Input, Row, Col, Statistic, Space, Tag
+  Card, Table, Select, Input, Row, Col, Statistic, Space, Tag, Button
 } from 'antd'
 import type { TableProps, TableColumnType } from 'antd'
 import {
   ShoppingCartOutlined, DollarOutlined, TagsOutlined, AppstoreOutlined
 } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
-import { listRawData, getRawStats, getRawFilters, listUploadFiles } from '../../services/api'
+import { listRawData, getRawStats, getRawFilters, listUploadFiles, exportRawData } from '../../services/api'
 
 const PLATFORM_LABEL: Record<string, string> = { JD: '京东', TM: '天猫', TB: '淘宝' }
 
@@ -118,6 +118,16 @@ export default function DataListPage() {
     setPage(1)
   }
 
+  const handleExport = async () => {
+    const res = await exportRawData(filters)
+    const url = window.URL.createObjectURL(new Blob([res.data]))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'rawdata_export.xlsx'
+    a.click()
+    window.URL.revokeObjectURL(url)
+  }
+
   const handleTableChange: TableProps<Record<string, unknown>>['onChange'] = (_pagination, _filters, sorter) => {
     const s = Array.isArray(sorter) ? sorter[0] : sorter
     if (s?.field && s?.order) {
@@ -160,30 +170,39 @@ export default function DataListPage() {
       </Row>
 
       <Card>
-        <Row gutter={12} style={{ marginBottom: 16 }}>
-          <Col span={5}>
+        <Row gutter={[8, 8]} style={{ marginBottom: 16 }} align="middle">
+          <Col span={4}>
             <Select placeholder="选择文件" allowClear style={{ width: '100%' }} onChange={v => updateFilter('file_id', v)}>
               {(filesData ?? []).map((f: { id: number; filename: string }) => (
                 <Select.Option key={f.id} value={f.id}>{f.filename}</Select.Option>
               ))}
             </Select>
           </Col>
-          <Col span={4}>
+          <Col span={3}>
             <Select placeholder="平台" allowClear style={{ width: '100%' }} onChange={v => updateFilter('platform', v)}>
               {(filterOptions?.platforms ?? []).map((p: string) => (
                 <Select.Option key={p} value={p}>{p}</Select.Option>
               ))}
             </Select>
           </Col>
-          <Col span={4}>
+          <Col span={3}>
             <Select placeholder="月份" allowClear style={{ width: '100%' }} onChange={v => updateFilter('month', v)}>
               {(filterOptions?.months ?? []).map((m: number) => (
                 <Select.Option key={m} value={m}>{m}</Select.Option>
               ))}
             </Select>
           </Col>
-          <Col span={5}>
-            <Input placeholder="搜索品牌" allowClear onChange={e => updateFilter('brand_std', e.target.value)} />
+          <Col span={4}>
+            <Input placeholder="搜索标准品牌" allowClear onChange={e => updateFilter('brand_std', e.target.value)} />
+          </Col>
+          <Col span={4}>
+            <Input placeholder="搜索品牌原始值" allowClear onChange={e => updateFilter('brand_raw', e.target.value)} />
+          </Col>
+          <Col span={4}>
+            <Input placeholder="搜索商品名称" allowClear onChange={e => updateFilter('item_name', e.target.value)} />
+          </Col>
+          <Col span={2} style={{ textAlign: 'right' }}>
+            <Button onClick={handleExport}>导出</Button>
           </Col>
         </Row>
 

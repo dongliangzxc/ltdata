@@ -65,6 +65,9 @@ export const getRawStats = (params: Record<string, unknown>) => api.get('/rawdat
 
 export const getRawFilters = () => api.get('/rawdata/filters')
 
+export const exportRawData = (params: Record<string, unknown>) =>
+  api.get('/rawdata/export', { params, responseType: 'blob' })
+
 // ─── Clean ─────────────────────────────────────────────────
 export const runCleanJob = (payload: {
   file_ids: number[]

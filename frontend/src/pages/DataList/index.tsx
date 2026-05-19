@@ -208,7 +208,7 @@ export default function DataListPage() {
             <Input placeholder="搜索商品名称" allowClear onChange={e => updateFilter('item_name', e.target.value)} />
           </Col>
           <Col span={2} style={{ textAlign: 'right' }}>
-            <Button onClick={handleExport}>导出</Button>
+            <Button onClick={handleExport}>导出 Excel</Button>
           </Col>
         </Row>
 

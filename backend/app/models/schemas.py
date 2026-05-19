@@ -350,6 +350,9 @@ class ItemUrlMapping(Base):
     brand_code = Column(String(100), nullable=True)          # 品牌已知但型号未知时填充
     model_id   = Column(Integer, ForeignKey("models.id"), nullable=True)
     price      = Column(Numeric(10, 2), nullable=True)
+    source     = Column(String(30),   nullable=True,  comment='model_db_import/manual/match_confirm/url_import')
+    data_year  = Column(SmallInteger, nullable=True,  comment='关联的上传年份')
+    data_month = Column(SmallInteger, nullable=True,  comment='关联的上传月份')
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow,
                         onupdate=datetime.utcnow)
@@ -395,6 +398,9 @@ class ItemUrlMappingOut(BaseModel):
     model_code: Optional[str] = None
     brand_name: Optional[str] = None
     model_name: Optional[str] = None
+    source:     Optional[str] = None
+    data_year:  Optional[int] = None
+    data_month: Optional[int] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

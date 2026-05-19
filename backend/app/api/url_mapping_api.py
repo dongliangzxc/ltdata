@@ -47,6 +47,9 @@ def _to_out(m: ItemUrlMapping) -> ItemUrlMappingOut:
         model_code=model.model_code if model else None,
         brand_name=model.brand_name if model else None,
         model_name=model.model_name if model else None,
+        source=m.source,
+        data_year=m.data_year,
+        data_month=m.data_month,
         created_at=m.created_at,
     )
 
@@ -57,6 +60,8 @@ class UrlMappingConfirmPayload(BaseModel):
     ignore_columns: list = []
     category_code: str
     save_template_name: Optional[str] = None
+    data_year: Optional[int] = None
+    data_month: Optional[int] = None
 
 
 @router.post("/headers")
@@ -177,6 +182,9 @@ def url_mapping_confirm(
             existing.model_id = model.id
             if price is not None:
                 existing.price = price
+            existing.source = 'url_import'
+            existing.data_year = payload.data_year
+            existing.data_month = payload.data_month
             updated += 1
         else:
             db.add(ItemUrlMapping(
@@ -185,6 +193,9 @@ def url_mapping_confirm(
                 item_url=item_url,
                 model_id=model.id,
                 price=price,
+                source='url_import',
+                data_year=payload.data_year,
+                data_month=payload.data_month,
             ))
             inserted += 1
 
@@ -308,9 +319,11 @@ def import_url_mappings(file: UploadFile = File(...), db: Session = Depends(get_
             existing.price = price
             existing.item_url = url
             existing.updated_at = datetime.utcnow()
+            existing.source = 'url_import'
         else:
             db.add(ItemUrlMapping(
-                platform=platform, item_id=item_id, item_url=url, model_id=model_id, price=price
+                platform=platform, item_id=item_id, item_url=url, model_id=model_id, price=price,
+                source='url_import',
             ))
         imported += 1
 
@@ -323,6 +336,8 @@ def list_url_mappings(
     keyword: Optional[str] = Query(None),
     platform: Optional[str] = Query(None),
     category_code: Optional[str] = Query(None),
+    year: Optional[int] = Query(None),
+    month: Optional[int] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -330,6 +345,10 @@ def list_url_mappings(
     q = db.query(ItemUrlMapping).filter(ItemUrlMapping.brand_code.isnot(None))
     if platform:
         q = q.filter(ItemUrlMapping.platform == platform)
+    if year is not None:
+        q = q.filter(ItemUrlMapping.data_year == year)
+    if month is not None:
+        q = q.filter(ItemUrlMapping.data_month == month)
     if keyword:
         kw = f"%{keyword}%"
         q = q.outerjoin(ModelRecord, ItemUrlMapping.model_id == ModelRecord.id).filter(
@@ -368,6 +387,7 @@ def create_url_mapping(payload: ItemUrlMappingIn, db: Session = Depends(get_db))
         brand_code=model_for_brand.brand_code if model_for_brand else payload.brand_code,
         model_id=payload.model_id,
         price=payload.price,
+        source='manual',
     )
     db.add(m)
     db.commit()

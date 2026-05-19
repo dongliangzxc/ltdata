@@ -309,12 +309,14 @@ def import_model_db(
             if existing_url:
                 existing_url.model_id = model_id
                 existing_url.item_url = u["item_url"]
+                existing_url.source = 'model_db_import'
             else:
                 db.add(ItemUrlMapping(
                     platform=u["platform"],
                     item_id=u["item_id"],
                     item_url=u["item_url"],
                     model_id=model_id,
+                    source='model_db_import',
                 ))
                 stats["urls_new"] += 1
             url_cache.add(key)
@@ -332,6 +334,7 @@ def import_model_db(
             if existing.model_id is None:
                 existing.item_url = iurl
                 existing.brand_code = bcode
+                existing.source = 'model_db_import'
         else:
             db.add(ItemUrlMapping(
                 platform=plat,
@@ -339,6 +342,7 @@ def import_model_db(
                 item_url=iurl,
                 brand_code=bcode,
                 model_id=None,
+                source='model_db_import',
             ))
             stats["urls_new"] += 1
         url_batch_count += 1

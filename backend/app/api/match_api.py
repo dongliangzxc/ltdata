@@ -363,6 +363,7 @@ def confirm_match(match_id: int, payload: dict, db: Session = Depends(get_db)):
                     existing_mapping.model_id = model_id
                     existing_mapping.item_url = rd_for_url.item_url
                     existing_mapping.brand_code = m.brand_code  # m is the ModelRecord queried above
+                    existing_mapping.source = 'match_confirm'
                 elif not existing_mapping and prev_status == "text_only":
                     db.add(ItemUrlMapping(
                         platform=rd_for_url.platform,
@@ -371,6 +372,7 @@ def confirm_match(match_id: int, payload: dict, db: Session = Depends(get_db)):
                         model_id=model_id,
                         brand_code=m.brand_code,
                         price=rd_for_url.price,
+                        source='match_confirm',
                     ))
 
         # historical pending 确认时回写历史库 model_id

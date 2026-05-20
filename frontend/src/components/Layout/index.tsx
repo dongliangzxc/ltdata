@@ -18,6 +18,7 @@ import {
   TagsOutlined,
   FunnelPlotOutlined,
   ShopOutlined,
+  LineChartOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 
@@ -37,6 +38,7 @@ const menuItems = [
   { key: '/clean',      icon: <ClearOutlined />,         label: '数据清洗' },
   { key: '/rules',      icon: <FilterOutlined />,        label: '规则管理' },
   { key: '/match',      icon: <AimOutlined />,           label: '匹配确认' },
+  { key: '/dashboard',  icon: <LineChartOutlined />,     label: '数据看板' },
   { key: '/workbench',  icon: <FundOutlined />,          label: '查询工作台' },
   { key: '/export',     icon: <ExportOutlined />,        label: '数据导出' },
   { key: '/manual',     icon: <QuestionCircleOutlined />, label: '使用手册' },

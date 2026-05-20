@@ -170,6 +170,73 @@ export const listPendingMatches = (clean_job_id: number, params?: Record<string,
 export const confirmMatch = (match_id: number, data: { model_id?: number; excluded?: boolean }) =>
   api.put(`/match/confirm/${match_id}`, data)
 
+// ─── Analytics Dashboard ─────────────────────────────────────
+export type AnalyticsGroupBy = 'model' | 'brand' | 'category' | 'platform'
+
+export interface AnalyticsSummaryParams {
+  year?: number
+  month?: number
+  brand?: string
+  category?: string
+  platform?: string
+  model_keyword?: string
+  item_keyword?: string
+  group_by?: AnalyticsGroupBy
+  page?: number
+  page_size?: number
+  sort_by?: string
+}
+
+export interface AnalyticsMetricRow {
+  sales_qty: number
+  corrected_sales_qty: number
+  sales_amount: number
+  avg_price: number | null
+  record_count: number
+}
+
+export interface AnalyticsSummaryRow extends AnalyticsMetricRow {
+  dimension_key: string
+  dimension_name: string
+  group_by: AnalyticsGroupBy
+}
+
+export interface AnalyticsSummaryResponse {
+  totals: AnalyticsMetricRow
+  rows: AnalyticsSummaryRow[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export interface AnalyticsFiltersResponse {
+  years: number[]
+  months: number[]
+  platforms: string[]
+  brands: { brand_code: string; brand_name: string | null }[]
+  categories: { category_name: string }[]
+}
+
+export interface AnalyticsExportResponse {
+  job_id: number
+  status: 'pending' | 'running' | 'done' | 'error'
+  download_url: string
+}
+
+export const getAnalyticsFilters = () =>
+  api.get<AnalyticsFiltersResponse>('/analytics/filters')
+
+export const getAnalyticsSummary = (params: AnalyticsSummaryParams) =>
+  api.get<AnalyticsSummaryResponse>('/analytics/summary', { params })
+
+export const exportAnalyticsSummary = (params: AnalyticsSummaryParams) =>
+  api.get<AnalyticsExportResponse>('/analytics/export/summary', { params })
+
+export const exportAnalyticsDetail = (params: AnalyticsSummaryParams & { fields?: string }) =>
+  api.get<AnalyticsExportResponse>('/analytics/export/detail', { params })
+
+export const getAnalyticsDownloadUrl = (token: string) => `/api/analytics/download/${token}`
+
 // ─── Workbench ──────────────────────────────────────────────
 export const getWorkbenchFilters = () =>
   api.get('/workbench/filters')

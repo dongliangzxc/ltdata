@@ -7,7 +7,7 @@ from app.core.security import verify_token, hash_password
 from app.models.database import Base, engine, SessionLocal
 from app.models.analytics_db import AnalyticsBase, analytics_engine
 from app.models.schemas import User
-from app.api import upload, rawdata, clean, export, metadata, models_api, match_api, publish_api, auth, workbench_api, url_mapping_api
+from app.api import upload, rawdata, clean, export, metadata, models_api, match_api, publish_api, auth, workbench_api, analytics_api, url_mapping_api
 from app.api import rules_api, historical_api, categories_api, correction_rules_api
 from app.api.dispatch_api import router as dispatch_router
 from app.api.upload_templates_api import router as upload_templates_router
@@ -15,7 +15,7 @@ from app.api.upload_templates_api import router as upload_templates_router
 
 # 不需要鉴权的路径（精确匹配或前缀匹配）
 _SKIP_AUTH = {"/api/auth/login", "/health"}
-_SKIP_AUTH_PREFIXES = ("/api/export/download/", "/api/workbench/download/")
+_SKIP_AUTH_PREFIXES = ("/api/export/download/", "/api/workbench/download/", "/api/analytics/download/")
 
 
 @asynccontextmanager
@@ -73,6 +73,7 @@ app.include_router(models_api.router)
 app.include_router(match_api.router)
 app.include_router(publish_api.router)
 app.include_router(workbench_api.router)
+app.include_router(analytics_api.router)
 app.include_router(url_mapping_api.router)
 app.include_router(rules_api.router)
 app.include_router(historical_api.router)

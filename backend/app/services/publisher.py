@@ -20,6 +20,46 @@ def _ensure_analytics_tables():
     AnalyticsBase.metadata.create_all(bind=analytics_engine)
 
 
+def _build_published_item_params(r, clean_job_id: int, published_at: datetime) -> dict:
+    base_corrected_qty = r["corrected_sales_qty"] if r["corrected_sales_qty"] is not None else r["sales_qty"]
+    if r["sales_coefficient"] is not None:
+        corrected_sales_qty = round(base_corrected_qty * r["sales_coefficient"])
+    else:
+        corrected_sales_qty = base_corrected_qty
+
+    return {
+        "publish_job_id":          0,   # 占位，稍后回填
+        "clean_job_id":            clean_job_id,
+        "match_result_id":         r["match_result_id"],
+        "platform":                r["platform"],
+        "month":                   r["month"],
+        "category_lv0":            r["category_lv0"],
+        "category_lv1":            r["category_lv1"],
+        "category_lv2":            r["category_lv2"],
+        "category_lv3":            r["category_lv3"],
+        "category_lv4":            r["category_lv4"],
+        "category_lv5":            r["category_lv5"],
+        "item_id":                 r["item_id"],
+        "item_name":               r["item_name"],
+        "item_image":              r["item_image"],
+        "item_url":                r["item_url"],
+        "ref_price":               r["ref_price"],
+        "shop_name":               r["shop_name"],
+        "sales_qty":               r["sales_qty"],
+        "sales_amount":            r["sales_amount"],
+        "price":                   r["price"],
+        "brand_code":              r["brand_code"],
+        "brand_name":              r["brand_name"],
+        "model_code":              r["model_code"],
+        "model_name":              r["model_name"],
+        "category_name":           r["category_name"],
+        "calc_price":              r["calc_price"],  # NULL when no cleaned_data row (pre-P1 data or unmatched) — intentional
+        "corrected_sales_qty":     corrected_sales_qty,
+        "corrected_sales_amount":  r["corrected_sales_amount"] if r["corrected_sales_amount"] is not None else r["sales_amount"],
+        "published_at":            published_at,
+    }
+
+
 def run_publish(luotu_db: Session, analytics_db: Session, clean_job_id: int) -> dict:
     """
     执行发布：从 luotu 读取匹配结果，写入 luotu_analytics。
@@ -69,7 +109,8 @@ def run_publish(luotu_db: Session, analytics_db: Session, clean_job_id: int) -> 
             m.id            AS model_id,
             cd.calc_price,
             cd.corrected_sales_qty,
-            cd.corrected_sales_amount
+            cd.corrected_sales_amount,
+            mr.sales_coefficient
         FROM match_results mr
         JOIN raw_data rd  ON rd.id = mr.raw_data_id
         JOIN models m     ON m.id  = mr.model_id
@@ -174,37 +215,9 @@ def run_publish(luotu_db: Session, analytics_db: Session, clean_job_id: int) -> 
 
     items_to_insert = []
     for r in rows:
-        items_to_insert.append({
-            "publish_job_id":          0,   # 占位，稍后回填
-            "clean_job_id":            clean_job_id,
-            "match_result_id":         r["match_result_id"],
-            "platform":                r["platform"],
-            "month":                   r["month"],
-            "category_lv0":            r["category_lv0"],
-            "category_lv1":            r["category_lv1"],
-            "category_lv2":            r["category_lv2"],
-            "category_lv3":            r["category_lv3"],
-            "category_lv4":            r["category_lv4"],
-            "category_lv5":            r["category_lv5"],
-            "item_id":                 r["item_id"],
-            "item_name":               r["item_name"],
-            "item_image":              r["item_image"],
-            "item_url":                r["item_url"],
-            "ref_price":               r["ref_price"],
-            "shop_name":               r["shop_name"],
-            "sales_qty":               r["sales_qty"],
-            "sales_amount":            r["sales_amount"],
-            "price":                   r["price"],
-            "brand_code":              r["brand_code"],
-            "brand_name":              r["brand_name"],
-            "model_code":              r["model_code"],
-            "model_name":              r["model_name"],
-            "category_name":           r["category_name"],
-            "calc_price":              r["calc_price"],  # NULL when no cleaned_data row (pre-P1 data or unmatched) — intentional
-            "corrected_sales_qty":     r["corrected_sales_qty"] if r["corrected_sales_qty"] is not None else r["sales_qty"],
-            "corrected_sales_amount":  r["corrected_sales_amount"] if r["corrected_sales_amount"] is not None else r["sales_amount"],
-            "published_at":            datetime.utcnow(),
-        })
+        items_to_insert.append(
+            _build_published_item_params(r, clean_job_id, datetime.utcnow())
+        )
 
     for item_dict in items_to_insert:
         analytics_db.execute(upsert_sql, item_dict)

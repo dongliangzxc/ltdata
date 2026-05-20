@@ -1,6 +1,7 @@
 """
 型号匹配 API
 """
+import logging
 import time
 from threading import Thread
 from typing import Optional
@@ -12,13 +13,16 @@ from app.models.schemas import (
     MatchResult, MatchResultOut, MatchSummary,
     CleanJobRecord, RawDataRecord, ModelRecord,
     MatchResultAttr, MatchResultCandidate, MatchCandidateOut, ItemUrlMapping, Category,
+    CleanedDataRecord,
     DispatchItem,
     PaginatedResponse,
     HistoricalMapping,
 )
 from app.services.matcher import run_match
+from app.services.price_auditor import audit_price
 
 router = APIRouter(prefix="/api/match", tags=["match"])
+logger = logging.getLogger(__name__)
 
 # ── 进度状态（内存，key=clean_job_id）────────────────────────────────
 # {
@@ -252,6 +256,9 @@ def list_pending(
             matched_by=mr.matched_by,
             match_source=mr.match_source,
             brand_identified=mr.brand_identified,
+            price_flag=mr.price_flag,
+            price_ref=float(mr.price_ref) if mr.price_ref is not None else None,
+            sales_coefficient=float(mr.sales_coefficient) if mr.sales_coefficient is not None else None,
             item_name=rd.item_name,
             item_url=rd.item_url,
             brand_raw=rd.brand_raw,
@@ -390,10 +397,15 @@ def confirm_match(match_id: int, payload: dict, db: Session = Depends(get_db)):
 
     db.commit()
 
-    # 型号确认后触发属性匹配
+    # 型号确认后触发属性匹配和量价审核
     if mr.match_status in ("confirmed", "matched") and mr.model_id:
         from app.services.attribute_matcher import run_attribute_matching
         run_attribute_matching(db, [mr.id])
+        try:
+            audit_price(db, [mr.id])
+        except Exception:
+            logger.exception("Price audit failed after confirming match_id=%s", mr.id)
+            db.rollback()
 
     db.refresh(mr)
 
@@ -407,10 +419,14 @@ def confirm_match(match_id: int, payload: dict, db: Session = Depends(get_db)):
         model_id=mr.model_id,
         match_status=mr.match_status,
         matched_by=mr.matched_by,
+        price_flag=mr.price_flag,
+        price_ref=mr.price_ref,
+        sales_coefficient=mr.sales_coefficient,
         item_name=rd.item_name if rd else None,
         brand_raw=rd.brand_raw if rd else None,
         model_code=model_info.model_code if model_info else None,
         brand_code=model_info.brand_code if model_info else None,
+        sales_qty=rd.sales_qty if rd else None,
     )
 
 
@@ -426,6 +442,143 @@ class _DisableIn(_PydanticBase):
 
 class _AvgPriceDisableIn(_PydanticBase):
     threshold: float = 200.0
+
+
+class _CoefficientIn(_PydanticBase):
+    coefficient: object
+
+
+def _quantity_preview(cleaned_qty: Optional[int], raw_qty: Optional[int], coefficient) -> tuple[Optional[int], Optional[int]]:
+    corrected_qty = cleaned_qty if cleaned_qty is not None else raw_qty
+    if corrected_qty is None:
+        return None, None
+    if coefficient is None:
+        return corrected_qty, corrected_qty
+    return corrected_qty, round(float(corrected_qty) * float(coefficient))
+
+
+def _reviewed_row_payload(mr, rd, model=None, cat=None, attr_count: int = 0, cleaned_qty: Optional[int] = None) -> MatchResultOut:
+    corrected_qty, adjusted_qty = _quantity_preview(cleaned_qty, rd.sales_qty if rd else None, mr.sales_coefficient)
+    return MatchResultOut(
+        id=mr.id,
+        clean_job_id=mr.clean_job_id,
+        raw_data_id=mr.raw_data_id,
+        model_id=mr.model_id,
+        match_status=mr.match_status,
+        matched_by=mr.matched_by,
+        match_source=mr.match_source,
+        is_disabled=mr.is_disabled,
+        disable_reason=mr.disable_reason,
+        brand_identified=mr.brand_identified,
+        price_flag=mr.price_flag,
+        price_ref=float(mr.price_ref) if mr.price_ref is not None else None,
+        sales_coefficient=float(mr.sales_coefficient) if mr.sales_coefficient is not None else None,
+        item_name=rd.item_name if rd else None,
+        item_url=rd.item_url if rd else None,
+        brand_raw=rd.brand_raw if rd else None,
+        model_code=model.model_code if model else None,
+        brand_code=model.brand_code if model else None,
+        attr_count=attr_count or 0,
+        sales_qty=rd.sales_qty if rd else None,
+        corrected_sales_qty=corrected_qty,
+        adjusted_sales_qty=adjusted_qty,
+        category_name=cat.name if cat else None,
+    )
+
+
+@router.get("/{clean_job_id}/reviewed", response_model=PaginatedResponse)
+def list_reviewed(
+    clean_job_id: int,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """分页查询已匹配/已确认行，用于量价审核与销量系数调整。"""
+    clean_job = db.query(CleanJobRecord).filter(CleanJobRecord.id == clean_job_id).first()
+    dispatch_batch_id = clean_job.dispatch_batch_id if clean_job else None
+    if dispatch_batch_id is not None:
+        di_join_cond = (
+            (DispatchItem.raw_data_id == MatchResult.raw_data_id) &
+            (DispatchItem.batch_id == dispatch_batch_id)
+        )
+    else:
+        di_join_cond = (DispatchItem.raw_data_id == None)  # noqa: E711
+
+    q = (
+        db.query(
+            MatchResult,
+            RawDataRecord,
+            ModelRecord,
+            Category,
+            func.count(MatchResultAttr.id).label("attr_count"),
+            func.max(CleanedDataRecord.corrected_sales_qty).label("corrected_sales_qty"),
+        )
+        .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
+        .outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
+        .outerjoin(DispatchItem, di_join_cond)
+        .outerjoin(Category, DispatchItem.category_code == Category.code)
+        .outerjoin(MatchResultAttr, MatchResultAttr.match_result_id == MatchResult.id)
+        .outerjoin(
+            CleanedDataRecord,
+            (CleanedDataRecord.clean_job_id == MatchResult.clean_job_id) &
+            (CleanedDataRecord.raw_data_id == MatchResult.raw_data_id),
+        )
+        .filter(
+            MatchResult.clean_job_id == clean_job_id,
+            MatchResult.match_status.in_(["matched", "url_matched", "confirmed"]),
+        )
+        .group_by(MatchResult.id, RawDataRecord.id, ModelRecord.id, Category.id)
+    )
+    total = q.count()
+    rows = q.order_by(MatchResult.id).offset((page - 1) * page_size).limit(page_size).all()
+    items = [
+        _reviewed_row_payload(mr, rd, model, cat, attr_count, cleaned_qty)
+        for mr, rd, model, cat, attr_count, cleaned_qty in rows
+    ]
+    return PaginatedResponse(total=total, page=page, page_size=page_size, items=items)
+
+
+@router.patch("/{match_id}/coefficient", response_model=MatchResultOut)
+def update_sales_coefficient(match_id: int, payload: _CoefficientIn, db: Session = Depends(get_db)):
+    """设置或清除单条匹配结果的销量调整系数。"""
+    coefficient = payload.coefficient
+    if coefficient is not None:
+        if isinstance(coefficient, bool) or not isinstance(coefficient, (int, float)):
+            raise HTTPException(status_code=400, detail="coefficient 必须是数字或 null")
+        if coefficient < 0 or coefficient > 999.9999:
+            raise HTTPException(status_code=400, detail="coefficient 必须在 0 到 999.9999 之间")
+
+    mr = db.query(MatchResult).filter(MatchResult.id == match_id).first()
+    if not mr:
+        raise HTTPException(status_code=404, detail="匹配记录不存在")
+
+    mr.sales_coefficient = coefficient
+    db.commit()
+    db.refresh(mr)
+
+    row = (
+        db.query(
+            MatchResult,
+            RawDataRecord,
+            ModelRecord,
+            Category,
+            func.count(MatchResultAttr.id).label("attr_count"),
+            func.max(CleanedDataRecord.corrected_sales_qty).label("corrected_sales_qty"),
+        )
+        .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
+        .outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
+        .outerjoin(Category, ModelRecord.category_code == Category.code)
+        .outerjoin(MatchResultAttr, MatchResultAttr.match_result_id == MatchResult.id)
+        .outerjoin(
+            CleanedDataRecord,
+            (CleanedDataRecord.clean_job_id == MatchResult.clean_job_id) &
+            (CleanedDataRecord.raw_data_id == MatchResult.raw_data_id),
+        )
+        .filter(MatchResult.id == match_id)
+        .group_by(MatchResult.id, RawDataRecord.id, ModelRecord.id, Category.id)
+        .first()
+    )
+    return _reviewed_row_payload(*row)
 
 
 @router.patch("/{match_id}/disable", response_model=MatchResultOut)

@@ -167,6 +167,10 @@ export const getMatchSummary = (clean_job_id: number) =>
   api.get(`/match/${clean_job_id}/summary`)
 export const listPendingMatches = (clean_job_id: number, params?: Record<string, unknown>) =>
   api.get(`/match/${clean_job_id}/pending`, { params })
+export const listReviewedMatches = (clean_job_id: number, params?: Record<string, unknown>) =>
+  api.get<PaginatedResponse<ReviewedMatchResultOut>>(`/match/${clean_job_id}/reviewed`, { params })
+export const updateMatchCoefficient = (match_id: number, coefficient: number | null) =>
+  api.patch<ReviewedMatchResultOut>(`/match/${match_id}/coefficient`, { coefficient })
 export const confirmMatch = (match_id: number, data: { model_id?: number; excluded?: boolean }) =>
   api.put(`/match/confirm/${match_id}`, data)
 
@@ -413,6 +417,15 @@ export const applyCorrectionRules = (cleanJobId: number) =>
   api.post(`/correction-rules/apply/${cleanJobId}`)
 
 // ─── Match Types ────────────────────────────────────────────
+export type PriceFlag = 'ok' | 'high' | 'low' | 'no_history'
+
+export interface PaginatedResponse<T> {
+  total: number
+  page: number
+  page_size: number
+  items: T[]
+}
+
 export interface MatchCandidateOut {
   model_id: number
   model_code: string | null
@@ -422,17 +435,85 @@ export interface MatchCandidateOut {
   rank: number
 }
 
+export interface MatchResultOut {
+  id: number
+  clean_job_id: number
+  raw_data_id: number
+  model_id?: number | null
+  match_status: string
+  matched_by: string
+  match_source?: string | null
+  is_disabled?: number
+  disable_reason?: string | null
+  brand_identified?: number
+  price_flag?: PriceFlag | null
+  price_ref?: number | null
+  sales_coefficient?: number | null
+  item_name?: string | null
+  item_url?: string | null
+  brand_raw?: string | null
+  model_code?: string | null
+  brand_code?: string | null
+  attr_count?: number
+  candidates?: MatchCandidateOut[]
+  sales_qty?: number | null
+  corrected_sales_qty?: number | null
+  adjusted_sales_qty?: number | null
+  category_name?: string | null
+}
+
+export type ReviewedMatchResultOut = MatchResultOut
+
+// ─── Brands ───────────────────────────────────────────────────────────────────
+export type BrandItem = {
+  brand_code: string
+  brand_name: string | null
+  model_count: number
+  alias_count: number
+}
+
+export type BrandAliasItem = {
+  id: number
+  alias_name: string
+  brand_code: string
+  is_active: number
+}
+
+export const listBrands = () =>
+  api.get<BrandItem[]>('/brands')
+
+export const listBrandAliasesByCode = (brandCode: string) =>
+  api.get<BrandAliasItem[]>(`/brands/${brandCode}/aliases`)
+
+export const createBrandAliasForCode = (brandCode: string, payload: { alias_name: string }) =>
+  api.post<BrandAliasItem>(`/brands/${brandCode}/aliases`, payload)
+
+export const deleteBrandAliasById = (brandCode: string, aliasId: number) =>
+  api.delete(`/brands/${brandCode}/aliases/${aliasId}`)
+
 // ─── Categories ─────────────────────────────────────────────
+export type CategoryTreeNode = {
+  id: number
+  code: string
+  name: string
+  parent_code: string | null
+  sort_order: number
+  children: CategoryTreeNode[]
+}
+
 export const listCategories = () =>
   api.get('/categories')
 
 export const fetchCategories = () =>
   api.get<{ id: number; code: string; name: string }[]>('/categories').then(r => r.data)
 
-export const createCategory = (data: { code: string; name: string }) =>
+export const getCategoryTree = () =>
+  api.get<CategoryTreeNode[]>('/categories/tree')
+
+export const createCategory = (data: { code: string; name: string; parent_code?: string | null; sort_order?: number }) =>
   api.post('/categories', data)
 
-export const updateCategory = (id: number, data: { name: string }) =>
+export const updateCategory = (id: number, data: { name?: string; parent_code?: string | null; sort_order?: number }) =>
   api.put(`/categories/${id}`, data)
 
 export const deleteCategory = (id: number) =>

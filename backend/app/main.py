@@ -11,6 +11,7 @@ from app.api import upload, rawdata, clean, export, metadata, models_api, match_
 from app.api import rules_api, historical_api, categories_api, correction_rules_api
 from app.api.dispatch_api import router as dispatch_router
 from app.api.upload_templates_api import router as upload_templates_router
+from app.api.brands_api import router as brands_router
 
 
 # 不需要鉴权的路径（精确匹配或前缀匹配）
@@ -81,6 +82,7 @@ app.include_router(categories_api.router)
 app.include_router(correction_rules_api.router)
 app.include_router(dispatch_router)
 app.include_router(upload_templates_router)
+app.include_router(brands_router)
 
 
 @app.get("/health")

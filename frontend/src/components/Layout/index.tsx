@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Layout, Menu, Typography, Button, Dropdown } from 'antd'
+import type { MenuProps } from 'antd'
 import {
   UploadOutlined,
   DatabaseOutlined,
@@ -19,30 +20,67 @@ import {
   FunnelPlotOutlined,
   ShopOutlined,
   LineChartOutlined,
+  FolderOutlined,
+  ToolOutlined,
+  ContainerOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 
 const { Sider, Header, Content } = Layout
 const { Title, Text } = Typography
 
-const menuItems = [
-  { key: '/upload',     icon: <UploadOutlined />,        label: '数据上传' },
-  { key: '/dispatch',   icon: <FunnelPlotOutlined />,    label: '数据分发' },
-  { key: '/rawdata',    icon: <DatabaseOutlined />,      label: '原始数据' },
-  { key: '/categories', icon: <TagsOutlined />,          label: '品类管理' },
-  { key: '/metadata',   icon: <ProfileOutlined />,       label: '产品字段定义' },
-  { key: '/models',     icon: <AppstoreAddOutlined />,   label: '产品属性管理' },
-  { key: '/brands',     icon: <ShopOutlined />,          label: '品牌管理' },
-  { key: '/url-mappings', icon: <LinkOutlined />,        label: '映射管理' },
-  { key: '/historical',   icon: <HistoryOutlined />,     label: '历史库' },
-  { key: '/clean',      icon: <ClearOutlined />,         label: '数据清洗' },
-  { key: '/rules',      icon: <FilterOutlined />,        label: '规则管理' },
-  { key: '/match',      icon: <AimOutlined />,           label: '匹配确认' },
-  { key: '/dashboard',  icon: <LineChartOutlined />,     label: '数据看板' },
-  { key: '/workbench',  icon: <FundOutlined />,          label: '查询工作台' },
-  { key: '/export',     icon: <ExportOutlined />,        label: '数据导出' },
-  { key: '/manual',     icon: <QuestionCircleOutlined />, label: '使用手册' },
+const menuItems: MenuProps['items'] = [
+  {
+    key: 'data-management',
+    icon: <FolderOutlined />,
+    label: '数据管理',
+    children: [
+      { key: '/upload',     icon: <UploadOutlined />,     label: '数据上传' },
+      { key: '/dispatch',   icon: <FunnelPlotOutlined />, label: '数据分发' },
+      { key: '/rawdata',    icon: <DatabaseOutlined />,   label: '原始数据' },
+      { key: '/categories', icon: <TagsOutlined />,       label: '品类管理' },
+    ],
+  },
+  {
+    key: 'processing-workbench',
+    icon: <ToolOutlined />,
+    label: '处理工作台',
+    children: [
+      { key: '/metadata',     icon: <ProfileOutlined />,     label: '产品字段定义' },
+      { key: '/models',       icon: <AppstoreAddOutlined />, label: '产品属性管理' },
+      { key: '/brands',       icon: <ShopOutlined />,        label: '品牌管理' },
+      { key: '/url-mappings', icon: <LinkOutlined />,        label: '映射管理' },
+      { key: '/historical',   icon: <HistoryOutlined />,     label: '历史库' },
+      { key: '/clean',        icon: <ClearOutlined />,       label: '数据清洗' },
+      { key: '/rules',        icon: <FilterOutlined />,      label: '规则管理' },
+      { key: '/match',        icon: <AimOutlined />,         label: '匹配确认' },
+    ],
+  },
+  {
+    key: 'product-management',
+    icon: <ContainerOutlined />,
+    label: '成品管理',
+    children: [
+      { key: '/dashboard', icon: <LineChartOutlined />, label: '数据看板' },
+      { key: '/export',    icon: <ExportOutlined />,    label: '数据导出' },
+      { key: '/workbench', icon: <FundOutlined />,      label: '查询工作台' },
+    ],
+  },
+  { key: '/manual', icon: <QuestionCircleOutlined />, label: '使用手册' },
 ]
+
+const pageTitles = new Map<string, string>()
+menuItems.forEach(item => {
+  if (item && 'children' in item && item.children) {
+    item.children.forEach(child => {
+      if (child && 'key' in child && 'label' in child) {
+        pageTitles.set(String(child.key), String(child.label))
+      }
+    })
+  } else if (item && 'key' in item && 'label' in item) {
+    pageTitles.set(String(item.key), String(item.label))
+  }
+})
 
 interface Props {
   children: React.ReactNode
@@ -92,7 +130,7 @@ export default function AppLayout({ children }: Props) {
           justifyContent: 'space-between',
         }}>
           <Title level={4} style={{ margin: 0, color: '#1677ff' }}>
-            {menuItems.find(m => m.key === location.pathname)?.label ?? '洛图数据处理平台'}
+            {pageTitles.get(location.pathname) ?? '洛图数据处理平台'}
           </Title>
           <Dropdown
             menu={{

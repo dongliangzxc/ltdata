@@ -259,7 +259,10 @@ def get_analytics_summary(
     else:
         key_col, name_col = _GROUP_COLUMNS[group_by]
         dimension_key_expr = func.coalesce(func.nullif(key_col, ""), "未填")
-        dimension_name_expr = func.coalesce(func.nullif(func.min(name_col), ""), dimension_key_expr)
+        dimension_name_expr = func.coalesce(
+            func.nullif(func.min(name_col), ""),
+            func.min(dimension_key_expr),
+        )
     sales_qty_sum = func.coalesce(func.sum(sales_qty_expr), 0)
     corrected_qty_sum = func.coalesce(func.sum(corrected_qty_expr), 0)
     sales_amount_sum = func.coalesce(func.sum(sales_amount_expr), 0)

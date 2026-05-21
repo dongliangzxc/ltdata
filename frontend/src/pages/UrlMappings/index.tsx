@@ -3,7 +3,7 @@ import {
   Card, Table, Button, Input, Select, Space, Typography,
   Modal, Form, InputNumber, message, Popconfirm, Tag,
 } from 'antd'
-import { PlusOutlined, UploadOutlined, EditOutlined, DeleteOutlined, LinkOutlined } from '@ant-design/icons'
+import { PlusOutlined, UploadOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import {
   listUrlMappings, createUrlMapping, updateUrlMapping,
@@ -25,9 +25,14 @@ type UrlMapping = {
   model_code: string | null
   brand_name: string | null
   model_name: string | null
+  category_code: string | null
+  category_name: string | null
+  item_name: string | null
   source: string | null
   data_year: number | null
   data_month: number | null
+  operator: string | null
+  updated_at: string | null
 }
 
 type ModelOption = {
@@ -46,15 +51,6 @@ const PLATFORM_OPTIONS = [
   { value: 'suning', label: '苏宁 (SUNING)' },
 ]
 
-function buildUrl(platform: string, itemId: string): string | null {
-  switch (platform) {
-    case 'jd':     return `https://item.jd.com/${itemId}.html`
-    case 'tmall':  return `https://detail.tmall.com/item.htm?id=${itemId}`
-    case 'taobao': return `https://item.taobao.com/item.htm?id=${itemId}`
-    default:       return null
-  }
-}
-
 export default function UrlMappingsPage() {
   const [keyword, setKeyword] = useState('')
   const [platform, setPlatform] = useState<string | undefined>()
@@ -69,8 +65,6 @@ export default function UrlMappingsPage() {
 
   const [filterYear, setFilterYear] = useState<number | undefined>()
   const [filterMonth, setFilterMonth] = useState<number | undefined>()
-  const [importYear, setImportYear] = useState<number | undefined>()
-  const [importMonth, setImportMonth] = useState<number | undefined>()
 
   const { options: categoryOptions } = useCategoryOptions()
 
@@ -142,32 +136,24 @@ export default function UrlMappingsPage() {
 
   const columns = [
     {
-      title: '平台', dataIndex: 'platform', width: 80,
-      render: (v: string) => <Tag color={v === 'jd' ? 'blue' : 'orange'}>{v.toUpperCase()}</Tag>
-    },
-    { title: 'item_id', dataIndex: 'item_id', width: 160 },
-    {
-      title: '商品链接', width: 80,
-      render: (_: unknown, record: UrlMapping) => {
-        const url = record.item_url || buildUrl(record.platform, record.item_id)
-        return url ? <a href={url} target="_blank" rel="noreferrer"><LinkOutlined /> 查看</a> : '-'
-      }
+      title: '品类', width: 120,
+      render: (_: unknown, record: UrlMapping) => record.category_name || record.category_code || '-'
     },
     {
-      title: '品牌码', dataIndex: 'brand_code', width: 100,
-      render: (v: string | null) => v ?? '-'
+      title: '品牌', width: 120,
+      render: (_: unknown, record: UrlMapping) => record.brand_name || record.brand_code || '-'
     },
     {
-      title: '型号码', dataIndex: 'model_code', width: 160,
+      title: '型号', dataIndex: 'model_code', width: 140,
       render: (v: string | null) => v ? <Text code>{v}</Text> : '-'
     },
     {
-      title: '品牌名', dataIndex: 'brand_name', width: 120,
-      render: (v: string | null) => v ?? '-'
+      title: '型号别名', dataIndex: 'model_name', width: 160,
+      render: (v: string | null) => v || '-'
     },
     {
-      title: '单价', dataIndex: 'price', width: 90,
-      render: (v: number | null) => v != null ? `¥${v}` : '-'
+      title: '宝贝名称', dataIndex: 'item_name', ellipsis: true, width: 240,
+      render: (v: string | null) => v || '-'
     },
     {
       title: '判断类型',
@@ -187,6 +173,14 @@ export default function UrlMappingsPage() {
       },
     },
     {
+      title: '修改时间', dataIndex: 'updated_at', width: 150,
+      render: (v: string | null) => v ? new Date(v).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }).slice(0, 16) : '-'
+    },
+    {
+      title: '操作人', dataIndex: 'operator', width: 90,
+      render: (v: string | null) => v || '-'
+    },
+    {
       title: '操作', width: 120, fixed: 'right' as const,
       render: (_: unknown, record: UrlMapping) => (
         <Space size={4}>
@@ -203,26 +197,6 @@ export default function UrlMappingsPage() {
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <Card>
         <Space wrap>
-          <Input.Search
-            placeholder="搜索 item_id / 型号码 / 品牌码"
-            allowClear
-            style={{ width: 280 }}
-            onSearch={v => { setKeyword(v); setPage(1) }}
-          />
-          <Select
-            placeholder="平台筛选"
-            allowClear
-            style={{ width: 160 }}
-            options={PLATFORM_OPTIONS}
-            onChange={v => { setPlatform(v); setPage(1) }}
-          />
-          <Select
-            placeholder="品类筛选"
-            allowClear
-            style={{ width: 140 }}
-            options={categoryOptions}
-            onChange={v => { setCategoryCode(v); setPage(1) }}
-          />
           <InputNumber
             placeholder="年份"
             value={filterYear}
@@ -239,23 +213,27 @@ export default function UrlMappingsPage() {
             style={{ width: 90 }}
             options={Array.from({ length: 12 }, (_, i) => ({ value: i + 1, label: `${i + 1} 月` }))}
           />
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增</Button>
-          <InputNumber
-            placeholder="导入年份"
-            value={importYear}
-            onChange={v => setImportYear(v ?? undefined)}
-            min={2020}
-            max={2099}
-            style={{ width: 100 }}
+          <Select
+            placeholder="品类筛选"
+            allowClear
+            style={{ width: 140 }}
+            options={categoryOptions}
+            onChange={v => { setCategoryCode(v); setPage(1) }}
           />
           <Select
-            placeholder="导入月份"
-            value={importMonth}
-            onChange={setImportMonth}
+            placeholder="平台筛选"
             allowClear
-            style={{ width: 90 }}
-            options={Array.from({ length: 12 }, (_, i) => ({ value: i + 1, label: `${i + 1} 月` }))}
+            style={{ width: 160 }}
+            options={PLATFORM_OPTIONS}
+            onChange={v => { setPlatform(v); setPage(1) }}
           />
+          <Input.Search
+            placeholder="搜索 item_id / 型号 / 品牌"
+            allowClear
+            style={{ width: 280 }}
+            onSearch={v => { setKeyword(v); setPage(1) }}
+          />
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增</Button>
           <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>导入 Excel</Button>
         </Space>
       </Card>
@@ -267,7 +245,7 @@ export default function UrlMappingsPage() {
           rowKey="id"
           size="small"
           loading={loading}
-          scroll={{ x: 900 }}
+          scroll={{ x: 1250 }}
           pagination={{
             current: page,
             pageSize: 20,
@@ -290,7 +268,6 @@ export default function UrlMappingsPage() {
         ]}
         headersUrl="/url-mappings/headers"
         confirmUrl="/url-mappings/confirm"
-        extraPayload={{ data_year: importYear, data_month: importMonth }}
         onSuccess={() => { refresh() }}
         onClose={() => setImportOpen(false)}
       />

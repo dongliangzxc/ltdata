@@ -299,6 +299,7 @@ class ModelRecord(Base):
 
     specs   = relationship("ModelSpec",  back_populates="model", cascade="all, delete-orphan")
     aliases = relationship("ModelAlias", back_populates="model", cascade="all, delete-orphan")
+    category = relationship("Category", foreign_keys=[category_code], primaryjoin="ModelRecord.category_code == Category.code", viewonly=True)
 
 
 class ModelSpec(Base):
@@ -394,20 +395,25 @@ class ItemUrlMappingIn(BaseModel):
 
 
 class ItemUrlMappingOut(BaseModel):
-    id:         int
-    platform:   str
-    item_id:    str
-    item_url:   Optional[str] = None
-    model_id:   Optional[int] = None
-    price:      Optional[float]
-    brand_code: Optional[str] = None
-    model_code: Optional[str] = None
-    brand_name: Optional[str] = None
-    model_name: Optional[str] = None
-    source:     Optional[str] = None
-    data_year:  Optional[int] = None
-    data_month: Optional[int] = None
-    created_at: datetime
+    id:            int
+    platform:      str
+    item_id:       str
+    item_url:      Optional[str] = None
+    model_id:      Optional[int] = None
+    price:         Optional[float]
+    brand_code:    Optional[str] = None
+    model_code:    Optional[str] = None
+    brand_name:    Optional[str] = None
+    model_name:    Optional[str] = None
+    category_code: Optional[str] = None
+    category_name: Optional[str] = None
+    item_name:     Optional[str] = None
+    source:        Optional[str] = None
+    data_year:     Optional[int] = None
+    data_month:    Optional[int] = None
+    operator:      Optional[str] = None
+    created_at:    datetime
+    updated_at:    Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 

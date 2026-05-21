@@ -36,6 +36,7 @@ _PLATFORM_MAP = {
 
 def _to_out(m: ItemUrlMapping) -> ItemUrlMappingOut:
     model = m.model
+    category = getattr(model, "category", None) if model else None
     return ItemUrlMappingOut(
         id=m.id,
         platform=m.platform,
@@ -43,14 +44,19 @@ def _to_out(m: ItemUrlMapping) -> ItemUrlMappingOut:
         item_url=m.item_url,
         model_id=m.model_id,
         price=float(m.price) if m.price is not None else None,
-        brand_code=model.brand_code if model else m.brand_code,   # fallback to direct field
+        brand_code=model.brand_code if model else m.brand_code,
         model_code=model.model_code if model else None,
         brand_name=model.brand_name if model else None,
         model_name=model.model_name if model else None,
+        category_code=model.category_code if model else None,
+        category_name=category.name if category else None,
+        item_name=None,
         source=m.source,
         data_year=m.data_year,
         data_month=m.data_month,
+        operator=None,
         created_at=m.created_at,
+        updated_at=m.updated_at,
     )
 
 

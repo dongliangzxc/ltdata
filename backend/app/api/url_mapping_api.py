@@ -133,6 +133,7 @@ def url_mapping_confirm(
     updated = 0
     skipped = 0
     errors = []
+    payload_fields = getattr(payload, "model_fields_set", getattr(payload, "__fields_set__", set()))
 
     for i, row in enumerate(df.itertuples(index=False), start=2):
         row_dict = row._asdict()
@@ -189,8 +190,10 @@ def url_mapping_confirm(
             if price is not None:
                 existing.price = price
             existing.source = 'url_import'
-            existing.data_year = payload.data_year
-            existing.data_month = payload.data_month
+            if "data_year" in payload_fields:
+                existing.data_year = payload.data_year
+            if "data_month" in payload_fields:
+                existing.data_month = payload.data_month
             updated += 1
         else:
             db.add(ItemUrlMapping(

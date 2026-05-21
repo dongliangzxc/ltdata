@@ -73,6 +73,20 @@ def test_filter_by_price_range_uses_inclusive_bounds(client_and_db):
     assert [item["item_name"] for item in items] == ["Lower bound", "Upper bound"]
 
 
+def test_filter_by_multiple_months_returns_matching_rows(client_and_db):
+    client, db = client_and_db
+    db.add(RawDataRecord(file_id=1, platform="jd", month=202604, item_name="April", sales_qty=1, sales_amount=100, price=100))
+    db.add(RawDataRecord(file_id=1, platform="jd", month=202605, item_name="May", sales_qty=2, sales_amount=200, price=100))
+    db.add(RawDataRecord(file_id=1, platform="jd", month=202606, item_name="June", sales_qty=3, sales_amount=300, price=100))
+    db.commit()
+
+    response = client.get("/api/rawdata?months=202604&months=202606")
+
+    assert response.status_code == 200, response.text
+    items = response.json()["items"]
+    assert [item["item_name"] for item in items] == ["April", "June"]
+
+
 def test_stats_respects_price_range(client_and_db):
     client, db = client_and_db
     db.add(RawDataRecord(file_id=1, platform="jd", brand_std="SONY", model_std="A", price=400, sales_qty=1, sales_amount=400))
@@ -86,6 +100,24 @@ def test_stats_respects_price_range(client_and_db):
     assert response.json() == {
         "total_qty": 5,
         "total_amount": 4000.0,
+        "brand_count": 2,
+        "model_count": 2,
+    }
+
+
+def test_stats_respects_multiple_months(client_and_db):
+    client, db = client_and_db
+    db.add(RawDataRecord(file_id=1, platform="jd", month=202604, brand_std="SONY", model_std="A", sales_qty=1, sales_amount=100))
+    db.add(RawDataRecord(file_id=1, platform="jd", month=202605, brand_std="JBL", model_std="B", sales_qty=2, sales_amount=200))
+    db.add(RawDataRecord(file_id=1, platform="jd", month=202606, brand_std="BOSE", model_std="C", sales_qty=3, sales_amount=300))
+    db.commit()
+
+    response = client.get("/api/rawdata/stats?months=202604&months=202605")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "total_qty": 3,
+        "total_amount": 300.0,
         "brand_count": 2,
         "model_count": 2,
     }
@@ -140,3 +172,19 @@ def test_export_respects_price_range(client_and_db):
     import pandas as _pd
     df = _pd.read_excel(_io.BytesIO(response.content))
     assert df["宝贝名称"].tolist() == ["Inside"]
+
+
+def test_export_respects_multiple_months(client_and_db):
+    client, db = client_and_db
+    db.add(RawDataRecord(file_id=1, platform="jd", month=202604, item_name="April"))
+    db.add(RawDataRecord(file_id=1, platform="jd", month=202605, item_name="May"))
+    db.add(RawDataRecord(file_id=1, platform="jd", month=202606, item_name="June"))
+    db.commit()
+
+    response = client.get("/api/rawdata/export?months=202604&months=202606")
+
+    assert response.status_code == 200, response.text
+    import io as _io
+    import pandas as _pd
+    df = _pd.read_excel(_io.BytesIO(response.content))
+    assert df["宝贝名称"].tolist() == ["April", "June"]

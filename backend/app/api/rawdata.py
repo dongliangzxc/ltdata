@@ -1,5 +1,5 @@
 import io
-from typing import Optional
+from typing import List, Optional
 from urllib.parse import quote
 import pandas as pd
 from fastapi import APIRouter, Depends, Query
@@ -28,13 +28,16 @@ def build_query(
     item_name=None,
     price_min=None,
     price_max=None,
+    months=None,
 ):
     q = db.query(RawDataRecord)
     if file_id is not None:
         q = q.filter(RawDataRecord.file_id == file_id)
     if platform and platform.strip():
         q = q.filter(RawDataRecord.platform.ilike(f"%{platform.strip()}%"))
-    if month is not None:
+    if months:
+        q = q.filter(RawDataRecord.month.in_(months))
+    elif month is not None:
         q = q.filter(RawDataRecord.month == month)
     if brand_std and brand_std.strip():
         q = q.filter(RawDataRecord.brand_std.ilike(f"%{brand_std.strip()}%"))
@@ -72,6 +75,7 @@ def export_raw_data(
     file_id: Optional[int] = Query(None),
     platform: Optional[str] = Query(None),
     month: Optional[int] = Query(None),
+    months: Optional[List[int]] = Query(None),
     brand_std: Optional[str] = Query(None),
     brand_raw: Optional[str] = Query(None),
     item_name: Optional[str] = Query(None),
@@ -90,6 +94,7 @@ def export_raw_data(
         item_name,
         price_min,
         price_max,
+        months,
     ).order_by(RawDataRecord.id).all()
     data = [
         {label: getattr(r, field, None) for field, label in EXPORT_COLUMNS}
@@ -112,6 +117,7 @@ def list_raw_data(
     file_id: Optional[int] = Query(None),
     platform: Optional[str] = Query(None),
     month: Optional[int] = Query(None),
+    months: Optional[List[int]] = Query(None),
     brand_std: Optional[str] = Query(None),
     brand_raw: Optional[str] = Query(None),
     item_name: Optional[str] = Query(None),
@@ -123,7 +129,7 @@ def list_raw_data(
     page_size: int = Query(20, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
-    q = build_query(db, file_id, platform, month, brand_std, brand_raw, item_name, price_min, price_max)
+    q = build_query(db, file_id, platform, month, brand_std, brand_raw, item_name, price_min, price_max, months)
     total = q.count()
 
     # 排序
@@ -147,6 +153,7 @@ def get_stats(
     file_id: Optional[int] = Query(None),
     platform: Optional[str] = Query(None),
     month: Optional[int] = Query(None),
+    months: Optional[List[int]] = Query(None),
     brand_std: Optional[str] = Query(None),
     brand_raw: Optional[str] = Query(None),
     item_name: Optional[str] = Query(None),
@@ -154,7 +161,7 @@ def get_stats(
     price_max: Optional[float] = Query(None, ge=0),
     db: Session = Depends(get_db),
 ):
-    q = build_query(db, file_id, platform, month, brand_std, brand_raw, item_name, price_min, price_max)
+    q = build_query(db, file_id, platform, month, brand_std, brand_raw, item_name, price_min, price_max, months)
     result = q.with_entities(
         func.sum(RawDataRecord.sales_qty).label("total_qty"),
         func.sum(RawDataRecord.sales_amount).label("total_amount"),

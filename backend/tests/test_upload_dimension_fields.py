@@ -98,6 +98,29 @@ def test_list_upload_files_filter_by_region(client):
     assert items[0]["data_region"] == "domestic"
 
 
+def test_list_upload_files_domestic_region_includes_legacy_domestic_platforms(client):
+    from app.models.database import get_db as real_get_db
+    db_gen = client.app.dependency_overrides[real_get_db]()
+    db = next(db_gen)
+    db.add(UploadFileRecord(filename="jd.xlsx", platform="JD", row_count=1, status="done"))
+    db.add(UploadFileRecord(filename="tmall.xlsx", platform="tmall", row_count=1, status="done"))
+    db.add(UploadFileRecord(filename="taobao.xlsx", platform="taobao", row_count=1, status="done"))
+    db.add(UploadFileRecord(filename="douyin.xlsx", platform="douyin", row_count=1, status="done"))
+    db.add(UploadFileRecord(filename="overseas.xlsx", platform="JD", row_count=1, status="done", data_region="overseas"))
+    db.add(UploadFileRecord(filename="unknown.xlsx", platform="amazon", row_count=1, status="done"))
+    db.commit()
+    try:
+        next(db_gen)
+    except StopIteration:
+        pass
+
+    r = client.get("/api/upload/files?data_region=domestic")
+
+    assert r.status_code == 200
+    filenames = {item["filename"] for item in r.json()}
+    assert filenames == {"jd.xlsx", "tmall.xlsx", "taobao.xlsx", "douyin.xlsx"}
+
+
 @pytest.mark.xfail(strict=False, reason="filter endpoint not yet implemented — passes after Task 3")
 def test_list_upload_files_filter_by_year_month(client):
     """GET /api/upload/files?data_year=2026&data_month=3 returns matching rows."""

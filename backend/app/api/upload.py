@@ -4,7 +4,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Query
-from sqlalchemy import tuple_, text
+from sqlalchemy import func, or_, tuple_, text
 from sqlalchemy.orm import Session
 from app.models.database import get_db
 from app.models.schemas import UploadFileRecord, RawDataRecord, UploadFileOut, RawDataOut, ColumnTemplate
@@ -23,6 +23,11 @@ from app.models.schemas import UploadConfirmJob
 
 # 内存进度表：job_id → 0-100，线程结束后清除
 _upload_progress: dict[int, int] = {}
+
+DOMESTIC_UPLOAD_PLATFORMS = {
+    "jd", "tm", "tb", "tmall", "taobao", "douyin",
+    "京东", "天猫", "淘宝", "抖音",
+}
 
 router = APIRouter(prefix="/api/upload", tags=["upload"])
 
@@ -132,7 +137,15 @@ def list_upload_files(
 ):
     """获取上传历史列表，支持按维度过滤"""
     q = db.query(UploadFileRecord).order_by(UploadFileRecord.uploaded_at.desc())
-    if data_region is not None:
+    if data_region == "domestic":
+        q = q.filter(
+            or_(
+                UploadFileRecord.data_region == data_region,
+                UploadFileRecord.data_region.is_(None)
+                & func.lower(UploadFileRecord.platform).in_(DOMESTIC_UPLOAD_PLATFORMS),
+            )
+        )
+    elif data_region is not None:
         q = q.filter(UploadFileRecord.data_region == data_region)
     if data_year is not None:
         q = q.filter(UploadFileRecord.data_year == data_year)

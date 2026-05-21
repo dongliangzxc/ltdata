@@ -59,14 +59,34 @@ export const listUploadFiles = (params?: {
 export const deleteUploadFile = (fileId: number) => api.delete(`/upload/files/${fileId}`)
 
 // ─── Raw Data ──────────────────────────────────────────────
-export const listRawData = (params: Record<string, unknown>) => api.get('/rawdata', { params })
+const rawDataRequestConfig = (params: Record<string, unknown>) => ({
+  params,
+  paramsSerializer: {
+    serialize: (rawParams: Record<string, unknown>) => {
+      const searchParams = new URLSearchParams()
+      Object.entries(rawParams).forEach(([key, value]) => {
+        if (value == null || value === '') return
+        if (Array.isArray(value)) {
+          value.forEach(item => {
+            if (item != null && item !== '') searchParams.append(key, String(item))
+          })
+        } else {
+          searchParams.append(key, String(value))
+        }
+      })
+      return searchParams.toString()
+    },
+  },
+})
 
-export const getRawStats = (params: Record<string, unknown>) => api.get('/rawdata/stats', { params })
+export const listRawData = (params: Record<string, unknown>) => api.get('/rawdata', rawDataRequestConfig(params))
+
+export const getRawStats = (params: Record<string, unknown>) => api.get('/rawdata/stats', rawDataRequestConfig(params))
 
 export const getRawFilters = () => api.get('/rawdata/filters')
 
 export const exportRawData = (params: Record<string, unknown>) =>
-  api.get('/rawdata/export', { params, responseType: 'blob' })
+  api.get('/rawdata/export', { ...rawDataRequestConfig(params), responseType: 'blob' })
 
 // ─── Clean ─────────────────────────────────────────────────
 export const runCleanJob = (payload: {

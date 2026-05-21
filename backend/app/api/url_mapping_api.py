@@ -351,7 +351,9 @@ def list_url_mappings(
     page_size: int = Query(20, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
-    q = db.query(ItemUrlMapping).filter(ItemUrlMapping.brand_code.isnot(None))
+    q = db.query(ItemUrlMapping).filter(
+        or_(ItemUrlMapping.brand_code.isnot(None), ItemUrlMapping.model_id.isnot(None))
+    )
     if platform:
         q = q.filter(ItemUrlMapping.platform == platform)
     if year is not None:

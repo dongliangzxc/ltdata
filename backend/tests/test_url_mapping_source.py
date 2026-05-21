@@ -113,3 +113,22 @@ def test_list_url_mappings_source_in_response(client_and_db):
     items = r.json()["items"]
     assert len(items) == 1
     assert items[0]["source"] == "manual"
+
+
+def test_list_url_mappings_uses_headphone_category_for_legacy_domestic_rows(client_and_db):
+    client, db = client_and_db
+    db.add(ItemUrlMapping(platform="jd", item_id="legacy-jd", brand_code="SONY", source=None))
+    db.add(ItemUrlMapping(platform="amazon", item_id="legacy-amazon", brand_code="SONY", source=None))
+    db.add(ItemUrlMapping(platform="jd", item_id="manual-jd", brand_code="SONY", source="manual"))
+    db.commit()
+
+    r = client.get("/api/url-mappings")
+
+    assert r.status_code == 200
+    items = {item["item_id"]: item for item in r.json()["items"]}
+    assert items["legacy-jd"]["category_code"] == "headphone"
+    assert items["legacy-jd"]["category_name"] == "耳机"
+    assert items["legacy-amazon"]["category_code"] is None
+    assert items["legacy-amazon"]["category_name"] is None
+    assert items["manual-jd"]["category_code"] is None
+    assert items["manual-jd"]["category_name"] is None

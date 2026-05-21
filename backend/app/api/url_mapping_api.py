@@ -33,10 +33,20 @@ _PLATFORM_MAP = {
     "SUNING": "suning", "苏宁": "suning",
 }
 
+_LEGACY_HEADPHONE_PLATFORMS = {"jd", "tmall", "taobao"}
+
+
+def _legacy_headphone_category(m: ItemUrlMapping) -> tuple[str | None, str | None]:
+    platform = (m.platform or "").strip().lower()
+    if m.model_id is None and m.brand_code and m.source is None and platform in _LEGACY_HEADPHONE_PLATFORMS:
+        return "headphone", "耳机"
+    return None, None
+
 
 def _to_out(m: ItemUrlMapping) -> ItemUrlMappingOut:
     model = m.model
     category = getattr(model, "category", None) if model else None
+    fallback_category_code, fallback_category_name = _legacy_headphone_category(m)
     return ItemUrlMappingOut(
         id=m.id,
         platform=m.platform,
@@ -48,8 +58,8 @@ def _to_out(m: ItemUrlMapping) -> ItemUrlMappingOut:
         model_code=model.model_code if model else None,
         brand_name=model.brand_name if model else None,
         model_name=model.model_name if model else None,
-        category_code=model.category_code if model else None,
-        category_name=category.name if category else None,
+        category_code=model.category_code if model else fallback_category_code,
+        category_name=category.name if category else fallback_category_name,
         item_name=None,
         source=m.source,
         data_year=m.data_year,

@@ -10,7 +10,7 @@ import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from pydantic import BaseModel
 from sqlalchemy import or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 import openpyxl
 
 from app.models.database import get_db
@@ -369,7 +369,13 @@ def list_url_mappings(
     if category_code:
         q = q.filter(ModelRecord.category_code == category_code)
     total = q.count()
-    rows = q.order_by(ItemUrlMapping.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    rows = (
+        q.options(joinedload(ItemUrlMapping.model).joinedload(ModelRecord.category))
+        .order_by(ItemUrlMapping.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
     return PaginatedResponse(
         total=total, page=page, page_size=page_size,
         items=[_to_out(r) for r in rows],

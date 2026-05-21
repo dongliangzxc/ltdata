@@ -4,10 +4,10 @@ import {
 } from 'antd'
 import type { TableProps, TableColumnType } from 'antd'
 import {
-  ShoppingCartOutlined, DollarOutlined, TagsOutlined, AppstoreOutlined
+  ShoppingCartOutlined, DollarOutlined
 } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
-import { listRawData, getRawStats, getRawFilters, listUploadFiles, exportRawData } from '../../services/api'
+import { listRawData, getRawStats, getRawFilters, exportRawData } from '../../services/api'
 
 const PLATFORM_LABEL: Record<string, string> = { JD: '京东', TM: '天猫', TB: '淘宝' }
 
@@ -100,7 +100,6 @@ export default function DataListPage() {
   const [exporting, setExporting] = useState(false)
 
   const { data: filterOptions } = useRequest(() => getRawFilters().then(r => r.data))
-  const { data: filesData } = useRequest(() => listUploadFiles().then(r => r.data))
 
   const queryParams = { ...filters, page, page_size: pageSize, sort_by: sortBy, sort_order: sortOrder }
 
@@ -121,6 +120,11 @@ export default function DataListPage() {
 
   const updatePriceFilter = (key: 'price_min' | 'price_max', value: number | null) => {
     setFilters(prev => ({ ...prev, [key]: value ?? undefined }))
+    setPage(1)
+  }
+
+  const updateMonthsFilter = (values: number[]) => {
+    setFilters(prev => ({ ...prev, months: values.length ? values : undefined }))
     setPage(1)
   }
 
@@ -169,30 +173,8 @@ export default function DataListPage() {
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Row gutter={16}>
-        <Col span={6}>
-          <Card><Statistic title="总销量" value={stats?.total_qty ?? 0} prefix={<ShoppingCartOutlined />} /></Card>
-        </Col>
-        <Col span={6}>
-          <Card><Statistic title="总销售额（¥）" value={stats?.total_amount ?? 0} prefix={<DollarOutlined />} precision={0} /></Card>
-        </Col>
-        <Col span={6}>
-          <Card><Statistic title="品牌数" value={stats?.brand_count ?? 0} prefix={<TagsOutlined />} /></Card>
-        </Col>
-        <Col span={6}>
-          <Card><Statistic title="型号数" value={stats?.model_count ?? 0} prefix={<AppstoreOutlined />} /></Card>
-        </Col>
-      </Row>
-
       <Card>
         <Row gutter={[8, 8]} style={{ marginBottom: 16 }} align="middle">
-          <Col span={4}>
-            <Select placeholder="选择文件" allowClear style={{ width: '100%' }} onChange={v => updateFilter('file_id', v)}>
-              {(filesData ?? []).map((f: { id: number; filename: string }) => (
-                <Select.Option key={f.id} value={f.id}>{f.filename}</Select.Option>
-              ))}
-            </Select>
-          </Col>
           <Col span={3}>
             <Select placeholder="平台" allowClear style={{ width: '100%' }} onChange={v => updateFilter('platform', v)}>
               {(filterOptions?.platforms ?? []).map((p: string) => (
@@ -200,8 +182,15 @@ export default function DataListPage() {
               ))}
             </Select>
           </Col>
-          <Col span={3}>
-            <Select placeholder="月份" allowClear style={{ width: '100%' }} onChange={v => updateFilter('month', v)}>
+          <Col span={4}>
+            <Select
+              mode="multiple"
+              placeholder="月份"
+              allowClear
+              style={{ width: '100%' }}
+              maxTagCount="responsive"
+              onChange={updateMonthsFilter}
+            >
               {(filterOptions?.months ?? []).map((m: number) => (
                 <Select.Option key={m} value={m}>{m}</Select.Option>
               ))}
@@ -240,7 +229,18 @@ export default function DataListPage() {
             <Button onClick={handleExport} loading={exporting}>导出 Excel</Button>
           </Col>
         </Row>
+      </Card>
 
+      <Row gutter={16}>
+        <Col span={12}>
+          <Card><Statistic title="总销量" value={stats?.total_qty ?? 0} prefix={<ShoppingCartOutlined />} /></Card>
+        </Col>
+        <Col span={12}>
+          <Card><Statistic title="总销售额（¥）" value={stats?.total_amount ?? 0} prefix={<DollarOutlined />} precision={0} /></Card>
+        </Col>
+      </Row>
+
+      <Card>
         <Table
           dataSource={tableData?.items ?? []}
           columns={columns}

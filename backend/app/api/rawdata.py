@@ -18,7 +18,17 @@ SORTABLE_FIELDS = {
     "month": RawDataRecord.month,
 }
 
-def build_query(db, file_id, platform, month, brand_std, brand_raw=None, item_name=None):
+def build_query(
+    db,
+    file_id,
+    platform,
+    month,
+    brand_std,
+    brand_raw=None,
+    item_name=None,
+    price_min=None,
+    price_max=None,
+):
     q = db.query(RawDataRecord)
     if file_id is not None:
         q = q.filter(RawDataRecord.file_id == file_id)
@@ -32,6 +42,10 @@ def build_query(db, file_id, platform, month, brand_std, brand_raw=None, item_na
         q = q.filter(RawDataRecord.brand_raw.ilike(f"%{brand_raw.strip()}%"))
     if item_name and item_name.strip():
         q = q.filter(RawDataRecord.item_name.ilike(f"%{item_name.strip()}%"))
+    if price_min is not None:
+        q = q.filter(RawDataRecord.price >= price_min)
+    if price_max is not None:
+        q = q.filter(RawDataRecord.price <= price_max)
     return q
 
 
@@ -61,10 +75,22 @@ def export_raw_data(
     brand_std: Optional[str] = Query(None),
     brand_raw: Optional[str] = Query(None),
     item_name: Optional[str] = Query(None),
+    price_min: Optional[float] = Query(None, ge=0),
+    price_max: Optional[float] = Query(None, ge=0),
     db: Session = Depends(get_db),
 ):
     """导出原始数据为 Excel，支持与列表相同的过滤参数。"""
-    rows = build_query(db, file_id, platform, month, brand_std, brand_raw, item_name).order_by(RawDataRecord.id).all()
+    rows = build_query(
+        db,
+        file_id,
+        platform,
+        month,
+        brand_std,
+        brand_raw,
+        item_name,
+        price_min,
+        price_max,
+    ).order_by(RawDataRecord.id).all()
     data = [
         {label: getattr(r, field, None) for field, label in EXPORT_COLUMNS}
         for r in rows
@@ -89,13 +115,15 @@ def list_raw_data(
     brand_std: Optional[str] = Query(None),
     brand_raw: Optional[str] = Query(None),
     item_name: Optional[str] = Query(None),
+    price_min: Optional[float] = Query(None, ge=0),
+    price_max: Optional[float] = Query(None, ge=0),
     sort_by: Optional[str] = Query(None),
     sort_order: Optional[str] = Query("desc"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
-    q = build_query(db, file_id, platform, month, brand_std, brand_raw, item_name)
+    q = build_query(db, file_id, platform, month, brand_std, brand_raw, item_name, price_min, price_max)
     total = q.count()
 
     # 排序
@@ -122,9 +150,11 @@ def get_stats(
     brand_std: Optional[str] = Query(None),
     brand_raw: Optional[str] = Query(None),
     item_name: Optional[str] = Query(None),
+    price_min: Optional[float] = Query(None, ge=0),
+    price_max: Optional[float] = Query(None, ge=0),
     db: Session = Depends(get_db),
 ):
-    q = build_query(db, file_id, platform, month, brand_std, brand_raw, item_name)
+    q = build_query(db, file_id, platform, month, brand_std, brand_raw, item_name, price_min, price_max)
     result = q.with_entities(
         func.sum(RawDataRecord.sales_qty).label("total_qty"),
         func.sum(RawDataRecord.sales_amount).label("total_amount"),

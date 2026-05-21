@@ -58,6 +58,39 @@ def test_filter_by_item_name(client_and_db):
     assert "speaker" in items[0]["item_name"]
 
 
+def test_filter_by_price_range_uses_inclusive_bounds(client_and_db):
+    client, db = client_and_db
+    db.add(RawDataRecord(file_id=1, platform="jd", item_name="Low", price=499.99, sales_qty=1, sales_amount=499.99))
+    db.add(RawDataRecord(file_id=1, platform="jd", item_name="Lower bound", price=500, sales_qty=2, sales_amount=1000))
+    db.add(RawDataRecord(file_id=1, platform="jd", item_name="Upper bound", price=1000, sales_qty=3, sales_amount=3000))
+    db.add(RawDataRecord(file_id=1, platform="jd", item_name="High", price=1000.01, sales_qty=4, sales_amount=4000.04))
+    db.commit()
+
+    response = client.get("/api/rawdata?price_min=500&price_max=1000")
+
+    assert response.status_code == 200, response.text
+    items = response.json()["items"]
+    assert [item["item_name"] for item in items] == ["Lower bound", "Upper bound"]
+
+
+def test_stats_respects_price_range(client_and_db):
+    client, db = client_and_db
+    db.add(RawDataRecord(file_id=1, platform="jd", brand_std="SONY", model_std="A", price=400, sales_qty=1, sales_amount=400))
+    db.add(RawDataRecord(file_id=1, platform="jd", brand_std="SONY", model_std="B", price=500, sales_qty=2, sales_amount=1000))
+    db.add(RawDataRecord(file_id=1, platform="jd", brand_std="JBL", model_std="C", price=1000, sales_qty=3, sales_amount=3000))
+    db.commit()
+
+    response = client.get("/api/rawdata/stats?price_min=500&price_max=1000")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "total_qty": 5,
+        "total_amount": 4000.0,
+        "brand_count": 2,
+        "model_count": 2,
+    }
+
+
 def test_export_returns_excel_with_data(client_and_db):
     """GET /api/rawdata/export returns an xlsx file containing seeded rows."""
     client, db = client_and_db
@@ -91,3 +124,19 @@ def test_export_filter_by_brand_raw(client_and_db):
     df = _pd.read_excel(_io.BytesIO(r.content))
     assert len(df) == 1
     assert str(df.iloc[0]["品牌原始值"]) == "SONY"
+
+
+def test_export_respects_price_range(client_and_db):
+    client, db = client_and_db
+    db.add(RawDataRecord(file_id=1, platform="jd", item_name="Low", price=499.99))
+    db.add(RawDataRecord(file_id=1, platform="jd", item_name="Inside", price=500))
+    db.add(RawDataRecord(file_id=1, platform="jd", item_name="High", price=1000.01))
+    db.commit()
+
+    response = client.get("/api/rawdata/export?price_min=500&price_max=1000")
+
+    assert response.status_code == 200, response.text
+    import io as _io
+    import pandas as _pd
+    df = _pd.read_excel(_io.BytesIO(response.content))
+    assert df["宝贝名称"].tolist() == ["Inside"]

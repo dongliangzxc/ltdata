@@ -172,14 +172,9 @@ export default function ModelsPage() {
     { title: '品类', dataIndex: 'category_name', width: 110, render: (v: string | null) => v || '-' },
     { title: '品牌', dataIndex: 'brand_name', width: 120, render: (v: string | null) => v || '-' },
     { title: '型号码', dataIndex: 'model_code', width: 130 },
-    { title: '型号名', dataIndex: 'model_name', ellipsis: true, render: (v: string | null) => v || '-' },
-    {
-      title: '上市年月', width: 100,
-      render: (_: unknown, row: ModelItem) => {
-        const y = row.launch_year, m = row.launch_month
-        return y ? `${y}${m ? `-${String(m).padStart(2, '0')}` : ''}` : '-'
-      }
-    },
+    { title: '型号别名', dataIndex: 'model_name', ellipsis: true, render: (v: string | null) => v || '-' },
+    { title: '上市年份', dataIndex: 'launch_year', width: 90, render: (v: number | null) => v ?? '-' },
+    { title: '上市月份', dataIndex: 'launch_month', width: 90, render: (v: number | null) => v ?? '-' },
     {
       title: '上市价', dataIndex: 'launch_price', width: 100,
       render: (v: number | null) => v != null ? `¥${Number(v).toLocaleString()}` : '-'
@@ -187,6 +182,10 @@ export default function ModelsPage() {
     {
       title: '网址', dataIndex: 'url', width: 70,
       render: (v: string | null) => v ? <a href={v} target="_blank" rel="noreferrer">查看</a> : '-'
+    },
+    {
+      title: '修改时间', dataIndex: 'updated_at', width: 140,
+      render: (v: string | null) => v ? new Date(v).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }).slice(0, 16) : '-'
     },
     {
       title: '状态', dataIndex: 'status', width: 70,
@@ -199,10 +198,6 @@ export default function ModelsPage() {
     {
       title: '操作人', dataIndex: 'operator', width: 90,
       render: (v: string | null) => v || '-'
-    },
-    {
-      title: '修改时间', dataIndex: 'updated_at', width: 140,
-      render: (v: string | null) => v ? new Date(v).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }).slice(0, 16) : '-'
     },
     {
       title: '操作', width: 90, fixed: 'right' as const,
@@ -226,20 +221,20 @@ export default function ModelsPage() {
     <Card>
       <Row gutter={12} style={{ marginBottom: 16 }} align="middle">
         <Col>
-          <Input
-            placeholder="搜索品牌"
-            allowClear
-            style={{ width: 140 }}
-            onChange={e => { setSearch(p => ({ ...p, brand_code: e.target.value || undefined })); setPage(1) }}
-          />
-        </Col>
-        <Col>
           <Select
             placeholder="品类筛选"
             allowClear
             style={{ width: 140 }}
             options={categoryOptions}
             onChange={v => { setSearch(p => ({ ...p, category_code: v || undefined })); setPage(1) }}
+          />
+        </Col>
+        <Col>
+          <Input
+            placeholder="搜索品牌"
+            allowClear
+            style={{ width: 140 }}
+            onChange={e => { setSearch(p => ({ ...p, brand_code: e.target.value || undefined })); setPage(1) }}
           />
         </Col>
         <Col>
@@ -277,7 +272,7 @@ export default function ModelsPage() {
         rowKey="id"
         size="small"
         loading={loading}
-        scroll={{ x: 1100 }}
+        scroll={{ x: 1250 }}
         expandable={{
           onExpand: handleExpand,
           expandedRowRender: (record: ModelItem) => {

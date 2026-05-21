@@ -11,15 +11,6 @@ import { listRawData, getRawStats, getRawFilters, listUploadFiles, exportRawData
 
 const PLATFORM_LABEL: Record<string, string> = { JD: '京东', TM: '天猫', TB: '淘宝' }
 
-const PRICE_RANGE_OPTIONS = [
-  { label: '全部价格', value: 'all' },
-  { label: '≤500', value: 'lte500', max: 500 },
-  { label: '500-1000', value: '500-1000', min: 500, max: 1000 },
-  { label: '1000-2000', value: '1000-2000', min: 1000, max: 2000 },
-  { label: '≥2000', value: 'gte2000', min: 2000 },
-  { label: '自定义', value: 'custom' },
-]
-
 const renderVal = (v: unknown) => (v == null || v === '' ? '-' : String(v))
 
 // 渲染品牌：brand_std 优先，为空则 fallback 到 brand_raw
@@ -105,7 +96,6 @@ export default function DataListPage() {
   const [pageSize, setPageSize] = useState(20)
   const [sortBy, setSortBy] = useState<string | undefined>()
   const [sortOrder, setSortOrder] = useState<string>('desc')
-  const [priceRange, setPriceRange] = useState('all')
   const [colWidths, setColWidths] = useState<Record<string, number>>({})
   const [exporting, setExporting] = useState(false)
 
@@ -129,19 +119,7 @@ export default function DataListPage() {
     setPage(1)
   }
 
-  const handlePriceRangeChange = (value: string) => {
-    setPriceRange(value)
-    const option = PRICE_RANGE_OPTIONS.find(item => item.value === value)
-    setFilters(prev => ({
-      ...prev,
-      price_min: option?.min,
-      price_max: option?.max,
-    }))
-    setPage(1)
-  }
-
   const updatePriceFilter = (key: 'price_min' | 'price_max', value: number | null) => {
-    setPriceRange('custom')
     setFilters(prev => ({ ...prev, [key]: value ?? undefined }))
     setPage(1)
   }
@@ -237,15 +215,6 @@ export default function DataListPage() {
           </Col>
           <Col span={4}>
             <Input placeholder="搜索商品名称" allowClear onChange={e => updateFilter('item_name', e.target.value)} />
-          </Col>
-          <Col span={3}>
-            <Select
-              placeholder="价格区间"
-              value={priceRange}
-              style={{ width: '100%' }}
-              onChange={handlePriceRangeChange}
-              options={PRICE_RANGE_OPTIONS.map(({ label, value }) => ({ label, value }))}
-            />
           </Col>
           <Col span={3}>
             <InputNumber

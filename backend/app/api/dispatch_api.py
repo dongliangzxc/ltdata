@@ -11,6 +11,7 @@ DELETE /rules/{id}  — 删除规则
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from app.models.database import get_db
 from app.models.schemas import (
@@ -20,6 +21,8 @@ from app.models.schemas import (
 )
 
 router = APIRouter(prefix="/api/dispatch", tags=["dispatch"])
+
+DISPATCH_PAGE_SIZE = 2000
 
 
 def _field_value(row: RawDataRecord, field: str) -> str:
@@ -71,14 +74,19 @@ def run_dispatch(payload: dict, db: Session = Depends(get_db)):
     # 1. 创建 batch
     batch = DispatchBatch(file_id=file_id, status="running")
     db.add(batch)
-    db.flush()
+    db.commit()
+    db.refresh(batch)
+    batch_id = batch.id
 
     try:
-        # 2. 取该文件所有 raw_data 行
-        rows = db.query(RawDataRecord).filter(RawDataRecord.file_id == file_id).all()
-        total_rows = len(rows)
+        total_rows = (
+            db.query(func.count(RawDataRecord.id))
+            .filter(RawDataRecord.file_id == file_id)
+            .scalar()
+            or 0
+        )
 
-        # 3. 取匹配平台（或 platform IS NULL）的 active 规则，按 priority ASC
+        # 2. 取匹配平台（或 platform IS NULL）的 active 规则，按 priority ASC
         rules = (
             db.query(DispatchRule)
             .filter(
@@ -89,30 +97,55 @@ def run_dispatch(payload: dict, db: Session = Depends(get_db)):
             .all()
         )
 
-        # 4. 逐行匹配
+        # 3. 分页读取 raw_data 少量字段并批量插入，避免大文件分发时占满内存
         dispatched_rows = 0
         unmatched_rows = 0
-        items_to_insert: list[DispatchItem] = []
+        last_id = 0
 
-        for row in rows:
-            matched = False
-            for rule in rules:
-                if _rule_matches(row, rule):
-                    items_to_insert.append(DispatchItem(
-                        batch_id=batch.id,
-                        raw_data_id=row.id,
-                        category_code=rule.category_code,
-                        matched_rule_id=rule.id,
-                    ))
-                    dispatched_rows += 1
-                    matched = True
-                    break
-            if not matched:
-                unmatched_rows += 1
+        while True:
+            rows = (
+                db.query(
+                    RawDataRecord.id,
+                    RawDataRecord.category_lv0,
+                    RawDataRecord.category_lv1,
+                    RawDataRecord.category_lv2,
+                    RawDataRecord.category_lv3,
+                    RawDataRecord.category_lv4,
+                    RawDataRecord.category_lv5,
+                    RawDataRecord.item_name,
+                )
+                .filter(RawDataRecord.file_id == file_id, RawDataRecord.id > last_id)
+                .order_by(RawDataRecord.id)
+                .limit(DISPATCH_PAGE_SIZE)
+                .all()
+            )
+            if not rows:
+                break
 
-        db.bulk_save_objects(items_to_insert)
+            insert_rows = []
+            for row in rows:
+                matched = False
+                for rule in rules:
+                    if _rule_matches(row, rule):
+                        insert_rows.append({
+                            "batch_id": batch_id,
+                            "raw_data_id": row.id,
+                            "category_code": rule.category_code,
+                            "matched_rule_id": rule.id,
+                        })
+                        dispatched_rows += 1
+                        matched = True
+                        break
+                if not matched:
+                    unmatched_rows += 1
 
-        # 5. 更新 batch
+            if insert_rows:
+                db.execute(DispatchItem.__table__.insert(), insert_rows)
+                db.flush()
+            last_id = rows[-1].id
+
+        # 4. 更新 batch
+        batch = db.query(DispatchBatch).filter(DispatchBatch.id == batch_id).one()
         batch.status = "done"
         batch.total_rows = total_rows
         batch.dispatched_rows = dispatched_rows
@@ -122,7 +155,10 @@ def run_dispatch(payload: dict, db: Session = Depends(get_db)):
         db.refresh(batch)
         return batch
     except Exception:
+        db.rollback()
+        batch = db.query(DispatchBatch).filter(DispatchBatch.id == batch_id).one()
         batch.status = "error"
+        batch.finished_at = datetime.utcnow()
         db.commit()
         raise
 

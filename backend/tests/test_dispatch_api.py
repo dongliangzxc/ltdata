@@ -91,6 +91,42 @@ def test_run_dispatch_processes_raw_data_in_pages(client_and_db):
     assert [item.category_code for item in items] == ["headphone", "headphone", "speaker", "headphone"]
 
 
+def test_run_dispatch_item_name_keyword_matches_any_split_keyword(client_and_db):
+    client, db = client_and_db
+    file_record = UploadFileRecord(filename="keyword.xlsx", platform="JD", row_count=5, status="done")
+    db.add(file_record)
+    db.flush()
+    db.add(DispatchRule(
+        category_code="headphone",
+        platform="jd",
+        field="category_lv1",
+        match_type="contains",
+        value="耳机",
+        item_name_keyword="旗舰, Pro，Ultra、礼盒\nMax",
+        priority=1,
+        is_active=1,
+    ))
+    for idx, item_name in enumerate(["标准款", "Pro版", "Ultra版", "Max 版", "旗舰款"], start=1):
+        db.add(RawDataRecord(
+            file_id=file_record.id,
+            platform="jd",
+            month=202605,
+            item_id=f"item-{idx}",
+            category_lv1="蓝牙耳机",
+            item_name=item_name,
+        ))
+    db.commit()
+
+    response = client.post("/api/dispatch/run", json={"file_id": file_record.id})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["dispatched_rows"] == 4
+    assert payload["unmatched_rows"] == 1
+    items = db.query(DispatchItem).filter_by(batch_id=payload["id"]).all()
+    assert [item.raw_data_id for item in items] == [2, 3, 4, 5]
+
+
 def test_run_dispatch_marks_error_and_rolls_back_partial_items(client_and_db, monkeypatch):
     client, db = client_and_db
     file_record = UploadFileRecord(filename="error.xlsx", platform="JD", row_count=3, status="done")

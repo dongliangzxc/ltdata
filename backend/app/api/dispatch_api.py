@@ -9,6 +9,7 @@ PUT  /rules/{id}    — 修改规则
 DELETE /rules/{id}  — 删除规则
 """
 from datetime import datetime
+import re
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, or_, select
@@ -39,6 +40,12 @@ def _field_value(row: RawDataRecord, field: str) -> str:
     return (field_map.get(field) or "")
 
 
+def _split_item_name_keywords(keyword: str | None) -> list[str]:
+    if not keyword:
+        return []
+    return [part.strip() for part in re.split(r"[,，、\n\r]+", keyword) if part.strip()]
+
+
 def _rule_matches(row: RawDataRecord, rule: DispatchRule) -> bool:
     """判断一条规则是否命中该行"""
     val = _field_value(row, rule.field)
@@ -52,8 +59,10 @@ def _rule_matches(row: RawDataRecord, rule: DispatchRule) -> bool:
     if not main_match:
         return False
 
-    if rule.item_name_keyword:
-        return rule.item_name_keyword in (row.item_name or "")
+    item_name_keywords = _split_item_name_keywords(rule.item_name_keyword)
+    if item_name_keywords:
+        item_name = row.item_name or ""
+        return any(keyword in item_name for keyword in item_name_keywords)
 
     return True
 

@@ -63,6 +63,15 @@ const formatPlatform = (platform: string | null) => (
   platform ? (PLATFORM_OPTIONS.find(o => o.value === platform)?.label ?? platform) : '不限'
 )
 
+const splitItemNameKeywords = (keyword: string | null) => (
+  keyword?.split(/[,，、\n\r]+/).map(part => part.trim()).filter(Boolean) ?? []
+)
+
+const formatItemNameKeyword = (keyword: string | null) => {
+  const keywords = splitItemNameKeywords(keyword)
+  return keywords.length ? `商品名包含任一：${keywords.join(' / ')}` : '不限'
+}
+
 const normalizeRuleValues = (vals: Record<string, unknown>) => ({
   ...vals,
   platform: vals.platform || null,
@@ -87,8 +96,11 @@ const RuleFormItems = ({ categoryOptions }: { categoryOptions: { value: string; 
     <Form.Item name="value" label="匹配值" rules={[{ required: true }]}>
       <Input />
     </Form.Item>
-    <Form.Item name="item_name_keyword" label="AND条件—商品名包含">
-      <Input placeholder="留空=不限" />
+    <Form.Item name="item_name_keyword" label="AND条件—商品名包含任一">
+      <Input.TextArea
+        autoSize={{ minRows: 1, maxRows: 3 }}
+        placeholder="留空=不限；多个词用逗号、顿号或换行分隔"
+      />
     </Form.Item>
     <Form.Item name="priority" label="优先级（数字越小越先）" rules={[{ required: true }]}>
       <InputNumber min={1} style={{ width: '100%' }} />
@@ -309,7 +321,7 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
                       { title: '规则', render: (_: unknown, row) => formatRuleDescription(row) },
                       {
                         title: 'AND 条件', width: 160, dataIndex: 'item_name_keyword',
-                        render: (v: string | null) => v ? `商品名包含 ${v}` : '不限'
+                        render: (v: string | null) => formatItemNameKeyword(v)
                       },
                       { title: '平台', width: 90, dataIndex: 'platform', render: (v: string | null) => formatPlatform(v) },
                       { title: '优先级', width: 90, dataIndex: 'priority', render: (v: number | null) => v ?? '-' },
@@ -479,7 +491,7 @@ function DispatchRulesTab({ refreshVersion }: { refreshVersion: number }) {
       render: (v: string) => MATCH_TYPE_OPTIONS.find(o => o.value === v)?.label ?? v
     },
     { title: '匹配值', dataIndex: 'value' },
-    { title: 'AND条件', dataIndex: 'item_name_keyword', width: 120, render: (v: string | null) => v ?? '-' },
+    { title: 'AND条件', dataIndex: 'item_name_keyword', width: 180, render: (v: string | null) => formatItemNameKeyword(v) },
     { title: '优先级', dataIndex: 'priority', width: 70 },
     {
       title: '启用', dataIndex: 'is_active', width: 60,

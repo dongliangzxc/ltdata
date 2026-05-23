@@ -48,6 +48,8 @@ const MATCH_TYPE_OPTIONS = [
 const PLATFORM_OPTIONS = [
   { value: 'jd', label: '京东' },
   { value: 'tmall', label: '天猫' },
+  { value: 'taobao', label: '淘宝' },
+  { value: 'douyin', label: '抖音' },
 ]
 
 const formatRuleDescription = (rule: DispatchRuleStat) => {
@@ -454,8 +456,16 @@ function DispatchRulesTab({ refreshVersion }: { refreshVersion: number }) {
     refresh()
   }
 
+  const sortedRules = [...(rules ?? [])].sort((a, b) => (
+    a.category_code.localeCompare(b.category_code) || a.priority - b.priority || a.id - b.id
+  ))
+
   const columns = [
-    { title: '品类', dataIndex: 'category_code', width: 100 },
+    {
+      title: '品类', dataIndex: 'category_code', width: 100,
+      sorter: (a: DispatchRule, b: DispatchRule) => a.category_code.localeCompare(b.category_code),
+      defaultSortOrder: 'ascend' as const,
+    },
     {
       title: '平台', dataIndex: 'platform', width: 80,
       render: (v: string | null) => v ? <Tag color="blue">{v}</Tag> : <Text type="secondary">不限</Text>
@@ -504,7 +514,7 @@ function DispatchRulesTab({ refreshVersion }: { refreshVersion: number }) {
         />
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增规则</Button>
       </Space>
-      <Table rowKey="id" dataSource={rules ?? []} columns={columns} size="small" pagination={{ pageSize: 20 }} />
+      <Table rowKey="id" dataSource={sortedRules} columns={columns} size="small" pagination={{ pageSize: 20 }} />
 
       <Modal
         title={editingId ? '编辑规则' : '新增规则'}

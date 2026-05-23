@@ -195,10 +195,23 @@ def get_batch_stats(batch_id: int, db: Session = Depends(get_db)):
         .all()
     )
 
-    rule_category_code = func.coalesce(DispatchRule.category_code, DispatchItem.category_code).label("category_code")
-    rule_rows = (
+    rule_stats_subq = (
         db.query(
             DispatchItem.matched_rule_id.label("rule_id"),
+            func.count(DispatchItem.id).label("count"),
+            func.min(DispatchItem.category_code).label("fallback_category_code"),
+        )
+        .filter(DispatchItem.batch_id == batch_id, DispatchItem.matched_rule_id.isnot(None))
+        .group_by(DispatchItem.matched_rule_id)
+        .subquery()
+    )
+    rule_category_code = func.coalesce(
+        DispatchRule.category_code,
+        rule_stats_subq.c.fallback_category_code,
+    ).label("category_code")
+    rule_rows = (
+        db.query(
+            rule_stats_subq.c.rule_id,
             rule_category_code,
             Category.name.label("category_name"),
             DispatchRule.field,
@@ -208,24 +221,12 @@ def get_batch_stats(batch_id: int, db: Session = Depends(get_db)):
             DispatchRule.platform,
             DispatchRule.priority,
             DispatchRule.is_active,
-            func.count(DispatchItem.id).label("count"),
+            rule_stats_subq.c.count,
         )
-        .outerjoin(DispatchRule, DispatchItem.matched_rule_id == DispatchRule.id)
+        .select_from(rule_stats_subq)
+        .outerjoin(DispatchRule, rule_stats_subq.c.rule_id == DispatchRule.id)
         .outerjoin(Category, rule_category_code == Category.code)
-        .filter(DispatchItem.batch_id == batch_id, DispatchItem.matched_rule_id.isnot(None))
-        .group_by(
-            DispatchItem.matched_rule_id,
-            rule_category_code,
-            Category.name,
-            DispatchRule.field,
-            DispatchRule.match_type,
-            DispatchRule.value,
-            DispatchRule.item_name_keyword,
-            DispatchRule.platform,
-            DispatchRule.priority,
-            DispatchRule.is_active,
-        )
-        .order_by(func.count(DispatchItem.id).desc(), DispatchRule.priority, DispatchItem.matched_rule_id)
+        .order_by(rule_stats_subq.c.count.desc(), DispatchRule.priority, rule_stats_subq.c.rule_id)
         .all()
     )
 

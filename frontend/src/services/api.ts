@@ -103,6 +103,58 @@ export const previewCleanJob = (jobId: number, params?: Record<string, unknown>)
   api.get(`/clean/jobs/${jobId}/preview`, { params })
 
 // ─── Dispatch ──────────────────────────────────────────────
+export interface DispatchCategoryStat {
+  category_code: string
+  category_name: string | null
+  count: number
+}
+
+export interface DispatchRuleStat {
+  rule_id: number
+  category_code: string | null
+  category_name: string | null
+  field: string | null
+  match_type: string | null
+  value: string | null
+  item_name_keyword: string | null
+  platform: string | null
+  priority: number | null
+  is_active: number | null
+  count: number
+}
+
+export interface DispatchBatchStatsResponse {
+  batch_id: number
+  total_rows: number | null
+  dispatched_rows: number | null
+  unmatched_rows: number | null
+  categories: DispatchCategoryStat[]
+  rules: DispatchRuleStat[]
+}
+
+export interface DispatchUnmatchedRow {
+  id: number
+  item_id: string | null
+  item_name: string | null
+  platform: string | null
+  month: number | null
+  category_lv1: string | null
+  category_lv2: string | null
+  category_lv3: string | null
+  brand_raw: string | null
+  shop_name: string | null
+  price: number | null
+  sales_qty: number | null
+  sales_amount: number | null
+}
+
+export interface DispatchUnmatchedResponse {
+  total: number
+  page: number
+  page_size: number
+  items: DispatchUnmatchedRow[]
+}
+
 export const runDispatch = (fileId: number) =>
   api.post('/dispatch/run', { file_id: fileId })
 
@@ -110,7 +162,10 @@ export const listDispatchBatches = (params?: Record<string, unknown>) =>
   api.get('/dispatch/batches', { params })
 
 export const getDispatchBatchStats = (batchId: number) =>
-  api.get(`/dispatch/batches/${batchId}/stats`)
+  api.get<DispatchBatchStatsResponse>(`/dispatch/batches/${batchId}/stats`)
+
+export const listDispatchUnmatched = (batchId: number, params?: { page?: number; page_size?: number; keyword?: string }) =>
+  api.get<DispatchUnmatchedResponse>(`/dispatch/batches/${batchId}/unmatched`, { params })
 
 export const listDispatchRules = (params?: Record<string, unknown>) =>
   api.get('/dispatch/rules', { params })

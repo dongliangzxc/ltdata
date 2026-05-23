@@ -313,3 +313,116 @@ def test_get_batch_stats_groups_deleted_rule_counts_by_rule_id(client_and_db):
             "count": 2,
         },
     ]
+
+
+def test_get_batch_unmatched_excludes_dispatched_rows_and_paginates(client_and_db):
+    client, db = client_and_db
+    file_record = UploadFileRecord(filename="unmatched.xlsx", platform="JD", row_count=5, status="done")
+    other_file = UploadFileRecord(filename="other.xlsx", platform="JD", row_count=1, status="done")
+    db.add_all([file_record, other_file])
+    db.flush()
+    rows = []
+    for idx in range(1, 6):
+        row = RawDataRecord(
+            file_id=file_record.id,
+            platform="jd",
+            month=202605,
+            item_id=f"item-{idx}",
+            item_name=f"商品 {idx}",
+            category_lv1="一级",
+            category_lv2="二级",
+            category_lv3="三级",
+            brand_raw=f"品牌 {idx}",
+            shop_name=f"店铺 {idx}",
+            price=idx * 10,
+            sales_qty=idx,
+            sales_amount=idx * 100,
+        )
+        db.add(row)
+        rows.append(row)
+    other_row = RawDataRecord(file_id=other_file.id, item_id="other", item_name="其他文件")
+    db.add(other_row)
+    db.flush()
+    batch = DispatchBatch(file_id=file_record.id, status="done", total_rows=5, dispatched_rows=2, unmatched_rows=3)
+    other_batch = DispatchBatch(file_id=file_record.id, status="done")
+    db.add_all([batch, other_batch])
+    db.flush()
+    db.add_all([
+        DispatchItem(batch_id=batch.id, raw_data_id=rows[1].id, category_code="headphone"),
+        DispatchItem(batch_id=batch.id, raw_data_id=rows[3].id, category_code="speaker"),
+        DispatchItem(batch_id=batch.id, raw_data_id=None, category_code="unknown"),
+        DispatchItem(batch_id=other_batch.id, raw_data_id=rows[0].id, category_code="other-batch"),
+    ])
+    db.commit()
+
+    response = client.get(f"/api/dispatch/batches/{batch.id}/unmatched", params={"page": 2, "page_size": 2})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 3
+    assert payload["page"] == 2
+    assert payload["page_size"] == 2
+    assert [item["item_id"] for item in payload["items"]] == ["item-5"]
+    assert payload["items"][0] == {
+        "id": rows[4].id,
+        "item_id": "item-5",
+        "item_name": "商品 5",
+        "platform": "jd",
+        "month": 202605,
+        "category_lv1": "一级",
+        "category_lv2": "二级",
+        "category_lv3": "三级",
+        "brand_raw": "品牌 5",
+        "shop_name": "店铺 5",
+        "price": 50.0,
+        "sales_qty": 5,
+        "sales_amount": 500.0,
+    }
+
+
+def test_get_batch_unmatched_filters_by_item_id_or_item_name_keyword(client_and_db):
+    client, db = client_and_db
+    file_record = UploadFileRecord(filename="keyword.xlsx", platform="JD", row_count=4, status="done")
+    db.add(file_record)
+    db.flush()
+    rows = [
+        RawDataRecord(file_id=file_record.id, item_id="SKU-ALPHA", item_name="普通商品"),
+        RawDataRecord(file_id=file_record.id, item_id="SKU-BETA", item_name="降噪耳机"),
+        RawDataRecord(file_id=file_record.id, item_id="SKU-GAMMA", item_name="无线音箱"),
+        RawDataRecord(file_id=file_record.id, item_id="SKU-DELTA", item_name="已分发耳机"),
+    ]
+    db.add_all(rows)
+    db.flush()
+    batch = DispatchBatch(file_id=file_record.id, status="done", total_rows=4, dispatched_rows=1, unmatched_rows=3)
+    db.add(batch)
+    db.flush()
+    db.add(DispatchItem(batch_id=batch.id, raw_data_id=rows[3].id, category_code="headphone"))
+    db.commit()
+
+    response = client.get(f"/api/dispatch/batches/{batch.id}/unmatched", params={"keyword": "耳机"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert [item["item_id"] for item in payload["items"]] == ["SKU-BETA"]
+
+
+def test_get_batch_unmatched_returns_404_for_missing_batch(client_and_db):
+    client, _ = client_and_db
+
+    response = client.get("/api/dispatch/batches/999/unmatched")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "批次不存在"
+
+
+def test_get_batch_unmatched_returns_empty_when_batch_has_no_file(client_and_db):
+    client, db = client_and_db
+    batch = DispatchBatch(file_id=None, status="done")
+    db.add(batch)
+    db.commit()
+
+    response = client.get(f"/api/dispatch/batches/{batch.id}/unmatched")
+
+    assert response.status_code == 200
+    assert response.json() == {"total": 0, "page": 1, "page_size": 20, "items": []}

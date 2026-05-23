@@ -11,7 +11,7 @@ DELETE /rules/{id}  — 删除规则
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 from app.models.database import get_db
 from app.models.schemas import (
@@ -173,6 +173,69 @@ def list_batches(
     if file_id:
         q = q.filter(DispatchBatch.file_id == file_id)
     return q.order_by(DispatchBatch.created_at.desc()).all()
+
+
+@router.get("/batches/{batch_id}/unmatched")
+def get_batch_unmatched(
+    batch_id: int,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
+    keyword: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """返回批次所属文件中未进入该批次 dispatch_items 的 raw_data 行"""
+    batch = db.query(DispatchBatch).filter(DispatchBatch.id == batch_id).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="批次不存在")
+    if batch.file_id is None:
+        return {"total": 0, "page": page, "page_size": page_size, "items": []}
+
+    dispatched_raw_ids = select(DispatchItem.raw_data_id).where(
+        DispatchItem.batch_id == batch_id,
+        DispatchItem.raw_data_id.isnot(None),
+    )
+    q = (
+        db.query(RawDataRecord)
+        .filter(RawDataRecord.file_id == batch.file_id)
+        .filter(~RawDataRecord.id.in_(dispatched_raw_ids))
+    )
+    if keyword:
+        like_keyword = f"%{keyword}%"
+        q = q.filter(or_(
+            RawDataRecord.item_id.ilike(like_keyword),
+            RawDataRecord.item_name.ilike(like_keyword),
+        ))
+
+    total = q.count()
+    rows = (
+        q.order_by(RawDataRecord.id)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "items": [
+            {
+                "id": row.id,
+                "item_id": row.item_id,
+                "item_name": row.item_name,
+                "platform": row.platform,
+                "month": row.month,
+                "category_lv1": row.category_lv1,
+                "category_lv2": row.category_lv2,
+                "category_lv3": row.category_lv3,
+                "brand_raw": row.brand_raw,
+                "shop_name": row.shop_name,
+                "price": float(row.price) if row.price is not None else None,
+                "sales_qty": row.sales_qty,
+                "sales_amount": float(row.sales_amount) if row.sales_amount is not None else None,
+            }
+            for row in rows
+        ],
+    }
 
 
 @router.get("/batches/{batch_id}/stats")

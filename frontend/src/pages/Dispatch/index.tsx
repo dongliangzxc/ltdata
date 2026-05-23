@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   Tabs, Table, Button, Tag, Space, Modal, Form, Select,
-  Input, InputNumber, Switch, message, Descriptions, Typography
+  Input, InputNumber, Switch, message, Descriptions, Typography,
+  Alert, Drawer
 } from 'antd'
 import {
   PlayCircleOutlined, PlusOutlined, EditOutlined, DeleteOutlined
@@ -9,8 +10,10 @@ import {
 import { useRequest } from 'ahooks'
 import {
   listUploadFiles, listDispatchBatches, runDispatch,
-  getDispatchBatchStats, listDispatchRules,
-  createDispatchRule, updateDispatchRule, deleteDispatchRule
+  getDispatchBatchStats, listDispatchUnmatched, listDispatchRules,
+  createDispatchRule, updateDispatchRule, deleteDispatchRule,
+  type DispatchBatchStatsResponse, type DispatchCategoryStat, type DispatchRuleStat,
+  type DispatchUnmatchedRow
 } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 
@@ -25,22 +28,117 @@ interface DispatchBatch {
   total_rows: number | null; dispatched_rows: number | null; unmatched_rows: number | null
   created_at: string; finished_at: string | null
 }
-interface CategoryStat { category_code: string; count: number }
 interface DispatchRule {
   id: number; category_code: string; platform: string | null
   field: string; match_type: string; value: string
   item_name_keyword: string | null; priority: number; is_active: number
 }
 
+const FIELD_OPTIONS = [
+  { value: 'category_lv0', label: 'Lv0类目' },
+  { value: 'category_lv1', label: 'Lv1类目' },
+  { value: 'category_lv2', label: 'Lv2类目' },
+  { value: 'category_lv3', label: 'Lv3类目' },
+  { value: 'item_name', label: '商品名称' },
+]
+const MATCH_TYPE_OPTIONS = [
+  { value: 'contains', label: '包含' },
+  { value: 'equals', label: '精准' },
+]
+const PLATFORM_OPTIONS = [
+  { value: 'jd', label: '京东' },
+  { value: 'tmall', label: '天猫' },
+]
+
+const formatRuleDescription = (rule: DispatchRuleStat) => {
+  if (!rule.field || !rule.match_type || !rule.value) return '规则已删除或不可用'
+  const fieldLabel = FIELD_OPTIONS.find(o => o.value === rule.field)?.label ?? rule.field
+  const matchTypeLabel = MATCH_TYPE_OPTIONS.find(o => o.value === rule.match_type)?.label ?? rule.match_type
+  return `${fieldLabel} ${matchTypeLabel} ${rule.value}`
+}
+
+const formatRuleTargetCategory = (categoryName: string | null, categoryCode: string | null) => {
+  if (categoryName && categoryCode) return `${categoryName}（${categoryCode}）`
+  if (categoryName) return categoryName
+  if (categoryCode) return `未知品类（${categoryCode}）`
+  return '未知品类'
+}
+
+const formatPlatform = (platform: string | null) => (
+  platform ? (PLATFORM_OPTIONS.find(o => o.value === platform)?.label ?? platform) : '不限'
+)
+
+const normalizeRuleValues = (vals: Record<string, unknown>) => ({
+  ...vals,
+  platform: vals.platform || null,
+  item_name_keyword: vals.item_name_keyword || null,
+  is_active: vals.is_active ? 1 : 0,
+})
+
+const RuleFormItems = ({ categoryOptions }: { categoryOptions: { value: string; label: string }[] }) => (
+  <>
+    <Form.Item name="category_code" label="目标品类" rules={[{ required: true }]}>
+      <Select options={categoryOptions} placeholder="选择品类" />
+    </Form.Item>
+    <Form.Item name="platform" label="平台限定">
+      <Select options={PLATFORM_OPTIONS} allowClear placeholder="不限" />
+    </Form.Item>
+    <Form.Item name="field" label="匹配字段" rules={[{ required: true }]}>
+      <Select options={FIELD_OPTIONS} />
+    </Form.Item>
+    <Form.Item name="match_type" label="匹配方式" rules={[{ required: true }]}>
+      <Select options={MATCH_TYPE_OPTIONS} />
+    </Form.Item>
+    <Form.Item name="value" label="匹配值" rules={[{ required: true }]}>
+      <Input />
+    </Form.Item>
+    <Form.Item name="item_name_keyword" label="AND条件—商品名包含">
+      <Input placeholder="留空=不限" />
+    </Form.Item>
+    <Form.Item name="priority" label="优先级（数字越小越先）" rules={[{ required: true }]}>
+      <InputNumber min={1} style={{ width: '100%' }} />
+    </Form.Item>
+    <Form.Item name="is_active" label="启用" valuePropName="checked">
+      <Switch />
+    </Form.Item>
+  </>
+)
+
 // ─── Tab 1: 分发管理 ──────────────────────────────────────────
-function DispatchManagementTab() {
+function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void }) {
   const [runningIds, setRunningIds] = useState<Set<number>>(new Set())
   const [statsVisible, setStatsVisible] = useState(false)
-  const [statsData, setStatsData] = useState<{ batch: DispatchBatch; categories: CategoryStat[] } | null>(null)
+  const [statsData, setStatsData] = useState<DispatchBatchStatsResponse | null>(null)
+  const [currentStatsBatch, setCurrentStatsBatch] = useState<DispatchBatch | null>(null)
+  const [unmatchedVisible, setUnmatchedVisible] = useState(false)
+  const [unmatchedPage, setUnmatchedPage] = useState(1)
+  const [unmatchedPageSize, setUnmatchedPageSize] = useState(20)
+  const [unmatchedSearchInput, setUnmatchedSearchInput] = useState('')
+  const [unmatchedKeyword, setUnmatchedKeyword] = useState('')
+  const [editDrawerOpen, setEditDrawerOpen] = useState(false)
+  const [editingRuleId, setEditingRuleId] = useState<number | null>(null)
+  const [ruleForm] = Form.useForm()
+  const { options: categoryOptions } = useCategoryOptions()
 
   const { data: files } = useRequest(() => listUploadFiles().then(r => r.data as UploadFile[]))
   const { data: batches, refresh: refreshBatches } = useRequest(
     () => listDispatchBatches().then(r => r.data as DispatchBatch[])
+  )
+  const {
+    data: unmatchedData,
+    loading: unmatchedLoading,
+  } = useRequest(
+    () => currentStatsBatch
+      ? listDispatchUnmatched(currentStatsBatch.id, {
+        page: unmatchedPage,
+        page_size: unmatchedPageSize,
+        ...(unmatchedKeyword ? { keyword: unmatchedKeyword } : {}),
+      }).then(r => r.data)
+      : Promise.resolve({ total: 0, page: 1, page_size: unmatchedPageSize, items: [] }),
+    {
+      ready: unmatchedVisible && !!currentStatsBatch,
+      refreshDeps: [currentStatsBatch?.id, unmatchedPage, unmatchedPageSize, unmatchedKeyword],
+    }
   )
 
   // 构建 file_id → latest done batch 映射
@@ -62,10 +160,55 @@ function DispatchManagementTab() {
     }
   }
 
+  const refreshStats = async (batchId: number) => {
+    const res = await getDispatchBatchStats(batchId)
+    setStatsData(res.data)
+  }
+
   const handleShowStats = async (batch: DispatchBatch) => {
-    const res = await getDispatchBatchStats(batch.id)
-    setStatsData({ batch, categories: res.data.categories })
+    await refreshStats(batch.id)
+    setCurrentStatsBatch(batch)
     setStatsVisible(true)
+  }
+
+  const openUnmatchedModal = () => {
+    setUnmatchedPage(1)
+    setUnmatchedSearchInput('')
+    setUnmatchedKeyword('')
+    setUnmatchedVisible(true)
+  }
+
+  const formatCategoryPath = (row: DispatchUnmatchedRow) => (
+    [row.category_lv1, row.category_lv2, row.category_lv3].filter(Boolean).join(' / ') || '-'
+  )
+
+  const canEditRuleStat = (rule: DispatchRuleStat) => (
+    rule.rule_id != null && !!rule.field && !!rule.match_type && !!rule.value && !!rule.category_code
+  )
+
+  const openRuleEdit = (rule: DispatchRuleStat) => {
+    setEditingRuleId(rule.rule_id)
+    ruleForm.setFieldsValue({
+      category_code: rule.category_code,
+      platform: rule.platform,
+      field: rule.field,
+      match_type: rule.match_type,
+      value: rule.value,
+      item_name_keyword: rule.item_name_keyword,
+      priority: rule.priority ?? 100,
+      is_active: rule.is_active !== 0,
+    })
+    setEditDrawerOpen(true)
+  }
+
+  const handleRuleEditSubmit = async () => {
+    if (!editingRuleId) return
+    const vals = await ruleForm.validateFields()
+    await updateDispatchRule(editingRuleId, normalizeRuleValues(vals))
+    setEditDrawerOpen(false)
+    if (currentStatsBatch) await refreshStats(currentStatsBatch.id)
+    onRulesChanged()
+    message.success('规则已保存，重新分发后对分发结果生效。')
   }
 
   const columns = [
@@ -131,50 +274,144 @@ function DispatchManagementTab() {
         open={statsVisible}
         onCancel={() => setStatsVisible(false)}
         footer={null}
-        width={480}
+        width={960}
       >
         {statsData && (
           <>
             <Descriptions size="small" column={3} style={{ marginBottom: 12 }}>
-              <Descriptions.Item label="总行数">{statsData.batch.total_rows}</Descriptions.Item>
-              <Descriptions.Item label="已分发">{statsData.batch.dispatched_rows}</Descriptions.Item>
-              <Descriptions.Item label="未命中">{statsData.batch.unmatched_rows}</Descriptions.Item>
+              <Descriptions.Item label="总行数">{statsData.total_rows}</Descriptions.Item>
+              <Descriptions.Item label="已分发">{statsData.dispatched_rows}</Descriptions.Item>
+              <Descriptions.Item label="未命中">
+                {statsData.unmatched_rows && statsData.unmatched_rows > 0 ? (
+                  <Button type="link" size="small" style={{ padding: 0 }} onClick={openUnmatchedModal}>
+                    {statsData.unmatched_rows} 条
+                  </Button>
+                ) : (
+                  `${statsData.unmatched_rows ?? 0} 条`
+                )}
+              </Descriptions.Item>
             </Descriptions>
-            <Table
-              size="small"
-              rowKey="category_code"
-              dataSource={statsData.categories}
-              pagination={false}
-              columns={[
-                { title: '品类', dataIndex: 'category_code' },
-                { title: '行数', dataIndex: 'count', width: 80 },
-              ]}
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="规则内容为当前配置；历史批次命中关系基于分发时的规则 ID。修改规则后需重新分发才会改变命中结果。"
             />
+            <Space align="start" size={16} style={{ width: '100%' }}>
+              <Table<DispatchCategoryStat>
+                size="small"
+                rowKey={row => row.category_code || 'unknown'}
+                dataSource={statsData.categories}
+                pagination={false}
+                style={{ width: 320 }}
+                columns={[
+                  { title: '品类', dataIndex: 'category_name', render: (v: string | null) => v || '未知品类' },
+                  { title: '品类编码', dataIndex: 'category_code', width: 100 },
+                  { title: '行数', dataIndex: 'count', width: 70 },
+                ]}
+              />
+              <Table<DispatchRuleStat>
+                size="small"
+                rowKey={(row, index) => `${row.rule_id ?? 'missing'}-${index}`}
+                dataSource={statsData.rules}
+                pagination={false}
+                style={{ flex: 1 }}
+                columns={[
+                  { title: '规则', width: 160, render: (_: unknown, row) => formatRuleDescription(row) },
+                  {
+                    title: 'AND 条件', width: 140, dataIndex: 'item_name_keyword',
+                    render: (v: string | null) => v ? `商品名包含 ${v}` : '不限'
+                  },
+                  {
+                    title: '目标品类', width: 160,
+                    render: (_: unknown, row) => formatRuleTargetCategory(row.category_name, row.category_code)
+                  },
+                  { title: '平台', width: 70, dataIndex: 'platform', render: (v: string | null) => formatPlatform(v) },
+                  { title: '优先级', width: 70, dataIndex: 'priority' },
+                  { title: '命中数量', width: 80, dataIndex: 'count' },
+                  {
+                    title: '操作', width: 70,
+                    render: (_: unknown, row) => canEditRuleStat(row)
+                      ? <Button type="link" size="small" onClick={() => openRuleEdit(row)}>编辑</Button>
+                      : null
+                  },
+                ]}
+              />
+            </Space>
           </>
         )}
       </Modal>
+      <Modal
+        title="未识别明细"
+        open={unmatchedVisible}
+        onCancel={() => setUnmatchedVisible(false)}
+        footer={null}
+        width={1200}
+      >
+        <Input.Search
+          allowClear
+          value={unmatchedSearchInput}
+          placeholder="搜索商品ID / 商品名称"
+          style={{ width: 320, marginBottom: 12 }}
+          onChange={e => setUnmatchedSearchInput(e.target.value)}
+          onSearch={value => {
+            setUnmatchedKeyword(value.trim())
+            setUnmatchedPage(1)
+          }}
+        />
+        <Table<DispatchUnmatchedRow>
+          size="small"
+          rowKey="id"
+          loading={unmatchedLoading}
+          dataSource={unmatchedData?.items ?? []}
+          scroll={{ x: 1100 }}
+          pagination={{
+            current: unmatchedData?.page ?? unmatchedPage,
+            pageSize: unmatchedData?.page_size ?? unmatchedPageSize,
+            total: unmatchedData?.total ?? 0,
+            showSizeChanger: true,
+            showTotal: total => `共 ${total} 条`,
+            onChange: (page, pageSize) => {
+              setUnmatchedPage(page)
+              setUnmatchedPageSize(pageSize)
+            },
+          }}
+          columns={[
+            { title: '商品ID', dataIndex: 'item_id', width: 120, render: (v: string | null) => v || '-' },
+            { title: '商品名称', dataIndex: 'item_name', width: 220, ellipsis: true, render: (v: string | null) => v || '-' },
+            { title: '平台', dataIndex: 'platform', width: 80, render: (v: string | null) => v || '-' },
+            { title: '月份', dataIndex: 'month', width: 80, render: (v: number | null) => v ?? '-' },
+            { title: '类目层级', width: 220, render: (_: unknown, row) => formatCategoryPath(row) },
+            { title: '品牌原始值', dataIndex: 'brand_raw', width: 120, render: (v: string | null) => v || '-' },
+            { title: '店铺名', dataIndex: 'shop_name', width: 140, ellipsis: true, render: (v: string | null) => v || '-' },
+            { title: '价格', dataIndex: 'price', width: 90, render: (v: number | null) => v ?? '-' },
+            { title: '销量', dataIndex: 'sales_qty', width: 90, render: (v: number | null) => v ?? '-' },
+            { title: '销额', dataIndex: 'sales_amount', width: 100, render: (v: number | null) => v ?? '-' },
+          ]}
+        />
+      </Modal>
+      <Drawer
+        title="编辑规则"
+        open={editDrawerOpen}
+        onClose={() => setEditDrawerOpen(false)}
+        width={420}
+        extra={(
+          <Space>
+            <Button onClick={() => setEditDrawerOpen(false)}>取消</Button>
+            <Button type="primary" onClick={handleRuleEditSubmit}>保存</Button>
+          </Space>
+        )}
+      >
+        <Form form={ruleForm} layout="vertical">
+          <RuleFormItems categoryOptions={categoryOptions} />
+        </Form>
+      </Drawer>
     </>
   )
 }
 
 // ─── Tab 2: 分发规则 ──────────────────────────────────────────
-const FIELD_OPTIONS = [
-  { value: 'category_lv0', label: 'Lv0类目' },
-  { value: 'category_lv1', label: 'Lv1类目' },
-  { value: 'category_lv2', label: 'Lv2类目' },
-  { value: 'category_lv3', label: 'Lv3类目' },
-  { value: 'item_name', label: '商品名称' },
-]
-const MATCH_TYPE_OPTIONS = [
-  { value: 'contains', label: '包含' },
-  { value: 'equals', label: '精准' },
-]
-const PLATFORM_OPTIONS = [
-  { value: 'jd', label: '京东' },
-  { value: 'tmall', label: '天猫' },
-]
-
-function DispatchRulesTab() {
+function DispatchRulesTab({ refreshVersion }: { refreshVersion: number }) {
   const [filterPlatform, setFilterPlatform] = useState<string | undefined>()
   const [filterCategory, setFilterCategory] = useState<string | undefined>()
   const [modalOpen, setModalOpen] = useState(false)
@@ -189,6 +426,10 @@ function DispatchRulesTab() {
     }).then(r => r.data as DispatchRule[]),
     { refreshDeps: [filterPlatform, filterCategory] }
   )
+
+  useEffect(() => {
+    if (refreshVersion > 0) refresh()
+  }, [refreshVersion, refresh])
 
   const openCreate = () => {
     setEditingId(null)
@@ -211,7 +452,7 @@ function DispatchRulesTab() {
 
   const handleSubmit = async () => {
     const vals = await form.validateFields()
-    const payload = { ...vals, platform: vals.platform || null, item_name_keyword: vals.item_name_keyword || null }
+    const payload = normalizeRuleValues(vals)
     if (editingId) {
       await updateDispatchRule(editingId, payload)
       message.success('已更新')
@@ -283,30 +524,7 @@ function DispatchRulesTab() {
         width={520}
       >
         <Form form={form} layout="vertical">
-          <Form.Item name="category_code" label="目标品类" rules={[{ required: true }]}>
-            <Select options={categoryOptions} placeholder="选择品类" />
-          </Form.Item>
-          <Form.Item name="platform" label="平台限定">
-            <Select options={PLATFORM_OPTIONS} allowClear placeholder="不限" />
-          </Form.Item>
-          <Form.Item name="field" label="匹配字段" rules={[{ required: true }]}>
-            <Select options={FIELD_OPTIONS} />
-          </Form.Item>
-          <Form.Item name="match_type" label="匹配方式" rules={[{ required: true }]}>
-            <Select options={MATCH_TYPE_OPTIONS} />
-          </Form.Item>
-          <Form.Item name="value" label="匹配值" rules={[{ required: true }]}>
-            <Input />
-          </Form.Item>
-          <Form.Item name="item_name_keyword" label="AND条件—商品名包含">
-            <Input placeholder="留空=不限" />
-          </Form.Item>
-          <Form.Item name="priority" label="优先级（数字越小越先）" rules={[{ required: true }]}>
-            <InputNumber min={1} style={{ width: '100%' }} />
-          </Form.Item>
-          <Form.Item name="is_active" label="启用" valuePropName="checked">
-            <Switch />
-          </Form.Item>
+          <RuleFormItems categoryOptions={categoryOptions} />
         </Form>
       </Modal>
     </>
@@ -315,11 +533,14 @@ function DispatchRulesTab() {
 
 // ─── 主页面 ───────────────────────────────────────────────────
 export default function DispatchPage() {
+  const [rulesRefreshVersion, setRulesRefreshVersion] = useState(0)
+  const notifyRulesChanged = () => setRulesRefreshVersion(v => v + 1)
+
   return (
     <Tabs
       items={[
-        { key: 'management', label: '分发管理', children: <DispatchManagementTab /> },
-        { key: 'rules', label: '分发规则', children: <DispatchRulesTab /> },
+        { key: 'management', label: '分发管理', children: <DispatchManagementTab onRulesChanged={notifyRulesChanged} /> },
+        { key: 'rules', label: '分发规则', children: <DispatchRulesTab refreshVersion={rulesRefreshVersion} /> },
       ]}
     />
   )

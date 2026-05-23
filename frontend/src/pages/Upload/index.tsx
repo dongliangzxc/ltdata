@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import {
   Card, Upload, Table, Tag, Button, Popconfirm, Select, Checkbox,
   message, Space, Typography, Spin, Alert, Tabs, Switch, Input,
-  Modal, Form, InputNumber,
+  Modal, Form, InputNumber, Progress,
 } from 'antd'
 import {
   InboxOutlined, DeleteOutlined, ReloadOutlined,
@@ -14,7 +14,8 @@ import {
   listUploadFiles, deleteUploadFile,
   listUploadTemplates,
   updateUploadTemplate, deleteUploadTemplate,
-  getUploadConfirmJob,
+  getUploadConfirmJob, listUploadConfirmJobs,
+  type UploadConfirmJobResponse,
 } from '../../services/api'
 import ProgressModal from '../../components/ProgressModal'
 
@@ -56,6 +57,13 @@ const PLATFORM_LABEL: Record<string, string> = {
 
 const renderVal = (v: unknown) =>
   v == null || v === '' ? <Text type="secondary">-</Text> : String(v)
+
+const uploadJobStatusTag = (status: string) => {
+  if (status === 'done') return <Tag color="green">已完成</Tag>
+  if (status === 'error') return <Tag color="red">失败</Tag>
+  if (status === 'running') return <Tag color="processing">处理中</Tag>
+  return <Tag>等待中</Tag>
+}
 
 // ─── Upload history table columns ────────────────────────────
 const historyColumns = (onDelete: (id: number) => void) => [
@@ -148,6 +156,7 @@ function MappingCard({
   dataRegion,
   dataYear,
   dataMonth,
+  onJobUpdate,
 }: {
   headersResult: HeadersResult
   templates: TemplateRow[]
@@ -156,6 +165,7 @@ function MappingCard({
   dataRegion?: string
   dataYear?: number
   dataMonth?: number
+  onJobUpdate?: () => void
 }) {
   const { columns, suggested_template, match_score, temp_file_id, filename } = headersResult
 
@@ -183,6 +193,7 @@ function MappingCard({
   const [uploadProgress, setUploadProgress] = useState(0)
   const [uploadError, setUploadError] = useState('')
   const [uploadProgressVisible, setUploadProgressVisible] = useState(false)
+  const [currentJob, setCurrentJob] = useState<UploadConfirmJobResponse | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const applyTemplate = (tmpl: TemplateRow) => {
@@ -226,6 +237,7 @@ function MappingCard({
     setConfirming(true)
     setUploadProgress(0)
     setUploadError('')
+    setCurrentJob(null)
     setUploadProgressVisible(true)
     try {
       const res = await confirmUpload({
@@ -244,19 +256,24 @@ function MappingCard({
       pollRef.current = setInterval(async () => {
         try {
           const jobRes = await getUploadConfirmJob(job_id)
-          const { status, progress, error_msg } = jobRes.data
+          const job = jobRes.data
+          setCurrentJob(job)
+          const { status, progress, error_msg } = job
           pollFailCount = 0  // reset on success
           setUploadProgress(progress)
+          onJobUpdate?.()
           if (status === 'done') {
             stopPoll()
             setUploadProgress(100)
+            onJobUpdate?.()
             setTimeout(() => {
               setUploadProgressVisible(false)
               setConfirming(false)
-              onSuccess(jobRes.data as Record<string, unknown>)
+              onSuccess(job as Record<string, unknown>)
             }, 600)
           } else if (status === 'error') {
             stopPoll()
+            onJobUpdate?.()
             setUploadError(error_msg || '处理失败，请重试')
             setConfirming(false)
           }
@@ -416,6 +433,11 @@ function MappingCard({
         title="正在处理文件..."
         progress={uploadProgress}
         errorMsg={uploadError}
+        stageLabel={currentJob?.stage_label}
+        totalRows={currentJob?.total_rows}
+        processedRows={currentJob?.processed_rows}
+        insertedRows={currentJob?.inserted_rows}
+        skippedRows={currentJob?.skipped_rows}
       />
     </>
   )
@@ -627,6 +649,8 @@ export default function UploadPage() {
     skipped: number
   } | null>(null)
   const [uploading, setUploading] = useState(false)
+  const [activeJob, setActiveJob] = useState<UploadConfirmJobResponse | null>(null)
+  const [jobProgressVisible, setJobProgressVisible] = useState(false)
 
   const [dataRegion, setDataRegion] = useState<string | undefined>(undefined)
   const [dataYear, setDataYear] = useState<number>(new Date().getFullYear())
@@ -651,7 +675,19 @@ export default function UploadPage() {
     { refreshDeps: [] }
   )
 
+  const { data: uploadJobsData, refresh: refreshUploadJobs } = useRequest(
+    () => listUploadConfirmJobs({ limit: 20 }).then(r => r.data),
+    { pollingInterval: 3000 }
+  )
+
   const templates: TemplateRow[] = (templatesData as TemplateRow[] | undefined) ?? []
+  const uploadJobs: UploadConfirmJobResponse[] = uploadJobsData ?? []
+
+  useEffect(() => {
+    if (!activeJob) return
+    const latest = uploadJobs.find(job => job.job_id === activeJob.job_id)
+    if (latest) setActiveJob(latest)
+  }, [uploadJobsData, activeJob?.job_id])
 
   const handleUpload = async (file: File) => {
     setUploading(true)
@@ -683,6 +719,7 @@ export default function UploadPage() {
     setStep('preview')
     runFilesQuery({ data_region: filterRegion, data_year: filterYear, data_month: filterMonth })
     refreshTemplates()
+    refreshUploadJobs()
   }
 
   const previewColumns = [
@@ -741,6 +778,61 @@ export default function UploadPage() {
         </Card>
       )}
 
+      {uploadJobs.length > 0 && (
+        <Card title="上传处理任务" size="small">
+          <Table<UploadConfirmJobResponse>
+            rowKey="job_id"
+            size="small"
+            dataSource={uploadJobs}
+            pagination={false}
+            columns={[
+              { title: '文件名', dataIndex: 'filename', ellipsis: true, render: (v: string | null) => v || '-' },
+              { title: '状态', dataIndex: 'status', width: 90, render: uploadJobStatusTag },
+              { title: '阶段', dataIndex: 'stage_label', width: 130, render: (v: string | null) => v || '-' },
+              {
+                title: '进度',
+                dataIndex: 'progress',
+                width: 160,
+                render: (v: number) => (
+                  <Progress percent={v ?? 0} size="small" status={v >= 100 ? 'success' : 'active'} />
+                ),
+              },
+              {
+                title: '处理行数',
+                width: 130,
+                render: (_: unknown, row) => (
+                  row.total_rows != null
+                    ? `${row.processed_rows ?? 0} / ${row.total_rows}`
+                    : row.processed_rows != null ? `${row.processed_rows}` : '-'
+                ),
+              },
+              {
+                title: '插入/跳过',
+                width: 120,
+                render: (_: unknown, row) => (
+                  row.inserted_rows != null || row.skipped_rows != null
+                    ? `${row.inserted_rows ?? 0} / ${row.skipped_rows ?? 0}`
+                    : '-'
+                ),
+              },
+              {
+                title: '操作',
+                width: 90,
+                render: (_: unknown, row) => (
+                  <Button
+                    type="link"
+                    size="small"
+                    onClick={() => { setActiveJob(row); setJobProgressVisible(true) }}
+                  >
+                    查看进度
+                  </Button>
+                ),
+              },
+            ]}
+          />
+        </Card>
+      )}
+
       {/* Step 2: Mapping confirmation */}
       {step === 'mapping' && headersResult && (
         <>
@@ -786,6 +878,7 @@ export default function UploadPage() {
             dataRegion={dataRegion}
             dataYear={dataYear}
             dataMonth={dataMonth}
+            onJobUpdate={refreshUploadJobs}
           />
         </>
       )}
@@ -832,7 +925,7 @@ export default function UploadPage() {
           tabBarExtraContent={
             <Button
               icon={<ReloadOutlined />}
-              onClick={() => { runFilesQuery({ data_region: filterRegion, data_year: filterYear, data_month: filterMonth }); refreshTemplates() }}
+              onClick={() => { runFilesQuery({ data_region: filterRegion, data_year: filterYear, data_month: filterMonth }); refreshTemplates(); refreshUploadJobs() }}
             >
               刷新
             </Button>
@@ -903,6 +996,19 @@ export default function UploadPage() {
           ]}
         />
       </Card>
+
+      <ProgressModal
+        visible={jobProgressVisible}
+        title={`上传任务：${activeJob?.filename ?? ''}`}
+        progress={activeJob?.progress ?? 0}
+        errorMsg={activeJob?.error_msg ?? undefined}
+        stageLabel={activeJob?.stage_label}
+        totalRows={activeJob?.total_rows}
+        processedRows={activeJob?.processed_rows}
+        insertedRows={activeJob?.inserted_rows}
+        skippedRows={activeJob?.skipped_rows}
+        onClose={() => setJobProgressVisible(false)}
+      />
     </Space>
   )
 }

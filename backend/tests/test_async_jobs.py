@@ -20,6 +20,13 @@ def test_upload_confirm_job_defaults(db):
     assert job.id is not None
     assert job.status == "pending"
     assert job.progress == 0
+    assert job.stage == "pending"
+    assert job.stage_label == "等待处理"
+    assert job.filename is None
+    assert job.total_rows is None
+    assert job.processed_rows == 0
+    assert job.inserted_rows == 0
+    assert job.skipped_rows == 0
     assert job.result_data is None
 
 
@@ -133,6 +140,42 @@ def test_wb_export_job_not_found(db, monkeypatch):
 
 
 # ── upload confirm API ──────────────────────────────────────────
+def test_upload_job_progress_helper_persists_stage_fields(db, monkeypatch):
+    from sqlalchemy.orm import sessionmaker
+    from app.api.upload import _update_upload_job_progress
+    import app.api.upload as upload_api
+
+    monkeypatch.setattr(upload_api, "SessionLocal", sessionmaker(bind=db.get_bind()))
+
+    job = UploadConfirmJob(filename="demo.xlsx")
+    db.add(job)
+    db.commit()
+
+    _update_upload_job_progress(
+        db,
+        job,
+        status="running",
+        stage="inserting",
+        stage_label="正在写入数据",
+        progress=75,
+        total_rows=1000,
+        processed_rows=700,
+        inserted_rows=650,
+        skipped_rows=50,
+    )
+    db.expire_all()
+    db.refresh(job)
+
+    assert job.status == "running"
+    assert job.stage == "inserting"
+    assert job.stage_label == "正在写入数据"
+    assert job.progress == 75
+    assert job.total_rows == 1000
+    assert job.processed_rows == 700
+    assert job.inserted_rows == 650
+    assert job.skipped_rows == 50
+
+
 def test_upload_confirm_returns_job_id(db, monkeypatch, tmp_path):
     """POST /upload/confirm 应立即返回 job_id，不阻塞。"""
     import threading
@@ -196,6 +239,62 @@ def test_upload_confirm_returns_job_id(db, monkeypatch, tmp_path):
     assert "job_id" in body
     assert body["status"] == "pending"
     assert started
+
+
+def test_upload_confirm_job_detail_returns_persisted_progress(db, monkeypatch):
+    from app.models.database import get_db
+
+    job = UploadConfirmJob(
+        filename="demo.xlsx",
+        status="running",
+        stage="inserting",
+        stage_label="正在写入数据",
+        progress=76,
+        total_rows=1000,
+        processed_rows=700,
+        inserted_rows=650,
+        skipped_rows=50,
+    )
+    db.add(job)
+    db.commit()
+
+    app = _patch_app(db, monkeypatch)
+    app.dependency_overrides[get_db] = lambda: (yield db)
+    client = TestClient(app, raise_server_exceptions=True)
+    resp = client.get(f"/api/upload/confirm/jobs/{job.id}", headers={"Authorization": "Bearer test_token"})
+    app.dependency_overrides.clear()
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["filename"] == "demo.xlsx"
+    assert body["status"] == "running"
+    assert body["stage"] == "inserting"
+    assert body["stage_label"] == "正在写入数据"
+    assert body["progress"] == 76
+    assert body["total_rows"] == 1000
+    assert body["processed_rows"] == 700
+    assert body["inserted_rows"] == 650
+    assert body["skipped_rows"] == 50
+
+
+def test_list_upload_confirm_jobs_returns_recent_jobs(db, monkeypatch):
+    from app.models.database import get_db
+
+    old = UploadConfirmJob(filename="old.xlsx", status="done", stage="done", stage_label="处理完成", progress=100)
+    new = UploadConfirmJob(filename="new.xlsx", status="running", stage="reading", stage_label="正在读取文件", progress=5)
+    db.add_all([old, new])
+    db.commit()
+
+    app = _patch_app(db, monkeypatch)
+    app.dependency_overrides[get_db] = lambda: (yield db)
+    client = TestClient(app, raise_server_exceptions=True)
+    resp = client.get("/api/upload/confirm/jobs", headers={"Authorization": "Bearer test_token"})
+    app.dependency_overrides.clear()
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [row["filename"] for row in body[:2]] == ["new.xlsx", "old.xlsx"]
+    assert body[0]["stage"] == "reading"
 
 
 def test_upload_confirm_job_not_found(db, monkeypatch):

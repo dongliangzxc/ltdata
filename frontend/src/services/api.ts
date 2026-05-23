@@ -621,22 +621,34 @@ export const confirmUpload = (payload: {
   data_month?: number
 }) => api.post('/upload/confirm', payload, { timeout: 300000 })
 
+export interface UploadConfirmJobResponse extends Record<string, unknown> {
+  job_id: number
+  file_id: number | null
+  filename: string | null
+  status: 'pending' | 'running' | 'done' | 'error'
+  stage: string | null
+  stage_label: string | null
+  progress: number
+  total_rows: number | null
+  processed_rows: number | null
+  inserted_rows: number | null
+  skipped_rows: number | null
+  error_msg: string | null
+  created_at?: string
+  finished_at?: string | null
+  platform?: string
+  month_range?: string
+  row_count?: number
+  inserted?: number
+  skipped?: number
+  preview?: Record<string, unknown>[]
+}
+
 export const getUploadConfirmJob = (jobId: number) =>
-  api.get<{
-    job_id: number
-    status: 'pending' | 'running' | 'done' | 'error'
-    progress: number
-    error_msg: string | null
-    // 以下字段仅 status=done 时存在
-    file_id?: number
-    filename?: string
-    platform?: string
-    month_range?: string
-    row_count?: number
-    inserted?: number
-    skipped?: number
-    preview?: Record<string, unknown>[]
-  }>(`/upload/confirm/jobs/${jobId}`)
+  api.get<UploadConfirmJobResponse>(`/upload/confirm/jobs/${jobId}`)
+
+export const listUploadConfirmJobs = (params?: { status?: string; limit?: number }) =>
+  api.get<UploadConfirmJobResponse[]>('/upload/confirm/jobs', { params })
 
 export const listUploadTemplates = () =>
   api.get<Array<{

@@ -24,6 +24,71 @@ from app.models.schemas import UploadConfirmJob
 # 内存进度表：job_id → 0-100，线程结束后清除
 _upload_progress: dict[int, int] = {}
 
+
+def _update_upload_job_progress(
+    db: Session,
+    job: UploadConfirmJob,
+    *,
+    status=None,
+    stage=None,
+    stage_label=None,
+    progress=None,
+    total_rows=None,
+    processed_rows=None,
+    inserted_rows=None,
+    skipped_rows=None,
+    error_msg=None,
+    finished_at=None,
+) -> None:
+    """Persist upload job progress fields in an isolated transaction."""
+    del db  # keep the public signature, but never commit the caller's import session
+    progress_db = SessionLocal()
+    try:
+        progress_job = progress_db.query(UploadConfirmJob).filter_by(id=job.id).first()
+        if not progress_job:
+            return
+        if status is not None:
+            progress_job.status = status
+        if stage is not None:
+            progress_job.stage = stage
+        if stage_label is not None:
+            progress_job.stage_label = stage_label
+        if progress is not None:
+            progress_job.progress = max(0, min(100, progress))
+        if total_rows is not None:
+            progress_job.total_rows = total_rows
+        if processed_rows is not None:
+            progress_job.processed_rows = processed_rows
+        if inserted_rows is not None:
+            progress_job.inserted_rows = inserted_rows
+        if skipped_rows is not None:
+            progress_job.skipped_rows = skipped_rows
+        if error_msg is not None:
+            progress_job.error_msg = error_msg
+        if finished_at is not None:
+            progress_job.finished_at = finished_at
+        progress_db.commit()
+        _upload_progress[job.id] = progress_job.progress
+    finally:
+        progress_db.close()
+
+
+def _get_upload_job_progress_state(job_id: int) -> dict:
+    """Read current upload job progress fields from an isolated session."""
+    progress_db = SessionLocal()
+    try:
+        progress_job = progress_db.query(UploadConfirmJob).filter_by(id=job_id).first()
+        if not progress_job:
+            return {}
+        return {
+            "stage": progress_job.stage,
+            "stage_label": progress_job.stage_label,
+            "progress": progress_job.progress,
+        }
+    finally:
+        progress_db.close()
+
+
 DOMESTIC_UPLOAD_PLATFORMS = {
     "jd", "tm", "tb", "tmall", "taobao", "douyin",
     "京东", "天猫", "淘宝", "抖音",
@@ -198,9 +263,14 @@ def _run_upload_confirm_thread(
         job = db.query(UploadConfirmJob).filter_by(id=job_id).first()
         if not job:
             return
-        job.status = "running"
-        db.commit()
-        _upload_progress[job_id] = 5
+        _update_upload_job_progress(
+            db,
+            job,
+            status="running",
+            stage="reading",
+            stage_label="正在读取文件",
+            progress=5,
+        )
 
         # 1. 解析 Excel（5→40%）
         try:
@@ -208,12 +278,27 @@ def _run_upload_confirm_thread(
                 tmp_path, mapping, ignore_columns
             )
         except Exception as e:
-            job.status = "error"
-            job.error_msg = f"文件解析失败: {e}"
-            job.finished_at = datetime.utcnow()
-            db.commit()
+            state = _get_upload_job_progress_state(job_id)
+            _update_upload_job_progress(
+                db,
+                job,
+                status="error",
+                stage="error",
+                stage_label="文件解析失败",
+                progress=state.get("progress") or 0,
+                error_msg=f"文件解析失败: {e}",
+                finished_at=datetime.utcnow(),
+            )
             return
-        _upload_progress[job_id] = 40
+        _update_upload_job_progress(
+            db,
+            job,
+            stage="reading",
+            stage_label="文件读取完成",
+            progress=40,
+            total_rows=len(records),
+            processed_rows=len(records),
+        )
 
         # 2. 可选保存模板（40→50%）
         saved_template_id = template_id_use
@@ -253,9 +338,15 @@ def _run_upload_confirm_thread(
                 except IntegrityError:
                     nested.rollback()
                     db.expunge(tmpl)
-        _upload_progress[job_id] = 50
-
         # 3. 去重（50→60%）
+        _update_upload_job_progress(
+            db,
+            job,
+            stage="deduping",
+            stage_label="正在去重检查",
+            progress=45,
+            processed_rows=0,
+        )
         keys = [
             (str(r.get("item_id")), r.get("month"), r.get("platform"))
             for r in records
@@ -272,12 +363,30 @@ def _run_upload_confirm_thread(
                     tuple_(RawDataRecord.item_id, RawDataRecord.month, RawDataRecord.platform).in_(chunk)
                 ).all()
                 existing_set.update((e.item_id, e.month, e.platform) for e in rows)
+                processed = min(i + DEDUP_BATCH, len(keys))
+                _update_upload_job_progress(
+                    db,
+                    job,
+                    stage="deduping",
+                    stage_label="正在去重检查",
+                    progress=45 + int(15 * processed / max(len(keys), 1)),
+                    processed_rows=processed,
+                )
         to_insert = [
             r for r in records
             if (str(r.get("item_id")), r.get("month"), r.get("platform")) not in existing_set
         ]
         skipped = len(records) - len(to_insert)
-        _upload_progress[job_id] = 60
+        _update_upload_job_progress(
+            db,
+            job,
+            stage="deduping",
+            stage_label="去重完成",
+            progress=60,
+            processed_rows=len(records),
+            inserted_rows=0,
+            skipped_rows=skipped,
+        )
 
         # 4. 写 upload_files 记录（60→65%）
         file_record = UploadFileRecord(
@@ -293,6 +402,15 @@ def _run_upload_confirm_thread(
         )
         db.add(file_record)
         db.flush()
+        _update_upload_job_progress(
+            db,
+            job,
+            stage="inserting",
+            stage_label="正在写入数据",
+            progress=65,
+            processed_rows=0,
+            inserted_rows=0,
+        )
 
         # 5. 批量写入 raw_data（65→90%）
         if to_insert:
@@ -329,15 +447,40 @@ def _run_upload_confirm_thread(
                         for r in chunk
                     ],
                 )
-                _upload_progress[job_id] = 65 + int(25 * min(i + batch_size, len(to_insert)) / max(len(to_insert), 1))
+                inserted = min(i + batch_size, len(to_insert))
+                _update_upload_job_progress(
+                    db,
+                    job,
+                    stage="inserting",
+                    stage_label="正在写入数据",
+                    progress=65 + int(25 * inserted / max(len(to_insert), 1)),
+                    processed_rows=inserted,
+                    inserted_rows=inserted,
+                    skipped_rows=skipped,
+                )
         db.commit()
         db.refresh(file_record)
-        _upload_progress[job_id] = 90
+        _update_upload_job_progress(
+            db,
+            job,
+            stage="finalizing",
+            stage_label="正在收尾",
+            progress=90,
+            processed_rows=len(records),
+            inserted_rows=len(to_insert),
+            skipped_rows=skipped,
+        )
 
         # 6. 移动临时文件（90→95%）
         final_path = Path(settings.UPLOAD_DIR) / original_filename
         shutil.move(str(tmp_path), str(final_path))
-        _upload_progress[job_id] = 95
+        _update_upload_job_progress(
+            db,
+            job,
+            stage="finalizing",
+            stage_label="正在生成结果",
+            progress=95,
+        )
 
         # 7. 写 done（95→100%）
         result = {
@@ -351,9 +494,15 @@ def _run_upload_confirm_thread(
             "skipped":     skipped,
             "preview":     records[:50],
         }
-        job.file_id     = file_record.id
-        job.status      = "done"
-        job.progress    = 100
+        job.file_id = file_record.id
+        job.status = "done"
+        job.stage = "done"
+        job.stage_label = "处理完成"
+        job.progress = 100
+        job.total_rows = len(records)
+        job.processed_rows = len(records)
+        job.inserted_rows = len(to_insert)
+        job.skipped_rows = skipped
         job.result_data = result
         job.finished_at = datetime.utcnow()
         db.commit()
@@ -361,12 +510,21 @@ def _run_upload_confirm_thread(
 
     except Exception as e:
         try:
+            db.rollback()
             job = db.query(UploadConfirmJob).filter_by(id=job_id).first()
             if job:
-                job.status    = "error"
-                job.error_msg = str(e)
-                job.finished_at = datetime.utcnow()
-                db.commit()
+                state = _get_upload_job_progress_state(job_id)
+                current_stage = state.get("stage_label") or state.get("stage")
+                _update_upload_job_progress(
+                    db,
+                    job,
+                    status="error",
+                    stage="error",
+                    stage_label="处理失败",
+                    progress=state.get("progress") or 0,
+                    error_msg=f"{current_stage}: {e}",
+                    finished_at=datetime.utcnow(),
+                )
         except Exception:
             pass
     finally:
@@ -474,7 +632,13 @@ async def upload_confirm(payload: dict, db: Session = Depends(get_db)):
         )
 
     # 创建 job 记录
-    job = UploadConfirmJob(status="pending")
+    job = UploadConfirmJob(
+        status="pending",
+        stage="pending",
+        stage_label="等待处理",
+        progress=0,
+        filename=original_filename,
+    )
     db.add(job)
     db.commit()
     db.refresh(job)
@@ -500,6 +664,41 @@ async def upload_confirm(payload: dict, db: Session = Depends(get_db)):
     return {"job_id": job.id, "status": "pending"}
 
 
+def _upload_job_response(job: UploadConfirmJob) -> dict:
+    resp = {
+        "job_id": job.id,
+        "file_id": job.file_id,
+        "filename": job.filename,
+        "status": job.status,
+        "stage": job.stage,
+        "stage_label": job.stage_label,
+        "progress": job.progress,
+        "total_rows": job.total_rows,
+        "processed_rows": job.processed_rows,
+        "inserted_rows": job.inserted_rows,
+        "skipped_rows": job.skipped_rows,
+        "error_msg": job.error_msg,
+        "created_at": job.created_at,
+        "finished_at": job.finished_at,
+    }
+    if job.status == "done" and job.result_data:
+        resp.update(job.result_data)
+    return resp
+
+
+@router.get("/confirm/jobs")
+def list_upload_confirm_jobs(
+    status: Optional[str] = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    q = db.query(UploadConfirmJob)
+    if status:
+        q = q.filter(UploadConfirmJob.status == status)
+    jobs = q.order_by(UploadConfirmJob.created_at.desc(), UploadConfirmJob.id.desc()).limit(limit).all()
+    return [_upload_job_response(job) for job in jobs]
+
+
 @router.get("/confirm/jobs/{job_id}")
 def get_upload_confirm_job(job_id: int, db: Session = Depends(get_db)):
     """轮询上传确认任务状态和进度。"""
@@ -507,13 +706,4 @@ def get_upload_confirm_job(job_id: int, db: Session = Depends(get_db)):
     if not job:
         raise HTTPException(status_code=404, detail="任务不存在")
 
-    progress = _upload_progress.get(job_id, job.progress)
-    resp: dict = {
-        "job_id":   job.id,
-        "status":   job.status,
-        "progress": progress,
-        "error_msg": job.error_msg,
-    }
-    if job.status == "done" and job.result_data:
-        resp.update(job.result_data)
-    return resp
+    return _upload_job_response(job)

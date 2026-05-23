@@ -741,14 +741,21 @@ class WorkbenchExportJob(Base):
 class UploadConfirmJob(Base):
     __tablename__ = "upload_confirm_jobs"
 
-    id          = Column(Integer, primary_key=True, index=True)
-    file_id     = Column(Integer, nullable=True)   # set by background thread after file record is created
-    status      = Column(String(20), default="pending")   # pending/running/done/error
-    progress    = Column(SmallInteger, default=0)
-    result_data = Column(JSON, nullable=True)   # 完成后存 {file_id, filename, platform, ...}
-    error_msg   = Column(Text, nullable=True)
-    created_at  = Column(DateTime, default=datetime.utcnow)
-    finished_at = Column(DateTime, nullable=True)
+    id             = Column(Integer, primary_key=True, index=True)
+    file_id        = Column(Integer, nullable=True)   # set by background thread after file record is created
+    status         = Column(String(20), nullable=False, default="pending")   # pending/running/done/error
+    progress       = Column(SmallInteger, nullable=False, default=0)
+    filename       = Column(String(500), nullable=True)
+    stage          = Column(String(30), nullable=False, default="pending")
+    stage_label    = Column(String(100), nullable=False, default="等待处理")
+    total_rows     = Column(Integer, nullable=True)
+    processed_rows = Column(Integer, nullable=False, default=0)
+    inserted_rows  = Column(Integer, nullable=False, default=0)
+    skipped_rows   = Column(Integer, nullable=False, default=0)
+    result_data    = Column(JSON, nullable=True)   # 完成后存 {file_id, filename, platform, ...}
+    error_msg      = Column(Text, nullable=True)
+    created_at     = Column(DateTime, default=datetime.utcnow)
+    finished_at    = Column(DateTime, nullable=True)
 
 
 # ─────────────────────────── 用户（登录） ───────────────────────────

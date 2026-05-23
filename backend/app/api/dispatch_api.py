@@ -15,7 +15,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 from app.models.database import get_db
 from app.models.schemas import (
-    DispatchRule, DispatchBatch, DispatchItem,
+    Category, DispatchRule, DispatchBatch, DispatchItem,
     DispatchRuleIn, DispatchRuleOut, DispatchBatchOut,
     RawDataRecord, UploadFileRecord,
 )
@@ -177,24 +177,86 @@ def list_batches(
 
 @router.get("/batches/{batch_id}/stats")
 def get_batch_stats(batch_id: int, db: Session = Depends(get_db)):
-    """某批次各品类行数明细"""
+    """某批次各品类行数与规则命中明细"""
     batch = db.query(DispatchBatch).filter(DispatchBatch.id == batch_id).first()
     if not batch:
         raise HTTPException(status_code=404, detail="批次不存在")
 
-    from sqlalchemy import func
-    rows = (
-        db.query(DispatchItem.category_code, func.count(DispatchItem.id).label("count"))
+    category_rows = (
+        db.query(
+            DispatchItem.category_code,
+            Category.name.label("category_name"),
+            func.count(DispatchItem.id).label("count"),
+        )
+        .outerjoin(Category, DispatchItem.category_code == Category.code)
         .filter(DispatchItem.batch_id == batch_id)
-        .group_by(DispatchItem.category_code)
+        .group_by(DispatchItem.category_code, Category.name)
+        .order_by(func.count(DispatchItem.id).desc(), DispatchItem.category_code)
         .all()
     )
+
+    rule_rows = (
+        db.query(
+            DispatchRule.id.label("rule_id"),
+            DispatchRule.category_code,
+            Category.name.label("category_name"),
+            DispatchRule.field,
+            DispatchRule.match_type,
+            DispatchRule.value,
+            DispatchRule.item_name_keyword,
+            DispatchRule.platform,
+            DispatchRule.priority,
+            DispatchRule.is_active,
+            func.count(DispatchItem.id).label("count"),
+        )
+        .join(DispatchRule, DispatchItem.matched_rule_id == DispatchRule.id)
+        .outerjoin(Category, DispatchRule.category_code == Category.code)
+        .filter(DispatchItem.batch_id == batch_id)
+        .group_by(
+            DispatchRule.id,
+            DispatchRule.category_code,
+            Category.name,
+            DispatchRule.field,
+            DispatchRule.match_type,
+            DispatchRule.value,
+            DispatchRule.item_name_keyword,
+            DispatchRule.platform,
+            DispatchRule.priority,
+            DispatchRule.is_active,
+        )
+        .order_by(func.count(DispatchItem.id).desc(), DispatchRule.priority, DispatchRule.id)
+        .all()
+    )
+
     return {
         "batch_id": batch_id,
         "total_rows": batch.total_rows,
         "dispatched_rows": batch.dispatched_rows,
         "unmatched_rows": batch.unmatched_rows,
-        "categories": [{"category_code": r.category_code, "count": r.count} for r in rows],
+        "categories": [
+            {
+                "category_code": row.category_code,
+                "category_name": row.category_name,
+                "count": row.count,
+            }
+            for row in category_rows
+        ],
+        "rules": [
+            {
+                "rule_id": row.rule_id,
+                "category_code": row.category_code,
+                "category_name": row.category_name,
+                "field": row.field,
+                "match_type": row.match_type,
+                "value": row.value,
+                "item_name_keyword": row.item_name_keyword,
+                "platform": row.platform,
+                "priority": row.priority,
+                "is_active": row.is_active,
+                "count": row.count,
+            }
+            for row in rule_rows
+        ],
     }
 
 

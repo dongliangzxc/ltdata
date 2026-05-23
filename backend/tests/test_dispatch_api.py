@@ -8,7 +8,7 @@ from sqlalchemy.pool import StaticPool
 from app.api import dispatch_api
 from app.api.dispatch_api import router
 from app.models.database import Base, get_db
-from app.models.schemas import DispatchBatch, DispatchItem, DispatchRule, RawDataRecord, UploadFileRecord
+from app.models.schemas import Category, DispatchBatch, DispatchItem, DispatchRule, RawDataRecord, UploadFileRecord
 
 
 @pytest.fixture
@@ -128,3 +128,91 @@ def test_run_dispatch_marks_error_and_rolls_back_partial_items(client_and_db, mo
     batch = db.query(DispatchBatch).one()
     assert batch.status == "error"
     assert db.query(DispatchItem).count() == 0
+
+
+def test_get_batch_stats_returns_category_names_and_rule_counts(client_and_db):
+    client, db = client_and_db
+    db.add(Category(code="headphone", name="耳机", sort_order=1))
+    db.add(Category(code="speaker", name="音箱", sort_order=2))
+    file_record = UploadFileRecord(filename="stats.xlsx", platform="JD", row_count=4, status="done")
+    db.add(file_record)
+    db.flush()
+    rule_one = DispatchRule(
+        category_code="headphone",
+        platform="jd",
+        field="category_lv1",
+        match_type="contains",
+        value="耳机",
+        item_name_keyword=None,
+        priority=1,
+        is_active=1,
+    )
+    rule_two = DispatchRule(
+        category_code="speaker",
+        platform=None,
+        field="item_name",
+        match_type="contains",
+        value="音箱",
+        item_name_keyword="无线",
+        priority=2,
+        is_active=1,
+    )
+    db.add(rule_one)
+    db.add(rule_two)
+    db.flush()
+    batch = DispatchBatch(
+        file_id=file_record.id,
+        status="done",
+        total_rows=4,
+        dispatched_rows=3,
+        unmatched_rows=1,
+    )
+    db.add(batch)
+    db.flush()
+    db.add_all([
+        DispatchItem(batch_id=batch.id, raw_data_id=1, category_code="headphone", matched_rule_id=rule_one.id),
+        DispatchItem(batch_id=batch.id, raw_data_id=2, category_code="headphone", matched_rule_id=rule_one.id),
+        DispatchItem(batch_id=batch.id, raw_data_id=3, category_code="speaker", matched_rule_id=rule_two.id),
+    ])
+    db.commit()
+
+    response = client.get(f"/api/dispatch/batches/{batch.id}/stats")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["batch_id"] == batch.id
+    assert payload["total_rows"] == 4
+    assert payload["dispatched_rows"] == 3
+    assert payload["unmatched_rows"] == 1
+    assert payload["categories"] == [
+        {"category_code": "headphone", "category_name": "耳机", "count": 2},
+        {"category_code": "speaker", "category_name": "音箱", "count": 1},
+    ]
+    assert payload["rules"] == [
+        {
+            "rule_id": rule_one.id,
+            "category_code": "headphone",
+            "category_name": "耳机",
+            "field": "category_lv1",
+            "match_type": "contains",
+            "value": "耳机",
+            "item_name_keyword": None,
+            "platform": "jd",
+            "priority": 1,
+            "is_active": 1,
+            "count": 2,
+        },
+        {
+            "rule_id": rule_two.id,
+            "category_code": "speaker",
+            "category_name": "音箱",
+            "field": "item_name",
+            "match_type": "contains",
+            "value": "音箱",
+            "item_name_keyword": "无线",
+            "platform": None,
+            "priority": 2,
+            "is_active": 1,
+            "count": 1,
+        },
+    ]

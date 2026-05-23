@@ -515,12 +515,12 @@ function DispatchRulesTab({ refreshVersion }: { refreshVersion: number }) {
     <>
       <Space style={{ marginBottom: 12 }}>
         <Select
-          placeholder="平台筛选" allowClear style={{ width: 120 }}
+          placeholder="平台筛选" allowClear showSearch optionFilterProp="label" style={{ width: 120 }}
           options={PLATFORM_OPTIONS}
           onChange={v => setFilterPlatform(v || undefined)}
         />
         <Select
-          placeholder="品类筛选" allowClear style={{ width: 140 }}
+          placeholder="品类筛选" allowClear showSearch optionFilterProp="label" style={{ width: 140 }}
           options={categoryOptions}
           onChange={v => setFilterCategory(v || undefined)}
         />

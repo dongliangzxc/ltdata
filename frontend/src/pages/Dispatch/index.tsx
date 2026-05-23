@@ -57,13 +57,6 @@ const formatRuleDescription = (rule: DispatchRuleStat) => {
   return `${fieldLabel} ${matchTypeLabel} ${rule.value}`
 }
 
-const formatRuleTargetCategory = (categoryName: string | null, categoryCode: string | null) => {
-  if (categoryName && categoryCode) return `${categoryName}（${categoryCode}）`
-  if (categoryName) return categoryName
-  if (categoryCode) return `未知品类（${categoryCode}）`
-  return '未知品类'
-}
-
 const formatPlatform = (platform: string | null) => (
   platform ? (PLATFORM_OPTIONS.find(o => o.value === platform)?.label ?? platform) : '不限'
 )
@@ -297,47 +290,44 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
               style={{ marginBottom: 12 }}
               message="规则内容为当前配置；历史批次命中关系基于分发时的规则 ID。修改规则后需重新分发才会改变命中结果。"
             />
-            <Space align="start" size={16} style={{ width: '100%' }}>
-              <Table<DispatchCategoryStat>
-                size="small"
-                rowKey={row => row.category_code || 'unknown'}
-                dataSource={statsData.categories}
-                pagination={false}
-                style={{ width: 320 }}
-                columns={[
-                  { title: '品类', dataIndex: 'category_name', render: (v: string | null) => v || '未知品类' },
-                  { title: '品类编码', dataIndex: 'category_code', width: 100 },
-                  { title: '行数', dataIndex: 'count', width: 70 },
-                ]}
-              />
-              <Table<DispatchRuleStat>
-                size="small"
-                rowKey={(row, index) => `${row.rule_id ?? 'missing'}-${index}`}
-                dataSource={statsData.rules}
-                pagination={false}
-                style={{ flex: 1 }}
-                columns={[
-                  { title: '规则', width: 160, render: (_: unknown, row) => formatRuleDescription(row) },
-                  {
-                    title: 'AND 条件', width: 140, dataIndex: 'item_name_keyword',
-                    render: (v: string | null) => v ? `商品名包含 ${v}` : '不限'
-                  },
-                  {
-                    title: '目标品类', width: 160,
-                    render: (_: unknown, row) => formatRuleTargetCategory(row.category_name, row.category_code)
-                  },
-                  { title: '平台', width: 70, dataIndex: 'platform', render: (v: string | null) => formatPlatform(v) },
-                  { title: '优先级', width: 70, dataIndex: 'priority' },
-                  { title: '命中数量', width: 80, dataIndex: 'count' },
-                  {
-                    title: '操作', width: 70,
-                    render: (_: unknown, row) => canEditRuleStat(row)
-                      ? <Button type="link" size="small" onClick={() => openRuleEdit(row)}>编辑</Button>
-                      : null
-                  },
-                ]}
-              />
-            </Space>
+            <Table<DispatchCategoryStat>
+              size="small"
+              rowKey={row => row.category_code || 'unknown'}
+              dataSource={statsData.categories}
+              pagination={false}
+              expandable={{
+                rowExpandable: category => statsData.rules.some(rule => rule.category_code === category.category_code),
+                expandedRowRender: category => (
+                  <Table<DispatchRuleStat>
+                    size="small"
+                    rowKey={(row, index) => `${row.rule_id ?? 'missing'}-${row.category_code ?? 'none'}-${index}`}
+                    dataSource={statsData.rules.filter(rule => rule.category_code === category.category_code)}
+                    pagination={false}
+                    columns={[
+                      { title: '规则', render: (_: unknown, row) => formatRuleDescription(row) },
+                      {
+                        title: 'AND 条件', width: 160, dataIndex: 'item_name_keyword',
+                        render: (v: string | null) => v ? `商品名包含 ${v}` : '不限'
+                      },
+                      { title: '平台', width: 90, dataIndex: 'platform', render: (v: string | null) => formatPlatform(v) },
+                      { title: '优先级', width: 90, dataIndex: 'priority', render: (v: number | null) => v ?? '-' },
+                      { title: '命中数量', width: 100, dataIndex: 'count' },
+                      {
+                        title: '操作', width: 80,
+                        render: (_: unknown, row) => canEditRuleStat(row)
+                          ? <Button type="link" size="small" onClick={() => openRuleEdit(row)}>编辑</Button>
+                          : null
+                      },
+                    ]}
+                  />
+                ),
+              }}
+              columns={[
+                { title: '品类', dataIndex: 'category_name', render: (v: string | null) => v || '未知品类' },
+                { title: '品类编码', dataIndex: 'category_code', width: 160 },
+                { title: '行数', dataIndex: 'count', width: 120 },
+              ]}
+            />
           </>
         )}
       </Modal>

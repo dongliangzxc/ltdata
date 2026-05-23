@@ -216,3 +216,56 @@ def test_get_batch_stats_returns_category_names_and_rule_counts(client_and_db):
             "count": 1,
         },
     ]
+
+
+def test_get_batch_stats_returns_404_for_missing_batch(client_and_db):
+    client, _ = client_and_db
+
+    response = client.get("/api/dispatch/batches/999/stats")
+
+    assert response.status_code == 404
+
+
+def test_get_batch_stats_preserves_deleted_rule_counts(client_and_db):
+    client, db = client_and_db
+    db.add(Category(code="headphone", name="耳机", sort_order=1))
+    file_record = UploadFileRecord(filename="deleted-rule.xlsx", platform="JD", row_count=1, status="done")
+    db.add(file_record)
+    db.flush()
+    batch = DispatchBatch(
+        file_id=file_record.id,
+        status="done",
+        total_rows=1,
+        dispatched_rows=1,
+        unmatched_rows=0,
+    )
+    db.add(batch)
+    db.flush()
+    deleted_rule_id = 12345
+    db.add(DispatchItem(
+        batch_id=batch.id,
+        raw_data_id=1,
+        category_code="headphone",
+        matched_rule_id=deleted_rule_id,
+    ))
+    db.commit()
+
+    response = client.get(f"/api/dispatch/batches/{batch.id}/stats")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["rules"] == [
+        {
+            "rule_id": deleted_rule_id,
+            "category_code": "headphone",
+            "category_name": "耳机",
+            "field": None,
+            "match_type": None,
+            "value": None,
+            "item_name_keyword": None,
+            "platform": None,
+            "priority": None,
+            "is_active": None,
+            "count": 1,
+        },
+    ]

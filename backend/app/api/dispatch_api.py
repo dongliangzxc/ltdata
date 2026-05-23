@@ -195,10 +195,11 @@ def get_batch_stats(batch_id: int, db: Session = Depends(get_db)):
         .all()
     )
 
+    rule_category_code = func.coalesce(DispatchRule.category_code, DispatchItem.category_code).label("category_code")
     rule_rows = (
         db.query(
-            DispatchRule.id.label("rule_id"),
-            DispatchRule.category_code,
+            DispatchItem.matched_rule_id.label("rule_id"),
+            rule_category_code,
             Category.name.label("category_name"),
             DispatchRule.field,
             DispatchRule.match_type,
@@ -209,12 +210,12 @@ def get_batch_stats(batch_id: int, db: Session = Depends(get_db)):
             DispatchRule.is_active,
             func.count(DispatchItem.id).label("count"),
         )
-        .join(DispatchRule, DispatchItem.matched_rule_id == DispatchRule.id)
-        .outerjoin(Category, DispatchRule.category_code == Category.code)
-        .filter(DispatchItem.batch_id == batch_id)
+        .outerjoin(DispatchRule, DispatchItem.matched_rule_id == DispatchRule.id)
+        .outerjoin(Category, rule_category_code == Category.code)
+        .filter(DispatchItem.batch_id == batch_id, DispatchItem.matched_rule_id.isnot(None))
         .group_by(
-            DispatchRule.id,
-            DispatchRule.category_code,
+            DispatchItem.matched_rule_id,
+            rule_category_code,
             Category.name,
             DispatchRule.field,
             DispatchRule.match_type,
@@ -224,7 +225,7 @@ def get_batch_stats(batch_id: int, db: Session = Depends(get_db)):
             DispatchRule.priority,
             DispatchRule.is_active,
         )
-        .order_by(func.count(DispatchItem.id).desc(), DispatchRule.priority, DispatchRule.id)
+        .order_by(func.count(DispatchItem.id).desc(), DispatchRule.priority, DispatchItem.matched_rule_id)
         .all()
     )
 

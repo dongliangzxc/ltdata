@@ -681,7 +681,9 @@ export default function UploadPage() {
   )
 
   const templates: TemplateRow[] = (templatesData as TemplateRow[] | undefined) ?? []
-  const uploadJobs: UploadConfirmJobResponse[] = uploadJobsData ?? []
+  const uploadJobs: UploadConfirmJobResponse[] = (uploadJobsData ?? []).filter(job => (
+    Boolean(job.filename) && ['pending', 'running', 'error'].includes(job.status)
+  ))
 
   useEffect(() => {
     if (!activeJob) return

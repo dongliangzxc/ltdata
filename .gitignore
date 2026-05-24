@@ -48,6 +48,7 @@ docs/superpowers/
 # Claude Code 本地配置
 .claude/settings.json
 .claude/MEMORY.md
+.claude/worktrees/
 
 # Git worktrees（本地隔离工作区，不提交）
 .worktrees/

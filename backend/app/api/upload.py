@@ -17,7 +17,7 @@ from app.services.import_helper import (
     cleanup_old_tmp as _ih_cleanup_old_tmp,
 )
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from app.models.database import SessionLocal
 from app.models.schemas import UploadConfirmJob
 
@@ -118,6 +118,13 @@ DOMESTIC_UPLOAD_PLATFORMS = {
     "jd", "tm", "tb", "tmall", "taobao", "douyin",
     "京东", "天猫", "淘宝", "抖音",
 }
+
+
+def _format_beijing_datetime(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return (value + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
+
 
 router = APIRouter(prefix="/api/upload", tags=["upload"])
 
@@ -241,7 +248,22 @@ def list_upload_files(
         q = q.filter(UploadFileRecord.data_year == data_year)
     if data_month is not None:
         q = q.filter(UploadFileRecord.data_month == data_month)
-    return q.all()
+    return [
+        {
+            "id": record.id,
+            "filename": record.filename,
+            "platform": record.platform,
+            "month_range": record.month_range,
+            "row_count": record.row_count,
+            "status": record.status,
+            "template_id": record.template_id,
+            "data_region": record.data_region,
+            "data_year": record.data_year,
+            "data_month": record.data_month,
+            "uploaded_at": _format_beijing_datetime(record.uploaded_at),
+        }
+        for record in q.all()
+    ]
 
 
 @router.delete("/files/{file_id}")

@@ -125,7 +125,7 @@ class UploadFileOut(BaseModel):
     data_region:  Optional[str] = None
     data_year:    Optional[int] = None
     data_month:   Optional[int] = None
-    uploaded_at: datetime
+    uploaded_at: str
 
     model_config = {"from_attributes": True}
 

@@ -105,7 +105,7 @@ const historyColumns = (onDelete: (id: number) => void) => [
   },
   {
     title: '上传时间', dataIndex: 'uploaded_at', width: 170,
-    render: (v: string) => new Date(v).toLocaleString('zh-CN'),
+    render: (v: string) => v || '—',
   },
   {
     title: '操作', width: 80,

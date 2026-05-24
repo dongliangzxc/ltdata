@@ -1,5 +1,7 @@
 """Tests for WorkbenchExportJob and UploadConfirmJob ORM models."""
-from app.models.schemas import WorkbenchExportJob, UploadConfirmJob
+from datetime import datetime
+
+from app.models.schemas import WorkbenchExportJob, UploadConfirmJob, UploadFileRecord
 
 
 def test_workbench_export_job_defaults(db):
@@ -140,6 +142,31 @@ def test_wb_export_job_not_found(db, monkeypatch):
 
 
 # ── upload confirm API ──────────────────────────────────────────
+def test_list_upload_files_returns_uploaded_at_as_beijing_time_string(db, monkeypatch):
+    from app.models.database import get_db
+
+    record = UploadFileRecord(
+        filename="demo.xlsx",
+        platform="TM",
+        month_range="202605",
+        row_count=10,
+        status="done",
+        uploaded_at=datetime(2026, 5, 24, 15, 6, 58),
+    )
+    db.add(record)
+    db.commit()
+
+    app = _patch_app(db, monkeypatch)
+    app.dependency_overrides[get_db] = lambda: (yield db)
+    client = TestClient(app, raise_server_exceptions=True)
+    resp = client.get("/api/upload/files", headers={"Authorization": "Bearer test_token"})
+    app.dependency_overrides.clear()
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body[0]["uploaded_at"] == "2026-05-24 23:06:58"
+
+
 def test_upload_job_progress_helper_persists_stage_fields(db, monkeypatch):
     from sqlalchemy.orm import sessionmaker
     from app.api.upload import _update_upload_job_progress
@@ -174,6 +201,7 @@ def test_upload_job_progress_helper_persists_stage_fields(db, monkeypatch):
     assert job.processed_rows == 700
     assert job.inserted_rows == 650
     assert job.skipped_rows == 50
+    upload_api._upload_progress.pop(job.id, None)
 
 
 def test_upload_confirm_returns_job_id(db, monkeypatch, tmp_path):
@@ -243,6 +271,7 @@ def test_upload_confirm_returns_job_id(db, monkeypatch, tmp_path):
 
 def test_upload_confirm_job_detail_returns_persisted_progress(db, monkeypatch):
     from app.models.database import get_db
+    from app.api.upload import _upload_progress
 
     job = UploadConfirmJob(
         filename="demo.xlsx",
@@ -257,6 +286,7 @@ def test_upload_confirm_job_detail_returns_persisted_progress(db, monkeypatch):
     )
     db.add(job)
     db.commit()
+    _upload_progress[job.id] = job.progress
 
     app = _patch_app(db, monkeypatch)
     app.dependency_overrides[get_db] = lambda: (yield db)
@@ -275,6 +305,7 @@ def test_upload_confirm_job_detail_returns_persisted_progress(db, monkeypatch):
     assert body["processed_rows"] == 700
     assert body["inserted_rows"] == 650
     assert body["skipped_rows"] == 50
+    _upload_progress.pop(job.id, None)
 
 
 def test_list_upload_confirm_jobs_returns_actionable_named_jobs_by_default(db, monkeypatch):

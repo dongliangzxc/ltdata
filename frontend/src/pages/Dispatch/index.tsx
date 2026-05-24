@@ -527,6 +527,9 @@ function DispatchRulesTab({ refreshVersion }: { refreshVersion: number }) {
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增规则</Button>
       </Space>
       <Table rowKey="id" dataSource={sortedRules} columns={columns} size="small" pagination={{ pageSize: 20 }} />
+      <Text type="secondary" style={{ display: 'block', marginTop: 8 }}>
+        共 {sortedRules.length} 条规则
+      </Text>
 
       <Modal
         title={editingId ? '编辑规则' : '新增规则'}

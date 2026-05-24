@@ -89,6 +89,31 @@ def _get_upload_job_progress_state(job_id: int) -> dict:
         progress_db.close()
 
 
+def _is_upload_job_cancelled(job_id: int) -> bool:
+    progress_db = SessionLocal()
+    try:
+        progress_job = progress_db.query(UploadConfirmJob).filter_by(id=job_id).first()
+        return bool(progress_job and progress_job.status == "cancelled")
+    finally:
+        progress_db.close()
+
+
+def _mark_interrupted_upload_jobs(db: Session) -> None:
+    jobs = db.query(UploadConfirmJob).filter(
+        UploadConfirmJob.status == "running",
+        UploadConfirmJob.id.notin_(list(_upload_progress.keys()) or [-1]),
+    ).all()
+    if not jobs:
+        return
+    for job in jobs:
+        job.status = "error"
+        job.stage = "interrupted"
+        job.stage_label = "任务已中断"
+        job.error_msg = "后端服务重启，后台处理线程已中断，请重新上传"
+        job.finished_at = datetime.utcnow()
+    db.commit()
+
+
 DOMESTIC_UPLOAD_PLATFORMS = {
     "jd", "tm", "tb", "tmall", "taobao", "douyin",
     "京东", "天猫", "淘宝", "抖音",
@@ -272,6 +297,9 @@ def _run_upload_confirm_thread(
             progress=5,
         )
 
+        if _is_upload_job_cancelled(job_id):
+            return
+
         # 1. 解析 Excel（5→40%）
         try:
             records, platform, month_range = parse_with_mapping(
@@ -339,6 +367,8 @@ def _run_upload_confirm_thread(
                     nested.rollback()
                     db.expunge(tmpl)
         # 3. 去重（50→60%）
+        if _is_upload_job_cancelled(job_id):
+            return
         _update_upload_job_progress(
             db,
             job,
@@ -354,8 +384,10 @@ def _run_upload_confirm_thread(
         ]
         existing_set: set = set()
         if keys:
-            DEDUP_BATCH = 500
+            DEDUP_BATCH = 5000
             for i in range(0, len(keys), DEDUP_BATCH):
+                if _is_upload_job_cancelled(job_id):
+                    return
                 chunk = keys[i: i + DEDUP_BATCH]
                 rows = db.query(
                     RawDataRecord.item_id, RawDataRecord.month, RawDataRecord.platform
@@ -388,6 +420,9 @@ def _run_upload_confirm_thread(
             skipped_rows=skipped,
         )
 
+        if _is_upload_job_cancelled(job_id):
+            return
+
         # 4. 写 upload_files 记录（60→65%）
         file_record = UploadFileRecord(
             filename=original_filename,
@@ -414,8 +449,11 @@ def _run_upload_confirm_thread(
 
         # 5. 批量写入 raw_data（65→90%）
         if to_insert:
-            batch_size = 1000
+            batch_size = 5000
             for i in range(0, len(to_insert), batch_size):
+                if _is_upload_job_cancelled(job_id):
+                    db.rollback()
+                    return
                 chunk = to_insert[i: i + batch_size]
                 db.execute(
                     RawDataRecord.__table__.insert(),
@@ -692,6 +730,7 @@ def list_upload_confirm_jobs(
     limit: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
+    _mark_interrupted_upload_jobs(db)
     q = db.query(UploadConfirmJob).filter(
         UploadConfirmJob.filename.isnot(None),
         UploadConfirmJob.filename != "",
@@ -707,8 +746,28 @@ def list_upload_confirm_jobs(
 @router.get("/confirm/jobs/{job_id}")
 def get_upload_confirm_job(job_id: int, db: Session = Depends(get_db)):
     """轮询上传确认任务状态和进度。"""
+    _mark_interrupted_upload_jobs(db)
     job = db.query(UploadConfirmJob).filter_by(id=job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="任务不存在")
 
+    return _upload_job_response(job)
+
+
+@router.post("/confirm/jobs/{job_id}/cancel")
+def cancel_upload_confirm_job(job_id: int, db: Session = Depends(get_db)):
+    job = db.query(UploadConfirmJob).filter_by(id=job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if job.status not in ("pending", "running"):
+        raise HTTPException(status_code=409, detail="任务已结束，不能取消")
+
+    job.status = "cancelled"
+    job.stage = "cancelled"
+    job.stage_label = "已取消"
+    job.error_msg = "用户取消上传处理"
+    job.finished_at = datetime.utcnow()
+    db.commit()
+    db.refresh(job)
+    _upload_progress.pop(job_id, None)
     return _upload_job_response(job)

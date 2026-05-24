@@ -14,7 +14,7 @@ import {
   listUploadFiles, deleteUploadFile,
   listUploadTemplates,
   updateUploadTemplate, deleteUploadTemplate,
-  getUploadConfirmJob, listUploadConfirmJobs,
+  getUploadConfirmJob, listUploadConfirmJobs, cancelUploadConfirmJob,
   type UploadConfirmJobResponse,
 } from '../../services/api'
 import ProgressModal from '../../components/ProgressModal'
@@ -61,6 +61,7 @@ const renderVal = (v: unknown) =>
 const uploadJobStatusTag = (status: string) => {
   if (status === 'done') return <Tag color="green">已完成</Tag>
   if (status === 'error') return <Tag color="red">失败</Tag>
+  if (status === 'cancelled') return <Tag color="default">已取消</Tag>
   if (status === 'running') return <Tag color="processing">处理中</Tag>
   return <Tag>等待中</Tag>
 }
@@ -753,6 +754,12 @@ export default function UploadPage() {
     }
   }
 
+  const handleCancelJob = async (jobId: number) => {
+    await cancelUploadConfirmJob(jobId)
+    message.success('已取消任务')
+    refreshUploadJobs()
+  }
+
   const Dragger = Upload.Dragger
 
   return (
@@ -819,15 +826,26 @@ export default function UploadPage() {
               },
               {
                 title: '操作',
-                width: 90,
+                width: 140,
                 render: (_: unknown, row) => (
-                  <Button
-                    type="link"
-                    size="small"
-                    onClick={() => { setActiveJob(row); setJobProgressVisible(true) }}
-                  >
-                    查看进度
-                  </Button>
+                  <Space size={4}>
+                    <Button
+                      type="link"
+                      size="small"
+                      onClick={() => { setActiveJob(row); setJobProgressVisible(true) }}
+                    >
+                      查看进度
+                    </Button>
+                    {['pending', 'running'].includes(row.status) && (
+                      <Popconfirm
+                        title="确认取消该上传处理任务？"
+                        description="取消后需要重新上传文件。"
+                        onConfirm={() => handleCancelJob(row.job_id)}
+                      >
+                        <Button type="link" size="small" danger>取消</Button>
+                      </Popconfirm>
+                    )}
+                  </Space>
                 ),
               },
             ]}

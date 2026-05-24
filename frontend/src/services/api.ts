@@ -625,7 +625,7 @@ export interface UploadConfirmJobResponse extends Record<string, unknown> {
   job_id: number
   file_id: number | null
   filename: string | null
-  status: 'pending' | 'running' | 'done' | 'error'
+  status: 'pending' | 'running' | 'done' | 'error' | 'cancelled'
   stage: string | null
   stage_label: string | null
   progress: number
@@ -646,6 +646,9 @@ export interface UploadConfirmJobResponse extends Record<string, unknown> {
 
 export const getUploadConfirmJob = (jobId: number) =>
   api.get<UploadConfirmJobResponse>(`/upload/confirm/jobs/${jobId}`)
+
+export const cancelUploadConfirmJob = (jobId: number) =>
+  api.post<UploadConfirmJobResponse>(`/upload/confirm/jobs/${jobId}/cancel`)
 
 export const listUploadConfirmJobs = (params?: { status?: string; limit?: number }) =>
   api.get<UploadConfirmJobResponse[]>('/upload/confirm/jobs', { params })

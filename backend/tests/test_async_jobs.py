@@ -289,6 +289,9 @@ def test_list_upload_confirm_jobs_returns_actionable_named_jobs_by_default(db, m
     db.add_all([done, running, pending, failed, unnamed, empty_name])
     db.commit()
 
+    from app.api.upload import _upload_progress
+    _upload_progress[running.id] = running.progress
+
     app = _patch_app(db, monkeypatch)
     app.dependency_overrides[get_db] = lambda: (yield db)
     client = TestClient(app, raise_server_exceptions=True)
@@ -299,6 +302,7 @@ def test_list_upload_confirm_jobs_returns_actionable_named_jobs_by_default(db, m
     body = resp.json()
     assert [row["filename"] for row in body] == ["failed.xlsx", "pending.xlsx", "running.xlsx"]
     assert {row["status"] for row in body} == {"pending", "running", "error"}
+    _upload_progress.pop(running.id, None)
 
 
 def test_list_upload_confirm_jobs_can_query_done_jobs_by_status(db, monkeypatch):
@@ -320,6 +324,65 @@ def test_list_upload_confirm_jobs_can_query_done_jobs_by_status(db, monkeypatch)
     body = resp.json()
     assert [row["filename"] for row in body] == ["done.xlsx"]
     assert body[0]["status"] == "done"
+
+
+def test_list_upload_confirm_jobs_marks_stale_running_jobs_interrupted(db, monkeypatch):
+    from app.models.database import get_db
+
+    job = UploadConfirmJob(filename="stale.xlsx", status="running", stage="deduping", stage_label="正在去重检查", progress=53)
+    db.add(job)
+    db.commit()
+
+    app = _patch_app(db, monkeypatch)
+    app.dependency_overrides[get_db] = lambda: (yield db)
+    client = TestClient(app, raise_server_exceptions=True)
+    resp = client.get("/api/upload/confirm/jobs", headers={"Authorization": "Bearer test_token"})
+    app.dependency_overrides.clear()
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body[0]["filename"] == "stale.xlsx"
+    assert body[0]["status"] == "error"
+    assert body[0]["stage"] == "interrupted"
+    assert body[0]["stage_label"] == "任务已中断"
+    assert "后台处理线程已中断" in body[0]["error_msg"]
+
+
+def test_cancel_upload_confirm_job_marks_running_job_cancelled(db, monkeypatch):
+    from app.models.database import get_db
+
+    job = UploadConfirmJob(filename="running.xlsx", status="running", stage="reading", stage_label="正在读取文件", progress=5)
+    db.add(job)
+    db.commit()
+
+    app = _patch_app(db, monkeypatch)
+    app.dependency_overrides[get_db] = lambda: (yield db)
+    client = TestClient(app, raise_server_exceptions=True)
+    resp = client.post(f"/api/upload/confirm/jobs/{job.id}/cancel", headers={"Authorization": "Bearer test_token"})
+    app.dependency_overrides.clear()
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "cancelled"
+    assert body["stage"] == "cancelled"
+    assert body["stage_label"] == "已取消"
+    assert body["finished_at"] is not None
+
+
+def test_cancel_upload_confirm_job_rejects_finished_job(db, monkeypatch):
+    from app.models.database import get_db
+
+    job = UploadConfirmJob(filename="done.xlsx", status="done", stage="done", stage_label="处理完成", progress=100)
+    db.add(job)
+    db.commit()
+
+    app = _patch_app(db, monkeypatch)
+    app.dependency_overrides[get_db] = lambda: (yield db)
+    client = TestClient(app, raise_server_exceptions=True)
+    resp = client.post(f"/api/upload/confirm/jobs/{job.id}/cancel", headers={"Authorization": "Bearer test_token"})
+    app.dependency_overrides.clear()
+
+    assert resp.status_code == 409
 
 
 def test_upload_confirm_job_not_found(db, monkeypatch):

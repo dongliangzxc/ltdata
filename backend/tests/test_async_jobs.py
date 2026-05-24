@@ -277,12 +277,16 @@ def test_upload_confirm_job_detail_returns_persisted_progress(db, monkeypatch):
     assert body["skipped_rows"] == 50
 
 
-def test_list_upload_confirm_jobs_returns_recent_jobs(db, monkeypatch):
+def test_list_upload_confirm_jobs_returns_actionable_named_jobs_by_default(db, monkeypatch):
     from app.models.database import get_db
 
-    old = UploadConfirmJob(filename="old.xlsx", status="done", stage="done", stage_label="处理完成", progress=100)
-    new = UploadConfirmJob(filename="new.xlsx", status="running", stage="reading", stage_label="正在读取文件", progress=5)
-    db.add_all([old, new])
+    done = UploadConfirmJob(filename="done.xlsx", status="done", stage="done", stage_label="处理完成", progress=100)
+    running = UploadConfirmJob(filename="running.xlsx", status="running", stage="reading", stage_label="正在读取文件", progress=5)
+    pending = UploadConfirmJob(filename="pending.xlsx", status="pending", stage="pending", stage_label="等待处理", progress=0)
+    failed = UploadConfirmJob(filename="failed.xlsx", status="error", stage="error", stage_label="文件解析失败", progress=20)
+    unnamed = UploadConfirmJob(filename=None, status="running", stage="pending", stage_label="等待处理", progress=0)
+    empty_name = UploadConfirmJob(filename="", status="running", stage="pending", stage_label="等待处理", progress=0)
+    db.add_all([done, running, pending, failed, unnamed, empty_name])
     db.commit()
 
     app = _patch_app(db, monkeypatch)
@@ -293,8 +297,29 @@ def test_list_upload_confirm_jobs_returns_recent_jobs(db, monkeypatch):
 
     assert resp.status_code == 200
     body = resp.json()
-    assert [row["filename"] for row in body[:2]] == ["new.xlsx", "old.xlsx"]
-    assert body[0]["stage"] == "reading"
+    assert [row["filename"] for row in body] == ["failed.xlsx", "pending.xlsx", "running.xlsx"]
+    assert {row["status"] for row in body} == {"pending", "running", "error"}
+
+
+def test_list_upload_confirm_jobs_can_query_done_jobs_by_status(db, monkeypatch):
+    from app.models.database import get_db
+
+    done = UploadConfirmJob(filename="done.xlsx", status="done", stage="done", stage_label="处理完成", progress=100)
+    running = UploadConfirmJob(filename="running.xlsx", status="running", stage="reading", stage_label="正在读取文件", progress=5)
+    unnamed_done = UploadConfirmJob(filename=None, status="done", stage="done", stage_label="处理完成", progress=100)
+    db.add_all([done, running, unnamed_done])
+    db.commit()
+
+    app = _patch_app(db, monkeypatch)
+    app.dependency_overrides[get_db] = lambda: (yield db)
+    client = TestClient(app, raise_server_exceptions=True)
+    resp = client.get("/api/upload/confirm/jobs?status=done", headers={"Authorization": "Bearer test_token"})
+    app.dependency_overrides.clear()
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [row["filename"] for row in body] == ["done.xlsx"]
+    assert body[0]["status"] == "done"
 
 
 def test_upload_confirm_job_not_found(db, monkeypatch):

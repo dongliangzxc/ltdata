@@ -692,9 +692,14 @@ def list_upload_confirm_jobs(
     limit: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
-    q = db.query(UploadConfirmJob)
+    q = db.query(UploadConfirmJob).filter(
+        UploadConfirmJob.filename.isnot(None),
+        UploadConfirmJob.filename != "",
+    )
     if status:
         q = q.filter(UploadConfirmJob.status == status)
+    else:
+        q = q.filter(UploadConfirmJob.status.in_(["pending", "running", "error"]))
     jobs = q.order_by(UploadConfirmJob.created_at.desc(), UploadConfirmJob.id.desc()).limit(limit).all()
     return [_upload_job_response(job) for job in jobs]
 

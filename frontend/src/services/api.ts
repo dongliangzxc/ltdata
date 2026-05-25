@@ -648,6 +648,9 @@ export const getUploadConfirmJob = (jobId: number) =>
 export const cancelUploadConfirmJob = (jobId: number) =>
   api.post<UploadConfirmJobResponse>(`/upload/confirm/jobs/${jobId}/cancel`)
 
+export const deleteUploadConfirmJob = (jobId: number) =>
+  api.delete(`/upload/confirm/jobs/${jobId}`)
+
 export const listUploadConfirmJobs = (params?: { status?: string; limit?: number }) =>
   api.get<UploadConfirmJobResponse[]>('/upload/confirm/jobs', { params })
 

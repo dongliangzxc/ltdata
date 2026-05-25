@@ -400,6 +400,45 @@ def test_cancel_upload_confirm_job_marks_running_job_cancelled(db, monkeypatch):
     assert body["finished_at"] is not None
 
 
+def test_delete_upload_confirm_job_removes_failed_job(db, monkeypatch):
+    from app.models.database import get_db
+
+    job = UploadConfirmJob(filename="failed.xlsx", status="error", stage="error", stage_label="文件解析失败", progress=20)
+    db.add(job)
+    db.commit()
+    job_id = job.id
+
+    app = _patch_app(db, monkeypatch)
+    app.dependency_overrides[get_db] = lambda: (yield db)
+    client = TestClient(app, raise_server_exceptions=True)
+    resp = client.delete(f"/api/upload/confirm/jobs/{job_id}", headers={"Authorization": "Bearer test_token"})
+    app.dependency_overrides.clear()
+
+    assert resp.status_code == 200
+    assert resp.json()["message"] == "已删除"
+    assert db.query(UploadConfirmJob).filter_by(id=job_id).first() is None
+
+
+def test_delete_upload_confirm_job_rejects_running_job(db, monkeypatch):
+    from app.models.database import get_db
+    from app.api.upload import _upload_progress
+
+    job = UploadConfirmJob(filename="running.xlsx", status="running", stage="reading", stage_label="正在读取文件", progress=5)
+    db.add(job)
+    db.commit()
+    _upload_progress[job.id] = job.progress
+
+    app = _patch_app(db, monkeypatch)
+    app.dependency_overrides[get_db] = lambda: (yield db)
+    client = TestClient(app, raise_server_exceptions=True)
+    resp = client.delete(f"/api/upload/confirm/jobs/{job.id}", headers={"Authorization": "Bearer test_token"})
+    app.dependency_overrides.clear()
+
+    assert resp.status_code == 409
+    assert db.query(UploadConfirmJob).filter_by(id=job.id).first() is not None
+    _upload_progress.pop(job.id, None)
+
+
 def test_cancel_upload_confirm_job_rejects_finished_job(db, monkeypatch):
     from app.models.database import get_db
 

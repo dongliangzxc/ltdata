@@ -14,7 +14,7 @@ import {
   listUploadFiles, deleteUploadFile,
   listUploadTemplates,
   updateUploadTemplate, deleteUploadTemplate,
-  getUploadConfirmJob, listUploadConfirmJobs, cancelUploadConfirmJob,
+  getUploadConfirmJob, listUploadConfirmJobs, cancelUploadConfirmJob, deleteUploadConfirmJob,
   type UploadConfirmJobResponse,
 } from '../../services/api'
 import ProgressModal from '../../components/ProgressModal'
@@ -754,6 +754,16 @@ export default function UploadPage() {
     refreshUploadJobs()
   }
 
+  const handleDeleteJob = async (jobId: number) => {
+    await deleteUploadConfirmJob(jobId)
+    message.success('已删除任务')
+    if (activeJob?.job_id === jobId) {
+      setActiveJob(null)
+      setJobProgressVisible(false)
+    }
+    refreshUploadJobs()
+  }
+
   const Dragger = Upload.Dragger
 
   return (
@@ -837,6 +847,15 @@ export default function UploadPage() {
                         onConfirm={() => handleCancelJob(row.job_id)}
                       >
                         <Button type="link" size="small" danger>取消</Button>
+                      </Popconfirm>
+                    )}
+                    {['error', 'cancelled'].includes(row.status) && (
+                      <Popconfirm
+                        title="确认删除该上传处理任务？"
+                        description="删除后该任务记录将不再显示。"
+                        onConfirm={() => handleDeleteJob(row.job_id)}
+                      >
+                        <Button type="link" size="small" danger>删除</Button>
                       </Popconfirm>
                     )}
                   </Space>

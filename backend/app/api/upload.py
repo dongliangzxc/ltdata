@@ -793,3 +793,17 @@ def cancel_upload_confirm_job(job_id: int, db: Session = Depends(get_db)):
     db.refresh(job)
     _upload_progress.pop(job_id, None)
     return _upload_job_response(job)
+
+
+@router.delete("/confirm/jobs/{job_id}")
+def delete_upload_confirm_job(job_id: int, db: Session = Depends(get_db)):
+    job = db.query(UploadConfirmJob).filter_by(id=job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if job.status not in ("error", "cancelled"):
+        raise HTTPException(status_code=409, detail="任务处理中，不能删除")
+
+    db.delete(job)
+    db.commit()
+    _upload_progress.pop(job_id, None)
+    return {"message": "已删除"}

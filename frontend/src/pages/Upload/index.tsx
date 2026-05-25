@@ -69,7 +69,12 @@ const uploadJobStatusTag = (status: string) => {
 // ─── Upload history table columns ────────────────────────────
 const historyColumns = (onDelete: (id: number) => void) => [
   { title: 'ID', dataIndex: 'id', width: 60 },
-  { title: '文件名', dataIndex: 'filename', ellipsis: true },
+  {
+    title: '文件名',
+    dataIndex: 'filename',
+    width: 420,
+    render: (v: string) => <span style={{ whiteSpace: 'nowrap' }}>{v}</span>,
+  },
   {
     title: '平台', dataIndex: 'platform', width: 80,
     render: (v: string) => <Tag color="blue">{PLATFORM_LABEL[v] ?? v}</Tag>,
@@ -89,12 +94,6 @@ const historyColumns = (onDelete: (id: number) => void) => [
     dataIndex: 'data_year',
     width: 70,
     render: (v: number | null) => v ?? '—',
-  },
-  {
-    title: '月份',
-    dataIndex: 'data_month',
-    width: 70,
-    render: (v: number | null) => v != null ? `${v} 月` : '—',
   },
   { title: '数据量', dataIndex: 'row_count', width: 80 },
   {
@@ -156,7 +155,6 @@ function MappingCard({
   onCancel,
   dataRegion,
   dataYear,
-  dataMonth,
   onJobUpdate,
 }: {
   headersResult: HeadersResult
@@ -165,7 +163,6 @@ function MappingCard({
   onCancel: () => void
   dataRegion?: string
   dataYear?: number
-  dataMonth?: number
   onJobUpdate?: () => void
 }) {
   const { columns, suggested_template, match_score, temp_file_id, filename } = headersResult
@@ -249,7 +246,6 @@ function MappingCard({
         template_id: selectedTemplateId,
         data_region: dataRegion,
         data_year: dataYear,
-        data_month: dataMonth,
       })
       const { job_id } = res.data as { job_id: number }
 
@@ -655,21 +651,19 @@ export default function UploadPage() {
 
   const [dataRegion, setDataRegion] = useState<string | undefined>(undefined)
   const [dataYear, setDataYear] = useState<number>(new Date().getFullYear())
-  const [dataMonth, setDataMonth] = useState<number>(new Date().getMonth() + 1)
 
   const [filterRegion, setFilterRegion] = useState<string | undefined>(undefined)
   const [filterYear, setFilterYear] = useState<number | undefined>(undefined)
-  const [filterMonth, setFilterMonth] = useState<number | undefined>(undefined)
 
   const { data: filesData, loading: filesLoading, run: runFilesQuery } = useRequest(
-    (params?: { data_region?: string; data_year?: number; data_month?: number }) =>
+    (params?: { data_region?: string; data_year?: number }) =>
       listUploadFiles(params).then(r => r.data),
     { manual: true }
   )
 
   useEffect(() => {
-    runFilesQuery({ data_region: filterRegion, data_year: filterYear, data_month: filterMonth })
-  }, [filterRegion, filterYear, filterMonth])
+    runFilesQuery({ data_region: filterRegion, data_year: filterYear })
+  }, [filterRegion, filterYear])
 
   const { data: templatesData, loading: templatesLoading, refresh: refreshTemplates } = useRequest(
     () => listUploadTemplates().then(r => r.data),
@@ -720,7 +714,7 @@ export default function UploadPage() {
       skipped: Number(result.skipped ?? 0),
     })
     setStep('preview')
-    runFilesQuery({ data_region: filterRegion, data_year: filterYear, data_month: filterMonth })
+    runFilesQuery({ data_region: filterRegion, data_year: filterYear })
     refreshTemplates()
     refreshUploadJobs()
   }
@@ -748,7 +742,7 @@ export default function UploadPage() {
     try {
       await deleteUploadFile(id)
       message.success('已删除')
-      runFilesQuery({ data_region: filterRegion, data_year: filterYear, data_month: filterMonth })
+      runFilesQuery({ data_region: filterRegion, data_year: filterYear })
     } catch {
       // handled
     }
@@ -878,16 +872,6 @@ export default function UploadPage() {
                 max={2099}
                 style={{ width: 100 }}
               />
-              <Select
-                placeholder="月份"
-                value={dataMonth}
-                onChange={setDataMonth}
-                style={{ width: 90 }}
-                options={Array.from({ length: 12 }, (_, i) => ({
-                  value: i + 1,
-                  label: `${i + 1} 月`,
-                }))}
-              />
             </Space>
           </Card>
           <MappingCard
@@ -897,7 +881,6 @@ export default function UploadPage() {
             onCancel={() => setStep('upload')}
             dataRegion={dataRegion}
             dataYear={dataYear}
-            dataMonth={dataMonth}
             onJobUpdate={refreshUploadJobs}
           />
         </>
@@ -945,7 +928,7 @@ export default function UploadPage() {
           tabBarExtraContent={
             <Button
               icon={<ReloadOutlined />}
-              onClick={() => { runFilesQuery({ data_region: filterRegion, data_year: filterYear, data_month: filterMonth }); refreshTemplates(); refreshUploadJobs() }}
+              onClick={() => { runFilesQuery({ data_region: filterRegion, data_year: filterYear }); refreshTemplates(); refreshUploadJobs() }}
             >
               刷新
             </Button>
@@ -976,18 +959,7 @@ export default function UploadPage() {
                       max={2099}
                       style={{ width: 100 }}
                     />
-                    <Select
-                      placeholder="月份"
-                      value={filterMonth}
-                      onChange={setFilterMonth}
-                      style={{ width: 90 }}
-                      options={Array.from({ length: 12 }, (_, i) => ({
-                        value: i + 1,
-                        label: `${i + 1} 月`,
-                      }))}
-                      allowClear
-                    />
-                    <Button onClick={() => { setFilterRegion(undefined); setFilterYear(undefined); setFilterMonth(undefined) }}>
+                    <Button onClick={() => { setFilterRegion(undefined); setFilterYear(undefined) }}>
                       重置
                     </Button>
                   </Space>
@@ -998,6 +970,7 @@ export default function UploadPage() {
                     size="small"
                     loading={filesLoading}
                     pagination={{ pageSize: 10 }}
+                    scroll={{ x: 1200 }}
                   />
                 </>
               ),

@@ -53,7 +53,6 @@ interface UploadFileItem {
 export const listUploadFiles = (params?: {
   data_region?: string
   data_year?: number
-  data_month?: number
 }) => api.get<UploadFileItem[]>('/upload/files', { params })
 
 export const deleteUploadFile = (fileId: number) => api.delete(`/upload/files/${fileId}`)
@@ -618,7 +617,6 @@ export const confirmUpload = (payload: {
   template_id?: number
   data_region?: string
   data_year?: number
-  data_month?: number
 }) => api.post('/upload/confirm', payload, { timeout: 300000 })
 
 export interface UploadConfirmJobResponse extends Record<string, unknown> {

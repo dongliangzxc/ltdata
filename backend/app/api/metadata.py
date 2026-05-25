@@ -4,9 +4,11 @@
 """
 import io
 import math
+from pathlib import Path
 import pandas as pd
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy import func
@@ -14,6 +16,9 @@ from app.models.database import get_db
 from app.models.schemas import MetadataSpec, MetadataSpecIn, MetadataSpecOut, PaginatedResponse
 
 router = APIRouter(prefix="/api/metadata", tags=["metadata"])
+
+_TEMPLATE_FILENAME = "洛图科技—产品段属性说明-模板.xlsx"
+_METADATA_TEMPLATE_PATH = Path(__file__).resolve().parents[3] / "平台元数据" / _TEMPLATE_FILENAME
 
 
 def _clean_val(v):
@@ -207,6 +212,17 @@ async def import_metadata(file: UploadFile = File(...), db: Session = Depends(ge
 
     db.commit()
     return {"imported": len(rows_to_upsert), "upserted": upserted}
+
+
+@router.get("/template")
+def download_metadata_template():
+    if not _METADATA_TEMPLATE_PATH.exists():
+        raise HTTPException(status_code=404, detail="模板文件不存在")
+    return FileResponse(
+        path=str(_METADATA_TEMPLATE_PATH),
+        filename=_TEMPLATE_FILENAME,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 @router.get("", response_model=PaginatedResponse)

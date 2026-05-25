@@ -4,14 +4,14 @@ import {
   InputNumber, message, Row, Col, Divider, Typography, Select
 } from 'antd'
 import {
-  PlusOutlined, UploadOutlined, EditOutlined, DeleteOutlined,
+  PlusOutlined, UploadOutlined, DownloadOutlined, EditOutlined, DeleteOutlined,
   MinusCircleOutlined,
 } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import {
   listModels, getModelDetail, createModel, updateModel, deleteModel,
   listModelAliases, addModelAlias, deleteModelAlias,
-  listCategories,
+  listCategories, downloadModelTemplate,
 } from '../../services/api'
 import ImportMappingModal from '../../components/ImportMappingModal'
 
@@ -57,6 +57,26 @@ export default function ModelsPage() {
   const [importOpen, setImportOpen] = useState(false)
   const [expandedSpecs, setExpandedSpecs] = useState<Record<number, ModelSpec[]>>({})
   const [form] = Form.useForm()
+
+  const triggerDownload = (blob: Blob, filename: string) => {
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(url)
+  }
+
+  const handleDownloadTemplate = async () => {
+    try {
+      const res = await downloadModelTemplate()
+      triggerDownload(res.data, '产品属性导入模板.xlsx')
+    } catch {
+      // handled by interceptor
+    }
+  }
 
   const [aliases, setAliases] = useState<ModelAlias[]>([])
   const [aliasInput, setAliasInput] = useState('')
@@ -260,6 +280,7 @@ export default function ModelsPage() {
         <Col flex="auto" />
         <Col>
           <Space>
+            <Button icon={<DownloadOutlined />} onClick={handleDownloadTemplate}>下载模板</Button>
             <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>Excel 导入</Button>
             <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增型号</Button>
           </Space>

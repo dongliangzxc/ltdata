@@ -201,6 +201,8 @@ export const listMetadata = (params: Record<string, unknown>) => api.get('/metad
 export const createMetadata = (data: unknown) => api.post('/metadata', data)
 export const updateMetadata = (id: number, data: unknown) => api.put(`/metadata/${id}`, data)
 export const deleteMetadata = (id: number) => api.delete(`/metadata/${id}`)
+export const downloadMetadataTemplate = () =>
+  api.get('/metadata/template', { responseType: 'blob' })
 
 // ─── Models ────────────────────────────────────────────────
 export const importModels = (formData: FormData) =>
@@ -212,6 +214,8 @@ export const getModelDetail = (id: number) => api.get(`/models/${id}`)
 export const createModel = (data: unknown) => api.post('/models', data)
 export const updateModel = (id: number, data: unknown) => api.put(`/models/${id}`, data)
 export const deleteModel = (id: number) => api.delete(`/models/${id}`)
+export const downloadModelTemplate = () =>
+  api.get('/models/template', { responseType: 'blob' })
 export const listModelAliases = (modelId: number) =>
   api.get(`/models/${modelId}/aliases`)
 export const addModelAlias = (modelId: number, aliasCode: string) =>

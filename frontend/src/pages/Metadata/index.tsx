@@ -3,11 +3,11 @@ import {
   Card, Table, Button, Input, Space, Popconfirm, Upload, Modal, Form,
   Select, Switch, InputNumber, message, Tag, Row, Col, Tooltip, Collapse
 } from 'antd'
-import { PlusOutlined, UploadOutlined, EditOutlined, DeleteOutlined, WarningOutlined, CheckCircleOutlined } from '@ant-design/icons'
+import { PlusOutlined, UploadOutlined, DownloadOutlined, EditOutlined, DeleteOutlined, WarningOutlined, CheckCircleOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import {
   listMetadata, createMetadata, updateMetadata, deleteMetadata, importMetadata, previewMetadata,
-  listCategories
+  downloadMetadataTemplate, listCategories
 } from '../../services/api'
 
 type MetadataItem = {
@@ -44,6 +44,26 @@ export default function MetadataPage() {
   const pendingFileRef = useRef<File | null>(null)
   const [form] = Form.useForm()
   const specType = Form.useWatch('spec_type', form)
+
+  const triggerDownload = (blob: Blob, filename: string) => {
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(url)
+  }
+
+  const handleDownloadTemplate = async () => {
+    try {
+      const res = await downloadMetadataTemplate()
+      triggerDownload(res.data, '洛图科技—产品段属性说明-模板.xlsx')
+    } catch {
+      // error handled by interceptor
+    }
+  }
 
   const { data: categoriesData } = useRequest(() => listCategories().then(r => r.data))
   const categoryOptions = (categoriesData ?? []).map((c: { code: string; name: string }) => ({
@@ -195,6 +215,7 @@ export default function MetadataPage() {
         <Col flex="auto" />
         <Col>
           <Space>
+            <Button icon={<DownloadOutlined />} onClick={handleDownloadTemplate}>下载模板</Button>
             <Upload beforeUpload={handleImport} showUploadList={false} accept=".xlsx,.xls">
               <Button icon={<UploadOutlined />} loading={previewing || importing}>Excel 导入</Button>
             </Upload>

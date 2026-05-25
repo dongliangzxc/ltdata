@@ -6,10 +6,11 @@
 import io
 import os
 import math
+from urllib.parse import quote
 import pandas as pd
 from pathlib import Path
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy.dialects.mysql import insert as mysql_insert
@@ -25,6 +26,29 @@ from app.services.import_helper import save_tmp_file, read_columns, find_best_te
 router = APIRouter(prefix="/api/models", tags=["models"])
 
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "./uploads")
+
+_MODEL_TEMPLATE_FILENAME = "产品属性导入模板.xlsx"
+_MODEL_TEMPLATE_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_MODEL_TEMPLATE_HEADERS = ["品牌码", "型号码", "品类", "品牌名称", "型号名称", "上市年", "上市月", "上市周", "上市价格", "网址"]
+_MODEL_SPEC_TEMPLATE_HEADERS = ["品牌码", "型号码", "规格名称", "规格值"]
+
+
+def _build_model_template_bytes() -> bytes:
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    model_sheet = workbook.active
+    model_sheet.title = "型号"
+    model_sheet.append(_MODEL_TEMPLATE_HEADERS)
+    model_sheet.append(["DJI", "OSMO-ACTION-4", "action_camera", "大疆", "Osmo Action 4", 2024, 9, None, 2999, "https://example.com/product"])
+
+    spec_sheet = workbook.create_sheet("型号规格")
+    spec_sheet.append(_MODEL_SPEC_TEMPLATE_HEADERS)
+    spec_sheet.append(["DJI", "OSMO-ACTION-4", "产品形态", "OA传统"])
+
+    output = io.BytesIO()
+    workbook.save(output)
+    return output.getvalue()
 
 
 class ModelsConfirmPayload(BaseModel):
@@ -76,6 +100,7 @@ def models_confirm(
     file_path = candidates[0]
 
     suffix = file_path.suffix.lower()
+    df_spec = pd.DataFrame()
     if suffix == ".csv":
         try:
             df = pd.read_csv(file_path, dtype=str, encoding="utf-8-sig")
@@ -83,6 +108,10 @@ def models_confirm(
             df = pd.read_csv(file_path, dtype=str, encoding="gbk")
     else:
         df = pd.read_excel(file_path, sheet_name=0, dtype=str)
+        try:
+            df_spec = pd.read_excel(file_path, sheet_name="型号规格", dtype=str)
+        except Exception:
+            df_spec = pd.DataFrame()
     df.columns = [str(c).strip() for c in df.columns]
 
     ignore_set = set(payload.ignore_columns)
@@ -148,7 +177,63 @@ def models_confirm(
             ))
             models_inserted += 1
 
+    specs_inserted = 0
     if models_inserted > 0 or models_updated > 0:
+        db.flush()
+
+        model_key_to_id = {
+            (record.brand_code, record.model_code): record.id
+            for record in db.query(ModelRecord).all()
+        }
+
+        if not df_spec.empty:
+            df_spec.columns = [str(c).strip() for c in df_spec.columns]
+            df_spec = df_spec.dropna(axis=1, how="all")
+            priority = {"品牌码": "brand_code", "型号码": "model_code"}
+            fallback = {"品牌": "brand_code", "型号": "model_code"}
+            other = {"规格名称": "spec_name", "规格值": "spec_value"}
+            spec_rename = {}
+            for src, dst in priority.items():
+                if src in df_spec.columns:
+                    spec_rename[src] = dst
+            for src, dst in fallback.items():
+                if src in df_spec.columns and dst not in spec_rename.values():
+                    spec_rename[src] = dst
+            for src, dst in other.items():
+                if src in df_spec.columns and dst not in spec_rename.values():
+                    spec_rename[src] = dst
+            df_spec = df_spec.rename(columns=spec_rename)
+
+            if "brand_code" in df_spec.columns and "model_code" in df_spec.columns:
+                for col in ["brand_code", "model_code"]:
+                    df_spec[col] = df_spec[col].replace("不需要填写", None).ffill()
+
+                affected_model_ids = set()
+                spec_rows = []
+                for _, spec_row in df_spec.iterrows():
+                    brand_code = _clean_val(spec_row.get("brand_code"))
+                    model_code = _clean_val(spec_row.get("model_code"))
+                    spec_name = _clean_val(spec_row.get("spec_name"))
+                    if not brand_code or not model_code or not spec_name:
+                        continue
+                    model_id = model_key_to_id.get((str(brand_code), str(model_code)))
+                    if model_id is None:
+                        continue
+                    affected_model_ids.add(model_id)
+                    spec_rows.append({
+                        "model_id": model_id,
+                        "spec_name": str(spec_name).strip(),
+                        "spec_value": str(_clean_val(spec_row.get("spec_value")) or "") or None,
+                    })
+
+                if affected_model_ids:
+                    db.query(ModelSpec).filter(
+                        ModelSpec.model_id.in_(affected_model_ids)
+                    ).delete(synchronize_session=False)
+                for spec in spec_rows:
+                    db.add(ModelSpec(**spec))
+                    specs_inserted += 1
+
         db.commit()
 
     if payload.save_template_name and (models_inserted + models_updated) > 0:
@@ -169,7 +254,7 @@ def models_confirm(
     return {
         "models_inserted": models_inserted,
         "models_updated": models_updated,
-        "specs_inserted": 0,
+        "specs_inserted": specs_inserted,
         "aliases_inserted": 0,
         "errors": errors,
     }
@@ -500,6 +585,14 @@ async def import_models(file: UploadFile = File(...), db: Session = Depends(get_
 
     db.commit()
     return {"imported_models": upserted_models, "imported_specs": upserted_specs, "imported_aliases": upserted_aliases}
+
+
+@router.get("/template")
+def download_model_template():
+    content = _build_model_template_bytes()
+    quoted_filename = quote(_MODEL_TEMPLATE_FILENAME)
+    headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{quoted_filename}"}
+    return Response(content=content, media_type=_MODEL_TEMPLATE_MEDIA_TYPE, headers=headers)
 
 
 @router.get("", response_model=PaginatedResponse)

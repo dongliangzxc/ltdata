@@ -31,6 +31,18 @@ _MODEL_TEMPLATE_FILENAME = "产品属性导入模板.xlsx"
 _MODEL_TEMPLATE_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _MODEL_TEMPLATE_HEADERS = ["品牌码", "型号码", "品类", "品牌名称", "型号名称", "上市年", "上市月", "上市周", "上市价格", "网址"]
 _MODEL_SPEC_TEMPLATE_HEADERS = ["品牌码", "型号码", "规格名称", "规格值"]
+_MODEL_TEMPLATE_MAPPING = {
+    "品牌码": "brand_code",
+    "型号码": "model_code",
+    "品类": "category_code",
+    "品牌名称": "brand_name",
+    "型号名称": "model_name",
+    "上市年": "launch_year",
+    "上市月": "launch_month",
+    "上市周": "launch_week",
+    "上市价格": "launch_price",
+    "网址": "url",
+}
 
 
 def _build_model_template_bytes() -> bytes:
@@ -67,17 +79,28 @@ async def models_headers(
     """P10: Step 1 — read columns from model sheet, suggest template."""
     temp_file_id, save_path, filename = await save_tmp_file(file, UPLOAD_DIR)
     columns = read_columns(save_path)
-    best_tmpl, score = find_best_template(columns, "model", db)
-    return {
-        "temp_file_id": temp_file_id,
-        "filename": filename,
-        "columns": columns,
-        "suggested_template": {
+    if columns == _MODEL_TEMPLATE_HEADERS:
+        best_tmpl = None
+        score = 100
+        suggested_template = {
+            "id": 0,
+            "name": "产品属性导入模板",
+            "mapping": _MODEL_TEMPLATE_MAPPING,
+            "ignore_columns": [],
+        }
+    else:
+        best_tmpl, score = find_best_template(columns, "model", db)
+        suggested_template = {
             "id": best_tmpl.id,
             "name": best_tmpl.name,
             "mapping": best_tmpl.mapping,
             "ignore_columns": best_tmpl.ignore_columns or [],
-        } if best_tmpl else None,
+        } if best_tmpl else None
+    return {
+        "temp_file_id": temp_file_id,
+        "filename": filename,
+        "columns": columns,
+        "suggested_template": suggested_template,
         "match_score": score,
     }
 

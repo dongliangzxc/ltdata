@@ -231,6 +231,40 @@ def test_models_confirm_upserts_on_duplicate(client):
     assert d2["models_inserted"] == 0
 
 
+def test_models_headers_suggests_builtin_template_mapping_for_downloaded_template(client):
+    mapping = {
+        "品牌码": "brand_code",
+        "型号码": "model_code",
+        "品类": "category_code",
+        "品牌名称": "brand_name",
+        "型号名称": "model_name",
+        "上市年": "launch_year",
+        "上市月": "launch_month",
+        "上市周": "launch_week",
+        "上市价格": "launch_price",
+        "网址": "url",
+    }
+
+    xlsx_bytes = _make_models_template_xlsx(
+        model_rows=[
+            ["DJI", "OSMO-ACTION-4", "CAT001", "大疆", "Osmo Action 4", 2024, 9, None, 2999, "https://example.com/product"],
+        ],
+        spec_rows=[
+            ["DJI", "OSMO-ACTION-4", "产品形态", "OA传统"],
+        ],
+    )
+    resp = client.post(
+        "/api/models/headers",
+        files={"file": ("models.xlsx", xlsx_bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["match_score"] == 100
+    assert data["suggested_template"]["name"] == "产品属性导入模板"
+    assert data["suggested_template"]["mapping"] == mapping
+
+
 def test_models_confirm_imports_specs_from_template_second_sheet(client):
     xlsx_bytes = _make_models_template_xlsx(
         model_rows=[

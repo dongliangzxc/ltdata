@@ -19,6 +19,14 @@ def _client(monkeypatch):
     return TestClient(app, raise_server_exceptions=True)
 
 
+def test_metadata_template_download_uses_backend_packaged_file(monkeypatch):
+    from app.api.metadata import _METADATA_TEMPLATE_PATH
+
+    assert _METADATA_TEMPLATE_PATH.name == "洛图科技—产品段属性说明-模板.xlsx"
+    assert _METADATA_TEMPLATE_PATH.parent.name == "templates"
+    assert _METADATA_TEMPLATE_PATH.parent.parent.name == "app"
+
+
 def test_metadata_template_download_returns_existing_excel_file(monkeypatch):
     client = _client(monkeypatch)
     resp = client.get("/api/metadata/template", headers={"Authorization": "Bearer test_token"})

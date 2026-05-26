@@ -18,7 +18,7 @@ from app.models.schemas import MetadataSpec, MetadataSpecIn, MetadataSpecOut, Pa
 router = APIRouter(prefix="/api/metadata", tags=["metadata"])
 
 _TEMPLATE_FILENAME = "洛图科技—产品段属性说明-模板.xlsx"
-_METADATA_TEMPLATE_PATH = Path(__file__).resolve().parents[3] / "平台元数据" / _TEMPLATE_FILENAME
+_METADATA_TEMPLATE_PATH = Path(__file__).resolve().parents[1] / "templates" / _TEMPLATE_FILENAME
 
 
 def _clean_val(v):

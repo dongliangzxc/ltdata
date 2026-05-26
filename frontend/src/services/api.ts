@@ -3,7 +3,7 @@ import { message } from 'antd'
 
 const api = axios.create({
   baseURL: '/api',
-  timeout: 300000,
+  timeout: 600000,
 })
 
 // 请求拦截：自动携带 token
@@ -621,7 +621,7 @@ export const confirmUpload = (payload: {
   template_id?: number
   data_region?: string
   data_year?: number
-}) => api.post('/upload/confirm', payload, { timeout: 300000 })
+}) => api.post('/upload/confirm', payload, { timeout: 600000 })
 
 export interface UploadConfirmJobResponse extends Record<string, unknown> {
   job_id: number

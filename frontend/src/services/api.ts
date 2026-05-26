@@ -3,7 +3,7 @@ import { message } from 'antd'
 
 const api = axios.create({
   baseURL: '/api',
-  timeout: 60000,
+  timeout: 300000,
 })
 
 // 请求拦截：自动携带 token

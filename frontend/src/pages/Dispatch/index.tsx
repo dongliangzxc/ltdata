@@ -287,7 +287,7 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
           <>
             <Descriptions size="small" column={3} style={{ marginBottom: 12 }}>
               <Descriptions.Item label="总行数">{statsData.total_rows}</Descriptions.Item>
-              <Descriptions.Item label="已分发">{statsData.dispatched_rows}</Descriptions.Item>
+              <Descriptions.Item label="分发结果数">{statsData.dispatched_rows}</Descriptions.Item>
               <Descriptions.Item label="未命中">
                 {statsData.unmatched_rows && statsData.unmatched_rows > 0 ? (
                   <Button type="link" size="small" style={{ padding: 0 }} onClick={openUnmatchedModal}>
@@ -302,7 +302,7 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
               type="info"
               showIcon
               style={{ marginBottom: 12 }}
-              message="规则内容为当前配置；历史批次命中关系基于分发时的规则 ID。修改规则后需重新分发才会改变命中结果。"
+              message="同一原始行可分发到多个类目；分发结果数可能大于总行数。同一类目命中多条规则时只记录优先级最高的规则。规则内容为当前配置，修改规则后需重新分发才会改变命中结果。"
             />
             <Table<DispatchCategoryStat>
               size="small"

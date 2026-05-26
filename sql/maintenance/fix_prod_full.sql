@@ -193,7 +193,7 @@ CREATE TABLE IF NOT EXISTS dispatch_items (
     raw_data_id INT NULL,
     category_code VARCHAR(50) NOT NULL,
     matched_rule_id INT NULL,
-    UNIQUE KEY uq_dispatch_items_batch_row (batch_id, raw_data_id),
+    UNIQUE KEY uq_dispatch_items_batch_row_category (batch_id, raw_data_id, category_code),
     CONSTRAINT fk_di_batch FOREIGN KEY (batch_id) REFERENCES dispatch_batches(id) ON DELETE CASCADE,
     CONSTRAINT fk_di_raw FOREIGN KEY (raw_data_id) REFERENCES raw_data(id) ON DELETE SET NULL,
     INDEX ix_dispatch_items_batch_id (batch_id),

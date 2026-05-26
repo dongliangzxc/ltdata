@@ -133,19 +133,23 @@ def run_dispatch(payload: dict, db: Session = Depends(get_db)):
 
             insert_rows = []
             for row in rows:
-                matched = False
+                matched_by_category = {}
                 for rule in rules:
-                    if _rule_matches(row, rule):
+                    if not _rule_matches(row, rule):
+                        continue
+                    if rule.category_code not in matched_by_category:
+                        matched_by_category[rule.category_code] = rule
+
+                if matched_by_category:
+                    for category_code, rule in matched_by_category.items():
                         insert_rows.append({
                             "batch_id": batch_id,
                             "raw_data_id": row.id,
-                            "category_code": rule.category_code,
+                            "category_code": category_code,
                             "matched_rule_id": rule.id,
                         })
-                        dispatched_rows += 1
-                        matched = True
-                        break
-                if not matched:
+                    dispatched_rows += len(matched_by_category)
+                else:
                     unmatched_rows += 1
 
             if insert_rows:

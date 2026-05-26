@@ -835,6 +835,9 @@ class DispatchBatch(Base):
 
 class DispatchItem(Base):
     __tablename__ = "dispatch_items"
+    __table_args__ = (
+        UniqueConstraint('batch_id', 'raw_data_id', 'category_code', name='uq_dispatch_items_batch_row_category'),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     batch_id = Column(Integer, ForeignKey("dispatch_batches.id", ondelete="CASCADE"), nullable=False, index=True)

@@ -91,6 +91,107 @@ def test_run_dispatch_processes_raw_data_in_pages(client_and_db):
     assert [item.category_code for item in items] == ["headphone", "headphone", "speaker", "headphone"]
 
 
+def test_run_dispatch_allows_one_raw_row_to_enter_multiple_categories(client_and_db):
+    client, db = client_and_db
+    file_record = UploadFileRecord(filename="multi-category.xlsx", platform="JD", row_count=1, status="done")
+    db.add(file_record)
+    db.flush()
+    db.add_all([
+        DispatchRule(
+            category_code="projector",
+            platform="jd",
+            field="category_lv2",
+            match_type="equals",
+            value="平板电视",
+            item_name_keyword="激光",
+            priority=5,
+            is_active=1,
+        ),
+        DispatchRule(
+            category_code="tv",
+            platform="jd",
+            field="category_lv2",
+            match_type="equals",
+            value="平板电视",
+            priority=10,
+            is_active=1,
+        ),
+    ])
+    db.add(RawDataRecord(
+        file_id=file_record.id,
+        platform="jd",
+        month=202605,
+        item_id="laser-tv-1",
+        category_lv1="大 家 电",
+        category_lv2="平板电视",
+        item_name="海信激光电视 100英寸",
+    ))
+    db.commit()
+
+    response = client.post("/api/dispatch/run", json={"file_id": file_record.id})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_rows"] == 1
+    assert payload["dispatched_rows"] == 2
+    assert payload["unmatched_rows"] == 0
+    items = db.query(DispatchItem).filter_by(batch_id=payload["id"]).order_by(DispatchItem.category_code).all()
+    assert [(item.category_code, item.raw_data_id) for item in items] == [
+        ("projector", items[0].raw_data_id),
+        ("tv", items[1].raw_data_id),
+    ]
+
+
+
+def test_run_dispatch_deduplicates_same_category_by_priority_then_id(client_and_db):
+    client, db = client_and_db
+    file_record = UploadFileRecord(filename="same-category.xlsx", platform="JD", row_count=1, status="done")
+    db.add(file_record)
+    db.flush()
+    lower_priority_rule = DispatchRule(
+        category_code="projector",
+        platform="jd",
+        field="category_lv2",
+        match_type="equals",
+        value="平板电视",
+        item_name_keyword="激光",
+        priority=5,
+        is_active=1,
+    )
+    higher_priority_rule = DispatchRule(
+        category_code="projector",
+        platform="jd",
+        field="item_name",
+        match_type="contains",
+        value="激光电视",
+        priority=20,
+        is_active=1,
+    )
+    db.add_all([lower_priority_rule, higher_priority_rule])
+    db.flush()
+    db.add(RawDataRecord(
+        file_id=file_record.id,
+        platform="jd",
+        month=202605,
+        item_id="laser-tv-2",
+        category_lv2="平板电视",
+        item_name="海信激光电视 100英寸",
+    ))
+    db.commit()
+
+    response = client.post("/api/dispatch/run", json={"file_id": file_record.id})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["dispatched_rows"] == 1
+    assert payload["unmatched_rows"] == 0
+    items = db.query(DispatchItem).filter_by(batch_id=payload["id"]).all()
+    assert len(items) == 1
+    assert items[0].category_code == "projector"
+    assert items[0].matched_rule_id == lower_priority_rule.id
+
+
+
 def test_run_dispatch_item_name_keyword_matches_any_split_keyword(client_and_db):
     client, db = client_and_db
     file_record = UploadFileRecord(filename="keyword.xlsx", platform="JD", row_count=5, status="done")

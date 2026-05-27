@@ -5,6 +5,7 @@ import pytest
 from app.models.schemas import (
     UploadFileRecord, RawDataRecord, CleanJobRecord,
     NoiseWord, BrandAlias, FilteredItem, CleanedDataRecord,
+    DispatchBatch, DispatchItem,
 )
 from app.services.data_cleaner import run_clean
 
@@ -79,6 +80,58 @@ def test_noise_word_shop_name_field(db):
 
     assert db.query(CleanedDataRecord).count() == 0
     assert db.query(FilteredItem).count() == 1
+
+
+def test_dispatch_category_clean_only_uses_global_and_same_category_noise_words(db):
+    f = _make_file(db)
+    raw = _make_raw(db, f.id, "投影仪测试商品")
+    batch = DispatchBatch(file_id=f.id, status="done", total_rows=1, dispatched_rows=1, unmatched_rows=0)
+    db.add(batch)
+    db.flush()
+    db.add(DispatchItem(batch_id=batch.id, raw_data_id=raw.id, category_code="projector"))
+    db.add(NoiseWord(keyword="测试商品", match_field="item_name", category_code="tv"))
+    job = CleanJobRecord(
+        file_ids=[f.id],
+        rules={},
+        status="done",
+        row_in=0,
+        row_out=0,
+        dispatch_batch_id=batch.id,
+        dispatch_category_code="projector",
+    )
+    db.add(job)
+    db.commit()
+
+    run_clean(db, job.id, [f.id], {"dedup": True}, batch.id, "projector")
+
+    assert db.query(CleanedDataRecord).count() == 1
+    assert db.query(FilteredItem).count() == 0
+
+
+def test_dispatch_category_clean_uses_same_category_noise_words(db):
+    f = _make_file(db)
+    raw = _make_raw(db, f.id, "投影仪测试商品")
+    batch = DispatchBatch(file_id=f.id, status="done", total_rows=1, dispatched_rows=1, unmatched_rows=0)
+    db.add(batch)
+    db.flush()
+    db.add(DispatchItem(batch_id=batch.id, raw_data_id=raw.id, category_code="projector"))
+    db.add(NoiseWord(keyword="测试商品", match_field="item_name", category_code="projector"))
+    job = CleanJobRecord(
+        file_ids=[f.id],
+        rules={},
+        status="done",
+        row_in=0,
+        row_out=0,
+        dispatch_batch_id=batch.id,
+        dispatch_category_code="projector",
+    )
+    db.add(job)
+    db.commit()
+
+    run_clean(db, job.id, [f.id], {"dedup": True}, batch.id, "projector")
+
+    assert db.query(CleanedDataRecord).count() == 0
+    assert db.query(FilteredItem).filter_by(raw_data_id=raw.id).count() == 1
 
 
 # ── 品牌写法标准化 ──────────────────────────────────────────

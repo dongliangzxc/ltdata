@@ -1,11 +1,59 @@
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.models.database import get_db
-from app.models.schemas import CleanJobRecord, CleanedDataRecord, CleanJobOut, CleanedDataOut
+from app.models.schemas import (
+    CleanJobRecord,
+    CleanedDataRecord,
+    CleanJobOut,
+    CleanedDataOut,
+    DispatchBatch,
+    DispatchItem,
+)
 from app.services.data_cleaner import run_clean
 
 router = APIRouter(prefix="/api/clean", tags=["clean"])
+
+
+def _run_clean_for_dispatch_category(
+    db: Session,
+    file_id: int,
+    rules: dict,
+    dispatch_batch_id: int,
+    dispatch_category_code: str,
+) -> CleanJobRecord:
+    from app.models.schemas import RawDataRecord
+
+    raw_data_ids = select(DispatchItem.raw_data_id).filter(
+        DispatchItem.batch_id == dispatch_batch_id,
+        DispatchItem.category_code == dispatch_category_code,
+    )
+    row_in = db.query(RawDataRecord).filter(RawDataRecord.id.in_(raw_data_ids)).count()
+    job = CleanJobRecord(
+        file_ids=[file_id],
+        rules=rules,
+        status="processing",
+        row_in=row_in,
+        row_out=0,
+        dispatch_batch_id=dispatch_batch_id,
+        dispatch_category_code=dispatch_category_code,
+    )
+    db.add(job)
+    db.flush()
+
+    try:
+        row_out = run_clean(db, job.id, [file_id], rules, dispatch_batch_id, dispatch_category_code)
+        job.row_out = row_out
+        job.status = "done"
+        db.commit()
+        db.refresh(job)
+    except Exception as e:
+        job.status = "error"
+        db.commit()
+        raise HTTPException(status_code=500, detail=f"清洗失败: {str(e)}")
+
+    return job
 
 
 @router.post("/run", response_model=CleanJobOut)
@@ -67,6 +115,44 @@ def run_clean_job(payload: dict, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"清洗失败: {str(e)}")
 
     return job
+
+
+@router.post("/run-dispatch-batch")
+def run_dispatch_batch_clean(payload: dict, db: Session = Depends(get_db)):
+    dispatch_batch_id: int | None = payload.get("dispatch_batch_id")
+    rules: dict = payload.get("rules", {"dedup": True})
+
+    if not dispatch_batch_id:
+        raise HTTPException(status_code=400, detail="dispatch_batch_id 不能为空")
+
+    batch = db.query(DispatchBatch).filter(DispatchBatch.id == dispatch_batch_id).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="分发批次不存在")
+    if batch.status != "done":
+        raise HTTPException(status_code=400, detail="只能清洗已完成的分发批次")
+    if not batch.file_id:
+        raise HTTPException(status_code=400, detail="分发批次缺少文件信息")
+
+    category_codes = [
+        row[0]
+        for row in db.query(DispatchItem.category_code)
+        .filter(DispatchItem.batch_id == dispatch_batch_id)
+        .distinct()
+        .order_by(DispatchItem.category_code)
+        .all()
+    ]
+    if not category_codes:
+        raise HTTPException(status_code=400, detail="分发批次没有可清洗的类目")
+
+    jobs = []
+    for category_code in category_codes:
+        job = _run_clean_for_dispatch_category(db, batch.file_id, rules, dispatch_batch_id, category_code)
+        jobs.append(job)
+
+    return {
+        "dispatch_batch_id": dispatch_batch_id,
+        "jobs": [CleanJobOut.model_validate(job) for job in jobs],
+    }
 
 
 @router.get("/jobs", response_model=list[CleanJobOut])

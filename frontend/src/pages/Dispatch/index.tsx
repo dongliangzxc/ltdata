@@ -12,6 +12,7 @@ import {
   listUploadFiles, listDispatchBatches, runDispatch,
   getDispatchBatchStats, listDispatchUnmatched, listDispatchRules,
   createDispatchRule, updateDispatchRule, deleteDispatchRule,
+  runCleanJob, runDispatchBatchClean,
   type DispatchBatchStatsResponse, type DispatchCategoryStat, type DispatchRuleStat,
   type DispatchUnmatchedRow
 } from '../../services/api'
@@ -114,6 +115,8 @@ const RuleFormItems = ({ categoryOptions }: { categoryOptions: { value: string; 
 // ─── Tab 1: 分发管理 ──────────────────────────────────────────
 function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void }) {
   const [runningIds, setRunningIds] = useState<Set<number>>(new Set())
+  const [cleaningBatchIds, setCleaningBatchIds] = useState<Set<number>>(new Set())
+  const [cleaningCategoryKeys, setCleaningCategoryKeys] = useState<Set<string>>(new Set())
   const [statsVisible, setStatsVisible] = useState(false)
   const [statsData, setStatsData] = useState<DispatchBatchStatsResponse | null>(null)
   const [currentStatsBatch, setCurrentStatsBatch] = useState<DispatchBatch | null>(null)
@@ -165,6 +168,49 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
     } finally {
       setRunningIds(prev => { const s = new Set(prev); s.delete(fileId); return s })
     }
+  }
+
+  const handleCleanBatch = async (batch: DispatchBatch) => {
+    setCleaningBatchIds(prev => new Set(prev).add(batch.id))
+    try {
+      const res = await runDispatchBatchClean({ dispatch_batch_id: batch.id, rules: { dedup: true } })
+      message.success(`已发起 ${res.data.jobs.length} 个类目清洗任务`)
+    } finally {
+      setCleaningBatchIds(prev => { const s = new Set(prev); s.delete(batch.id); return s })
+    }
+  }
+
+  const handleCleanCategory = async (category: DispatchCategoryStat) => {
+    if (!currentStatsBatch) return
+    const key = `${currentStatsBatch.id}:${category.category_code}`
+    setCleaningCategoryKeys(prev => new Set(prev).add(key))
+    try {
+      await runCleanJob({
+        file_ids: [currentStatsBatch.file_id],
+        rules: { dedup: true },
+        dispatch_batch_id: currentStatsBatch.id,
+        dispatch_category_code: category.category_code,
+      })
+      message.success(`已发起 ${category.category_name || category.category_code} 类目清洗任务`)
+    } finally {
+      setCleaningCategoryKeys(prev => { const s = new Set(prev); s.delete(key); return s })
+    }
+  }
+
+  const confirmCleanBatch = (batch: DispatchBatch) => {
+    Modal.confirm({
+      title: '确认全量清洗入库？',
+      content: '将对当前分发批次下所有类目分别创建清洗任务。同一原始行分发到多个类目时，会在对应类目中分别清洗。',
+      onOk: () => handleCleanBatch(batch),
+    })
+  }
+
+  const confirmCleanCategory = (category: DispatchCategoryStat) => {
+    Modal.confirm({
+      title: '确认清洗该类目？',
+      content: `将清洗当前批次下「${category.category_name || category.category_code}」类目的分发数据。`,
+      onOk: () => handleCleanCategory(category),
+    })
   }
 
   const refreshStats = async (batchId: number) => {
@@ -244,7 +290,7 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
       }
     },
     {
-      title: '操作', width: 160,
+      title: '操作', width: 260,
       render: (_: unknown, row: UploadFile) => {
         const batch = batchByFile[row.id]
         return (
@@ -257,9 +303,19 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
               {batch ? '重新分发' : '执行分发'}
             </Button>
             {batch && (
-              <Button type="link" size="small" onClick={() => handleShowStats(batch)}>
-                查看明细
-              </Button>
+              <>
+                <Button type="link" size="small" onClick={() => handleShowStats(batch)}>
+                  查看明细
+                </Button>
+                <Button
+                  type="link"
+                  size="small"
+                  loading={cleaningBatchIds.has(batch.id)}
+                  onClick={() => confirmCleanBatch(batch)}
+                >
+                  全量清洗入库
+                </Button>
+              </>
             )}
           </Space>
         )
@@ -340,6 +396,22 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
                 { title: '品类', dataIndex: 'category_name', render: (v: string | null) => v || '未知品类' },
                 { title: '品类编码', dataIndex: 'category_code', width: 160 },
                 { title: '行数', dataIndex: 'count', width: 120 },
+                {
+                  title: '操作', width: 120,
+                  render: (_: unknown, row) => {
+                    const key = currentStatsBatch ? `${currentStatsBatch.id}:${row.category_code}` : ''
+                    return (
+                      <Button
+                        type="link"
+                        size="small"
+                        loading={cleaningCategoryKeys.has(key)}
+                        onClick={() => confirmCleanCategory(row)}
+                      >
+                        清洗入库
+                      </Button>
+                    )
+                  }
+                },
               ]}
             />
           </>

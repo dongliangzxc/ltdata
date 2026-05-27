@@ -88,13 +88,32 @@ export const exportRawData = (params: Record<string, unknown>) =>
   api.get('/rawdata/export', { ...rawDataRequestConfig(params), responseType: 'blob' })
 
 // ─── Clean ─────────────────────────────────────────────────
+export interface CleanJobItem {
+  id: number
+  file_ids: number[]
+  rules: Record<string, unknown>
+  status: string
+  row_in: number
+  row_out: number
+  row_filtered: number
+  dispatch_batch_id?: number | null
+  dispatch_category_code?: string | null
+  created_at: string
+}
+
 export const runCleanJob = (payload: {
   file_ids: number[]
   rules: Record<string, unknown>
   dispatch_batch_id?: number
   dispatch_category_code?: string
 }) =>
-  api.post('/clean/run', payload)
+  api.post<CleanJobItem>('/clean/run', payload)
+
+export const runDispatchBatchClean = (payload: {
+  dispatch_batch_id: number
+  rules: Record<string, unknown>
+}) =>
+  api.post<{ dispatch_batch_id: number; jobs: CleanJobItem[] }>('/clean/run-dispatch-batch', payload)
 
 export const listCleanJobs = () => api.get('/clean/jobs')
 

@@ -163,6 +163,8 @@ class CleanJobOut(BaseModel):
     row_in: int
     row_out: int
     row_filtered: int = 0
+    dispatch_batch_id: Optional[int] = None
+    dispatch_category_code: Optional[str] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

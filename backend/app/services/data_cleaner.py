@@ -5,6 +5,7 @@
 3. 去重（同 item_id + month + shop_name 保留第一条）
 4. brand_std 兜底补全（无匹配时用 brand_raw）
 """
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.models.schemas import (
     RawDataRecord, CleanedDataRecord, CleanJobRecord,
@@ -12,9 +13,14 @@ from app.models.schemas import (
 )
 
 
-def _load_noise_words(db: Session) -> list[tuple[str, str]]:
+def _load_noise_words(db: Session, category_code: str | None = None) -> list[tuple[str, str]]:
     """返回 [(keyword_upper, match_field), ...] 只取 active"""
-    rows = db.query(NoiseWord).filter(NoiseWord.is_active == 1).all()
+    query = db.query(NoiseWord).filter(NoiseWord.is_active == 1)
+    if category_code:
+        query = query.filter((NoiseWord.category_code == None) | (NoiseWord.category_code == category_code))
+    else:
+        query = query.filter(NoiseWord.category_code == None)
+    rows = query.all()
     return [(r.keyword.upper(), r.match_field) for r in rows]
 
 
@@ -50,19 +56,15 @@ def run_clean(
     dedup: bool = rules.get("dedup", True)
 
     # ── 加载规则表 ─────────────────────────────────────────────
-    noise_words = _load_noise_words(db)
+    noise_words = _load_noise_words(db, dispatch_category_code)
     brand_alias_map = _load_brand_alias_map(db)
 
     # ── 数据源选取 ─────────────────────────────────────────────
     if dispatch_batch_id and dispatch_category_code:
         from app.models.schemas import DispatchItem
-        raw_data_ids = (
-            db.query(DispatchItem.raw_data_id)
-            .filter(
-                DispatchItem.batch_id == dispatch_batch_id,
-                DispatchItem.category_code == dispatch_category_code,
-            )
-            .subquery()
+        raw_data_ids = select(DispatchItem.raw_data_id).filter(
+            DispatchItem.batch_id == dispatch_batch_id,
+            DispatchItem.category_code == dispatch_category_code,
         )
         records = db.query(RawDataRecord).filter(RawDataRecord.id.in_(raw_data_ids)).all()
     else:

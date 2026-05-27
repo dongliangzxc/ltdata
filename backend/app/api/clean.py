@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
@@ -10,10 +11,54 @@ from app.models.schemas import (
     CleanedDataOut,
     DispatchBatch,
     DispatchItem,
+    UploadFileRecord,
 )
 from app.services.data_cleaner import run_clean
 
 router = APIRouter(prefix="/api/clean", tags=["clean"])
+
+
+def _format_beijing_datetime(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return (value + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _build_clean_scope_desc(db: Session, job: CleanJobRecord) -> str:
+    files = []
+    if job.file_ids:
+        files = db.query(UploadFileRecord).filter(UploadFileRecord.id.in_(job.file_ids)).all()
+    platforms = sorted({f.platform for f in files if f.platform})
+    months = sorted({f.month_range for f in files if f.month_range})
+
+    parts = []
+    if platforms:
+        parts.append(f"平台：{'、'.join(platforms)}")
+    if job.dispatch_category_code:
+        parts.append(f"品类：{job.dispatch_category_code}")
+    if months:
+        parts.append(f"月份：{'、'.join(months)}")
+    if parts:
+        return " / ".join(parts)
+    if job.file_ids:
+        return "、".join(f"文件#{file_id}" for file_id in job.file_ids)
+    return "-"
+
+
+def _clean_job_to_dict(db: Session, job: CleanJobRecord) -> dict:
+    return {
+        "id": job.id,
+        "file_ids": job.file_ids,
+        "rules": job.rules,
+        "status": job.status,
+        "row_in": job.row_in,
+        "row_out": job.row_out,
+        "row_filtered": job.row_filtered,
+        "dispatch_batch_id": job.dispatch_batch_id,
+        "dispatch_category_code": job.dispatch_category_code,
+        "created_at": _format_beijing_datetime(job.created_at),
+        "scope_desc": _build_clean_scope_desc(db, job),
+    }
 
 
 def _run_clean_for_dispatch_category(
@@ -155,9 +200,10 @@ def run_dispatch_batch_clean(payload: dict, db: Session = Depends(get_db)):
     }
 
 
-@router.get("/jobs", response_model=list[CleanJobOut])
+@router.get("/jobs")
 def list_clean_jobs(db: Session = Depends(get_db)):
-    return db.query(CleanJobRecord).order_by(CleanJobRecord.created_at.desc()).all()
+    jobs = db.query(CleanJobRecord).order_by(CleanJobRecord.created_at.desc()).all()
+    return [_clean_job_to_dict(db, job) for job in jobs]
 
 
 @router.get("/jobs/{job_id}/preview")

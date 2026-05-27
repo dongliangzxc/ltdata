@@ -98,6 +98,7 @@ export interface CleanJobItem {
   row_filtered: number
   dispatch_batch_id?: number | null
   dispatch_category_code?: string | null
+  scope_desc?: string | null
   created_at: string
 }
 

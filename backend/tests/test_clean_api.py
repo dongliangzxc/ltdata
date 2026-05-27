@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -73,3 +75,38 @@ def test_run_dispatch_batch_clean_creates_one_job_per_category(db):
         ("tv", 2, 2),
     ]
     assert db.query(CleanedDataRecord).count() == 3
+
+
+def test_list_clean_jobs_returns_beijing_time_and_scope_description(db):
+    client = _make_client(db)
+    file_record = UploadFileRecord(
+        filename="jd-projector-202605.xlsx",
+        platform="jd",
+        month_range="202605",
+        row_count=10,
+        status="done",
+    )
+    db.add(file_record)
+    db.flush()
+    batch = DispatchBatch(file_id=file_record.id, status="done", total_rows=10, dispatched_rows=8, unmatched_rows=2)
+    db.add(batch)
+    db.flush()
+    job = CleanJobRecord(
+        file_ids=[file_record.id],
+        rules={"dedup": True},
+        status="done",
+        row_in=8,
+        row_out=7,
+        dispatch_batch_id=batch.id,
+        dispatch_category_code="projector",
+        created_at=datetime(2026, 5, 27, 1, 2, 3),
+    )
+    db.add(job)
+    db.commit()
+
+    response = client.get("/api/clean/jobs")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0]["created_at"] == "2026-05-27 09:02:03"
+    assert payload[0]["scope_desc"] == "平台：jd / 品类：projector / 月份：202605"

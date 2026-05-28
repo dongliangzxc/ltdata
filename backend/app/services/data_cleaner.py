@@ -1,6 +1,6 @@
 """
 数据清洗服务：
-1. 干扰词过滤（noise_words）→ 命中写入 filtered_items，跳过
+1. 清洗干预规则（intervention_rules）→ 命中过滤规则写入 filtered_items，跳过
 2. 品牌写法标准化（brand_aliases）→ brand_raw 查表覆盖 brand_std
 3. 去重（同 item_id + month + shop_name 保留第一条）
 4. brand_std 兜底补全（无匹配时用 brand_raw）
@@ -9,19 +9,23 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.models.schemas import (
     RawDataRecord, CleanedDataRecord, CleanJobRecord,
-    NoiseWord, FilteredItem, BrandAlias,
+    FilteredItem, BrandAlias, InterventionRule,
 )
 
 
-def _load_noise_words(db: Session, category_code: str | None = None) -> list[tuple[str, str]]:
-    """返回 [(keyword_upper, match_field), ...] 只取 active"""
-    query = db.query(NoiseWord).filter(NoiseWord.is_active == 1)
-    if category_code:
-        query = query.filter((NoiseWord.category_code == None) | (NoiseWord.category_code == category_code))
-    else:
-        query = query.filter(NoiseWord.category_code == None)
-    rows = query.all()
-    return [(r.keyword.upper(), r.match_field) for r in rows]
+def _load_intervention_rules(db: Session, category_code: str | None = None) -> list[InterventionRule]:
+    """返回指定分发品类的 active 干预规则；未指定品类时不应用规则。"""
+    if not category_code:
+        return []
+    return (
+        db.query(InterventionRule)
+        .filter(
+            InterventionRule.is_active == 1,
+            InterventionRule.category_code == category_code,
+        )
+        .order_by(InterventionRule.priority, InterventionRule.id)
+        .all()
+    )
 
 
 def _load_brand_alias_map(db: Session) -> dict[str, str]:
@@ -30,17 +34,114 @@ def _load_brand_alias_map(db: Session) -> dict[str, str]:
     return {r.alias_name.upper(): r.brand_code for r in rows}
 
 
-def _check_noise(item_name: str | None, shop_name: str | None, brand_raw: str | None,
-                 noise_words: list[tuple[str, str]]) -> str | None:
-    """若命中干扰词返回该关键词，否则返回 None"""
-    field_map = {
-        "item_name": (item_name or "").upper(),
-        "shop_name": (shop_name or "").upper(),
-        "brand_raw": (brand_raw or "").upper(),
-    }
-    for keyword, field in noise_words:
-        if keyword in field_map.get(field, ""):
-            return keyword
+def _format_number(value: object) -> str:
+    try:
+        return f"{float(value):g}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _stringify_list(values: list) -> list[str]:
+    return [str(value) for value in values]
+
+
+def _intervention_condition_summary(conditions: dict) -> str:
+    parts = []
+    if conditions.get("brand_in"):
+        parts.append(f"品牌 in [{', '.join(_stringify_list(conditions['brand_in']))}]")
+    if conditions.get("item_name_contains_any"):
+        parts.append(f"商品名称包含 [{', '.join(_stringify_list(conditions['item_name_contains_any']))}]")
+    if conditions.get("item_name_not_contains_any"):
+        parts.append(f"商品名称不包含 [{', '.join(_stringify_list(conditions['item_name_not_contains_any']))}]")
+
+    price = conditions.get("reference_price")
+    if price:
+        op = price.get("op")
+        if op == "between":
+            parts.append(f"参考价格 {_format_number(price.get('min'))} - {_format_number(price.get('max'))}")
+        elif op in {"gt", "gte", "lt", "lte"}:
+            op_label = {"gt": ">", "gte": ">=", "lt": "<", "lte": "<="}[op]
+            parts.append(f"参考价格 {op_label} {_format_number(price.get('value'))}")
+    return " 且 ".join(parts)
+
+
+def _to_float(value: object) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _matches_price_condition(ref_price: object, condition: dict) -> bool:
+    if ref_price is None:
+        return False
+    price = _to_float(ref_price)
+    if price is None:
+        return False
+
+    op = condition.get("op")
+    if op in {"gt", "gte", "lt", "lte"}:
+        value = _to_float(condition.get("value"))
+        if value is None:
+            return False
+        if op == "gt":
+            return price > value
+        if op == "gte":
+            return price >= value
+        if op == "lt":
+            return price < value
+        if op == "lte":
+            return price <= value
+    if op == "between":
+        min_value = _to_float(condition.get("min"))
+        max_value = _to_float(condition.get("max"))
+        if min_value is None or max_value is None:
+            return False
+        return min_value <= price <= max_value
+    return False
+
+
+def _matches_intervention_rule(record: RawDataRecord, rule: InterventionRule) -> bool:
+    """所有已配置条件均需满足，且至少一个已识别条件匹配。"""
+    conditions = rule.conditions or {}
+    brand_raw = (record.brand_raw or "").casefold()
+    item_name = (record.item_name or "").casefold()
+    has_recognized_condition = False
+
+    brand_values = conditions.get("brand_in")
+    if brand_values:
+        has_recognized_condition = True
+        if brand_raw not in {str(value).casefold() for value in brand_values}:
+            return False
+
+    contains_values = conditions.get("item_name_contains_any")
+    if contains_values:
+        has_recognized_condition = True
+        if not any(str(value).casefold() in item_name for value in contains_values):
+            return False
+
+    not_contains_values = conditions.get("item_name_not_contains_any")
+    if not_contains_values:
+        has_recognized_condition = True
+        if any(str(value).casefold() in item_name for value in not_contains_values):
+            return False
+
+    price_condition = conditions.get("reference_price")
+    if price_condition:
+        has_recognized_condition = True
+        if not _matches_price_condition(record.ref_price, price_condition):
+            return False
+
+    return has_recognized_condition
+
+
+def _first_matching_intervention_rule(
+    record: RawDataRecord,
+    intervention_rules: list[InterventionRule],
+) -> InterventionRule | None:
+    for rule in intervention_rules:
+        if _matches_intervention_rule(record, rule):
+            return rule
     return None
 
 
@@ -56,7 +157,7 @@ def run_clean(
     dedup: bool = rules.get("dedup", True)
 
     # ── 加载规则表 ─────────────────────────────────────────────
-    noise_words = _load_noise_words(db, dispatch_category_code)
+    intervention_rules = _load_intervention_rules(db, dispatch_category_code)
     brand_alias_map = _load_brand_alias_map(db)
 
     # ── 数据源选取 ─────────────────────────────────────────────
@@ -75,15 +176,24 @@ def run_clean(
     seen_keys: set = set()
 
     for r in records:
-        # ── Step 1: 干扰词过滤 ───────────────────────────────────
-        hit_keyword = _check_noise(r.item_name, r.shop_name, r.brand_raw, noise_words)
-        if hit_keyword is not None:
-            filtered.append(FilteredItem(
-                raw_data_id=r.id,
-                clean_job_id=clean_job_id,
-                matched_keyword=hit_keyword,
-            ))
-            continue
+        # ── Step 1: 清洗干预规则 ─────────────────────────────────
+        matched_rule = _first_matching_intervention_rule(r, intervention_rules)
+        if matched_rule is not None:
+            if matched_rule.action == "filter":
+                filtered.append(FilteredItem(
+                    raw_data_id=r.id,
+                    clean_job_id=clean_job_id,
+                    matched_keyword=matched_rule.name,
+                    intervention_rule_id=matched_rule.id,
+                    intervention_rule_name=matched_rule.name,
+                    matched_reason=(
+                        f"命中规则「{matched_rule.name}」："
+                        f"{_intervention_condition_summary(matched_rule.conditions or {})}"
+                    ),
+                ))
+                continue
+            if matched_rule.action == "allow":
+                pass
 
         # ── Step 2: 去重 ─────────────────────────────────────────
         if dedup:

@@ -6,6 +6,7 @@
 - /api/rules/filtered-items  干扰项存档（含恢复）
 - /api/rules/attr-rules      属性关键词规则（含 P10 批量导入）
 """
+import math
 import os
 from datetime import datetime
 from pathlib import Path
@@ -22,13 +23,179 @@ from app.models.schemas import (
     AttrRule, MatchResultAttr,
     RawDataRecord, CleanedDataRecord, ModelRecord,
     AttrRuleIn, AttrRuleOut,
-    Category,
+    Category, InterventionRule, InterventionRuleIn,
+    InterventionRulePatch,
 )
 from app.services.import_helper import save_tmp_file, read_columns, find_best_template, col_fingerprint
 
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "./uploads")
 
 router = APIRouter(prefix="/api/rules", tags=["rules"])
+
+
+ALLOWED_PRICE_OPS = {"gt", "gte", "lt", "lte", "between"}
+ALLOWED_CONDITION_KEYS = {
+    "brand_in",
+    "item_name_contains_any",
+    "item_name_not_contains_any",
+    "reference_price",
+}
+
+
+def _clean_string_list(value: object) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise HTTPException(400, "条件值必须是数组")
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _parse_price_number(value: object) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "reference_price 数值必须是有效数字")
+    if not math.isfinite(number):
+        raise HTTPException(400, "reference_price 数值必须是有效数字")
+    return number
+
+
+def _validate_intervention_conditions(conditions: dict) -> dict:
+    if not isinstance(conditions, dict):
+        raise HTTPException(400, "conditions 必须是对象")
+
+    unknown_keys = [key for key in conditions if key not in ALLOWED_CONDITION_KEYS]
+    if unknown_keys:
+        raise HTTPException(400, f"不支持的干预条件: {unknown_keys[0]}")
+
+    cleaned: dict = {}
+    for key in ("brand_in", "item_name_contains_any", "item_name_not_contains_any"):
+        values = _clean_string_list(conditions.get(key))
+        if values:
+            cleaned[key] = values
+
+    price = conditions.get("reference_price")
+    if price:
+        if not isinstance(price, dict):
+            raise HTTPException(400, "reference_price 必须是对象")
+        op = price.get("op")
+        if op not in ALLOWED_PRICE_OPS:
+            raise HTTPException(400, "reference_price op 必须是 gt/gte/lt/lte/between")
+        if op == "between":
+            if price.get("min") is None or price.get("max") is None:
+                raise HTTPException(400, "reference_price between 必须包含 min 和 max")
+            min_price = _parse_price_number(price["min"])
+            max_price = _parse_price_number(price["max"])
+            if min_price > max_price:
+                raise HTTPException(400, "reference_price between 最低价不能大于最高价")
+            cleaned["reference_price"] = {"op": op, "min": min_price, "max": max_price}
+        else:
+            if price.get("value") is None:
+                raise HTTPException(400, "reference_price 比较必须包含 value")
+            cleaned["reference_price"] = {"op": op, "value": _parse_price_number(price["value"])}
+
+    if not cleaned:
+        raise HTTPException(400, "至少填写一个干预条件")
+    return cleaned
+
+
+def _validate_intervention_rule_payload(body: InterventionRuleIn | InterventionRulePatch, db: Session) -> dict:
+    values = body.model_dump(exclude_unset=True)
+    if "category_code" in values:
+        values["category_code"] = (values["category_code"] or "").strip()
+        if not values["category_code"]:
+            raise HTTPException(400, "category_code 不能为空")
+        if not db.query(Category).filter(Category.code == values["category_code"]).first():
+            raise HTTPException(400, f"品类码 {values['category_code']} 不存在")
+    if "name" in values:
+        values["name"] = (values["name"] or "").strip()
+        if not values["name"]:
+            raise HTTPException(400, "规则名称不能为空")
+    if "action" in values and values["action"] not in ("filter", "allow"):
+        raise HTTPException(400, "action 必须是 filter 或 allow")
+    if "is_active" in values and values["is_active"] not in (0, 1):
+        raise HTTPException(400, "is_active 必须是 0 或 1")
+    if "conditions" in values:
+        values["conditions"] = _validate_intervention_conditions(values["conditions"])
+    return values
+
+
+def _intervention_condition_summary(conditions: dict) -> str:
+    parts = []
+    if conditions.get("brand_in"):
+        parts.append(f"品牌 in [{', '.join(conditions['brand_in'])}]")
+    if conditions.get("item_name_contains_any"):
+        parts.append(f"商品名称包含 [{', '.join(conditions['item_name_contains_any'])}]")
+    if conditions.get("item_name_not_contains_any"):
+        parts.append(f"商品名称不包含 [{', '.join(conditions['item_name_not_contains_any'])}]")
+    price = conditions.get("reference_price")
+    if price:
+        op_label = {"gt": ">", "gte": ">=", "lt": "<", "lte": "<=", "between": "区间"}[price["op"]]
+        if price["op"] == "between":
+            parts.append(f"参考价格 {price['min']} - {price['max']}")
+        else:
+            parts.append(f"参考价格 {op_label} {price['value']:g}")
+    return " 且 ".join(parts)
+
+
+def _intervention_rule_to_dict(rule: InterventionRule) -> dict:
+    return {
+        "id": rule.id,
+        "name": rule.name,
+        "category_code": rule.category_code,
+        "action": rule.action,
+        "priority": rule.priority,
+        "conditions": rule.conditions,
+        "summary": _intervention_condition_summary(rule.conditions or {}),
+        "is_active": rule.is_active,
+        "created_at": rule.created_at,
+        "updated_at": rule.updated_at,
+    }
+
+
+@router.get("/intervention-rules")
+def list_intervention_rules(
+    category_code: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    q = db.query(InterventionRule).order_by(InterventionRule.priority, InterventionRule.id)
+    if category_code:
+        q = q.filter(InterventionRule.category_code == category_code)
+    return [_intervention_rule_to_dict(rule) for rule in q.all()]
+
+
+@router.post("/intervention-rules", status_code=201)
+def create_intervention_rule(body: InterventionRuleIn, db: Session = Depends(get_db)):
+    values = _validate_intervention_rule_payload(body, db)
+    if "category_code" not in values or not values["category_code"]:
+        raise HTTPException(400, "category_code 不能为空")
+    rule = InterventionRule(**values)
+    db.add(rule)
+    db.commit()
+    db.refresh(rule)
+    return _intervention_rule_to_dict(rule)
+
+
+@router.patch("/intervention-rules/{rule_id}")
+def update_intervention_rule(rule_id: int, body: InterventionRulePatch, db: Session = Depends(get_db)):
+    rule = db.query(InterventionRule).filter(InterventionRule.id == rule_id).first()
+    if not rule:
+        raise HTTPException(404, "干预规则不存在")
+    values = _validate_intervention_rule_payload(body, db)
+    for field, value in values.items():
+        setattr(rule, field, value)
+    db.commit()
+    db.refresh(rule)
+    return _intervention_rule_to_dict(rule)
+
+
+@router.delete("/intervention-rules/{rule_id}", status_code=204)
+def delete_intervention_rule(rule_id: int, db: Session = Depends(get_db)):
+    rule = db.query(InterventionRule).filter(InterventionRule.id == rule_id).first()
+    if not rule:
+        raise HTTPException(404, "干预规则不存在")
+    db.delete(rule)
+    db.commit()
 
 
 # ═══════════════════════════════════════════════════════════
@@ -279,7 +446,11 @@ def list_filtered_items(
     if clean_job_id:
         q = q.filter(FilteredItem.clean_job_id == clean_job_id)
     if keyword:
-        q = q.filter(FilteredItem.matched_keyword.ilike(f"%{keyword}%"))
+        q = q.filter(
+            (FilteredItem.matched_keyword.ilike(f"%{keyword}%")) |
+            (FilteredItem.intervention_rule_name.ilike(f"%{keyword}%")) |
+            (FilteredItem.matched_reason.ilike(f"%{keyword}%"))
+        )
 
     total = q.count()
     rows = q.order_by(FilteredItem.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
@@ -290,6 +461,9 @@ def list_filtered_items(
             "raw_data_id": fi.raw_data_id,
             "clean_job_id": fi.clean_job_id,
             "matched_keyword": fi.matched_keyword,
+            "intervention_rule_id": fi.intervention_rule_id,
+            "intervention_rule_name": fi.intervention_rule_name,
+            "matched_reason": fi.matched_reason,
             "item_name": rd.item_name,
             "brand_raw": rd.brand_raw,
             "shop_name": rd.shop_name,

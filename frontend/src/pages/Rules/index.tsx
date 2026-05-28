@@ -10,7 +10,7 @@ import {
 } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import {
-  listNoiseWords, createNoiseWord, toggleNoiseWord, deleteNoiseWord,
+  listInterventionRules, createInterventionRule, updateInterventionRule, deleteInterventionRule,
   listBrandAliases, createBrandAlias, importBrandAliases, deleteBrandAlias,
   listMatchRules, createMatchRule, updateMatchRule, deleteMatchRule,
   listFilteredItems, recoverFilteredItem, recoverFilteredItemsBatch,
@@ -23,49 +23,132 @@ import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 import ImportMappingModal from '../../components/ImportMappingModal'
 
 // ══════════════════════════════════════════════
-// Tab 1: 干扰词库
+// Tab 1: 清洗干预规则
 // ══════════════════════════════════════════════
-function NoiseWordTab() {
-  const [keyword, setKeyword] = useState('')
-  const [matchField, setMatchField] = useState('item_name')
-  const [adding, setAdding] = useState(false)
-  const [categoryCode, setCategoryCode] = useState<string | undefined>()
-  const [addCategoryCode, setAddCategoryCode] = useState<string | undefined>()
+function splitLines(value?: string) {
+  return (value ?? '')
+    .split(/[,，\n]/)
+    .map(item => item.trim())
+    .filter(Boolean)
+}
+
+function conditionsToFormValues(conditions: Record<string, any>) {
+  const price = conditions.reference_price ?? {}
+  return {
+    brand_in_text: (conditions.brand_in ?? []).join('\n'),
+    item_name_contains_text: (conditions.item_name_contains_any ?? []).join('\n'),
+    item_name_not_contains_text: (conditions.item_name_not_contains_any ?? []).join('\n'),
+    price_enabled: Boolean(conditions.reference_price),
+    price_op: price.op ?? 'gt',
+    price_value: price.value,
+    price_min: price.min,
+    price_max: price.max,
+  }
+}
+
+function buildConditions(values: Record<string, any>) {
+  const conditions: Record<string, any> = {}
+  const brandIn = splitLines(values.brand_in_text)
+  const nameContains = splitLines(values.item_name_contains_text)
+  const nameNotContains = splitLines(values.item_name_not_contains_text)
+  if (brandIn.length) conditions.brand_in = brandIn
+  if (nameContains.length) conditions.item_name_contains_any = nameContains
+  if (nameNotContains.length) conditions.item_name_not_contains_any = nameNotContains
+  if (values.price_enabled) {
+    if (values.price_op === 'between') {
+      conditions.reference_price = { op: 'between', min: values.price_min, max: values.price_max }
+    } else {
+      conditions.reference_price = { op: values.price_op, value: values.price_value }
+    }
+  }
+  return conditions
+}
+
+function InterventionRuleTab() {
+  const [modalOpen, setModalOpen] = useState(false)
+  const [editing, setEditing] = useState<Record<string, any> | null>(null)
+  const [filterCategory, setFilterCategory] = useState<string | undefined>()
+  const [saving, setSaving] = useState(false)
+  const [form] = Form.useForm()
   const { options: categoryOptions } = useCategoryOptions()
   const { data, loading, refresh } = useRequest(
-    () => listNoiseWords(categoryCode ? { category_code: categoryCode } : undefined).then(r => r.data),
-    { refreshDeps: [categoryCode] }
+    () => listInterventionRules(filterCategory ? { category_code: filterCategory } : undefined).then(r => r.data),
+    { refreshDeps: [filterCategory] }
   )
 
-  const handleAdd = async () => {
-    if (!keyword.trim()) { message.warning('请输入关键词'); return }
-    setAdding(true)
+  const openCreate = () => {
+    setEditing(null)
+    form.resetFields()
+    form.setFieldsValue({ action: 'filter', priority: 100, price_op: 'gt', price_enabled: false })
+    setModalOpen(true)
+  }
+
+  const openEdit = (row: Record<string, any>) => {
+    setEditing(row)
+    form.resetFields()
+    form.setFieldsValue({
+      name: row.name,
+      category_code: row.category_code,
+      action: row.action,
+      priority: row.priority,
+      ...conditionsToFormValues(row.conditions ?? {}),
+    })
+    setModalOpen(true)
+  }
+
+  const handleSave = async () => {
+    const values = await form.validateFields()
+    if (values.price_enabled && values.price_op === 'between' && values.price_min > values.price_max) {
+      message.warning('参考价格区间最低价不能大于最高价')
+      return
+    }
+    const conditions = buildConditions(values)
+    if (!Object.keys(conditions).length) {
+      message.warning('至少填写一个干预条件')
+      return
+    }
+    const payload = {
+      name: values.name,
+      category_code: values.category_code,
+      action: values.action,
+      priority: values.priority,
+      conditions,
+    }
+    setSaving(true)
     try {
-      await createNoiseWord({ keyword: keyword.trim(), match_field: matchField, category_code: addCategoryCode || null })
-      message.success('添加成功')
-      setKeyword('')
-      setAddCategoryCode(undefined)
+      if (editing) {
+        await updateInterventionRule(editing.id as number, payload)
+        message.success('更新成功')
+      } else {
+        await createInterventionRule(payload)
+        message.success('添加成功')
+      }
+      setModalOpen(false)
       refresh()
-    } finally { setAdding(false) }
+    } finally {
+      setSaving(false)
+    }
   }
 
   const columns = [
-    { title: '关键词', dataIndex: 'keyword', ellipsis: true },
-    { title: '匹配字段', dataIndex: 'match_field', width: 120,
-      render: (v: string) => ({ item_name: '商品名称', shop_name: '店铺名称', brand_raw: '原始品牌' }[v] ?? v) },
-    { title: '品类', dataIndex: 'category_code', width: 120,
-      render: (v: string | null) => v ?? '-' },
+    { title: '优先级', dataIndex: 'priority', width: 80, sorter: (a: { priority: number }, b: { priority: number }) => a.priority - b.priority },
+    { title: '规则名称', dataIndex: 'name', width: 180, ellipsis: true },
+    { title: '品类', dataIndex: 'category_code', width: 120 },
+    { title: '动作', dataIndex: 'action', width: 80,
+      render: (v: string) => v === 'allow' ? <Tag color="green">放行</Tag> : <Tag color="red">过滤</Tag> },
+    { title: '条件摘要', dataIndex: 'summary', ellipsis: true },
     { title: '状态', dataIndex: 'is_active', width: 80,
       render: (v: number) => v ? <Tag color="green">启用</Tag> : <Tag color="default">禁用</Tag> },
     {
-      title: '操作', width: 120,
+      title: '操作', width: 180,
       render: (_: unknown, row: { id: number; is_active: number }) => (
         <Space size={4}>
-          <Button size="small" icon={row.is_active ? <StopOutlined /> : <CheckCircleOutlined />}
-            onClick={async () => { await toggleNoiseWord(row.id); refresh() }}>
-            {row.is_active ? '禁用' : '启用'}
-          </Button>
-          <Popconfirm title="确认删除？" onConfirm={async () => { await deleteNoiseWord(row.id); refresh() }}>
+          <Button size="small" onClick={() => openEdit(row)}>编辑</Button>
+          <Button size="small" onClick={async () => {
+            await updateInterventionRule(row.id, { is_active: row.is_active ? 0 : 1 })
+            refresh()
+          }}>{row.is_active ? '禁用' : '启用'}</Button>
+          <Popconfirm title="确认删除？" onConfirm={async () => { await deleteInterventionRule(row.id); refresh() }}>
             <Button size="small" danger icon={<DeleteOutlined />} />
           </Popconfirm>
         </Space>
@@ -74,38 +157,87 @@ function NoiseWordTab() {
   ]
 
   return (
-    <Space direction="vertical" size={12} style={{ width: '100%' }}>
-      <Alert type="info" showIcon message="命中干扰词的商品将被移入「干扰项存档」，不进入清洗数据。支持禁用（不删除），方便排查误过滤。" />
-      <Space wrap>
-        <Input placeholder="输入干扰关键词" value={keyword} onChange={e => setKeyword(e.target.value)}
-          onPressEnter={handleAdd} style={{ width: 220 }} />
-        <Select value={matchField} onChange={setMatchField} style={{ width: 130 }}
-          options={[
-            { value: 'item_name', label: '商品名称' },
-            { value: 'shop_name', label: '店铺名称' },
-            { value: 'brand_raw', label: '原始品牌' },
-          ]} />
-        <Select
-          placeholder="品类（可选）"
-          allowClear
-          style={{ width: 140 }}
-          options={categoryOptions}
-          value={addCategoryCode}
-          onChange={v => setAddCategoryCode(v)}
-        />
-        <Button type="primary" icon={<PlusOutlined />} loading={adding} onClick={handleAdd}>添加</Button>
-        <Select
-          placeholder="品类筛选"
-          allowClear
-          style={{ width: 140 }}
-          options={categoryOptions}
-          value={categoryCode}
-          onChange={v => setCategoryCode(v)}
-        />
+    <>
+      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <Alert type="info" showIcon message="清洗干预规则按品类生效，优先级数字越小越先执行。首条命中即决定过滤或放行；未命中任何规则默认保留。" />
+        <Space wrap>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增干预规则</Button>
+          <Select
+            placeholder="品类筛选"
+            allowClear
+            style={{ width: 180 }}
+            options={categoryOptions}
+            value={filterCategory}
+            onChange={v => setFilterCategory(v)}
+          />
+        </Space>
+        <Table dataSource={data ?? []} columns={columns} rowKey="id" size="small" loading={loading}
+          pagination={{ pageSize: 20, showTotal: (t: number) => `共 ${t} 条` }} />
       </Space>
-      <Table dataSource={data ?? []} columns={columns} rowKey="id" size="small" loading={loading}
-        pagination={{ pageSize: 20, showTotal: (t: number) => `共 ${t} 条` }} />
-    </Space>
+
+      <Modal title={editing ? '编辑干预规则' : '新增干预规则'} open={modalOpen}
+        onOk={handleSave} onCancel={() => setModalOpen(false)} confirmLoading={saving}
+        width={720} okText="保存" cancelText="取消">
+        <Form form={form} layout="vertical" style={{ marginTop: 8 }}>
+          <Form.Item label="规则名称" name="name" rules={[{ required: true, message: '请输入规则名称' }]}>
+            <Input placeholder="例如：海信低价配件过滤" />
+          </Form.Item>
+          <Form.Item label="品类" name="category_code" rules={[{ required: true, message: '请选择品类' }]}>
+            <Select showSearch placeholder="选择品类" options={categoryOptions}
+              filterOption={(input, option) => (option?.label as string ?? '').toLowerCase().includes(input.toLowerCase())} />
+          </Form.Item>
+          <Space style={{ width: '100%' }} size={16} align="start">
+            <Form.Item label="动作" name="action" rules={[{ required: true }]} style={{ width: 160 }}>
+              <Select options={[{ value: 'filter', label: '过滤' }, { value: 'allow', label: '放行' }]} />
+            </Form.Item>
+            <Form.Item label="优先级" name="priority" rules={[{ required: true }]} style={{ width: 160 }}>
+              <InputNumber min={1} max={9999} style={{ width: '100%' }} />
+            </Form.Item>
+          </Space>
+          <Form.Item label="宝贝品牌（多个品牌用换行或逗号分隔）" name="brand_in_text">
+            <Input.TextArea rows={2} placeholder="海信&#10;Vidda" />
+          </Form.Item>
+          <Form.Item label="商品名称包含任一关键词" name="item_name_contains_text">
+            <Input.TextArea rows={2} placeholder="激光电视&#10;投影" />
+          </Form.Item>
+          <Form.Item label="商品名称不包含任一关键词" name="item_name_not_contains_text">
+            <Input.TextArea rows={2} placeholder="配件&#10;幕布" />
+          </Form.Item>
+          <Form.Item label="启用参考价格条件" name="price_enabled" valuePropName="checked">
+            <Switch />
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(prev, cur) => prev.price_enabled !== cur.price_enabled || prev.price_op !== cur.price_op}>
+            {({ getFieldValue }) => getFieldValue('price_enabled') ? (
+              <Space size={12} align="start">
+                <Form.Item label="价格关系" name="price_op" rules={[{ required: true }]} style={{ width: 140 }}>
+                  <Select options={[
+                    { value: 'gt', label: '大于' },
+                    { value: 'gte', label: '大于等于' },
+                    { value: 'lt', label: '小于' },
+                    { value: 'lte', label: '小于等于' },
+                    { value: 'between', label: '区间' },
+                  ]} />
+                </Form.Item>
+                {getFieldValue('price_op') === 'between' ? (
+                  <>
+                    <Form.Item label="最低价" name="price_min" rules={[{ required: true, message: '请输入最低价' }]}>
+                      <InputNumber min={0} precision={2} />
+                    </Form.Item>
+                    <Form.Item label="最高价" name="price_max" rules={[{ required: true, message: '请输入最高价' }]}>
+                      <InputNumber min={0} precision={2} />
+                    </Form.Item>
+                  </>
+                ) : (
+                  <Form.Item label="价格" name="price_value" rules={[{ required: true, message: '请输入价格' }]}>
+                    <InputNumber min={0} precision={2} />
+                  </Form.Item>
+                )}
+              </Space>
+            ) : null}
+          </Form.Item>
+        </Form>
+      </Modal>
+    </>
   )
 }
 
@@ -298,11 +430,14 @@ function FilteredItemTab() {
   const columns = [
     { title: '商品名称', dataIndex: 'item_name', ellipsis: true },
     { title: '原始品牌', dataIndex: 'brand_raw', width: 120 },
-    { title: '触发词', dataIndex: 'matched_keyword', width: 150 },
+    { title: '命中规则', dataIndex: 'intervention_rule_name', width: 160,
+      render: (v: string | null, row: { matched_keyword?: string }) => v || row.matched_keyword || '-' },
+    { title: '命中原因', dataIndex: 'matched_reason', ellipsis: true,
+      render: (v: string | null) => v || '-' },
     { title: '清洗任务', dataIndex: 'clean_job_id', width: 90 },
     {
       title: '操作', width: 80,
-      render: (_: unknown, row: { id: number }) => (
+      render: (_: unknown, row: { id: number; matched_keyword?: string }) => (
         <Button size="small" type="link" onClick={() => handleRecover(row.id)}>恢复</Button>
       ),
     },
@@ -317,7 +452,7 @@ function FilteredItemTab() {
           options={(jobsData ?? []).map((j: { id: number; created_at: string }) => ({
             value: j.id, label: `任务 #${j.id}（${new Date(j.created_at).toLocaleDateString('zh-CN')}）`
           }))} />
-        <Input.Search placeholder="搜索触发词" allowClear style={{ width: 200 }}
+        <Input.Search placeholder="搜索命中规则" allowClear style={{ width: 200 }}
           onSearch={(v: string) => { setKeyword(v); setPage(1) }} />
         <Button onClick={handleBatchRecover} disabled={!selectedIds.length}>
           批量恢复（{selectedIds.length}）
@@ -686,20 +821,28 @@ function CorrectionRulesTab() {
 // ══════════════════════════════════════════════
 // 主页面
 // ══════════════════════════════════════════════
+const RULE_TAB_KEYS = ['intervention', 'brand', 'rules', 'filtered', 'attr', 'correction']
+
+function normalizeRuleTab(tab: string | null) {
+  if (!tab || tab === 'noise') return 'intervention'
+  return RULE_TAB_KEYS.includes(tab) ? tab : 'intervention'
+}
+
 export default function RulesPage() {
   const [searchParams, setSearchParams] = useSearchParams()
-  const [activeTab, setActiveTab] = useState(searchParams.get('tab') ?? 'noise')
+  const [activeTab, setActiveTab] = useState(() => normalizeRuleTab(searchParams.get('tab')))
 
   return (
     <Card>
       <Tabs
         activeKey={activeTab}
         onChange={(key) => {
-          setActiveTab(key)
-          setSearchParams(key !== 'noise' ? { tab: key } : {})
+          const nextTab = normalizeRuleTab(key)
+          setActiveTab(nextTab)
+          setSearchParams(nextTab !== 'intervention' ? { tab: nextTab } : {})
         }}
         items={[
-          { key: 'noise',      label: '干扰词库',   children: <NoiseWordTab /> },
+          { key: 'intervention', label: '清洗干预规则', children: <InterventionRuleTab /> },
           { key: 'brand',      label: '品牌写法库', children: <BrandAliasTab /> },
           { key: 'rules',      label: '匹配规则',   children: <MatchRuleTab /> },
           { key: 'filtered',   label: '干扰项存档', children: <FilteredItemTab /> },

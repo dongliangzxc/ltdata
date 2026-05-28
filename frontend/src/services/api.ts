@@ -121,6 +121,40 @@ export const listCleanJobs = () => api.get('/clean/jobs')
 export const previewCleanJob = (jobId: number, params?: Record<string, unknown>) =>
   api.get(`/clean/jobs/${jobId}/preview`, { params })
 
+export interface InterventionRuleConditions {
+  brand_in?: string[]
+  item_name_contains_any?: string[]
+  item_name_not_contains_any?: string[]
+  reference_price?:
+    | { op: 'gt' | 'gte' | 'lt' | 'lte'; value: number }
+    | { op: 'between'; min: number; max: number }
+}
+
+export interface InterventionRuleItem {
+  id: number
+  name: string
+  category_code: string
+  action: 'filter' | 'allow'
+  priority: number
+  conditions: InterventionRuleConditions
+  summary: string
+  is_active: number
+  created_at: string
+  updated_at?: string | null
+}
+
+export const listInterventionRules = (params?: { category_code?: string }) =>
+  api.get<InterventionRuleItem[]>('/rules/intervention-rules', { params })
+
+export const createInterventionRule = (payload: Omit<InterventionRuleItem, 'id' | 'summary' | 'is_active' | 'created_at' | 'updated_at'>) =>
+  api.post<InterventionRuleItem>('/rules/intervention-rules', payload)
+
+export const updateInterventionRule = (id: number, payload: Partial<Omit<InterventionRuleItem, 'id' | 'summary' | 'created_at' | 'updated_at'>>) =>
+  api.patch<InterventionRuleItem>(`/rules/intervention-rules/${id}`, payload)
+
+export const deleteInterventionRule = (id: number) =>
+  api.delete(`/rules/intervention-rules/${id}`)
+
 // ─── Dispatch ──────────────────────────────────────────────
 export interface DispatchCategoryStat {
   category_code: string

@@ -192,6 +192,37 @@ class CleanedDataOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class InterventionRuleIn(BaseModel):
+    name: str
+    category_code: str
+    action: str = "filter"
+    priority: int = 100
+    conditions: dict
+
+
+class InterventionRulePatch(BaseModel):
+    name: Optional[str] = None
+    category_code: Optional[str] = None
+    action: Optional[str] = None
+    priority: Optional[int] = None
+    conditions: Optional[dict] = None
+    is_active: Optional[int] = None
+
+
+class InterventionRuleOut(BaseModel):
+    id: int
+    name: str
+    category_code: str
+    action: str
+    priority: int
+    conditions: dict
+    is_active: int
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
 class PaginatedResponse(BaseModel):
     total: int
     page: int
@@ -437,16 +468,37 @@ class NoiseWord(Base):
     category_code = Column(String(50), nullable=True, index=True)
 
 
+class InterventionRule(Base):
+    __tablename__ = "intervention_rules"
+    __table_args__ = (
+        CheckConstraint("action IN ('filter', 'allow')", name="ck_intervention_rule_action"),
+    )
+
+    id            = Column(Integer, primary_key=True, index=True)
+    name          = Column(String(100), nullable=False)
+    category_code = Column(String(50), nullable=False, index=True)
+    action        = Column(String(20), nullable=False, default="filter")
+    priority      = Column(Integer, default=100)
+    conditions    = Column(JSON, nullable=False)
+    is_active     = Column(SmallInteger, default=1)
+    created_by    = Column(String(50))
+    created_at    = Column(DateTime, default=datetime.utcnow)
+    updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class FilteredItem(Base):
     __tablename__ = "filtered_items"
 
-    id              = Column(Integer, primary_key=True, index=True)
-    raw_data_id     = Column(Integer, ForeignKey("raw_data.id"))
-    clean_job_id    = Column(Integer, ForeignKey("clean_jobs.id"))
-    matched_keyword = Column(String(200))
-    is_recovered    = Column(SmallInteger, default=0)
-    recovered_at    = Column(DateTime)
-    created_at      = Column(DateTime, default=datetime.utcnow)
+    id                     = Column(Integer, primary_key=True, index=True)
+    raw_data_id            = Column(Integer, ForeignKey("raw_data.id"))
+    clean_job_id           = Column(Integer, ForeignKey("clean_jobs.id"))
+    matched_keyword        = Column(String(200))
+    intervention_rule_id   = Column(Integer, ForeignKey("intervention_rules.id", ondelete="SET NULL"), nullable=True)
+    intervention_rule_name = Column(String(100), nullable=True)
+    matched_reason         = Column(Text, nullable=True)
+    is_recovered           = Column(SmallInteger, default=0)
+    recovered_at           = Column(DateTime)
+    created_at             = Column(DateTime, default=datetime.utcnow)
 
 
 class BrandAlias(Base):

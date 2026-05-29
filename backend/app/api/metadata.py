@@ -38,23 +38,36 @@ def _clean_val(v):
     return v
 
 
-def _parse_metadata_file(content: bytes) -> dict:
-    """解析 Excel，返回预览数据，不操作数据库"""
+def _read_metadata_excel(content: bytes) -> pd.DataFrame:
     try:
-        df = pd.read_excel(io.BytesIO(content), sheet_name="元数据", dtype=str)
+        workbook = pd.ExcelFile(io.BytesIO(content))
+        sheet_name = "元数据" if "元数据" in workbook.sheet_names else workbook.sheet_names[0]
+        df = pd.read_excel(workbook, sheet_name=sheet_name, dtype=str)
     except Exception as e:
-        raise HTTPException(status_code=422, detail=f"读取「元数据」sheet 失败：{e}")
+        raise HTTPException(status_code=422, detail=f"读取产品字段定义 Excel 失败：{e}")
 
     df.columns = [str(c).strip() for c in df.columns]
     df = df.dropna(axis=1, how='all')
+    if "category_code" not in df.columns and "品类码" not in df.columns and sheet_name != "元数据":
+        df["category_code"] = sheet_name
+    return df
 
+
+def _normalize_metadata_columns(df: pd.DataFrame) -> pd.DataFrame:
     col_map = {
         "品类码": "category_code", "规格名称": "spec_name",
         "规格类型": "spec_type",   "规格值": "spec_value_raw",
         "必填": "required_raw",   "保留几位小数": "decimal_places_raw",
         "单选": "single_select_raw",
+        "属性字段名称": "spec_name", "字段类型": "spec_type",
+        "字段内容实例": "spec_value_raw", "字段说明": "single_select_raw",
     }
-    df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+    return df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+
+
+def _parse_metadata_file(content: bytes) -> dict:
+    """解析 Excel，返回预览数据，不操作数据库"""
+    df = _normalize_metadata_columns(_read_metadata_excel(content))
 
     for col in ["spec_name", "spec_type"]:
         if col not in df.columns:
@@ -122,25 +135,7 @@ async def import_metadata(file: UploadFile = File(...), db: Session = Depends(ge
         raise HTTPException(status_code=400, detail="只支持 .xlsx / .xls 格式文件")
 
     content = await file.read()
-    try:
-        df = pd.read_excel(io.BytesIO(content), sheet_name="元数据", dtype=str)
-    except Exception as e:
-        raise HTTPException(status_code=422, detail=f"读取「元数据」sheet 失败: {e}")
-
-    df.columns = [str(c).strip() for c in df.columns]
-    # 去掉全是 NaN 的多余列
-    df = df.dropna(axis=1, how='all')
-
-    col_map = {
-        "品类码": "category_code",
-        "规格名称": "spec_name",
-        "规格类型": "spec_type",
-        "规格值": "spec_value_raw",
-        "必填": "required_raw",
-        "保留几位小数": "decimal_places_raw",
-        "单选": "single_select_raw",
-    }
-    df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+    df = _normalize_metadata_columns(_read_metadata_excel(content))
 
     for col in ["spec_name", "spec_type"]:
         if col not in df.columns:

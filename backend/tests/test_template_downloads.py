@@ -37,6 +37,29 @@ def test_metadata_template_download_returns_existing_excel_file(monkeypatch):
     assert "filename" in resp.headers["content-disposition"]
 
 
+def test_metadata_template_can_be_previewed_for_import(monkeypatch):
+    client = _client(monkeypatch)
+    template_resp = client.get("/api/metadata/template", headers={"Authorization": "Bearer test_token"})
+
+    resp = client.post(
+        "/api/metadata/preview",
+        files={
+            "file": (
+                "洛图科技—产品段属性说明-模板.xlsx",
+                template_resp.content,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+        headers={"Authorization": "Bearer test_token"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_rows"] > 0
+    assert data["valid_rows"] > 0
+    assert data["preview"][0]["spec_name"]
+
+
 def test_models_template_download_returns_two_sheet_workbook(monkeypatch):
     client = _client(monkeypatch)
     resp = client.get("/api/models/template", headers={"Authorization": "Bearer test_token"})

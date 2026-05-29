@@ -4,18 +4,26 @@ import io
 from fastapi.testclient import TestClient
 from openpyxl import load_workbook
 
+from app.models.schemas import Category
+
 
 @asynccontextmanager
 async def _noop_lifespan(application):
     yield
 
 
-def _client(monkeypatch):
+def _client(monkeypatch, db_session=None):
     from app.main import app
+    from app.models.database import get_db
 
     monkeypatch.setattr("app.core.security.verify_token", lambda token: "test_user")
     monkeypatch.setattr("app.main.verify_token", lambda token: "test_user")
     monkeypatch.setattr(app.router, "lifespan_context", _noop_lifespan)
+    app.dependency_overrides.pop(get_db, None)
+    if db_session is not None:
+        def override_db():
+            yield db_session
+        app.dependency_overrides[get_db] = override_db
     return TestClient(app, raise_server_exceptions=True)
 
 
@@ -37,8 +45,10 @@ def test_metadata_template_download_returns_existing_excel_file(monkeypatch):
     assert "filename" in resp.headers["content-disposition"]
 
 
-def test_metadata_template_can_be_previewed_for_import(monkeypatch):
-    client = _client(monkeypatch)
+def test_metadata_template_can_be_previewed_for_import(monkeypatch, db):
+    client = _client(monkeypatch, db)
+    db.add(Category(code="sports_camera", name="运动相机"))
+    db.commit()
     template_resp = client.get("/api/metadata/template", headers={"Authorization": "Bearer test_token"})
 
     resp = client.post(

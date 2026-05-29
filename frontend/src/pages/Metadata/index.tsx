@@ -199,6 +199,8 @@ export default function MetadataPage() {
           <Select
             placeholder="搜索品类"
             allowClear
+            showSearch
+            optionFilterProp="label"
             style={{ width: 180 }}
             options={categoryOptions}
             onChange={v => { setSearch(p => ({ ...p, category_code: v || undefined })); setPage(1) }}

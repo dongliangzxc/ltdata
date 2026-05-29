@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy import func
 from app.models.database import get_db
-from app.models.schemas import MetadataSpec, MetadataSpecIn, MetadataSpecOut, PaginatedResponse
+from app.models.schemas import Category, MetadataSpec, MetadataSpecIn, MetadataSpecOut, PaginatedResponse
 
 router = APIRouter(prefix="/api/metadata", tags=["metadata"])
 
@@ -38,7 +38,18 @@ def _clean_val(v):
     return v
 
 
-def _read_metadata_excel(content: bytes) -> pd.DataFrame:
+def _match_category_code(db: Session, sheet_name: str) -> str:
+    category = (
+        db.query(Category)
+        .filter((Category.code == sheet_name) | (Category.name == sheet_name))
+        .first()
+    )
+    if not category:
+        raise HTTPException(status_code=422, detail=f"找不到匹配品类：{sheet_name}，请确认 sheet 名是已有品类码或品类名称")
+    return category.code
+
+
+def _read_metadata_excel(content: bytes, db: Session | None = None) -> pd.DataFrame:
     try:
         workbook = pd.ExcelFile(io.BytesIO(content))
         sheet_name = "元数据" if "元数据" in workbook.sheet_names else workbook.sheet_names[0]
@@ -49,7 +60,10 @@ def _read_metadata_excel(content: bytes) -> pd.DataFrame:
     df.columns = [str(c).strip() for c in df.columns]
     df = df.dropna(axis=1, how='all')
     if "category_code" not in df.columns and "品类码" not in df.columns and sheet_name != "元数据":
-        df["category_code"] = sheet_name
+        if db is None:
+            df["category_code"] = sheet_name
+        else:
+            df["category_code"] = _match_category_code(db, sheet_name)
     return df
 
 
@@ -65,9 +79,9 @@ def _normalize_metadata_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
 
 
-def _parse_metadata_file(content: bytes) -> dict:
+def _parse_metadata_file(content: bytes, db: Session | None = None) -> dict:
     """解析 Excel，返回预览数据，不操作数据库"""
-    df = _normalize_metadata_columns(_read_metadata_excel(content))
+    df = _normalize_metadata_columns(_read_metadata_excel(content, db))
 
     for col in ["spec_name", "spec_type"]:
         if col not in df.columns:
@@ -116,12 +130,12 @@ def _parse_metadata_file(content: bytes) -> dict:
 
 
 @router.post("/preview", response_model=dict)
-async def preview_metadata(file: UploadFile = File(...)):
+async def preview_metadata(file: UploadFile = File(...), db: Session = Depends(get_db)):
     """解析 Excel 并返回预览数据，不写入数据库"""
     if not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="只支持 .xlsx / .xls 格式文件")
     content = await file.read()
-    return _parse_metadata_file(content)
+    return _parse_metadata_file(content, db)
 
 
 @router.post("/import", response_model=dict)
@@ -135,7 +149,7 @@ async def import_metadata(file: UploadFile = File(...), db: Session = Depends(ge
         raise HTTPException(status_code=400, detail="只支持 .xlsx / .xls 格式文件")
 
     content = await file.read()
-    df = _normalize_metadata_columns(_read_metadata_excel(content))
+    df = _normalize_metadata_columns(_read_metadata_excel(content, db))
 
     for col in ["spec_name", "spec_type"]:
         if col not in df.columns:

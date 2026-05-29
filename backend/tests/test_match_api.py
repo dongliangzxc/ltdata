@@ -5,6 +5,7 @@ from app.models.database import get_db
 from app.models.schemas import (
     ModelRecord, UploadFileRecord, RawDataRecord,
     CleanJobRecord, MatchResult, ItemUrlMapping, CleanedDataRecord,
+    HistoricalMapping,
 )
 from app.api.match_api import confirm_match, router as match_router
 
@@ -120,6 +121,56 @@ def test_confirm_matched_backfills_null_url_mapping(db):
 
     mapping = db.query(ItemUrlMapping).filter_by(platform="jd", item_id="88888").first()
     assert mapping.model_id == model.id
+
+
+def test_confirm_historical_pending_does_not_query_historical_mappings(db, monkeypatch):
+    model = ModelRecord(brand_code="Sony", model_code="WH-XM5-HIST", category_code="headphone")
+    db.add(model)
+    db.flush()
+
+    upload = UploadFileRecord(filename="x.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+
+    clean_job = CleanJobRecord(file_ids=[upload.id], status="done")
+    db.add(clean_job)
+    db.flush()
+
+    rd = RawDataRecord(
+        file_id=upload.id,
+        platform="jd",
+        item_id="hist-pending-1",
+        item_url="https://item.jd.com/hist-pending-1.html",
+        item_name="历史待确认商品",
+        brand_raw="Sony",
+    )
+    db.add(rd)
+    db.flush()
+
+    mr = MatchResult(
+        clean_job_id=clean_job.id,
+        raw_data_id=rd.id,
+        model_id=None,
+        match_status="pending",
+        matched_by="auto",
+        match_source="historical",
+    )
+    db.add(mr)
+    db.commit()
+
+    original_query = db.query
+
+    def fail_on_historical_mapping(*entities, **kwargs):
+        if any(entity is HistoricalMapping for entity in entities):
+            raise AssertionError("confirm_match must not rewrite historical_mappings")
+        return original_query(*entities, **kwargs)
+
+    monkeypatch.setattr(db, "query", fail_on_historical_mapping)
+
+    response = confirm_match(mr.id, {"model_id": model.id}, db=db)
+
+    assert response.match_status == "confirmed"
+    assert response.model_id == model.id
 
 
 def test_reviewed_endpoint_returns_only_reviewable_rows_with_price_and_quantity_fields(db, match_client):

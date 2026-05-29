@@ -376,6 +376,21 @@ def test_no_alias_keeps_original_brand_std(db):
     assert cleaned.brand_std == "未知品牌"
 
 
+def test_clean_preserves_week_from_raw_data(db):
+    """清洗时保留 raw_data.week，供后续历史库按周匹配使用"""
+    f = _make_file(db)
+    raw = _make_raw(db, f.id, "索尼HT-A7000", brand_raw="SONY")
+    raw.week = "W21"
+    job = _make_job(db, f.id)
+    db.commit()
+
+    run_clean(db, job.id, [f.id], {"dedup": True})
+
+    cleaned = db.query(CleanedDataRecord).first()
+    assert cleaned is not None
+    assert cleaned.week == "W21"
+
+
 # ── row_filtered 计数 ────────────────────────────────────────
 
 def test_row_filtered_count_in_job(db):

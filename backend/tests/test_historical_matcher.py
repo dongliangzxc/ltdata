@@ -9,8 +9,7 @@ from app.models.schemas import (
 from app.services.matcher import run_match
 
 
-def _seed(db, *, platform="jd", item_id="12345", item_name="Sony HT-A7000 soundbar"):
-    """创建最小可运行的 upload/raw/clean/model 数据，返回 (clean_job_id, model_id)"""
+def _seed(db, *, platform="jd", item_id="12345", item_name="Sony HT-A7000 soundbar", item_url=None, month=202605, week=None):
     upload = UploadFileRecord(filename="t.xlsx", status="done", row_count=1)
     db.add(upload)
     db.flush()
@@ -19,7 +18,10 @@ def _seed(db, *, platform="jd", item_id="12345", item_name="Sony HT-A7000 soundb
         platform=platform,
         item_id=item_id,
         item_name=item_name,
+        item_url=item_url,
         brand_raw="SONY",
+        month=month,
+        week=week,
     )
     db.add(raw)
     db.flush()
@@ -32,13 +34,17 @@ def _seed(db, *, platform="jd", item_id="12345", item_name="Sony HT-A7000 soundb
         platform=platform,
         item_id=item_id,
         item_name=item_name,
+        item_url=item_url,
         brand_raw="SONY",
+        month=month,
+        week=week,
     )
     db.add(cleaned)
     db.flush()
     model = ModelRecord(
         brand_code="SONY",
         model_code=f"MODEL-{item_id}",
+        model_name=f"Model {item_id}",
         category_code="soundbar",
     )
     db.add(model)
@@ -46,10 +52,32 @@ def _seed(db, *, platform="jd", item_id="12345", item_name="Sony HT-A7000 soundb
     return job.id, model.id
 
 
-def test_s02_matches_by_platform_item_id(db):
-    """historical_mappings 中有 (platform, item_id) → S0.2 命中，match_source='historical'"""
-    job_id, model_id = _seed(db, platform="jd", item_id="99999")
-    db.add(HistoricalMapping(platform="jd", item_id="99999", model_id=model_id, import_batch="batch1"))
+def _add_history(db, *, platform="jd", item_id="12345", item_url=None, item_name="Sony HT-A7000 soundbar", year=2026, month_num=5, week=None, model_id=None, model_code="MODEL-12345"):
+    row = HistoricalMapping(
+        platform=platform,
+        item_id=item_id,
+        item_url=item_url,
+        item_name=item_name,
+        item_name_norm=" ".join(item_name.upper().split()),
+        year=year,
+        month_num=month_num,
+        week=week,
+        month=f"{year:04d}-{month_num:02d}",
+        model_text=model_code,
+        model_id=model_id,
+        model_code=model_code,
+        category_code="soundbar",
+        match_key_type="item_id" if item_id else "item_url" if item_url else "item_name",
+        raw_payload={"标题": item_name},
+        import_batch="batch1",
+    )
+    db.add(row)
+    return row
+
+
+def test_s02_matches_by_platform_item_id_same_month(db):
+    job_id, model_id = _seed(db, platform="jd", item_id="99999", month=202605)
+    _add_history(db, platform="jd", item_id="99999", year=2026, month_num=5, model_id=model_id, model_code="MODEL-99999")
     db.commit()
 
     run_match(db, job_id)
@@ -58,6 +86,96 @@ def test_s02_matches_by_platform_item_id(db):
     assert mr is not None
     assert mr.match_source == "historical"
     assert mr.match_status == "matched"
+    assert mr.model_id == model_id
+    assert mr.brand_identified == 1
+
+
+def test_s02_does_not_match_same_item_different_month(db):
+    job_id, model_id = _seed(db, platform="jd", item_id="99999", item_name="unknown brand no text hit", month=202606)
+    _add_history(db, platform="jd", item_id="99999", year=2026, month_num=5, model_id=model_id, model_code="MODEL-99999")
+    db.commit()
+
+    run_match(db, job_id)
+
+    mr = db.query(MatchResult).filter(MatchResult.clean_job_id == job_id).first()
+    assert mr is not None
+    assert mr.match_source != "historical"
+
+
+def test_s02_matches_by_parsed_url_item_id(db):
+    job_id, model_id = _seed(
+        db,
+        platform="tmall",
+        item_id=None,
+        item_url="https://detail.tmall.com/item.htm?id=909868962326",
+        item_name="history parsed url item",
+        month=202605,
+    )
+    _add_history(db, platform="tmall", item_id="909868962326", year=2026, month_num=5, model_id=model_id, model_code="MODEL-12345")
+    db.commit()
+
+    run_match(db, job_id)
+
+    mr = db.query(MatchResult).filter(MatchResult.clean_job_id == job_id).first()
+    assert mr.match_source == "historical"
+    assert mr.model_id == model_id
+
+
+def test_s02_matches_by_item_url_when_no_item_id(db):
+    url = "https://example.com/not-supported-url"
+    job_id, model_id = _seed(db, platform="other", item_id=None, item_url=url, item_name="history url item", month=202605)
+    _add_history(db, platform="other", item_id=None, item_url=url, item_name="different title", year=2026, month_num=5, model_id=model_id, model_code="MODEL-12345")
+    db.commit()
+
+    run_match(db, job_id)
+
+    mr = db.query(MatchResult).filter(MatchResult.clean_job_id == job_id).first()
+    assert mr.match_source == "historical"
+    assert mr.model_id == model_id
+
+
+def test_s02_matches_by_normalized_item_name_when_no_url_key(db):
+    job_id, model_id = _seed(db, platform="jd", item_id=None, item_url=None, item_name="Sony   HT-A7000 Soundbar", month=202605)
+    _add_history(db, platform="jd", item_id=None, item_url=None, item_name="SONY HT-A7000 SOUNDBAR", year=2026, month_num=5, model_id=model_id, model_code="MODEL-12345")
+    db.commit()
+
+    run_match(db, job_id)
+
+    mr = db.query(MatchResult).filter(MatchResult.clean_job_id == job_id).first()
+    assert mr.match_source == "historical"
+    assert mr.model_id == model_id
+
+
+def test_s02_matches_same_week_before_same_month(db):
+    job_id, model_id = _seed(db, platform="jd", item_id="99999", month=202605, week="W21")
+    older_model = ModelRecord(brand_code="SONY", model_code="MODEL-OLDER", model_name="Older", category_code="soundbar")
+    db.add(older_model)
+    db.flush()
+    _add_history(db, platform="jd", item_id="99999", year=2026, month_num=5, week=None, model_id=older_model.id, model_code="MODEL-OLDER")
+    _add_history(db, platform="jd", item_id="99999", year=2026, month_num=5, week="W21", model_id=model_id, model_code="MODEL-99999")
+    db.commit()
+
+    run_match(db, job_id)
+
+    mr = db.query(MatchResult).filter(MatchResult.clean_job_id == job_id).first()
+    assert mr.match_source == "historical"
+    assert mr.model_id == model_id
+
+
+def test_s02_prefers_item_id_month_fallback_before_item_url_week_hit(db):
+    url = "https://example.com/conflicting-url"
+    job_id, model_id = _seed(db, platform="jd", item_id="KEY-PRIORITY", item_url=url, month=202605, week="W21")
+    url_model = ModelRecord(brand_code="SONY", model_code="MODEL-URL-WEEK", model_name="Url Week", category_code="soundbar")
+    db.add(url_model)
+    db.flush()
+    _add_history(db, platform="jd", item_id="KEY-PRIORITY", item_url=None, year=2026, month_num=5, week=None, model_id=model_id, model_code="MODEL-KEY")
+    _add_history(db, platform="jd", item_id=None, item_url=url, year=2026, month_num=5, week="W21", model_id=url_model.id, model_code="MODEL-URL-WEEK")
+    db.commit()
+
+    run_match(db, job_id)
+
+    mr = db.query(MatchResult).filter(MatchResult.clean_job_id == job_id).first()
+    assert mr.match_source == "historical"
     assert mr.model_id == model_id
 
 
@@ -76,19 +194,19 @@ def test_s02_no_match_when_not_in_table(db):
 
 def test_s0_takes_precedence_over_s02(db):
     """同一商品既有 url_mapping(S0) 又有 historical_mapping(S0.2) → S0 优先"""
-    job_id, model_id = _seed(db, platform="jd", item_id="77777",
-                              item_name="Sony HT-A3000 from url test")
-    # 给 cleaned_data 添加 item_url，使 S0 能从 URL 提取到 (jd, 77777)
-    cleaned = db.query(CleanedDataRecord).filter(CleanedDataRecord.clean_job_id == job_id).first()
-    cleaned.item_url = "https://item.jd.com/77777.html"
-    db.flush()
-    # S0: url mapping → 另一个 model
-    model2 = ModelRecord(brand_code="SONY", model_code="MODEL-URL", category_code="soundbar")
+    job_id, model_id = _seed(
+        db,
+        platform="jd",
+        item_id="77777",
+        item_url="https://item.jd.com/77777.html",
+        item_name="Sony HT-A3000 from url test",
+        month=202605,
+    )
+    model2 = ModelRecord(brand_code="SONY", model_code="MODEL-URL", model_name="URL Model", category_code="soundbar")
     db.add(model2)
     db.flush()
     db.add(ItemUrlMapping(platform="jd", item_id="77777", model_id=model2.id))
-    # S0.2: historical mapping → model_id
-    db.add(HistoricalMapping(platform="jd", item_id="77777", model_id=model_id, import_batch="b1"))
+    _add_history(db, platform="jd", item_id="77777", year=2026, month_num=5, model_id=model_id, model_code="MODEL-77777")
     db.commit()
 
     run_match(db, job_id)
@@ -99,102 +217,15 @@ def test_s0_takes_precedence_over_s02(db):
 
 
 def test_s02_platform_case_insensitive(db):
-    """historical_mappings 中 platform 为小写，cleaned_data platform 大写也能命中"""
-    job_id, model_id = _seed(db, platform="JD", item_id="66666")
-    db.add(HistoricalMapping(platform="jd", item_id="66666", model_id=model_id, import_batch="b1"))
+    """historical_mappings 与 cleaned_data platform 大小写不一致也能命中"""
+    job_id, model_id = _seed(db, platform="jd", item_id="66666", month=202605)
+    _add_history(db, platform="JD", item_id="66666", year=2026, month_num=5, model_id=model_id, model_code="MODEL-66666")
     db.commit()
 
     run_match(db, job_id)
 
     mr = db.query(MatchResult).filter(MatchResult.clean_job_id == job_id).first()
     assert mr.match_source == "historical"
-
-
-def test_s02_skips_when_item_id_is_none(db):
-    """item_id 为 None 时，S0.2 不崩溃也不匹配"""
-    job_id, model_id = _seed(db, platform="jd", item_id="55555")
-    # Patch the cleaned record's item_id to None after seeding
-    cleaned = db.query(CleanedDataRecord).filter(CleanedDataRecord.clean_job_id == job_id).first()
-    cleaned.item_id = None
-    db.add(HistoricalMapping(platform="jd", item_id="55555", model_id=model_id, import_batch="b1"))
-    db.commit()
-
-    run_match(db, job_id)
-
-    mr = db.query(MatchResult).filter(MatchResult.clean_job_id == job_id).first()
-    assert mr is not None
-    assert mr.match_source != "historical"
-    assert mr.match_source in ("s1", "s2", "s3", "s4", None)
-
-
-def test_import_null_model_code_is_accepted(db):
-    """model_code 为空时，historical_mapping 写入 model_id=None，不报 error"""
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-    from app.api.historical_api import router as historical_router
-    from app.models.database import get_db
-    import io, openpyxl
-
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.append(["platform", "item_id", "model_code"])
-    ws.append(["jd", "ITEM-NULL-001", ""])
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-
-    def override_db():
-        yield db
-
-    test_app = FastAPI()
-    test_app.include_router(historical_router)
-    test_app.dependency_overrides[get_db] = override_db
-    client = TestClient(test_app)
-    resp = client.post(
-        "/api/historical/import",
-        files={"file": ("test.xlsx", buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
-    )
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["success"] == 1
-    assert data.get("imported_no_model", 0) == 1
-    assert data["errors"] == []
-
-    mapping = db.query(HistoricalMapping).filter_by(platform="jd", item_id="ITEM-NULL-001").first()
-    assert mapping is not None
-    assert mapping.model_id is None
-
-
-def test_s02_null_model_goes_to_pending_skips_s4(db):
-    """
-    historical_mappings 中 item 存在但 model_id=None 时：
-    - match_status = 'pending'
-    - match_source = 'historical'
-    - brand_identified = 1
-    - 不触发 S4（不误匹配 decoy_model）
-    """
-    decoy_model = ModelRecord(brand_code="FAKE", model_code="Pro5sX", category_code="headphone")
-    db.add(decoy_model)
-    db.flush()
-
-    job_id, _ = _seed(db, platform="tmall", item_id="909868962326",
-                      item_name="新款Pro5sX无线蓝牙耳机山寨品牌")
-
-    db.add(HistoricalMapping(
-        platform="tmall", item_id="909868962326",
-        model_id=None, import_batch="headphone_db"
-    ))
-    db.commit()
-
-    run_match(db, job_id)
-
-    mr = db.query(MatchResult).filter(MatchResult.clean_job_id == job_id).first()
-    assert mr is not None
-    assert mr.match_status == "pending"
-    assert mr.match_source == "historical"
-    assert mr.brand_identified == 1
-    assert mr.model_id is None
 
 
 def test_s04_still_runs_when_item_not_in_historical(db):
@@ -202,7 +233,7 @@ def test_s04_still_runs_when_item_not_in_historical(db):
     item 完全不在历史库时，S4 正常执行（兜底行为不受影响）。
     使用 brand_raw=None 确保 S1/S2/S3 不识别品牌，让 S4 兜底触发。
     """
-    long_model = ModelRecord(brand_code="XNCO", model_code="XM1000X", category_code="headphone")
+    long_model = ModelRecord(brand_code="XNCO", model_code="XM1000X", model_name="XM1000X", category_code="headphone")
     db.add(long_model)
     db.flush()
 
@@ -215,6 +246,7 @@ def test_s04_still_runs_when_item_not_in_historical(db):
         item_id="NEW-ITEM-999",
         item_name="新款XM1000X无线蓝牙耳机未知品牌",
         brand_raw=None,
+        month=202605,
     )
     db.add(raw)
     db.flush()
@@ -228,6 +260,7 @@ def test_s04_still_runs_when_item_not_in_historical(db):
         item_id="NEW-ITEM-999",
         item_name="新款XM1000X无线蓝牙耳机未知品牌",
         brand_raw=None,
+        month=202605,
     )
     db.add(cleaned)
     db.commit()
@@ -238,46 +271,3 @@ def test_s04_still_runs_when_item_not_in_historical(db):
     assert mr is not None
     assert mr.match_source == "s4"
     assert mr.model_id == long_model.id
-
-
-def test_confirm_historical_pending_writes_back_to_hist_map(db):
-    """
-    人工确认 match_source='historical' 的 pending 条目时，
-    historical_mappings.model_id 应同步更新。
-    """
-    from fastapi.testclient import TestClient
-    from app.main import app
-    from app.models.database import get_db
-    from app.core.security import create_access_token
-
-    job_id, model_id = _seed(db, platform="jd", item_id="HIST-WRITEBACK-01")
-    hist = HistoricalMapping(
-        platform="jd", item_id="HIST-WRITEBACK-01",
-        model_id=None, import_batch="test_batch"
-    )
-    db.add(hist)
-    db.commit()
-
-    run_match(db, job_id)
-
-    mr = db.query(MatchResult).filter(MatchResult.clean_job_id == job_id).first()
-    assert mr.match_status == "pending"
-    assert mr.match_source == "historical"
-
-    def override_db():
-        yield db
-
-    token = create_access_token("testuser")
-    app.dependency_overrides[get_db] = override_db
-    client = TestClient(app)
-    resp = client.put(
-        f"/api/match/confirm/{mr.id}",
-        json={"model_id": model_id},
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    app.dependency_overrides.clear()
-
-    assert resp.status_code == 200
-
-    db.refresh(hist)
-    assert hist.model_id == model_id

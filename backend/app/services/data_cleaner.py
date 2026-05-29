@@ -216,6 +216,7 @@ def run_clean(
             clean_job_id=clean_job_id,
             platform=r.platform,
             month=r.month,
+            week=r.week,
             category_lv1=r.category_lv1,
             category_lv2=r.category_lv2,
             category_lv3=r.category_lv3,

@@ -511,20 +511,71 @@ export const applyAttrRules = (match_job_id: number) =>
 export const listMissingAttrs = (clean_job_id: number, params?: Record<string, unknown>) =>
   api.get(`/match/${clean_job_id}/missing-attrs`, { params })
 
-// ─── Historical Mappings ─────────────────────────────────────
-export const importHistoricalMappings = (formData: FormData) =>
-  api.post('/historical/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+// ─── Historical Confirmed Results ─────────────────────────────
+export interface HistoricalImportError {
+  row: number
+  reason: string
+}
 
-export const listHistoricalBatches = () =>
-  api.get<{ batch: string; count: number }[]>('/historical/batches')
+export interface HistoricalImportResult {
+  success: number
+  created: number
+  updated: number
+  errors: HistoricalImportError[]
+  import_batch: string
+}
 
-export const listHistoricalMappings = (params?: {
+export interface HistoricalBatchItem {
+  batch: string
+  count: number
+  updated_at: string | null
+}
+
+export interface HistoricalMappingItem {
+  id: number
+  platform: string
+  item_id: string | null
+  item_url: string | null
+  item_name: string
+  brand_raw: string | null
+  brand_code_raw: string | null
+  model_text: string
+  model_id: number
+  model_code: string
+  standard_model_name: string | null
+  category_code: string | null
+  category_name_raw: string | null
+  year: number
+  month_num: number
+  month: string
+  week: string | null
+  sales_qty: number | null
+  price: number | null
+  sales_amount: number | null
+  import_batch: string | null
+  match_key_type: string
+  updated_at: string | null
+}
+
+export interface HistoricalMappingParams {
   platform?: string
   import_batch?: string
   category_code?: string
+  model_keyword?: string
+  item_keyword?: string
+  month?: string
   page?: number
   page_size?: number
-}) => api.get('/historical/mappings', { params })
+}
+
+export const importHistoricalMappings = (formData: FormData) =>
+  api.post<HistoricalImportResult>('/historical/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+
+export const listHistoricalBatches = () =>
+  api.get<HistoricalBatchItem[]>('/historical/batches')
+
+export const listHistoricalMappings = (params?: HistoricalMappingParams) =>
+  api.get<PaginatedResponse<HistoricalMappingItem>>('/historical/mappings', { params })
 
 export const deleteHistoricalMapping = (id: number) =>
   api.delete(`/historical/mappings/${id}`)

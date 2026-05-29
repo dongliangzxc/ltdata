@@ -48,6 +48,7 @@ brand_identified 标记：S1/S2/S3 任意阶段识别到品牌即置 1，即使�
 """
 import logging
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from app.models.schemas import CleanedDataRecord, ModelRecord, ModelAlias, MatchResult, MatchResultCandidate, ItemUrlMapping, MatchRule, HistoricalMapping
 from app.utils.url_utils import extract_item_id
@@ -59,6 +60,78 @@ logger = logging.getLogger(__name__)
 
 def _norm(s: str | None) -> str:
     return (s or "").upper().strip()
+
+
+def _normalize_history_name(s: str | None) -> str:
+    return " ".join((s or "").upper().split())
+
+
+def _month_parts(month_value) -> tuple[int | None, int | None]:
+    if month_value is None:
+        return None, None
+    try:
+        month_int = int(month_value)
+    except (TypeError, ValueError):
+        return None, None
+    if month_int < 10000:
+        return None, None
+    return month_int // 100, month_int % 100
+
+
+def _period_candidates(row) -> list[tuple[int | None, int | None, str | None]]:
+    year, month_num = _month_parts(getattr(row, "month", None))
+    week = getattr(row, "week", None)
+    if year and month_num:
+        if week:
+            return [(year, month_num, str(week)), (year, month_num, None)]
+        return [(year, month_num, None)]
+    return [(None, None, None)]
+
+
+def _apply_history_period(query, year: int | None, month_num: int | None, week: str | None):
+    if year is None or month_num is None:
+        return query.order_by(HistoricalMapping.updated_at.desc(), HistoricalMapping.id.desc())
+    query = query.filter(HistoricalMapping.year == year, HistoricalMapping.month_num == month_num)
+    if week:
+        return query.filter(HistoricalMapping.week == week).order_by(HistoricalMapping.updated_at.desc(), HistoricalMapping.id.desc())
+    return query.filter(HistoricalMapping.week.is_(None)).order_by(HistoricalMapping.updated_at.desc(), HistoricalMapping.id.desc())
+
+
+def _history_lookup(db: Session, row: CleanedDataRecord) -> HistoricalMapping | None:
+    row_platform = (row.platform or "").lower()
+    parsed = extract_item_id(row.item_url) if row.item_url else None
+    keys = []
+    if row_platform and row.item_id:
+        keys.append(("item_id", row_platform, row.item_id))
+    if parsed:
+        parsed_platform, parsed_item_id = parsed
+        keys.append(("item_id", parsed_platform, parsed_item_id))
+    if row_platform and row.item_url:
+        keys.append(("item_url", row_platform, row.item_url))
+    item_name_norm = _normalize_history_name(row.item_name)
+    if row_platform and item_name_norm:
+        keys.append(("item_name", row_platform, item_name_norm))
+
+    seen = set()
+    deduped_keys = []
+    for key in keys:
+        if key not in seen:
+            deduped_keys.append(key)
+            seen.add(key)
+
+    for key_type, platform, value in deduped_keys:
+        for year, month_num, week in _period_candidates(row):
+            q = db.query(HistoricalMapping).filter(func.lower(HistoricalMapping.platform) == platform.lower())
+            if key_type == "item_id":
+                q = q.filter(HistoricalMapping.item_id == value)
+            elif key_type == "item_url":
+                q = q.filter(HistoricalMapping.item_url == value)
+            else:
+                q = q.filter(HistoricalMapping.item_name_norm == value)
+            hit = _apply_history_period(q, year, month_num, week).first()
+            if hit:
+                return hit
+    return None
 
 
 def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
@@ -95,12 +168,6 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
         .order_by(MatchRule.priority)
         .all()
     )
-
-    # ── S0.2: 预加载历史库映射 ────────────────────────────────────
-    # key=(platform_lower, item_id), value=model_id
-    hist_map: dict[tuple[str, str], int | None] = {}
-    for hm in db.query(HistoricalMapping).all():
-        hist_map[(hm.platform.lower(), hm.item_id)] = hm.model_id
 
     # ── 构建内存索引 ─────────────────────────────────────────────
     all_models = db.query(ModelRecord).all()
@@ -256,47 +323,25 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
             url_brand_hint = url_brand_map.get((platform, item_id))
 
         # ── S0.2: 历史库精确匹配 ─────────────────────────────────
-        hist_key = ((row.platform or "").lower(), row.item_id) if row.item_id else None
-        hist_hit = hist_key in hist_map if hist_key else False
+        hist_hit = _history_lookup(db, row)
         if hist_hit:
-            hist_model_id = hist_map[hist_key]
-            if hist_model_id:
-                # 已知商品且有型号 → matched
-                results.append(MatchResult(
-                    clean_job_id=clean_job_id,
-                    raw_data_id=row.raw_data_id,
-                    model_id=hist_model_id,
-                    match_status="matched",
-                    matched_by="auto",
-                    match_source="historical",
-                    brand_identified=1,
-                ))
-                matched_count += 1
-                if len(results) >= BATCH:
-                    db.bulk_save_objects(results)
-                    db.commit()
-                    if progress_cb:
-                        progress_cb(i + 1, total, matched_count)
-                    results = []
-                continue  # 跳过 S0.5 / S1-S4
-            else:
-                # 已知商品但无型号 → pending，跳过 S1-S4（防止 S4 误匹配）
-                results.append(MatchResult(
-                    clean_job_id=clean_job_id,
-                    raw_data_id=row.raw_data_id,
-                    model_id=None,
-                    match_status="pending",
-                    matched_by="auto",
-                    match_source="historical",
-                    brand_identified=1,
-                ))
-                if len(results) >= BATCH:
-                    db.bulk_save_objects(results)
-                    db.commit()
-                    if progress_cb:
-                        progress_cb(i + 1, total, matched_count)
-                    results = []
-                continue  # 跳过 S0.5 / S1-S4
+            results.append(MatchResult(
+                clean_job_id=clean_job_id,
+                raw_data_id=row.raw_data_id,
+                model_id=hist_hit.model_id,
+                match_status="matched",
+                matched_by="auto",
+                match_source="historical",
+                brand_identified=1,
+            ))
+            matched_count += 1
+            if len(results) >= BATCH:
+                db.bulk_save_objects(results)
+                db.commit()
+                if progress_cb:
+                    progress_cb(i + 1, total, matched_count)
+                results = []
+            continue  # 跳过 S0.5 / S1-S4
 
         # ── S0.5: 显式规则匹配 ─────────────────────────────────────
         s05_model_id: int | None = None

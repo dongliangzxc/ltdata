@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS raw_data (
     file_id        INT          NOT NULL          COMMENT '关联 upload_files.id',
     platform       VARCHAR(50)                    COMMENT '平台',
     month          INT                            COMMENT '月份, 如 202507',
+    week           VARCHAR(50)                    COMMENT '周，如 W21',
     category_lv0   VARCHAR(100)                   COMMENT 'JD Lv0类目',
     category_lv1   VARCHAR(100)                   COMMENT 'Lv1类目',
     category_lv2   VARCHAR(100)                   COMMENT 'Lv2类目',
@@ -74,6 +75,7 @@ CREATE TABLE IF NOT EXISTS cleaned_data (
     clean_job_id   INT          NOT NULL          COMMENT '关联 clean_jobs.id',
     platform       VARCHAR(50),
     month          INT,
+    week           VARCHAR(50),
     category_lv1   VARCHAR(100),
     category_lv2   VARCHAR(100),
     category_lv3   VARCHAR(100),
@@ -137,6 +139,45 @@ CREATE TABLE IF NOT EXISTS models (
     updated_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uq_model (brand_code, model_code)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='型号主信息';
+
+-- 历史确认结果库（线下已确认工作台结果导入）
+CREATE TABLE IF NOT EXISTS historical_mappings (
+    id                 INT AUTO_INCREMENT PRIMARY KEY,
+    import_batch       VARCHAR(200),
+    platform           VARCHAR(50) NOT NULL,
+    item_id            VARCHAR(200),
+    item_url           TEXT,
+    item_name          TEXT NOT NULL,
+    item_name_norm     TEXT NOT NULL,
+    year               INT NOT NULL,
+    month_num          INT NOT NULL,
+    week               VARCHAR(50),
+    month              VARCHAR(7) NOT NULL,
+    report_type        VARCHAR(100),
+    channel            VARCHAR(100),
+    category_name_raw  VARCHAR(200),
+    category_code_raw  VARCHAR(100),
+    brand_raw          VARCHAR(200),
+    brand_code_raw     VARCHAR(100),
+    model_text         VARCHAR(200) NOT NULL,
+    model_code_raw     VARCHAR(100),
+    model_id           INT NOT NULL,
+    model_code         VARCHAR(100) NOT NULL,
+    category_code      VARCHAR(50),
+    sales_amount       DECIMAL(14,2),
+    sales_qty          INT,
+    price              DECIMAL(14,2),
+    match_key_type     VARCHAR(50) NOT NULL,
+    raw_payload        JSON NOT NULL,
+    created_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    KEY idx_hist_batch (import_batch),
+    KEY idx_hist_item_period (platform, item_id, year, month_num, week),
+    KEY idx_hist_url_period (platform, item_url(255), year, month_num, week),
+    KEY idx_hist_name_period (platform, item_name_norm(255), year, month_num, week),
+    KEY idx_hist_month (month),
+    CONSTRAINT fk_hist_model FOREIGN KEY (model_id) REFERENCES models(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='历史确认结果库';
 
 -- 型号规格参数（对应 Excel 模版"型号规格" sheet）
 -- spec_type 已移除，规格类型信息存于元数据表
@@ -471,4 +512,4 @@ VALUES
 
 ALTER TABLE upload_files ADD COLUMN IF NOT EXISTS template_id INT NULL COMMENT '本次上传使用的列模板 ID';
 
-UPDATE alembic_version SET version_num = 'p11a1b2c3d4e5';
+UPDATE alembic_version SET version_num = 'p24a1b2c3d4e5';

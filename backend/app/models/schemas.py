@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional
 from sqlalchemy import (
     Column, Integer, String, Numeric, Text, DateTime,
-    ForeignKey, JSON, SmallInteger, UniqueConstraint, CheckConstraint, Enum
+    ForeignKey, JSON, SmallInteger, UniqueConstraint, CheckConstraint, Enum, Index
 )
 from sqlalchemy.orm import relationship
 from pydantic import BaseModel
@@ -36,6 +36,7 @@ class RawDataRecord(Base):
     file_id = Column(Integer, ForeignKey("upload_files.id"), nullable=False)
     platform = Column(String(50))
     month = Column(Integer)                 # 202507
+    week = Column(String(50))
     category_lv0 = Column(String(100))
     category_lv1 = Column(String(100))
     category_lv2 = Column(String(100))
@@ -85,6 +86,7 @@ class CleanedDataRecord(Base):
     clean_job_id = Column(Integer, ForeignKey("clean_jobs.id"), nullable=False)
     platform = Column(String(50))
     month = Column(Integer)
+    week = Column(String(50))
     category_lv1 = Column(String(100))
     category_lv2 = Column(String(100))
     category_lv3 = Column(String(100))
@@ -403,16 +405,49 @@ class ItemUrlMapping(Base):
 class HistoricalMapping(Base):
     __tablename__ = "historical_mappings"
     __table_args__ = (
-        UniqueConstraint("platform", "item_id", name="uq_hist_platform_item"),
+        Index("idx_hist_item_period", "platform", "item_id", "year", "month_num", "week"),
+        Index("idx_hist_url_period", "platform", "item_url", "year", "month_num", "week", mysql_length={"item_url": 255}),
+        Index("idx_hist_name_period", "platform", "item_name_norm", "year", "month_num", "week", mysql_length={"item_name_norm": 255}),
+        Index("idx_hist_batch", "import_batch"),
+        Index("idx_hist_month", "month"),
     )
 
-    id           = Column(Integer, primary_key=True, index=True)
-    platform     = Column(String(50),  nullable=False)
-    item_id      = Column(String(200), nullable=False)
-    model_id     = Column(Integer, ForeignKey("models.id"), nullable=True)
-    import_batch = Column(String(100), nullable=True)
-    created_at   = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at   = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    id = Column(Integer, primary_key=True, index=True)
+    import_batch = Column(String(200), nullable=True)
+
+    platform = Column(String(50), nullable=False)
+    item_id = Column(String(200), nullable=True)
+    item_url = Column(Text, nullable=True)
+    item_name = Column(Text, nullable=False)
+    item_name_norm = Column(Text, nullable=False)
+
+    year = Column(Integer, nullable=False)
+    month_num = Column(Integer, nullable=False)
+    week = Column(String(50), nullable=True)
+    month = Column(String(7), nullable=False)
+    report_type = Column(String(100), nullable=True)
+    channel = Column(String(100), nullable=True)
+
+    category_name_raw = Column(String(200), nullable=True)
+    category_code_raw = Column(String(100), nullable=True)
+    brand_raw = Column(String(200), nullable=True)
+    brand_code_raw = Column(String(100), nullable=True)
+
+    model_text = Column(String(200), nullable=False)
+    model_code_raw = Column(String(100), nullable=True)
+    model_id = Column(Integer, ForeignKey("models.id"), nullable=False)
+    model_code = Column(String(100), nullable=False)
+    category_code = Column(String(50), nullable=True)
+
+    sales_amount = Column(Numeric(14, 2), nullable=True)
+    sales_qty = Column(Integer, nullable=True)
+    price = Column(Numeric(14, 2), nullable=True)
+
+    match_key_type = Column(String(50), nullable=False)
+    raw_payload = Column(JSON, nullable=False)
+
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     model = relationship("ModelRecord")
 

@@ -12,7 +12,7 @@ from typing import Optional
 import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, tuple_
 from sqlalchemy.orm import Session
 
 from app.models.database import get_db
@@ -134,8 +134,7 @@ def _period_filter(query, *, year: int, month_num: int, week: Optional[str]):
     return query
 
 
-def _find_existing(
-    db: Session,
+def _history_identity_key(
     *,
     platform: str,
     item_id: Optional[str],
@@ -144,14 +143,46 @@ def _find_existing(
     year: int,
     month_num: int,
     week: Optional[str],
-) -> Optional[HistoricalMapping]:
-    base = db.query(HistoricalMapping).filter(HistoricalMapping.platform == platform)
-    period_query = _period_filter(base, year=year, month_num=month_num, week=week)
+) -> tuple[str, str, int, int, Optional[str], str]:
     if item_id:
-        return period_query.filter(HistoricalMapping.item_id == item_id).first()
+        return platform, "item_id", year, month_num, week, item_id
     if item_url:
-        return period_query.filter(HistoricalMapping.item_url == item_url).first()
-    return period_query.filter(HistoricalMapping.item_name_norm == item_name_norm).first()
+        return platform, "item_url", year, month_num, week, item_url
+    return platform, "item_name", year, month_num, week, item_name_norm
+
+
+def _preload_existing_history(db: Session, keys: set[tuple[str, str, int, int, Optional[str], str]]) -> dict[tuple[str, str, int, int, Optional[str], str], HistoricalMapping]:
+    if not keys:
+        return {}
+
+    item_keys = {(platform, year, month_num, value) for platform, key_type, year, month_num, week, value in keys if key_type == "item_id"}
+    url_keys = {(platform, year, month_num, value) for platform, key_type, year, month_num, week, value in keys if key_type == "item_url"}
+    name_keys = {(platform, year, month_num, value) for platform, key_type, year, month_num, week, value in keys if key_type == "item_name"}
+
+    existing = {}
+
+    def add_rows(rows, key_type: str, value_attr: str):
+        for row in rows:
+            value = getattr(row, value_attr)
+            key = (row.platform, key_type, row.year, row.month_num, row.week, value)
+            existing[key] = row
+
+    if item_keys:
+        rows = db.query(HistoricalMapping).filter(
+            tuple_(HistoricalMapping.platform, HistoricalMapping.year, HistoricalMapping.month_num, HistoricalMapping.item_id).in_(item_keys)
+        ).all()
+        add_rows(rows, "item_id", "item_id")
+    if url_keys:
+        rows = db.query(HistoricalMapping).filter(
+            tuple_(HistoricalMapping.platform, HistoricalMapping.year, HistoricalMapping.month_num, HistoricalMapping.item_url).in_(url_keys)
+        ).all()
+        add_rows(rows, "item_url", "item_url")
+    if name_keys:
+        rows = db.query(HistoricalMapping).filter(
+            tuple_(HistoricalMapping.platform, HistoricalMapping.year, HistoricalMapping.month_num, HistoricalMapping.item_name_norm).in_(name_keys)
+        ).all()
+        add_rows(rows, "item_name", "item_name_norm")
+    return existing
 
 
 def _json_safe_row(row: dict) -> dict:
@@ -188,13 +219,16 @@ def import_historical_mappings(
     db: Session = Depends(get_db),
 ):
     try:
-        sheets = pd.read_excel(file.file, sheet_name=None)
+        xls = pd.ExcelFile(file.file)
+        if not xls.sheet_names:
+            raise HTTPException(400, "Excel 文件没有可读取的工作表")
+        sheet_name = "rawdata" if "rawdata" in xls.sheet_names else xls.sheet_names[0]
+        df = pd.read_excel(xls, sheet_name=sheet_name)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(400, f"无法解析 Excel 文件: {e}")
 
-    if not sheets:
-        raise HTTPException(400, "Excel 文件没有可读取的工作表")
-    df = sheets["rawdata"] if "rawdata" in sheets else next(iter(sheets.values()))
     df.columns = [str(col).strip() for col in df.columns]
     if df.empty:
         df = pd.DataFrame([{col: None for col in df.columns}])
@@ -205,6 +239,8 @@ def import_historical_mappings(
     updated = 0
     errors = []
     models_by_code, models_by_name = _preload_models(db, df)
+    pending_rows = []
+    history_keys = set()
 
     for idx, raw_row in df.iterrows():
         row = raw_row.to_dict()
@@ -256,8 +292,7 @@ def import_historical_mappings(
         week = _clean_value(_get(row, "周"))
         month = f"{year:04d}-{month_num:02d}"
         match_key_type = _match_key_type(item_id, item_url, item_name_norm)
-        existing = _find_existing(
-            db,
+        history_key = _history_identity_key(
             platform=platform,
             item_id=item_id,
             item_url=item_url,
@@ -297,12 +332,20 @@ def import_historical_mappings(
             "updated_at": datetime.utcnow(),
         }
 
+        pending_rows.append((history_key, values))
+        history_keys.add(history_key)
+
+    existing_by_key = _preload_existing_history(db, history_keys)
+    for history_key, values in pending_rows:
+        existing = existing_by_key.get(history_key)
         if existing:
             for key, value in values.items():
                 setattr(existing, key, value)
             updated += 1
         else:
-            db.add(HistoricalMapping(**values))
+            new_row = HistoricalMapping(**values)
+            db.add(new_row)
+            existing_by_key[history_key] = new_row
             created += 1
         success += 1
 

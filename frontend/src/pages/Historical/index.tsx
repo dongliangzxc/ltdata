@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import {
-  Tabs, Table, Button, Upload, Space, Select, Tag, Popconfirm, message, Input, Card, Statistic
+  Tabs, Table, Button, Upload, Space, Select, Tag, Popconfirm, message, Input, Card, Statistic, Alert
 } from 'antd'
 import { InboxOutlined, DeleteOutlined } from '@ant-design/icons'
 import type { UploadProps } from 'antd'
@@ -71,11 +71,15 @@ function ImportTab() {
     <Space direction="vertical" style={{ width: '100%' }} size="large">
       <Dragger {...uploadProps}>
         <p className="ant-upload-drag-icon"><InboxOutlined /></p>
-        <p>点击或拖拽 Excel 文件到此处导入历史库数据</p>
+        <p>{uploading ? '正在导入历史库数据，请不要刷新页面' : '点击或拖拽 Excel 文件到此处导入历史库数据'}</p>
         <p style={{ color: '#888', fontSize: 12 }}>
           必填列：商场或渠道 / 标题 / 年 / 月；推荐列：周 / 报告类型 / 品类 / 品牌 / 型号 / 品类码 / 品牌码 / 型号码 / 销额 / 销量 / 单价 / 网址。型号可为空，后续可补充。
         </p>
       </Dragger>
+
+      {uploading && (
+        <Alert type="info" showIcon message="导入处理中" description="大 Excel 需要解析和写入较多数据，完成后会显示成功、失败明细和导入批次。" />
+      )}
 
       {result && (
         <Space direction="vertical" style={{ width: '100%' }}>

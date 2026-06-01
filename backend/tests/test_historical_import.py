@@ -146,6 +146,34 @@ def test_import_preloads_model_resolution_without_per_row_model_queries(db):
     assert len(model_selects) == 2
 
 
+def test_import_preloads_existing_history_without_per_row_history_queries(db):
+    client = _client(db)
+    content = _history_excel([
+        {"年": 2026, "月": 5, "商场": "TMALL", "标题": "商品1", "网址": "https://detail.tmall.com/item.htm?id=201"},
+        {"年": 2026, "月": 5, "商场": "TMALL", "标题": "商品2", "网址": "https://detail.tmall.com/item.htm?id=202"},
+        {"年": 2026, "月": 5, "商场": "JD", "标题": "商品3", "网址": "https://item.jd.com/203.html"},
+    ])
+    history_selects = []
+
+    def track_history_selects(conn, cursor, statement, parameters, context, executemany):
+        if "FROM historical_mappings" in statement and statement.lstrip().upper().startswith("SELECT"):
+            history_selects.append(statement)
+
+    event.listen(db.bind, "before_cursor_execute", track_history_selects)
+    try:
+        resp = client.post(
+            "/api/historical/import",
+            files={"file": ("history.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+    finally:
+        event.remove(db.bind, "before_cursor_execute", track_history_selects)
+
+    assert resp.status_code == 200
+    assert resp.json()["success"] == 3
+    assert resp.json()["errors"] == []
+    assert len(history_selects) <= 1
+
+
 def test_import_requires_platform_title_year_and_month(db):
     client = _client(db)
     content = _history_excel([{"商场": "", "渠道": "", "标题": "", "型号": "", "年": "", "月": ""}])

@@ -16,7 +16,7 @@ from sqlalchemy import func, or_, tuple_
 from sqlalchemy.orm import Session
 
 from app.models.database import get_db
-from app.models.schemas import HistoricalMapping, ModelRecord
+from app.models.schemas import Category, HistoricalMapping, ModelRecord
 from app.utils.url_utils import extract_item_id
 
 router = APIRouter(prefix="/api/historical", tags=["historical"])
@@ -193,6 +193,29 @@ def _json_safe_row(row: dict) -> dict:
     return result
 
 
+def _preload_categories(db: Session) -> tuple[dict[str, str], dict[str, str]]:
+    by_code = {}
+    by_name = {}
+    for category in db.query(Category).all():
+        by_code[category.code] = category.code
+        by_name[category.name] = category.code
+    return by_code, by_name
+
+
+def _resolve_category_code(
+    *,
+    category_code_raw: Optional[str],
+    category_name_raw: Optional[str],
+    categories_by_code: dict[str, str],
+    categories_by_name: dict[str, str],
+) -> Optional[str]:
+    if category_code_raw and category_code_raw in categories_by_code:
+        return categories_by_code[category_code_raw]
+    if category_name_raw and category_name_raw in categories_by_name:
+        return categories_by_name[category_name_raw]
+    return None
+
+
 def _preload_models(db: Session, df: pd.DataFrame):
     model_code_values = {_clean_value(value) for value in df.get("型号码", [])}
     model_text_values = {_clean_value(value) for value in df.get("型号", [])}
@@ -239,6 +262,7 @@ def import_historical_mappings(
     updated = 0
     errors = []
     models_by_code, models_by_name = _preload_models(db, df)
+    categories_by_code, categories_by_name = _preload_categories(db)
     pending_rows = []
     history_keys = set()
 
@@ -277,6 +301,8 @@ def import_historical_mappings(
 
         brand_code_raw = _clean_value(_get(row, "品牌码"))
         model_code_raw = _clean_value(_get(row, "型号码"))
+        category_name_raw = _clean_value(_get(row, "品类"))
+        category_code_raw = _clean_value(_get(row, "品类码"))
         model, reason = _resolve_model(
             model_code_raw=model_code_raw,
             model_text=model_text,
@@ -288,6 +314,12 @@ def import_historical_mappings(
             errors.append({"row": row_num, "reason": reason})
             continue
 
+        resolved_category_code = _resolve_category_code(
+            category_code_raw=category_code_raw,
+            category_name_raw=category_name_raw,
+            categories_by_code=categories_by_code,
+            categories_by_name=categories_by_name,
+        )
         item_name_norm = _normalize_item_name(item_name)
         week = _clean_value(_get(row, "周"))
         month = f"{year:04d}-{month_num:02d}"
@@ -315,15 +347,15 @@ def import_historical_mappings(
             "month": month,
             "report_type": _clean_value(_get(row, "报告类型")),
             "channel": _clean_value(_get(row, "渠道")),
-            "category_name_raw": _clean_value(_get(row, "品类")),
-            "category_code_raw": _clean_value(_get(row, "品类码")),
+            "category_name_raw": category_name_raw,
+            "category_code_raw": category_code_raw,
             "brand_raw": _clean_value(_get(row, "品牌")),
             "brand_code_raw": brand_code_raw,
             "model_text": model_text,
             "model_code_raw": model_code_raw,
             "model_id": model.id if model else None,
             "model_code": model.model_code if model else None,
-            "category_code": model.category_code if model else _clean_value(_get(row, "品类码")),
+            "category_code": model.category_code if model else resolved_category_code,
             "sales_amount": _clean_decimal(_get(row, "销额")),
             "sales_qty": _clean_int(_get(row, "销量")),
             "price": _clean_decimal(_get(row, "单价")),

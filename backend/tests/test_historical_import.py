@@ -8,7 +8,7 @@ from sqlalchemy import event
 
 from app.api.historical_api import router as historical_router
 from app.models.database import get_db
-from app.models.schemas import HistoricalMapping, ModelRecord
+from app.models.schemas import Category, HistoricalMapping, ModelRecord
 
 
 def _client(db):
@@ -195,6 +195,8 @@ def test_import_requires_platform_title_year_and_month(db):
 
 
 def test_import_reads_rawdata_sheet_uses_channel_as_platform_and_allows_blank_model(db):
+    db.add(Category(code="monitor", name="显示器"))
+    db.commit()
     client = _client(db)
     content = _history_excel_with_sheets({
         "元数据": [{"品类码": "monitor", "规格名称": "产品细分"}],
@@ -208,7 +210,7 @@ def test_import_reads_rawdata_sheet_uses_channel_as_platform_and_allows_blank_mo
             "品类": "显示器",
             "品牌": "清华同方",
             "型号": "",
-            "品类码": "monitor",
+            "品类码": "",
             "品牌码": "THTF",
             "型号码": "",
             "标题": "清华同方 21.5英寸液晶显示器",
@@ -235,6 +237,7 @@ def test_import_reads_rawdata_sheet_uses_channel_as_platform_and_allows_blank_mo
     assert row.model_text is None
     assert row.model_id is None
     assert row.model_code is None
+    assert row.category_code == "monitor"
     assert row.brand_raw == "清华同方"
     assert row.brand_code_raw == "THTF"
     assert row.match_key_type == "item_id"

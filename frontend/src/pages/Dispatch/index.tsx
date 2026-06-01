@@ -283,7 +283,7 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
           <Space direction="vertical" size={0}>
             <Tag color="green">已分发</Tag>
             <Text type="secondary" style={{ fontSize: 12 }}>
-              {new Date(batch.finished_at!).toLocaleString('zh-CN')}
+              {batch.finished_at || '-'}
             </Text>
           </Space>
         )

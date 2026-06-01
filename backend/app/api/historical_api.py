@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.models.database import get_db
 from app.models.schemas import Category, HistoricalMapping, ModelRecord
+from app.utils.time_utils import format_beijing_datetime
 from app.utils.url_utils import extract_item_id
 
 router = APIRouter(prefix="/api/historical", tags=["historical"])
@@ -398,7 +399,7 @@ def list_batches(db: Session = Depends(get_db)):
         .order_by(func.max(HistoricalMapping.updated_at).desc(), func.max(HistoricalMapping.id).desc())
         .all()
     )
-    return [{"batch": r.import_batch, "count": r.count, "updated_at": r.updated_at} for r in rows]
+    return [{"batch": r.import_batch, "count": r.count, "updated_at": format_beijing_datetime(r.updated_at)} for r in rows]
 
 
 @router.get("/mappings")
@@ -472,7 +473,7 @@ def list_mappings(
             "sales_amount": float(hm.sales_amount) if hm.sales_amount is not None else None,
             "import_batch": hm.import_batch,
             "match_key_type": hm.match_key_type,
-            "updated_at": hm.updated_at,
+            "updated_at": format_beijing_datetime(hm.updated_at),
         }
         for hm, m in rows
     ]

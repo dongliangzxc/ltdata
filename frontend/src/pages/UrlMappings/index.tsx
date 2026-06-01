@@ -174,7 +174,7 @@ export default function UrlMappingsPage() {
     },
     {
       title: '修改时间', dataIndex: 'updated_at', width: 150,
-      render: (v: string | null) => v ? new Date(v).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }).slice(0, 16) : '-'
+      render: (v: string | null) => v || '-'
     },
     {
       title: '操作人', dataIndex: 'operator', width: 90,

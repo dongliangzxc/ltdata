@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
@@ -14,14 +14,9 @@ from app.models.schemas import (
     UploadFileRecord,
 )
 from app.services.data_cleaner import run_clean
+from app.utils.time_utils import format_beijing_datetime
 
 router = APIRouter(prefix="/api/clean", tags=["clean"])
-
-
-def _format_beijing_datetime(value: datetime | None) -> str | None:
-    if value is None:
-        return None
-    return (value + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _build_clean_scope_desc(db: Session, job: CleanJobRecord) -> str:
@@ -56,7 +51,7 @@ def _clean_job_to_dict(db: Session, job: CleanJobRecord) -> dict:
         "row_filtered": job.row_filtered,
         "dispatch_batch_id": job.dispatch_batch_id,
         "dispatch_category_code": job.dispatch_category_code,
-        "created_at": _format_beijing_datetime(job.created_at),
+        "created_at": format_beijing_datetime(job.created_at),
         "scope_desc": _build_clean_scope_desc(db, job),
     }
 

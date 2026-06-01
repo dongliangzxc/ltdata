@@ -205,7 +205,7 @@ export default function ModelsPage() {
     },
     {
       title: '修改时间', dataIndex: 'updated_at', width: 140,
-      render: (v: string | null) => v ? new Date(v).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }).slice(0, 16) : '-'
+      render: (v: string | null) => v || '-'
     },
     {
       title: '状态', dataIndex: 'status', width: 70,

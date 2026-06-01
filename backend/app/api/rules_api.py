@@ -27,6 +27,7 @@ from app.models.schemas import (
     InterventionRulePatch,
 )
 from app.services.import_helper import save_tmp_file, read_columns, find_best_template, col_fingerprint
+from app.utils.time_utils import format_beijing_datetime
 
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "./uploads")
 
@@ -148,8 +149,8 @@ def _intervention_rule_to_dict(rule: InterventionRule) -> dict:
         "conditions": rule.conditions,
         "summary": _intervention_condition_summary(rule.conditions or {}),
         "is_active": rule.is_active,
-        "created_at": rule.created_at,
-        "updated_at": rule.updated_at,
+        "created_at": format_beijing_datetime(rule.created_at),
+        "updated_at": format_beijing_datetime(rule.updated_at),
     }
 
 
@@ -223,7 +224,7 @@ def list_noise_words(
             "keyword": r.keyword,
             "match_field": r.match_field,
             "is_active": r.is_active,
-            "created_at": r.created_at,
+            "created_at": format_beijing_datetime(r.created_at),
             "category_code": r.category_code,
         }
         for r in rows
@@ -283,7 +284,7 @@ def list_brand_aliases(db: Session = Depends(get_db)):
     rows = db.query(BrandAlias).order_by(BrandAlias.alias_name).all()
     return [
         {"id": r.id, "alias_name": r.alias_name, "brand_code": r.brand_code,
-         "is_active": r.is_active, "created_at": r.created_at}
+         "is_active": r.is_active, "created_at": format_beijing_datetime(r.created_at)}
         for r in rows
     ]
 
@@ -367,7 +368,7 @@ def list_match_rules(db: Session = Depends(get_db)):
             "id": mr.id, "keyword": mr.keyword, "match_type": mr.match_type,
             "model_id": mr.model_id, "priority": mr.priority, "is_active": mr.is_active,
             "brand_code": m.brand_code, "model_code": m.model_code,
-            "model_name": m.model_name, "created_at": mr.created_at,
+            "model_name": m.model_name, "created_at": format_beijing_datetime(mr.created_at),
         }
         for mr, m in rows
     ]
@@ -467,7 +468,7 @@ def list_filtered_items(
             "item_name": rd.item_name,
             "brand_raw": rd.brand_raw,
             "shop_name": rd.shop_name,
-            "created_at": fi.created_at,
+            "created_at": format_beijing_datetime(fi.created_at),
         }
         for fi, rd in rows
     ]
@@ -591,7 +592,7 @@ def list_attr_rules(
             "id": r.id, "keyword": r.keyword, "match_type": r.match_type,
             "attr_name": r.attr_name, "attr_value": r.attr_value,
             "category_code": r.category_code, "priority": r.priority,
-            "is_active": r.is_active, "created_at": r.created_at,
+            "is_active": r.is_active, "created_at": format_beijing_datetime(r.created_at),
         }
         for r in rows
     ]

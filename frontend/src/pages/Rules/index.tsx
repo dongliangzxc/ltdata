@@ -450,7 +450,7 @@ function FilteredItemTab() {
         <Select allowClear placeholder="筛选清洗任务" style={{ width: 200 }}
           value={jobId} onChange={(v: number | undefined) => { setJobId(v); setPage(1) }}
           options={(jobsData ?? []).map((j: { id: number; created_at: string }) => ({
-            value: j.id, label: `任务 #${j.id}（${new Date(j.created_at).toLocaleDateString('zh-CN')}）`
+            value: j.id, label: `任务 #${j.id}（${j.created_at?.slice(0, 10) || '-'}）`
           }))} />
         <Input.Search placeholder="搜索命中规则" allowClear style={{ width: 200 }}
           onSearch={(v: string) => { setKeyword(v); setPage(1) }} />

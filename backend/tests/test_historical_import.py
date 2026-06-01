@@ -174,6 +174,38 @@ def test_import_preloads_existing_history_without_per_row_history_queries(db):
     assert len(history_selects) <= 1
 
 
+def test_list_history_returns_beijing_time_strings(db):
+    row = HistoricalMapping(
+        import_batch="batch1",
+        platform="tmall",
+        item_id="1001",
+        item_name="商品1",
+        item_name_norm="商品1",
+        year=2026,
+        month_num=6,
+        month="2026-06",
+        model_text=None,
+        model_id=None,
+        model_code=None,
+        category_code="monitor",
+        match_key_type="item_id",
+        raw_payload={"标题": "商品1"},
+        created_at=datetime(2026, 6, 1, 1, 2, 3),
+        updated_at=datetime(2026, 6, 1, 1, 2, 3),
+    )
+    db.add(row)
+    db.commit()
+    client = _client(db)
+
+    batch_resp = client.get("/api/historical/batches")
+    mapping_resp = client.get("/api/historical/mappings")
+
+    assert batch_resp.status_code == 200
+    assert mapping_resp.status_code == 200
+    assert batch_resp.json()[0]["updated_at"] == "2026-06-01 09:02:03"
+    assert mapping_resp.json()["items"][0]["updated_at"] == "2026-06-01 09:02:03"
+
+
 def test_import_requires_platform_title_year_and_month(db):
     client = _client(db)
     content = _history_excel([{"商场": "", "渠道": "", "标题": "", "型号": "", "年": "", "月": ""}])
@@ -548,8 +580,8 @@ def test_list_batches_returns_count_updated_at_and_orders_newest_first(db):
     assert resp.status_code == 200
     data = resp.json()
     assert data == [
-        {"batch": "new.xlsx", "count": 1, "updated_at": "2026-06-01T00:00:00"},
-        {"batch": "old.xlsx", "count": 2, "updated_at": "2026-05-01T00:00:00"},
+        {"batch": "new.xlsx", "count": 1, "updated_at": "2026-06-01 08:00:00"},
+        {"batch": "old.xlsx", "count": 2, "updated_at": "2026-05-01 08:00:00"},
     ]
 
 

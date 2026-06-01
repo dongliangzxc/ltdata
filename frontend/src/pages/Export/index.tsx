@@ -118,7 +118,7 @@ export default function ExportPage() {
     { title: '待确认行', dataIndex: 'pending_rows', width: 90, render: (v: number | null) => v ?? '-' },
     {
       title: '提交时间', dataIndex: 'created_at', width: 160,
-      render: (v: string) => new Date(v).toLocaleString('zh-CN')
+      render: (v: string) => v || '-'
     },
     {
       title: '操作', width: 100, fixed: 'right' as const,
@@ -169,7 +169,7 @@ export default function ExportPage() {
                     <Select.Option key={j.id} value={j.id}>
                       任务 #{j.id} — 输出 {j.row_out} 条 —
                       <Text type="secondary" style={{ marginLeft: 4 }}>
-                        {new Date(j.created_at).toLocaleDateString('zh-CN')}
+                        {j.created_at?.slice(0, 10) || '-'}
                       </Text>
                     </Select.Option>
                   ))}

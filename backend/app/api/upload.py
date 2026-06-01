@@ -17,9 +17,10 @@ from app.services.import_helper import (
     cleanup_old_tmp as _ih_cleanup_old_tmp,
 )
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime
 from app.models.database import SessionLocal
 from app.models.schemas import UploadConfirmJob
+from app.utils.time_utils import format_beijing_datetime
 
 # 内存进度表：job_id → 0-100，线程结束后清除
 _upload_progress: dict[int, int] = {}
@@ -118,12 +119,6 @@ DOMESTIC_UPLOAD_PLATFORMS = {
     "jd", "tm", "tb", "tmall", "taobao", "douyin",
     "京东", "天猫", "淘宝", "抖音",
 }
-
-
-def _format_beijing_datetime(value: datetime | None) -> str | None:
-    if value is None:
-        return None
-    return (value + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
 
 
 router = APIRouter(prefix="/api/upload", tags=["upload"])
@@ -260,7 +255,7 @@ def list_upload_files(
             "data_region": record.data_region,
             "data_year": record.data_year,
             "data_month": record.data_month,
-            "uploaded_at": _format_beijing_datetime(record.uploaded_at),
+            "uploaded_at": format_beijing_datetime(record.uploaded_at),
         }
         for record in q.all()
     ]
@@ -738,8 +733,8 @@ def _upload_job_response(job: UploadConfirmJob) -> dict:
         "inserted_rows": job.inserted_rows,
         "skipped_rows": job.skipped_rows,
         "error_msg": job.error_msg,
-        "created_at": job.created_at,
-        "finished_at": job.finished_at,
+        "created_at": format_beijing_datetime(job.created_at),
+        "finished_at": format_beijing_datetime(job.finished_at),
     }
     if job.status == "done" and job.result_data:
         resp.update(job.result_data)

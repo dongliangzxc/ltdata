@@ -798,7 +798,7 @@ export default function MatchPage() {
     },
     {
       title: '发布时间', dataIndex: 'created_at',
-      render: (v: string) => new Date(v).toLocaleString('zh-CN')
+      render: (v: string) => v || '-'
     },
   ]
 
@@ -819,7 +819,7 @@ export default function MatchPage() {
               onChange={v => { setSelectedJobId(v); setSummary(null); setPage(1); setReviewedPage(1); setPublishJobs([]); setCoefficientDrafts({}); setEditedCoefficientIds(new Set()) }}
               options={doneJobs.map((j: { id: number; created_at: string; row_out: number }) => ({
                 value: j.id,
-                label: `任务#${j.id}（${j.row_out}条，${new Date(j.created_at).toLocaleDateString('zh-CN')}）`,
+                label: `任务#${j.id}（${j.row_out}条，${j.created_at?.slice(0, 10) || '-'}）`,
               }))}
             />
           </Col>

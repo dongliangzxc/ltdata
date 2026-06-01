@@ -511,7 +511,7 @@ function TemplatesTab({
     },
     {
       title: '最后更新', dataIndex: 'updated_at', width: 170,
-      render: (v: string) => v ? new Date(v).toLocaleString('zh-CN') : '-',
+      render: (v: string) => v || '-',
     },
     {
       title: '操作', width: 120,

@@ -5,8 +5,9 @@ from sqlalchemy import (
     ForeignKey, JSON, SmallInteger, UniqueConstraint, CheckConstraint, Enum, Index
 )
 from sqlalchemy.orm import relationship
-from pydantic import BaseModel
+from pydantic import BaseModel, field_serializer
 from app.models.database import Base
+from app.utils.time_utils import format_beijing_datetime
 
 
 # ─────────────────────────── ORM Models ───────────────────────────
@@ -169,6 +170,10 @@ class CleanJobOut(BaseModel):
     dispatch_category_code: Optional[str] = None
     created_at: datetime
 
+    @field_serializer("created_at")
+    def serialize_created_at(self, value: datetime | None):
+        return format_beijing_datetime(value)
+
     model_config = {"from_attributes": True}
 
 
@@ -222,6 +227,10 @@ class InterventionRuleOut(BaseModel):
     created_at: datetime
     updated_at: Optional[datetime] = None
 
+    @field_serializer("created_at", "updated_at")
+    def serialize_datetime(self, value: datetime | None):
+        return format_beijing_datetime(value)
+
     model_config = {"from_attributes": True}
 
 
@@ -252,6 +261,10 @@ class CategoryOut(BaseModel):
     parent_code: Optional[str] = None
     sort_order:  int = 0
     created_at:  datetime
+
+    @field_serializer("created_at")
+    def serialize_created_at(self, value: datetime | None):
+        return format_beijing_datetime(value)
 
     model_config = {"from_attributes": True}
 
@@ -304,6 +317,10 @@ class MetadataSpecOut(BaseModel):
     single_select:  bool
     created_at:     datetime
     updated_at:     datetime
+
+    @field_serializer("created_at", "updated_at")
+    def serialize_datetime(self, value: datetime | None):
+        return format_beijing_datetime(value)
 
     model_config = {"from_attributes": True}
 
@@ -482,6 +499,10 @@ class ItemUrlMappingOut(BaseModel):
     operator:      Optional[str] = None
     created_at:    datetime
     updated_at:    Optional[datetime] = None
+
+    @field_serializer("created_at", "updated_at")
+    def serialize_datetime(self, value: datetime | None):
+        return format_beijing_datetime(value)
 
     model_config = {"from_attributes": True}
 
@@ -706,6 +727,10 @@ class PublishJobOut(BaseModel):
     note:            Optional[str]
     created_at:      datetime
 
+    @field_serializer("created_at")
+    def serialize_created_at(self, value: datetime | None):
+        return format_beijing_datetime(value)
+
     model_config = {"from_attributes": True}
 
 
@@ -745,6 +770,10 @@ class ModelOut(BaseModel):
     created_at:    datetime
     updated_at:    datetime
 
+    @field_serializer("created_at", "updated_at")
+    def serialize_datetime(self, value: datetime | None):
+        return format_beijing_datetime(value)
+
     model_config = {"from_attributes": True}
 
 
@@ -769,6 +798,10 @@ class AttrRuleOut(BaseModel):
     priority:      int
     is_active:     int
     created_at:    datetime
+
+    @field_serializer("created_at")
+    def serialize_created_at(self, value: datetime | None):
+        return format_beijing_datetime(value)
 
     model_config = {"from_attributes": True}
 
@@ -810,6 +843,10 @@ class ExportJobOut(BaseModel):
     pending_rows:    Optional[int]
     error_msg:       Optional[str]
     created_at:      datetime
+
+    @field_serializer("created_at")
+    def serialize_created_at(self, value: datetime | None):
+        return format_beijing_datetime(value)
 
     model_config = {"from_attributes": True}
 
@@ -955,6 +992,10 @@ class CorrectionRuleOut(CorrectionRuleIn):
     id: int
     created_at: Optional[datetime] = None
 
+    @field_serializer("created_at")
+    def serialize_created_at(self, value: datetime | None):
+        return format_beijing_datetime(value)
+
     model_config = {"from_attributes": True}
 
 
@@ -985,6 +1026,10 @@ class DispatchRuleOut(BaseModel):
     is_active: int
     created_at: Optional[datetime]
 
+    @field_serializer("created_at")
+    def serialize_created_at(self, value: datetime | None):
+        return format_beijing_datetime(value)
+
 
 class DispatchBatchOut(BaseModel):
     model_config = {"from_attributes": True}
@@ -997,6 +1042,10 @@ class DispatchBatchOut(BaseModel):
     unmatched_rows: Optional[int]
     created_at: Optional[datetime]
     finished_at: Optional[datetime]
+
+    @field_serializer("created_at", "finished_at")
+    def serialize_datetime(self, value: datetime | None):
+        return format_beijing_datetime(value)
 
 
 # ─── P9: Column Templates ─────────────────────────────────────
@@ -1029,6 +1078,10 @@ class ColumnTemplateOut(BaseModel):
     ignore_columns: Optional[list]
     is_builtin: int
     updated_at: Optional[datetime]
+
+    @field_serializer("updated_at")
+    def serialize_updated_at(self, value: datetime | None):
+        return format_beijing_datetime(value)
 
 
 class ColumnTemplateIn(BaseModel):

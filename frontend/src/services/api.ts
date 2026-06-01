@@ -539,9 +539,9 @@ export interface HistoricalMappingItem {
   item_name: string
   brand_raw: string | null
   brand_code_raw: string | null
-  model_text: string
-  model_id: number
-  model_code: string
+  model_text: string | null
+  model_id: number | null
+  model_code: string | null
   standard_model_name: string | null
   category_code: string | null
   category_name_raw: string | null

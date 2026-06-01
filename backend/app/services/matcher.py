@@ -325,16 +325,18 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
         # ── S0.2: 历史库精确匹配 ─────────────────────────────────
         hist_hit = _history_lookup(db, row)
         if hist_hit:
+            historical_status = "matched" if hist_hit.model_id else "pending"
             results.append(MatchResult(
                 clean_job_id=clean_job_id,
                 raw_data_id=row.raw_data_id,
                 model_id=hist_hit.model_id,
-                match_status="matched",
+                match_status=historical_status,
                 matched_by="auto",
                 match_source="historical",
                 brand_identified=1,
             ))
-            matched_count += 1
+            if hist_hit.model_id:
+                matched_count += 1
             if len(results) >= BATCH:
                 db.bulk_save_objects(results)
                 db.commit()

@@ -28,6 +28,15 @@ def _history_excel(rows: list[dict]) -> bytes:
     return buffer.getvalue()
 
 
+def _history_excel_with_sheets(sheets: dict[str, list[dict]]) -> bytes:
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer) as writer:
+        for sheet_name, rows in sheets.items():
+            pd.DataFrame(rows).to_excel(writer, sheet_name=sheet_name, index=False)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
 def _seed_model(db, *, model_code="QH-001", model_name="Mini", brand_code="DJI", category_code="sports_camera"):
     model = ModelRecord(
         brand_code=brand_code,
@@ -137,9 +146,9 @@ def test_import_preloads_model_resolution_without_per_row_model_queries(db):
     assert len(model_selects) == 2
 
 
-def test_import_requires_platform_title_model_year_and_month(db):
+def test_import_requires_platform_title_year_and_month(db):
     client = _client(db)
-    content = _history_excel([{"商场": "", "标题": "", "型号": "", "年": "", "月": ""}])
+    content = _history_excel([{"商场": "", "渠道": "", "标题": "", "型号": "", "年": "", "月": ""}])
 
     resp = client.post(
         "/api/historical/import",
@@ -150,14 +159,60 @@ def test_import_requires_platform_title_model_year_and_month(db):
     data = resp.json()
     assert data["success"] == 0
     reasons = "\n".join(e["reason"] for e in data["errors"])
-    assert "商场不能为空" in reasons
+    assert "商场/渠道不能为空" in reasons
     assert "标题不能为空" in reasons
-    assert "型号不能为空" in reasons
+    assert "型号不能为空" not in reasons
     assert "年不能为空" in reasons
     assert "月不能为空" in reasons
 
 
-def test_import_uses_model_text_as_model_code_when_model_code_raw_empty(db):
+def test_import_reads_rawdata_sheet_uses_channel_as_platform_and_allows_blank_model(db):
+    client = _client(db)
+    content = _history_excel_with_sheets({
+        "元数据": [{"品类码": "monitor", "规格名称": "产品细分"}],
+        "rawdata": [{
+            "年": 2023,
+            "月": 1,
+            "周": "W01",
+            "报告类型": "ONLINE_M",
+            "渠道": "TMALL",
+            "商场": "",
+            "品类": "显示器",
+            "品牌": "清华同方",
+            "型号": "",
+            "品类码": "monitor",
+            "品牌码": "THTF",
+            "型号码": "",
+            "标题": "清华同方 21.5英寸液晶显示器",
+            "销额": 3552,
+            "销量": 4,
+            "单价": 888,
+            "网址": "https://detail.tmall.com/item.htm?id=15498989111",
+        }],
+    })
+
+    resp = client.post(
+        "/api/historical/import",
+        files={"file": ("monitor.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] == 1
+    assert data["created"] == 1
+    assert data["errors"] == []
+    row = db.query(HistoricalMapping).one()
+    assert row.platform == "tmall"
+    assert row.item_id == "15498989111"
+    assert row.model_text is None
+    assert row.model_id is None
+    assert row.model_code is None
+    assert row.brand_raw == "清华同方"
+    assert row.brand_code_raw == "THTF"
+    assert row.match_key_type == "item_id"
+
+
+def test_import_uses_model_code_when_model_text_matches_code(db):
     model = _seed_model(db, model_code="QH-215", model_name="QHTF 21.5", brand_code="ROCK")
     client = _client(db)
     content = _history_excel([{

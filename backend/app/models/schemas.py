@@ -433,10 +433,10 @@ class HistoricalMapping(Base):
     brand_raw = Column(String(200), nullable=True)
     brand_code_raw = Column(String(100), nullable=True)
 
-    model_text = Column(String(200), nullable=False)
+    model_text = Column(String(200), nullable=True)
     model_code_raw = Column(String(100), nullable=True)
-    model_id = Column(Integer, ForeignKey("models.id"), nullable=False)
-    model_code = Column(String(100), nullable=False)
+    model_id = Column(Integer, ForeignKey("models.id"), nullable=True)
+    model_code = Column(String(100), nullable=True)
     category_code = Column(String(50), nullable=True)
 
     sales_amount = Column(Numeric(14, 2), nullable=True)

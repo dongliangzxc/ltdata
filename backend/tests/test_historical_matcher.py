@@ -179,6 +179,38 @@ def test_s02_prefers_item_id_month_fallback_before_item_url_week_hit(db):
     assert mr.model_id == model_id
 
 
+def test_s02_blank_model_history_goes_pending_and_skips_text_matching(db):
+    decoy_model = ModelRecord(brand_code="FAKE", model_code="XM1000X", model_name="XM1000X", category_code="headphone")
+    db.add(decoy_model)
+    db.flush()
+    job_id, _ = _seed(
+        db,
+        platform="tmall",
+        item_id="15498989111",
+        item_url="https://detail.tmall.com/item.htm?id=15498989111",
+        item_name="新款XM1000X无线蓝牙耳机",
+        month=202301,
+    )
+    _add_history(
+        db,
+        platform="tmall",
+        item_id="15498989111",
+        year=2023,
+        month_num=1,
+        model_id=None,
+        model_code=None,
+    )
+    db.commit()
+
+    run_match(db, job_id)
+
+    mr = db.query(MatchResult).filter(MatchResult.clean_job_id == job_id).first()
+    assert mr.match_status == "pending"
+    assert mr.match_source == "historical"
+    assert mr.model_id is None
+    assert mr.brand_identified == 1
+
+
 def test_s02_no_match_when_not_in_table(db):
     """historical_mappings 为空时，S0.2 不命中，走后续阶段（pending）"""
     job_id, _ = _seed(db, platform="jd", item_id="88888", item_name="unknown brand XYZ no match")

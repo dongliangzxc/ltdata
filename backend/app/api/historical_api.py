@@ -82,7 +82,7 @@ def _get(row: dict, key: str):
 def _resolve_model(
     *,
     model_code_raw: Optional[str],
-    model_text: str,
+    model_text: Optional[str],
     brand_code_raw: Optional[str],
     models_by_code: dict[str, ModelRecord],
     models_by_name: dict[str, list[ModelRecord]],
@@ -91,6 +91,11 @@ def _resolve_model(
         model = models_by_code.get(model_code_raw)
         if model:
             return model, None
+        if not model_text:
+            return None, f"型号码「{model_code_raw}」在型号库中不存在"
+
+    if not model_text:
+        return None, None
 
     model_by_code = models_by_code.get(model_text)
     if model_by_code:
@@ -183,10 +188,13 @@ def import_historical_mappings(
     db: Session = Depends(get_db),
 ):
     try:
-        df = pd.read_excel(file.file)
+        sheets = pd.read_excel(file.file, sheet_name=None)
     except Exception as e:
         raise HTTPException(400, f"无法解析 Excel 文件: {e}")
 
+    if not sheets:
+        raise HTTPException(400, "Excel 文件没有可读取的工作表")
+    df = sheets["rawdata"] if "rawdata" in sheets else next(iter(sheets.values()))
     df.columns = [str(col).strip() for col in df.columns]
     if df.empty:
         df = pd.DataFrame([{col: None for col in df.columns}])
@@ -202,7 +210,7 @@ def import_historical_mappings(
         row = raw_row.to_dict()
         row_num = int(idx) + 2
 
-        platform = _normalize_platform(_get(row, "商场"))
+        platform = _normalize_platform(_get(row, "商场")) or _normalize_platform(_get(row, "渠道"))
         item_name = _clean_value(_get(row, "标题"))
         model_text = _clean_value(_get(row, "型号"))
         year = _clean_int(_get(row, "年"))
@@ -210,11 +218,9 @@ def import_historical_mappings(
 
         missing = []
         if not platform:
-            missing.append("商场不能为空")
+            missing.append("商场/渠道不能为空")
         if not item_name:
             missing.append("标题不能为空")
-        if not model_text:
-            missing.append("型号不能为空")
         if year is None:
             missing.append("年不能为空")
         if month_num is None:
@@ -230,7 +236,8 @@ def import_historical_mappings(
         parsed = extract_item_id(item_url)
         item_id = None
         if parsed:
-            platform, item_id = parsed
+            parsed_platform, item_id = parsed
+            platform = parsed_platform
 
         brand_code_raw = _clean_value(_get(row, "品牌码"))
         model_code_raw = _clean_value(_get(row, "型号码"))
@@ -279,9 +286,9 @@ def import_historical_mappings(
             "brand_code_raw": brand_code_raw,
             "model_text": model_text,
             "model_code_raw": model_code_raw,
-            "model_id": model.id,
-            "model_code": model.model_code,
-            "category_code": model.category_code,
+            "model_id": model.id if model else None,
+            "model_code": model.model_code if model else None,
+            "category_code": model.category_code if model else _clean_value(_get(row, "品类码")),
             "sales_amount": _clean_decimal(_get(row, "销额")),
             "sales_qty": _clean_int(_get(row, "销量")),
             "price": _clean_decimal(_get(row, "单价")),

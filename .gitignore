@@ -14,6 +14,7 @@ env/
 backend/.env
 
 # 上传/导出文件（运行时产生）
+uploads/
 backend/uploads/
 backend/exports/
 
@@ -52,3 +53,4 @@ docs/superpowers/
 
 # Git worktrees（本地隔离工作区，不提交）
 .worktrees/
+worktrees/

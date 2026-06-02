@@ -525,6 +525,36 @@ export interface HistoricalImportResult {
   import_batch: string
 }
 
+export interface HistoricalImportStats {
+  total_rows: number
+  importable_rows: number
+  missing_required_rows: number
+  missing_model_rows: number
+  auto_create_model_count: number
+}
+
+export interface HistoricalImportPreview {
+  temp_file_id: string
+  filename: string
+  sheets: string[]
+  sheet_name: string
+  columns: string[]
+  standard_fields: Record<string, string>
+  mapping: Record<string, string>
+  category_code: string | null
+  issues: string[]
+  total_rows: number
+  stats: HistoricalImportStats
+  preview: Record<string, string | null>[]
+}
+
+export interface HistoricalConfirmPayload {
+  temp_file_id: string
+  sheet_name: string
+  mapping: Record<string, string>
+  category_code?: string | null
+}
+
 export interface HistoricalBatchItem {
   batch: string
   count: number
@@ -570,6 +600,15 @@ export interface HistoricalMappingParams {
 
 export const importHistoricalMappings = (formData: FormData) =>
   api.post<HistoricalImportResult>('/historical/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+
+export const parseHistoricalImport = (formData: FormData) =>
+  api.post<HistoricalImportPreview>('/historical/headers', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+
+export const previewHistoricalImport = (payload: HistoricalConfirmPayload) =>
+  api.post<HistoricalImportPreview>('/historical/preview', payload)
+
+export const confirmHistoricalImport = (payload: HistoricalConfirmPayload) =>
+  api.post<HistoricalImportResult>('/historical/confirm', payload)
 
 export const listHistoricalBatches = () =>
   api.get<HistoricalBatchItem[]>('/historical/batches')

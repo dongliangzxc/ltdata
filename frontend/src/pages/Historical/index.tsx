@@ -1,17 +1,20 @@
 import { useState, useEffect } from 'react'
 import {
-  Tabs, Table, Button, Upload, Space, Select, Tag, Popconfirm, message, Input, Card, Statistic, Alert
+  Tabs, Table, Button, Upload, Space, Select, Tag, Popconfirm, message, Input, Card, Statistic, Alert, Form
 } from 'antd'
 import { InboxOutlined, DeleteOutlined } from '@ant-design/icons'
 import type { UploadProps } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
-  importHistoricalMappings,
+  parseHistoricalImport,
+  previewHistoricalImport,
+  confirmHistoricalImport,
   listHistoricalBatches,
   listHistoricalMappings,
   deleteHistoricalMapping,
   deleteHistoricalBatch,
   type HistoricalBatchItem,
+  type HistoricalImportPreview,
   type HistoricalImportResult,
   type HistoricalMappingItem,
 } from '../../services/api'
@@ -27,8 +30,15 @@ function formatDateTime(value: string | null | undefined) {
 // ─── Tab 1: 导入历史确认结果 ─────────────────────────────────────
 function ImportTab() {
   const [uploading, setUploading] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [preview, setPreview] = useState<HistoricalImportPreview | null>(null)
+  const [mapping, setMapping] = useState<Record<string, string>>({})
+  const [sheetName, setSheetName] = useState<string>()
+  const [categoryCode, setCategoryCode] = useState<string | undefined>()
   const [result, setResult] = useState<HistoricalImportResult | null>(null)
   const [batches, setBatches] = useState<HistoricalBatchItem[]>([])
+  const { options: categoryOptions, loading: categoryLoading } = useCategoryOptions()
 
   const loadBatches = async () => {
     const res = await listHistoricalBatches()
@@ -37,19 +47,68 @@ function ImportTab() {
 
   useEffect(() => { loadBatches() }, [])
 
+  const applyPreview = (nextPreview: HistoricalImportPreview) => {
+    setPreview(nextPreview)
+    setMapping(nextPreview.mapping)
+    setSheetName(nextPreview.sheet_name)
+    setCategoryCode(nextPreview.category_code || undefined)
+  }
+
   const handleUpload = async (file: File) => {
     const formData = new FormData()
     formData.append('file', file)
     setUploading(true)
     try {
-      const res = await importHistoricalMappings(formData)
-      setResult(res.data)
-      message.success(`导入完成：成功 ${res.data.success} 条，新增 ${res.data.created} 条，更新 ${res.data.updated} 条`)
-      loadBatches()
+      const res = await parseHistoricalImport(formData)
+      applyPreview(res.data)
+      setResult(null)
+      message.success('解析完成，请确认 sheet、字段映射和预览后再导入')
     } finally {
       setUploading(false)
     }
     return false
+  }
+
+  const refreshPreview = async (nextSheetName = sheetName, nextMapping = mapping, nextCategoryCode = categoryCode) => {
+    if (!preview || !nextSheetName) return
+    setPreviewLoading(true)
+    try {
+      const res = await previewHistoricalImport({
+        temp_file_id: preview.temp_file_id,
+        sheet_name: nextSheetName,
+        mapping: nextMapping,
+        category_code: nextCategoryCode,
+      })
+      applyPreview(res.data)
+    } finally {
+      setPreviewLoading(false)
+    }
+  }
+
+  const updateMapping = (field: string, column?: string) => {
+    const nextMapping = { ...mapping }
+    if (column) nextMapping[field] = column
+    else delete nextMapping[field]
+    setMapping(nextMapping)
+  }
+
+  const handleConfirm = async () => {
+    if (!preview || !sheetName) return
+    setConfirming(true)
+    try {
+      const res = await confirmHistoricalImport({
+        temp_file_id: preview.temp_file_id,
+        sheet_name: sheetName,
+        mapping,
+        category_code: categoryCode,
+      })
+      setResult(res.data)
+      setPreview(null)
+      message.success(`导入完成：成功 ${res.data.success} 条，新增 ${res.data.created} 条，更新 ${res.data.updated} 条`)
+      loadBatches()
+    } finally {
+      setConfirming(false)
+    }
   }
 
   const handleDeleteBatch = async (batch: string) => {
@@ -64,8 +123,20 @@ function ImportTab() {
     accept: '.xlsx,.xls',
     beforeUpload: (file) => { handleUpload(file); return false },
     showUploadList: false,
-    disabled: uploading,
+    disabled: uploading || confirming,
   }
+
+  const currentIssues = preview?.issues ?? []
+
+  const previewColumns = preview?.preview[0]
+    ? Object.keys(preview.preview[0]).map(key => ({
+      title: key,
+      dataIndex: key,
+      key,
+      width: 120,
+      render: (v: string | null) => v || '-',
+    }))
+    : []
 
   return (
     <Space direction="vertical" style={{ width: '100%' }} size="large">
@@ -78,7 +149,98 @@ function ImportTab() {
       </Dragger>
 
       {uploading && (
-        <Alert type="info" showIcon message="导入处理中" description="大 Excel 需要解析和写入较多数据，完成后会显示成功、失败明细和导入批次。" />
+        <Alert type="info" showIcon message="解析处理中" description="正在识别 sheet、列映射和预览数据，确认后才会正式写入历史库。" />
+      )}
+
+      {preview && (
+        <Card title="导入确认" loading={previewLoading}>
+          <Space direction="vertical" style={{ width: '100%' }} size="middle">
+            <Space wrap>
+              <Tag color="blue">文件：{preview.filename}</Tag>
+              <Tag color="blue">总行数：{preview.total_rows}</Tag>
+            </Space>
+            <Space wrap>
+              <Card size="small"><Statistic title="可导入" value={preview.stats.importable_rows} suffix="行" /></Card>
+              <Card size="small"><Statistic title="缺必要字段" value={preview.stats.missing_required_rows} suffix="行" /></Card>
+              <Card size="small"><Statistic title="未建型号" value={preview.stats.missing_model_rows} suffix="行" /></Card>
+              <Card size="small"><Statistic title="将自动建型号" value={preview.stats.auto_create_model_count} suffix="个" /></Card>
+            </Space>
+            {currentIssues.length > 0 && (
+              <Alert type="warning" showIcon message="需要确认" description={currentIssues.join('；')} />
+            )}
+            {preview.stats.auto_create_model_count > 0 && (
+              <Alert
+                type="info"
+                showIcon
+                message="确认导入时会自动创建缺失型号"
+                description="自动创建只写入品牌、型号、品类等基础信息；型号属性仍由产品字段定义和产品属性管理维护。"
+              />
+            )}
+            <Form layout="vertical">
+              <Form.Item label="数据 Sheet">
+                <Select
+                  value={sheetName}
+                  style={{ width: 260 }}
+                  options={preview.sheets.map(s => ({ value: s, label: s }))}
+                  onChange={value => { setSheetName(value); refreshPreview(value, mapping, categoryCode) }}
+                />
+              </Form.Item>
+              <Form.Item label="品类">
+                <Select
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  loading={categoryLoading}
+                  placeholder="选择品类"
+                  value={categoryCode}
+                  style={{ width: 260 }}
+                  options={categoryOptions}
+                  onChange={value => { setCategoryCode(value); refreshPreview(sheetName, mapping, value) }}
+                />
+              </Form.Item>
+            </Form>
+            <Table
+              size="small"
+              title={() => '字段映射'}
+              dataSource={Object.entries(preview.standard_fields).map(([field, label]) => ({ field, label }))}
+              rowKey="field"
+              pagination={false}
+              columns={[
+                { title: '标准字段', dataIndex: 'label', key: 'label', width: 140 },
+                {
+                  title: 'Excel 列', key: 'column',
+                  render: (_: unknown, record: { field: string }) => (
+                    <Select
+                      allowClear
+                      showSearch
+                      optionFilterProp="label"
+                      style={{ width: 220 }}
+                      value={mapping[record.field]}
+                      options={preview.columns.map(col => ({ value: col, label: col }))}
+                      onChange={value => updateMapping(record.field, value)}
+                    />
+                  ),
+                },
+              ]}
+            />
+            <Button onClick={() => refreshPreview()} loading={previewLoading}>刷新预览</Button>
+            <Table
+              size="small"
+              title={() => '标准化预览（前 20 行）'}
+              dataSource={preview.preview.map((row, index) => ({ ...row, __index: index }))}
+              rowKey="__index"
+              columns={previewColumns}
+              pagination={false}
+              scroll={{ x: 1800 }}
+            />
+            <Space>
+              <Button type="primary" onClick={handleConfirm} loading={confirming} disabled={currentIssues.length > 0}>
+                确认导入
+              </Button>
+              <Button onClick={() => setPreview(null)} disabled={confirming}>取消</Button>
+            </Space>
+          </Space>
+        </Card>
       )}
 
       {result && (

@@ -3,4 +3,6 @@ src
 public
 *.config.*
 *.json
+!package.json
+!package-lock.json
 *.md

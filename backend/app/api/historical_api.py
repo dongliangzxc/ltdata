@@ -8,11 +8,12 @@
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 from uuid import UUID
 
 import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from openpyxl import load_workbook
 from pydantic import BaseModel
 from sqlalchemy import func, or_, tuple_
 from sqlalchemy.orm import Session
@@ -211,6 +212,58 @@ def _read_sheet_preview(
     return df
 
 
+def _iter_sheet_rows_streaming(
+    path: Path,
+    sheet_name: str,
+    *,
+    columns: list[str],
+    usecols: Optional[list[str]] = None,
+):
+    selected = set(usecols or columns)
+    workbook = load_workbook(path, read_only=True, data_only=True)
+    try:
+        if sheet_name not in workbook.sheetnames:
+            raise HTTPException(400, "选择的 sheet 不存在")
+        sheet = workbook[sheet_name]
+        rows_iter = sheet.iter_rows(values_only=True)
+        header = next(rows_iter, None)
+        if header is None:
+            return
+        header_values = [str(col).strip() if col is not None else "" for col in header]
+        selected_indexes = [(index, col) for index, col in enumerate(header_values) if col in selected]
+        for row in rows_iter:
+            yield {col: row[index] if index < len(row) else None for index, col in selected_indexes}
+    finally:
+        workbook.close()
+
+
+def _read_sheet_streaming(
+    path: Path,
+    sheet_name: str,
+    *,
+    columns: list[str],
+    nrows: Optional[int] = None,
+    usecols: Optional[list[str]] = None,
+) -> pd.DataFrame:
+    rows = []
+    for row in _iter_sheet_rows_streaming(path, sheet_name, columns=columns, usecols=usecols):
+        rows.append(row)
+        if nrows is not None and len(rows) >= nrows:
+            break
+    return pd.DataFrame(rows, columns=usecols or columns)
+
+
+def _sheet_total_rows_streaming(path: Path, sheet_name: str) -> int:
+    workbook = load_workbook(path, read_only=True, data_only=True)
+    try:
+        if sheet_name not in workbook.sheetnames:
+            raise HTTPException(400, "选择的 sheet 不存在")
+        sheet = workbook[sheet_name]
+        return max((sheet.max_row or 1) - 1, 0)
+    finally:
+        workbook.close()
+
+
 def _mapped_columns(mapping: dict[str, str], columns: list[str]) -> list[str]:
     column_set = set(columns)
     return list(dict.fromkeys(source for source in mapping.values() if source in column_set))
@@ -266,38 +319,40 @@ def _infer_category_code(filename: str, db: Session) -> Optional[str]:
     return None
 
 
+def _standardize_historical_row(row: dict, mapping: dict[str, str], category_code: Optional[str]) -> dict:
+    year_value = _row_value(row, mapping, "year")
+    month_value = _row_value(row, mapping, "month_num")
+    year = _parse_year(year_value)
+    month_num = _parse_month(month_value)
+    if (year is None or month_num is None) and mapping.get("month_num") in {"时间维度", "月度"}:
+        dimension_year, dimension_month = _parse_time_dimension(month_value)
+        year = year if year is not None else dimension_year
+        month_num = month_num if month_num is not None else dimension_month
+    return {
+        "年": year,
+        "月": month_num,
+        "周": _clean_value(_row_value(row, mapping, "week")),
+        "报告类型": _clean_value(_row_value(row, mapping, "report_type")),
+        "渠道": _clean_value(_row_value(row, mapping, "channel")),
+        "商场": _clean_value(_row_value(row, mapping, "platform")),
+        "品类": _clean_value(_row_value(row, mapping, "category_name_raw")),
+        "品牌": _clean_value(_row_value(row, mapping, "brand_raw")),
+        "型号": _clean_value(_row_value(row, mapping, "model_text")),
+        "品类码": _clean_value(_row_value(row, mapping, "category_code_raw")) or category_code,
+        "品牌码": _clean_value(_row_value(row, mapping, "brand_code_raw")),
+        "型号码": _clean_value(_row_value(row, mapping, "model_code_raw")),
+        "标题": _clean_value(_row_value(row, mapping, "item_name")),
+        "销额": _clean_value(_row_value(row, mapping, "sales_amount")),
+        "销量": _clean_value(_row_value(row, mapping, "sales_qty")),
+        "单价": _clean_value(_row_value(row, mapping, "price")),
+        "网址": _clean_value(_row_value(row, mapping, "item_url")),
+    }
+
+
 def _standardize_historical_df(df: pd.DataFrame, mapping: dict[str, str], category_code: Optional[str]) -> pd.DataFrame:
     rows = []
     for _, raw_row in df.iterrows():
-        row = raw_row.to_dict()
-        year_value = _row_value(row, mapping, "year")
-        month_value = _row_value(row, mapping, "month_num")
-        year = _parse_year(year_value)
-        month_num = _parse_month(month_value)
-        if (year is None or month_num is None) and mapping.get("month_num") in {"时间维度", "月度"}:
-            dimension_year, dimension_month = _parse_time_dimension(month_value)
-            year = year if year is not None else dimension_year
-            month_num = month_num if month_num is not None else dimension_month
-        standardized = {
-            "年": year,
-            "月": month_num,
-            "周": _clean_value(_row_value(row, mapping, "week")),
-            "报告类型": _clean_value(_row_value(row, mapping, "report_type")),
-            "渠道": _clean_value(_row_value(row, mapping, "channel")),
-            "商场": _clean_value(_row_value(row, mapping, "platform")),
-            "品类": _clean_value(_row_value(row, mapping, "category_name_raw")),
-            "品牌": _clean_value(_row_value(row, mapping, "brand_raw")),
-            "型号": _clean_value(_row_value(row, mapping, "model_text")),
-            "品类码": _clean_value(_row_value(row, mapping, "category_code_raw")) or category_code,
-            "品牌码": _clean_value(_row_value(row, mapping, "brand_code_raw")),
-            "型号码": _clean_value(_row_value(row, mapping, "model_code_raw")),
-            "标题": _clean_value(_row_value(row, mapping, "item_name")),
-            "销额": _clean_value(_row_value(row, mapping, "sales_amount")),
-            "销量": _clean_value(_row_value(row, mapping, "sales_qty")),
-            "单价": _clean_value(_row_value(row, mapping, "price")),
-            "网址": _clean_value(_row_value(row, mapping, "item_url")),
-        }
-        rows.append(standardized)
+        rows.append(_standardize_historical_row(raw_row.to_dict(), mapping, category_code))
     return pd.DataFrame(rows)
 
 
@@ -365,15 +420,59 @@ def _effective_brand_code(brand_code_raw: Optional[str], brand_raw: Optional[str
 
 
 def _preview_stats(db: Session, standardized_df: pd.DataFrame) -> dict:
-    total_rows = len(standardized_df)
+    return _preview_stats_for_rows(db, (raw_row.to_dict() for _, raw_row in standardized_df.iterrows()))
+
+
+def _preview_stats_for_rows(db: Session, rows: Iterable[dict]) -> dict:
+    materialized_rows = list(rows)
+    model_code_values = {_clean_value(_get(row, "型号码")) for row in materialized_rows}
+    model_text_values = {_clean_value(_get(row, "型号")) for row in materialized_rows}
+    models_by_code, models_by_code_unbranded, models_by_name = _load_preview_models(db, model_code_values, model_text_values)
+    ambiguous_model_codes = _ambiguous_model_codes_from_rows(materialized_rows, models_by_code_unbranded)
+    return _calculate_preview_stats_for_rows(
+        materialized_rows,
+        models_by_code=models_by_code,
+        models_by_code_unbranded=models_by_code_unbranded,
+        models_by_name=models_by_name,
+        ambiguous_model_codes=ambiguous_model_codes,
+    )
+
+
+def _load_preview_models(db: Session, model_code_values: set[str | None], model_text_values: set[str | None]):
+    model_code_values.discard(None)
+    model_text_values.discard(None)
+    all_codes = model_code_values | model_text_values
+
+    models_by_code = {}
+    models_by_code_unbranded = {}
+    if all_codes:
+        for model in db.query(ModelRecord).filter(ModelRecord.model_code.in_(all_codes)).all():
+            models_by_code[(model.brand_code, model.model_code)] = model
+            models_by_code_unbranded.setdefault(model.model_code, []).append(model)
+
+    models_by_name = {}
+    if model_text_values:
+        for model in db.query(ModelRecord).filter(ModelRecord.model_name.in_(model_text_values)).all():
+            models_by_name.setdefault(model.model_name, []).append(model)
+
+    return models_by_code, models_by_code_unbranded, models_by_name
+
+
+def _calculate_preview_stats_for_rows(
+    rows: Iterable[dict],
+    *,
+    models_by_code: dict[tuple[str, str], ModelRecord],
+    models_by_code_unbranded: dict[str, list[ModelRecord]],
+    models_by_name: dict[str, list[ModelRecord]],
+    ambiguous_model_codes: set[str],
+) -> dict:
+    total_rows = 0
     missing_required_rows = 0
     missing_model_rows = 0
     auto_create_keys: set[tuple[str, str]] = set()
-    models_by_code, models_by_code_unbranded, models_by_name = _preload_models(db, standardized_df)
-    ambiguous_model_codes = _ambiguous_model_codes_from_batch(standardized_df, models_by_code_unbranded)
 
-    for _, raw_row in standardized_df.iterrows():
-        row = raw_row.to_dict()
+    for row in rows:
+        total_rows += 1
         if _row_required_errors(row):
             missing_required_rows += 1
             continue
@@ -720,6 +819,7 @@ def _historical_preview_response(
     temp_file_id: str,
     filename: str,
     xls: pd.ExcelFile,
+    path: Path,
     sheet_name: str,
     columns: list[str],
     mapping: dict[str, str],
@@ -731,12 +831,42 @@ def _historical_preview_response(
     normalized_issues = _mapping_issues(normalized_mapping, category_code, columns)
     issues = list(dict.fromkeys(raw_issues + normalized_issues))
     usecols = _mapped_columns(normalized_mapping, columns)
-    df_preview = _read_sheet_preview(xls, sheet_name, nrows=20, usecols=usecols)
-    total_rows = len(pd.read_excel(xls, sheet_name=sheet_name, usecols=[0]))
-    standardized_preview = _standardize_historical_df(df_preview, normalized_mapping, category_code)
-    full_df = _standardize_historical_df(_read_sheet_preview(xls, sheet_name, usecols=usecols), normalized_mapping, category_code)
-    stats = _preview_stats(db, full_df)
-    stats["total_rows"] = total_rows
+    if path.suffix.lower() == ".xls":
+        df_preview = _read_sheet_preview(xls, sheet_name, nrows=20, usecols=usecols)
+        standardized_preview = _standardize_historical_df(df_preview, normalized_mapping, category_code)
+        full_df = _standardize_historical_df(_read_sheet_preview(xls, sheet_name, usecols=usecols), normalized_mapping, category_code)
+        stats = _preview_stats(db, full_df)
+        total_rows = stats["total_rows"]
+        preview_rows = _preview_rows(standardized_preview)
+    else:
+        preview_rows = []
+        model_code_values = set()
+        model_text_values = set()
+        for raw_row in _iter_sheet_rows_streaming(path, sheet_name, columns=columns, usecols=usecols):
+            standardized = _standardize_historical_row(raw_row, normalized_mapping, category_code)
+            model_code_values.add(_clean_value(_get(standardized, "型号码")))
+            model_text_values.add(_clean_value(_get(standardized, "型号")))
+            if len(preview_rows) < 20:
+                preview_rows.append(_json_safe_row(standardized))
+        models_by_code, models_by_code_unbranded, models_by_name = _load_preview_models(db, model_code_values, model_text_values)
+        ambiguous_model_codes = _ambiguous_model_codes_from_rows(
+            (
+                _standardize_historical_row(raw_row, normalized_mapping, category_code)
+                for raw_row in _iter_sheet_rows_streaming(path, sheet_name, columns=columns, usecols=usecols)
+            ),
+            models_by_code_unbranded,
+        )
+        stats = _calculate_preview_stats_for_rows(
+            (
+                _standardize_historical_row(raw_row, normalized_mapping, category_code)
+                for raw_row in _iter_sheet_rows_streaming(path, sheet_name, columns=columns, usecols=usecols)
+            ),
+            models_by_code=models_by_code,
+            models_by_code_unbranded=models_by_code_unbranded,
+            models_by_name=models_by_name,
+            ambiguous_model_codes=ambiguous_model_codes,
+        )
+        total_rows = stats["total_rows"]
     return {
         "temp_file_id": temp_file_id,
         "filename": filename,
@@ -749,7 +879,7 @@ def _historical_preview_response(
         "issues": issues,
         "total_rows": total_rows,
         "stats": stats,
-        "preview": _preview_rows(standardized_preview),
+        "preview": preview_rows,
     }
 
 
@@ -775,13 +905,12 @@ def _preload_models(db: Session, df: pd.DataFrame):
     return models_by_code, models_by_code_unbranded, models_by_name
 
 
-def _ambiguous_model_codes_from_batch(df: pd.DataFrame, models_by_code_unbranded: dict[str, list[ModelRecord]]) -> set[str]:
+def _ambiguous_model_codes_from_rows(rows: Iterable[dict], models_by_code_unbranded: dict[str, list[ModelRecord]]) -> set[str]:
     brands_by_code = {
         model_code: {model.brand_code for model in models}
         for model_code, models in models_by_code_unbranded.items()
     }
-    for _, raw_row in df.iterrows():
-        row = raw_row.to_dict()
+    for row in rows:
         brand_code_raw = _clean_value(_get(row, "品牌码"))
         brand_raw = _clean_value(_get(row, "品牌"))
         brand_code = _effective_brand_code(brand_code_raw, brand_raw)
@@ -791,6 +920,10 @@ def _ambiguous_model_codes_from_batch(df: pd.DataFrame, models_by_code_unbranded
             if model_code:
                 brands_by_code.setdefault(model_code, set()).add(brand_code)
     return {model_code for model_code, brands in brands_by_code.items() if len(brands) > 1}
+
+
+def _ambiguous_model_codes_from_batch(df: pd.DataFrame, models_by_code_unbranded: dict[str, list[ModelRecord]]) -> set[str]:
+    return _ambiguous_model_codes_from_rows((raw_row.to_dict() for _, raw_row in df.iterrows()), models_by_code_unbranded)
 
 
 def _import_historical_dataframe(db: Session, df: pd.DataFrame, import_batch: str) -> dict:
@@ -952,7 +1085,10 @@ async def import_historical_mappings(file: UploadFile = File(...), db: Session =
         sheet_name, columns, mapping = _detect_sheet_and_mapping(xls)
         category_code = _infer_category_code(safe_filename, db)
         mapping = _normalize_mapping_for_columns(mapping, columns)
-        df = _read_sheet_preview(xls, sheet_name, usecols=_mapped_columns(mapping, columns))
+        if save_path.suffix.lower() == ".xls":
+            df = _read_sheet_preview(xls, sheet_name, usecols=_mapped_columns(mapping, columns))
+        else:
+            df = _read_sheet_streaming(save_path, sheet_name, columns=columns, usecols=_mapped_columns(mapping, columns))
         standardized_df = _standardize_historical_df(df, mapping, category_code)
         return _import_historical_dataframe(db, standardized_df, safe_filename)
     finally:
@@ -971,6 +1107,7 @@ async def historical_headers(file: UploadFile = File(...), db: Session = Depends
             temp_file_id=temp_file_id,
             filename=safe_filename,
             xls=xls,
+            path=save_path,
             sheet_name=sheet_name,
             columns=columns,
             mapping=mapping,
@@ -995,6 +1132,7 @@ def historical_preview(payload: HistoricalPreviewIn, db: Session = Depends(get_d
         temp_file_id=payload.temp_file_id,
         filename=filename,
         xls=xls,
+        path=save_path,
         sheet_name=payload.sheet_name,
         columns=columns,
         mapping=payload.mapping,
@@ -1018,7 +1156,10 @@ def historical_confirm(payload: HistoricalConfirmIn, db: Session = Depends(get_d
     issues = _mapping_issues(mapping, payload.category_code, columns)
     if issues:
         raise HTTPException(422, "；".join(issues))
-    df = _read_sheet_preview(xls, payload.sheet_name, usecols=_mapped_columns(mapping, columns))
+    if save_path.suffix.lower() == ".xls":
+        df = _read_sheet_preview(xls, payload.sheet_name, usecols=_mapped_columns(mapping, columns))
+    else:
+        df = _read_sheet_streaming(save_path, payload.sheet_name, columns=columns, usecols=_mapped_columns(mapping, columns))
     standardized_df = _standardize_historical_df(df, mapping, payload.category_code)
     filename = _original_filename_from_tmp(save_path, payload.temp_file_id)
     result = _import_historical_dataframe(db, standardized_df, filename)

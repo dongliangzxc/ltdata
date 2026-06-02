@@ -1005,6 +1005,33 @@ def test_headers_parses_legacy_time_dimension_and_preview_stats(db, tmp_path, mo
     assert data["stats"]["auto_create_model_count"] == 0
 
 
+def test_headers_preview_stats_does_not_use_full_streaming_dataframe(db, tmp_path, monkeypatch):
+    monkeypatch.setattr("app.api.historical_api.settings.UPLOAD_DIR", str(tmp_path))
+    if db.query(Category).filter_by(code="router").first() is None:
+        db.add(Category(code="router", name="路由器"))
+        db.commit()
+    client = _client(db)
+    content = _history_excel([
+        {"年度": 2025, "月度": "2025.12", "平台": "天猫", "商品名称": "路由器 商品", "商品网址": "https://detail.tmall.com/item.htm?id=1006960105587", "产品系列": "D70"},
+        {"年度": 2025, "月度": "2025.12", "平台": "天猫", "商品名称": "路由器 商品2", "商品网址": "https://detail.tmall.com/item.htm?id=1006960105588", "产品系列": "D80"},
+    ])
+
+    def fail_full_dataframe_read(*args, **kwargs):
+        raise AssertionError("headers preview must not build a full streaming DataFrame")
+
+    monkeypatch.setattr("app.api.historical_api._read_sheet_streaming", fail_full_dataframe_read)
+
+    resp = client.post(
+        "/api/historical/headers",
+        files={"file": ("路由器数据库202501-202604.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["stats"]["total_rows"] == 2
+    assert len(data["preview"]) == 2
+
+
 def test_headers_counts_rows_missing_required_fields(db, tmp_path, monkeypatch):
     monkeypatch.setattr("app.api.historical_api.settings.UPLOAD_DIR", str(tmp_path))
     db.add(Category(code="router", name="路由器"))

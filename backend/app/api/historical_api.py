@@ -200,10 +200,20 @@ def _build_mapping(columns: list[str]) -> dict[str, str]:
     return mapping
 
 
-def _read_sheet_preview(xls: pd.ExcelFile, sheet_name: str, nrows: Optional[int] = None) -> pd.DataFrame:
-    df = pd.read_excel(xls, sheet_name=sheet_name, nrows=nrows)
+def _read_sheet_preview(
+    xls: pd.ExcelFile,
+    sheet_name: str,
+    nrows: Optional[int] = None,
+    usecols: Optional[list[str]] = None,
+) -> pd.DataFrame:
+    df = pd.read_excel(xls, sheet_name=sheet_name, nrows=nrows, usecols=usecols)
     df.columns = [str(col).strip() for col in df.columns]
     return df
+
+
+def _mapped_columns(mapping: dict[str, str], columns: list[str]) -> list[str]:
+    column_set = set(columns)
+    return list(dict.fromkeys(source for source in mapping.values() if source in column_set))
 
 
 def _score_sheet(columns: list[str]) -> int:
@@ -716,14 +726,15 @@ def _historical_preview_response(
     category_code: Optional[str],
     db: Session,
 ) -> dict:
-    df_preview = _read_sheet_preview(xls, sheet_name, nrows=20)
-    total_rows = len(pd.read_excel(xls, sheet_name=sheet_name, usecols=[0]))
     raw_issues = _mapping_issues(mapping, category_code, columns)
     normalized_mapping = _normalize_mapping_for_columns(mapping, columns)
     normalized_issues = _mapping_issues(normalized_mapping, category_code, columns)
     issues = list(dict.fromkeys(raw_issues + normalized_issues))
+    usecols = _mapped_columns(normalized_mapping, columns)
+    df_preview = _read_sheet_preview(xls, sheet_name, nrows=20, usecols=usecols)
+    total_rows = len(pd.read_excel(xls, sheet_name=sheet_name, usecols=[0]))
     standardized_preview = _standardize_historical_df(df_preview, normalized_mapping, category_code)
-    full_df = _standardize_historical_df(_read_sheet_preview(xls, sheet_name), normalized_mapping, category_code)
+    full_df = _standardize_historical_df(_read_sheet_preview(xls, sheet_name, usecols=usecols), normalized_mapping, category_code)
     stats = _preview_stats(db, full_df)
     stats["total_rows"] = total_rows
     return {
@@ -941,7 +952,7 @@ async def import_historical_mappings(file: UploadFile = File(...), db: Session =
         sheet_name, columns, mapping = _detect_sheet_and_mapping(xls)
         category_code = _infer_category_code(safe_filename, db)
         mapping = _normalize_mapping_for_columns(mapping, columns)
-        df = _read_sheet_preview(xls, sheet_name)
+        df = _read_sheet_preview(xls, sheet_name, usecols=_mapped_columns(mapping, columns))
         standardized_df = _standardize_historical_df(df, mapping, category_code)
         return _import_historical_dataframe(db, standardized_df, safe_filename)
     finally:
@@ -1007,7 +1018,7 @@ def historical_confirm(payload: HistoricalConfirmIn, db: Session = Depends(get_d
     issues = _mapping_issues(mapping, payload.category_code, columns)
     if issues:
         raise HTTPException(422, "；".join(issues))
-    df = _read_sheet_preview(xls, payload.sheet_name)
+    df = _read_sheet_preview(xls, payload.sheet_name, usecols=_mapped_columns(mapping, columns))
     standardized_df = _standardize_historical_df(df, mapping, payload.category_code)
     filename = _original_filename_from_tmp(save_path, payload.temp_file_id)
     result = _import_historical_dataframe(db, standardized_df, filename)

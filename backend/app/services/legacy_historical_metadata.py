@@ -273,20 +273,38 @@ def _upsert_metadata_spec(db: Session, category_code: str, spec_name: str, value
     else:
         spec.spec_type = spec.spec_type or "文本型"
     if value_counts:
-        spec.spec_values = _ordered_spec_values(value_counts)
+        merged_values = _ordered_spec_values(value_counts, spec.spec_values)
+        if merged_values is not None:
+            spec.spec_values = merged_values
     return spec
 
 
-def _ordered_spec_values(value_counts: Counter) -> str | None:
-    if len(value_counts) > SPEC_VALUES_MAX_OPTIONS:
-        return None
+def _ordered_spec_values(value_counts: Counter, existing_values: str | None = None) -> str | None:
+    existing = [value.strip() for value in (existing_values or "").split(",") if value.strip()]
+    if len(set(existing) | set(value_counts)) > SPEC_VALUES_MAX_OPTIONS:
+        return existing_values
+
     values = []
+    seen = set()
     total_length = 0
-    for value, _ in sorted(value_counts.items(), key=lambda item: (-item[1], item[0])):
+    for value in existing:
+        if value in seen:
+            continue
         next_length = total_length + len(value) + (1 if values else 0)
         if next_length > SPEC_VALUES_MAX_LENGTH:
-            return None
+            return existing_values
         values.append(value)
+        seen.add(value)
+        total_length = next_length
+
+    for value, _ in sorted(value_counts.items(), key=lambda item: (-item[1], item[0])):
+        if value in seen:
+            continue
+        next_length = total_length + len(value) + (1 if values else 0)
+        if next_length > SPEC_VALUES_MAX_LENGTH:
+            return existing_values
+        values.append(value)
+        seen.add(value)
         total_length = next_length
     return ",".join(values) if values else None
 

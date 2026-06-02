@@ -270,6 +270,29 @@ def test_import_legacy_metadata_tie_conflict_uses_latest_value(db, tmp_path):
     assert spec.spec_value == "B"
 
 
+def test_import_legacy_metadata_merges_existing_metadata_spec_values(db, tmp_path):
+    db.add(Category(code="router", name="路由器"))
+    db.add(MetadataSpec(category_code="router", spec_name="WiFi协议", spec_type="文本型", spec_values="已有值,WiFi6"))
+    db.commit()
+    path = tmp_path / "路由器数据库202501-202604.xlsx"
+    path.write_bytes(_excel([{
+        "年度": 2025,
+        "月度": "2025.12",
+        "平台": "天猫",
+        "商品名称": "路由器 商品",
+        "商品网址": "https://detail.tmall.com/item.htm?id=1006960105587",
+        "品牌": "品牌A",
+        "产品系列": "Router A",
+        "WiFi协议": "WiFi7",
+    }]))
+
+    import_legacy_historical_metadata(db, [path], dry_run=False)
+
+    spec = db.query(MetadataSpec).filter_by(category_code="router", spec_name="WiFi协议").one()
+    assert spec.spec_values == "已有值,WiFi6,WiFi7"
+
+
+
 def test_import_legacy_metadata_skips_oversized_metadata_spec_values_but_writes_model_specs(db, tmp_path):
     db.add(Category(code="door_lock", name="门锁"))
     db.commit()

@@ -610,6 +610,17 @@ def _history_identity_key(
     return platform, "item_name", year, month_num, week, item_name_norm
 
 
+def _chunks(values: set[tuple], size: int = 1000):
+    batch = []
+    for value in values:
+        batch.append(value)
+        if len(batch) >= size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
+
+
 def _preload_existing_history(db: Session, keys: set[tuple[str, str, int, int, Optional[str], str]]) -> dict[tuple[str, str, int, int, Optional[str], str], HistoricalMapping]:
     if not keys:
         return {}
@@ -626,19 +637,19 @@ def _preload_existing_history(db: Session, keys: set[tuple[str, str, int, int, O
             key = (row.platform, key_type, row.year, row.month_num, row.week, value)
             existing[key] = row
 
-    if item_keys:
+    for batch in _chunks(item_keys):
         rows = db.query(HistoricalMapping).filter(
-            tuple_(HistoricalMapping.platform, HistoricalMapping.year, HistoricalMapping.month_num, HistoricalMapping.item_id).in_(item_keys)
+            tuple_(HistoricalMapping.platform, HistoricalMapping.year, HistoricalMapping.month_num, HistoricalMapping.item_id).in_(batch)
         ).all()
         add_rows(rows, "item_id", "item_id")
-    if url_keys:
+    for batch in _chunks(url_keys):
         rows = db.query(HistoricalMapping).filter(
-            tuple_(HistoricalMapping.platform, HistoricalMapping.year, HistoricalMapping.month_num, HistoricalMapping.item_url).in_(url_keys)
+            tuple_(HistoricalMapping.platform, HistoricalMapping.year, HistoricalMapping.month_num, HistoricalMapping.item_url).in_(batch)
         ).all()
         add_rows(rows, "item_url", "item_url")
-    if name_keys:
+    for batch in _chunks(name_keys):
         rows = db.query(HistoricalMapping).filter(
-            tuple_(HistoricalMapping.platform, HistoricalMapping.year, HistoricalMapping.month_num, HistoricalMapping.item_name_norm).in_(name_keys)
+            tuple_(HistoricalMapping.platform, HistoricalMapping.year, HistoricalMapping.month_num, HistoricalMapping.item_name_norm).in_(batch)
         ).all()
         add_rows(rows, "item_name", "item_name_norm")
     return existing
@@ -929,21 +940,143 @@ def _ambiguous_model_codes_from_batch(df: pd.DataFrame, models_by_code_unbranded
 def _import_historical_dataframe(db: Session, df: pd.DataFrame, import_batch: str) -> dict:
     if df.empty:
         df = pd.DataFrame([{col: None for col in df.columns}])
+    rows = (raw_row.to_dict() for _, raw_row in df.iterrows())
+    models_by_code, models_by_code_unbranded, models_by_name = _preload_models(db, df)
+    ambiguous_model_codes = _ambiguous_model_codes_from_batch(df, models_by_code_unbranded)
+    return _import_historical_rows(
+        db,
+        rows,
+        import_batch,
+        models_by_code=models_by_code,
+        models_by_code_unbranded=models_by_code_unbranded,
+        models_by_name=models_by_name,
+        ambiguous_model_codes=ambiguous_model_codes,
+    )
 
+
+def _model_lookup_values_from_rows(rows: Iterable[dict]) -> tuple[set[str | None], set[str | None]]:
+    model_code_values = set()
+    model_text_values = set()
+    for row in rows:
+        model_code_values.add(_clean_value(_get(row, "型号码")))
+        model_text_values.add(_clean_value(_get(row, "型号")))
+    return model_code_values, model_text_values
+
+
+def _historical_values_from_existing(existing: HistoricalMapping) -> dict:
+    return {
+        "import_batch": existing.import_batch,
+        "platform": existing.platform,
+        "item_id": existing.item_id,
+        "item_url": existing.item_url,
+        "item_name": existing.item_name,
+        "item_name_norm": existing.item_name_norm,
+        "year": existing.year,
+        "month_num": existing.month_num,
+        "week": existing.week,
+        "month": existing.month,
+        "report_type": existing.report_type,
+        "channel": existing.channel,
+        "category_name_raw": existing.category_name_raw,
+        "category_code_raw": existing.category_code_raw,
+        "brand_raw": existing.brand_raw,
+        "brand_code_raw": existing.brand_code_raw,
+        "model_text": existing.model_text,
+        "model_code_raw": existing.model_code_raw,
+        "model_id": existing.model_id,
+        "model_code": existing.model_code,
+        "category_code": existing.category_code,
+        "sales_amount": existing.sales_amount,
+        "sales_qty": existing.sales_qty,
+        "price": existing.price,
+        "match_key_type": existing.match_key_type,
+        "raw_payload": existing.raw_payload,
+        "updated_at": existing.updated_at,
+    }
+
+
+def _apply_historical_batch(
+    db: Session,
+    merged_rows: dict[tuple[str, str, int, int, Optional[str], str], dict],
+    merged_row_nums: dict[tuple[str, str, int, int, Optional[str], str], list[int]],
+    seen_current_keys: set[tuple[str, str, int, int, Optional[str], str]],
+    seen_row_nums: dict[tuple[str, str, int, int, Optional[str], str], list[int]],
+) -> tuple[int, int]:
+    created = 0
+    updated = 0
+    touched_rows = []
+    existing_by_key = _preload_existing_history(db, set(merged_rows))
+    for history_key, values in merged_rows.items():
+        row_nums = merged_row_nums[history_key]
+        existing = existing_by_key.get(history_key)
+        if existing:
+            touched_rows.append(existing)
+            if history_key in seen_current_keys:
+                all_row_nums = seen_row_nums.setdefault(history_key, [])
+                all_row_nums.extend(row_nums)
+                merged_values = _historical_values_from_existing(existing)
+                _merge_duplicate_history_values(merged_values, values, all_row_nums)
+                for key, value in merged_values.items():
+                    setattr(existing, key, value)
+            else:
+                for key, value in values.items():
+                    setattr(existing, key, value)
+                updated += 1
+        else:
+            new_row = HistoricalMapping(**values)
+            db.add(new_row)
+            touched_rows.append(new_row)
+            created += 1
+        if history_key not in seen_current_keys:
+            seen_current_keys.add(history_key)
+            seen_row_nums[history_key] = list(row_nums)
+        elif history_key not in seen_row_nums:
+            seen_row_nums[history_key] = list(row_nums)
+    db.commit()
+    for row in touched_rows:
+        if row in db:
+            db.expunge(row)
+    return created, updated
+
+
+def _import_historical_rows(
+    db: Session,
+    rows: Iterable[dict],
+    import_batch: str,
+    *,
+    models_by_code: dict[tuple[str, str], ModelRecord],
+    models_by_code_unbranded: dict[str, list[ModelRecord]],
+    models_by_name: dict[str, list[ModelRecord]],
+    ambiguous_model_codes: set[str],
+) -> dict:
     success = 0
     created = 0
     updated = 0
     errors = []
-    models_by_code, models_by_code_unbranded, models_by_name = _preload_models(db, df)
-    ambiguous_model_codes = _ambiguous_model_codes_from_batch(df, models_by_code_unbranded)
     categories_by_code, categories_by_name = _preload_categories(db)
-    pending_rows = []
-    history_keys = set()
+    merged_rows: dict[tuple[str, str, int, int, Optional[str], str], dict] = {}
+    merged_row_nums: dict[tuple[str, str, int, int, Optional[str], str], list[int]] = {}
+    seen_current_keys: set[tuple[str, str, int, int, Optional[str], str]] = set()
+    seen_row_nums: dict[tuple[str, str, int, int, Optional[str], str], list[int]] = {}
 
-    for idx, raw_row in df.iterrows():
-        row = raw_row.to_dict()
-        row_num = int(idx) + 2
+    def flush_batch() -> None:
+        nonlocal created, updated, merged_rows, merged_row_nums
+        if not merged_rows:
+            return
+        batch_created, batch_updated = _apply_historical_batch(
+            db,
+            merged_rows,
+            merged_row_nums,
+            seen_current_keys,
+            seen_row_nums,
+        )
+        created += batch_created
+        updated += batch_updated
+        merged_rows = {}
+        merged_row_nums = {}
 
+    for idx, row in enumerate(rows):
+        row_num = idx + 2
         platform = _normalize_platform(_get(row, "商场")) or _normalize_platform(_get(row, "渠道"))
         item_name = _clean_value(_get(row, "标题"))
         model_text = _clean_value(_get(row, "型号"))
@@ -1044,12 +1177,6 @@ def _import_historical_dataframe(db: Session, df: pd.DataFrame, import_batch: st
             "updated_at": datetime.utcnow(),
         }
 
-        pending_rows.append((history_key, values, row_num))
-        history_keys.add(history_key)
-
-    merged_rows: dict[tuple[str, str, int, int, Optional[str], str], dict] = {}
-    merged_row_nums: dict[tuple[str, str, int, int, Optional[str], str], list[int]] = {}
-    for history_key, values, row_num in pending_rows:
         if history_key in merged_rows:
             row_nums = merged_row_nums[history_key]
             row_nums.append(row_num)
@@ -1058,22 +1185,37 @@ def _import_historical_dataframe(db: Session, df: pd.DataFrame, import_batch: st
             merged_rows[history_key] = values
             merged_row_nums[history_key] = [row_num]
         success += 1
+        if len(merged_rows) >= 1000:
+            flush_batch()
 
-    existing_by_key = _preload_existing_history(db, history_keys)
-    for history_key, values in merged_rows.items():
-        existing = existing_by_key.get(history_key)
-        if existing:
-            for key, value in values.items():
-                setattr(existing, key, value)
-            updated += 1
-        else:
-            new_row = HistoricalMapping(**values)
-            db.add(new_row)
-            existing_by_key[history_key] = new_row
-            created += 1
-
-    db.commit()
+    flush_batch()
     return {"success": success, "created": created, "updated": updated, "errors": errors, "import_batch": import_batch}
+
+
+def _import_historical_stream(
+    db: Session,
+    raw_rows_factory,
+    mapping: dict[str, str],
+    category_code: Optional[str],
+    import_batch: str,
+) -> dict:
+    model_code_values, model_text_values = _model_lookup_values_from_rows(
+        _standardize_historical_row(row, mapping, category_code) for row in raw_rows_factory()
+    )
+    models_by_code, models_by_code_unbranded, models_by_name = _load_preview_models(db, model_code_values, model_text_values)
+    ambiguous_model_codes = _ambiguous_model_codes_from_rows(
+        (_standardize_historical_row(row, mapping, category_code) for row in raw_rows_factory()),
+        models_by_code_unbranded,
+    )
+    return _import_historical_rows(
+        db,
+        (_standardize_historical_row(row, mapping, category_code) for row in raw_rows_factory()),
+        import_batch,
+        models_by_code=models_by_code,
+        models_by_code_unbranded=models_by_code_unbranded,
+        models_by_name=models_by_name,
+        ambiguous_model_codes=ambiguous_model_codes,
+    )
 
 
 @router.post("/import")
@@ -1085,12 +1227,18 @@ async def import_historical_mappings(file: UploadFile = File(...), db: Session =
         sheet_name, columns, mapping = _detect_sheet_and_mapping(xls)
         category_code = _infer_category_code(safe_filename, db)
         mapping = _normalize_mapping_for_columns(mapping, columns)
+        usecols = _mapped_columns(mapping, columns)
         if save_path.suffix.lower() == ".xls":
-            df = _read_sheet_preview(xls, sheet_name, usecols=_mapped_columns(mapping, columns))
-        else:
-            df = _read_sheet_streaming(save_path, sheet_name, columns=columns, usecols=_mapped_columns(mapping, columns))
-        standardized_df = _standardize_historical_df(df, mapping, category_code)
-        return _import_historical_dataframe(db, standardized_df, safe_filename)
+            df = _read_sheet_preview(xls, sheet_name, usecols=usecols)
+            standardized_df = _standardize_historical_df(df, mapping, category_code)
+            return _import_historical_dataframe(db, standardized_df, safe_filename)
+        return _import_historical_stream(
+            db,
+            lambda: _iter_sheet_rows_streaming(save_path, sheet_name, columns=columns, usecols=usecols),
+            mapping,
+            category_code,
+            safe_filename,
+        )
     finally:
         save_path.unlink(missing_ok=True)
 
@@ -1156,13 +1304,20 @@ def historical_confirm(payload: HistoricalConfirmIn, db: Session = Depends(get_d
     issues = _mapping_issues(mapping, payload.category_code, columns)
     if issues:
         raise HTTPException(422, "；".join(issues))
-    if save_path.suffix.lower() == ".xls":
-        df = _read_sheet_preview(xls, payload.sheet_name, usecols=_mapped_columns(mapping, columns))
-    else:
-        df = _read_sheet_streaming(save_path, payload.sheet_name, columns=columns, usecols=_mapped_columns(mapping, columns))
-    standardized_df = _standardize_historical_df(df, mapping, payload.category_code)
+    usecols = _mapped_columns(mapping, columns)
     filename = _original_filename_from_tmp(save_path, payload.temp_file_id)
-    result = _import_historical_dataframe(db, standardized_df, filename)
+    if save_path.suffix.lower() == ".xls":
+        df = _read_sheet_preview(xls, payload.sheet_name, usecols=usecols)
+        standardized_df = _standardize_historical_df(df, mapping, payload.category_code)
+        result = _import_historical_dataframe(db, standardized_df, filename)
+    else:
+        result = _import_historical_stream(
+            db,
+            lambda: _iter_sheet_rows_streaming(save_path, payload.sheet_name, columns=columns, usecols=usecols),
+            mapping,
+            payload.category_code,
+            filename,
+        )
     save_path.unlink(missing_ok=True)
     return result
 

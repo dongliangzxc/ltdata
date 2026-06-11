@@ -528,14 +528,14 @@ export default function MatchPage() {
             )
             : <Text type="secondary">-</Text>
       },
-      {
-        title: '商品链接', width: 80,
-        render: (_: unknown, row: PendingItem) =>
-          row.item_url
-            ? <a href={row.item_url} target="_blank" rel="noreferrer"><LinkOutlined /> 查看</a>
-            : '-'
-      },
     ] : []),
+    {
+      title: '商品链接', width: 90,
+      render: (_: unknown, row: PendingItem) =>
+        row.item_url
+          ? <a href={row.item_url} target="_blank" rel="noreferrer"><LinkOutlined /> 查看</a>
+          : '-'
+    },
     ...(activeTab !== 'text_only' ? [
       {
         title: '候选型号', width: 80,

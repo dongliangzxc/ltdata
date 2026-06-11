@@ -621,6 +621,9 @@ class MatchResult(Base):
     price_flag = Column(String(20), nullable=True)
     price_ref = Column(Numeric(10, 2), nullable=True)
     sales_coefficient = Column(Numeric(7, 4), nullable=True)
+    dispute_reason = Column(String(500), nullable=True)
+    review_note = Column(String(500), nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
     created_at     = Column(DateTime, default=datetime.utcnow)
     updated_at   = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -676,6 +679,9 @@ class MatchResultOut(BaseModel):
     price_flag: Optional[str] = None
     price_ref: Optional[float] = None
     sales_coefficient: Optional[float] = None
+    dispute_reason: Optional[str] = None
+    review_note: Optional[str] = None
+    reviewed_at: Optional[datetime] = None
     # 关联字段（join 查询后填充）
     item_name:     Optional[str] = None
     item_url:      Optional[str] = None
@@ -688,6 +694,10 @@ class MatchResultOut(BaseModel):
     corrected_sales_qty: Optional[int] = None
     adjusted_sales_qty: Optional[int] = None
     category_name: Optional[str] = None
+
+    @field_serializer("reviewed_at")
+    def serialize_reviewed_at(self, value: datetime | None):
+        return format_beijing_datetime(value)
 
     model_config = {"from_attributes": True}
 
@@ -702,6 +712,7 @@ class MatchSummary(BaseModel):
     pending:     int
     confirmed:   int
     excluded:    int
+    disputed:    int = 0
     disabled:    int = 0
     unidentified_brand: int = 0
     missing_attrs: int = 0

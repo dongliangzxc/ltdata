@@ -19,7 +19,8 @@ from sqlalchemy.orm import Session
 
 from app.models.analytics_db import get_analytics_db, AnalyticsSession, PublishedItem, PublishedItemSpec
 from app.models.database import get_db, SessionLocal
-from app.models.schemas import WorkbenchExportJob
+from app.models.schemas import MatchResult, ModelAlias, RawDataRecord, WorkbenchExportJob
+from app.utils.time_utils import format_beijing_datetime
 
 router = APIRouter(prefix="/api/workbench", tags=["workbench"])
 
@@ -38,6 +39,65 @@ class WorkbenchExportParams(BaseModel):
 
 # 内存进度表：job_id → 0-100，线程结束后清除
 _wb_progress: dict[int, int] = {}
+
+
+_MATCH_SOURCE_LABELS = {
+    "s0": "URL映射命中",
+    "historical": "历史库命中",
+    "s0.5": "规则命中",
+    "s1": "品牌字段匹配",
+    "s2": "标题品牌码匹配",
+    "s3": "标题品牌名匹配",
+    "s4": "型号码兜底匹配",
+    "manual": "人工确认",
+}
+
+
+def _match_source_label(source: str | None) -> str:
+    if not source:
+        return "-"
+    return _MATCH_SOURCE_LABELS.get(source, source)
+
+
+def _year_from_month(month: int | None) -> int | None:
+    if not month:
+        return None
+    return month // 100
+
+
+def _load_workbench_context(rows: list[PublishedItem]) -> tuple[dict[int, tuple[MatchResult, RawDataRecord]], dict[str, list[str]]]:
+    match_result_ids = [r.match_result_id for r in rows if r.match_result_id]
+    if not match_result_ids:
+        return {}, {}
+
+    luotu_db = SessionLocal()
+    try:
+        match_rows = (
+            luotu_db.query(MatchResult, RawDataRecord)
+            .join(RawDataRecord, RawDataRecord.id == MatchResult.raw_data_id)
+            .filter(MatchResult.id.in_(match_result_ids))
+            .all()
+        )
+        match_index = {mr.id: (mr, raw) for mr, raw in match_rows}
+        model_id_to_code = {
+            match_index[r.match_result_id][0].model_id: r.model_code
+            for r in rows
+            if r.match_result_id in match_index and r.model_code
+        }
+        alias_index: dict[str, list[str]] = {}
+        if model_id_to_code:
+            alias_rows = (
+                luotu_db.query(ModelAlias.alias_code, ModelAlias.model_id)
+                .filter(ModelAlias.model_id.in_(model_id_to_code.keys()))
+                .all()
+            )
+            for alias_code, model_id in alias_rows:
+                model_code = model_id_to_code.get(model_id)
+                if model_code and alias_code:
+                    alias_index.setdefault(model_code, []).append(alias_code)
+        return match_index, alias_index
+    finally:
+        luotu_db.close()
 
 
 def _build_query(db: Session, params: dict):
@@ -244,16 +304,31 @@ def query_data(
         .all()
     )
 
-    items = [
-        {
+    match_index, alias_index = _load_workbench_context(rows)
+
+    items = []
+    for index, r in enumerate(rows, start=(page - 1) * page_size + 1):
+        match_info = match_index.get(r.match_result_id)
+        match_result = match_info[0] if match_info else None
+        raw_data = match_info[1] if match_info else None
+        items.append({
             "id": r.id,
+            "sequence": index,
+            "year": _year_from_month(r.month),
             "month": r.month,
             "platform": r.platform,
             "item_name": r.item_name,
+            "item_image": r.item_image,
+            "item_url": r.item_url,
+            "brand_raw": raw_data.brand_raw if raw_data else None,
             "brand_code": r.brand_code,
             "brand_name": r.brand_name,
             "model_code": r.model_code,
             "model_name": r.model_name,
+            "model_aliases": alias_index.get(r.model_code or "", []),
+            "judgement_type": _match_source_label(match_result.match_source if match_result else None),
+            "operator": "-",
+            "operated_at": format_beijing_datetime(match_result.updated_at if match_result else r.published_at),
             "shop_name": r.shop_name,
             "ref_price": float(r.ref_price) if r.ref_price is not None else None,
             "sales_qty": r.sales_qty,
@@ -264,10 +339,7 @@ def query_data(
             "category_lv0": r.category_lv0,
             "category_lv1": r.category_lv1,
             "category_lv2": r.category_lv2,
-            "item_url": r.item_url,
-        }
-        for r in rows
-    ]
+        })
 
     return {"total": total, "page": page, "page_size": page_size, "items": items}
 

@@ -3,6 +3,7 @@
 """
 import logging
 import time
+from datetime import datetime
 from threading import Thread
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -19,6 +20,7 @@ from app.models.schemas import (
 )
 from app.services.matcher import run_match
 from app.services.price_auditor import audit_price
+from app.utils.time_utils import format_beijing_datetime
 
 router = APIRouter(prefix="/api/match", tags=["match"])
 logger = logging.getLogger(__name__)
@@ -123,7 +125,7 @@ def get_match_summary(clean_job_id: int, db: Session = Depends(get_db)):
         return MatchSummary(
             clean_job_id=clean_job_id,
             total=0, url_matched=0, matched=0, text_only=0,
-            pending=0, confirmed=0, excluded=0, disabled=0,
+            pending=0, confirmed=0, excluded=0, disputed=0, disabled=0,
         )
 
     total = len(rows)
@@ -161,6 +163,7 @@ def get_match_summary(clean_job_id: int, db: Session = Depends(get_db)):
         pending=status_count.get("pending", 0),
         confirmed=status_count.get("confirmed", 0),
         excluded=status_count.get("excluded", 0),
+        disputed=status_count.get("disputed", 0),
         disabled=disabled_count,
         unidentified_brand=unidentified_brand_count,
         missing_attrs=missing_attrs_count,
@@ -179,8 +182,8 @@ def list_pending(
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
-    """分页查询待处理条目，status=pending 或 text_only"""
-    allowed_statuses = {"pending", "text_only"}
+    """分页查询待处理条目，status=pending、text_only 或 disputed"""
+    allowed_statuses = {"pending", "text_only", "disputed"}
     if status not in allowed_statuses:
         status = "pending"
 
@@ -263,6 +266,9 @@ def list_pending(
             price_flag=mr.price_flag,
             price_ref=float(mr.price_ref) if mr.price_ref is not None else None,
             sales_coefficient=float(mr.sales_coefficient) if mr.sales_coefficient is not None else None,
+            dispute_reason=mr.dispute_reason,
+            review_note=mr.review_note,
+            reviewed_at=mr.reviewed_at,
             item_name=rd.item_name,
             item_url=rd.item_url,
             brand_raw=rd.brand_raw,
@@ -275,6 +281,80 @@ def list_pending(
         ))
 
     return PaginatedResponse(total=total, page=page, page_size=page_size, items=items)
+
+
+@router.get("/items/{match_id}/review-detail")
+def get_match_review_detail(match_id: int, db: Session = Depends(get_db)):
+    row = (
+        db.query(MatchResult, RawDataRecord, ModelRecord, Category)
+        .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
+        .outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
+        .outerjoin(Category, ModelRecord.category_code == Category.code)
+        .filter(MatchResult.id == match_id)
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="匹配记录不存在")
+
+    mr, rd, model, cat = row
+    candidate_rows = (
+        db.query(MatchResultCandidate, ModelRecord)
+        .outerjoin(ModelRecord, MatchResultCandidate.model_id == ModelRecord.id)
+        .filter(MatchResultCandidate.match_result_id == match_id)
+        .order_by(MatchResultCandidate.rank)
+        .all()
+    )
+    mapping = None
+    if rd.platform and rd.item_id:
+        mapping = db.query(ItemUrlMapping).filter_by(platform=rd.platform, item_id=rd.item_id).first()
+
+    return {
+        "id": mr.id,
+        "clean_job_id": mr.clean_job_id,
+        "raw_data_id": mr.raw_data_id,
+        "model_id": mr.model_id,
+        "model_code": model.model_code if model else None,
+        "brand_code": model.brand_code if model else None,
+        "category_name": cat.name if cat else None,
+        "match_status": mr.match_status,
+        "matched_by": mr.matched_by,
+        "match_source": mr.match_source,
+        "brand_identified": mr.brand_identified,
+        "price_flag": mr.price_flag,
+        "price_ref": float(mr.price_ref) if mr.price_ref is not None else None,
+        "sales_coefficient": float(mr.sales_coefficient) if mr.sales_coefficient is not None else None,
+        "dispute_reason": mr.dispute_reason,
+        "review_note": mr.review_note,
+        "reviewed_at": format_beijing_datetime(mr.reviewed_at),
+        "item_name": rd.item_name,
+        "item_url": rd.item_url,
+        "item_image": rd.item_image,
+        "platform": rd.platform,
+        "item_id": rd.item_id,
+        "brand_raw": rd.brand_raw,
+        "shop_name": rd.shop_name,
+        "ref_price": float(rd.ref_price) if rd.ref_price is not None else None,
+        "price": float(rd.price) if rd.price is not None else None,
+        "sales_qty": rd.sales_qty,
+        "sales_amount": float(rd.sales_amount) if rd.sales_amount is not None else None,
+        "url_mapping": {
+            "id": mapping.id,
+            "model_id": mapping.model_id,
+            "brand_code": mapping.brand_code,
+            "source": mapping.source,
+        } if mapping else None,
+        "candidates": [
+            {
+                "model_id": cand.model_id,
+                "model_code": candidate_model.model_code if candidate_model else None,
+                "brand_code": candidate_model.brand_code if candidate_model else None,
+                "match_source": cand.match_source,
+                "score": cand.score,
+                "rank": cand.rank,
+            }
+            for cand, candidate_model in candidate_rows
+        ],
+    }
 
 
 @router.get("/{clean_job_id}/missing-attrs", response_model=PaginatedResponse)
@@ -347,10 +427,23 @@ def confirm_match(match_id: int, payload: dict, db: Session = Depends(get_db)):
     if not mr:
         raise HTTPException(status_code=404, detail="匹配记录不存在")
 
+    reason = (payload.get("reason") or "").strip() or None
+
     if payload.get("excluded"):
         mr.match_status = "excluded"
         mr.model_id = None
         mr.matched_by = "manual"
+        mr.dispute_reason = None
+        mr.review_note = reason
+        mr.reviewed_at = datetime.utcnow()
+    elif payload.get("disputed"):
+        if not reason:
+            raise HTTPException(status_code=400, detail="暂存争议需填写原因")
+        mr.match_status = "disputed"
+        mr.matched_by = "manual"
+        mr.dispute_reason = reason
+        mr.review_note = reason
+        mr.reviewed_at = datetime.utcnow()
     elif payload.get("model_id") is not None:
         model_id = int(payload["model_id"])
         m = db.query(ModelRecord).filter(ModelRecord.id == model_id).first()
@@ -360,6 +453,9 @@ def confirm_match(match_id: int, payload: dict, db: Session = Depends(get_db)):
         mr.model_id = model_id
         mr.match_status = "confirmed"
         mr.matched_by = "manual"
+        mr.dispute_reason = None
+        mr.review_note = None
+        mr.reviewed_at = datetime.utcnow()
 
         # 确认时更新 URL 映射：
         #   · 已存在且 model_id=NULL → 回写（适用于从耳机数据库 URL-only 导入的条目）
@@ -386,7 +482,7 @@ def confirm_match(match_id: int, payload: dict, db: Session = Depends(get_db)):
                         source='match_confirm',
                     ))
     else:
-        raise HTTPException(status_code=400, detail="需提供 model_id 或 excluded=true")
+        raise HTTPException(status_code=400, detail="需提供 model_id、excluded=true 或 disputed=true")
 
     db.commit()
 
@@ -412,10 +508,15 @@ def confirm_match(match_id: int, payload: dict, db: Session = Depends(get_db)):
         model_id=mr.model_id,
         match_status=mr.match_status,
         matched_by=mr.matched_by,
+        match_source=mr.match_source,
         price_flag=mr.price_flag,
         price_ref=mr.price_ref,
         sales_coefficient=mr.sales_coefficient,
+        dispute_reason=mr.dispute_reason,
+        review_note=mr.review_note,
+        reviewed_at=mr.reviewed_at,
         item_name=rd.item_name if rd else None,
+        item_url=rd.item_url if rd else None,
         brand_raw=rd.brand_raw if rd else None,
         model_code=model_info.model_code if model_info else None,
         brand_code=model_info.brand_code if model_info else None,
@@ -466,6 +567,9 @@ def _reviewed_row_payload(mr, rd, model=None, cat=None, attr_count: int = 0, cle
         price_flag=mr.price_flag,
         price_ref=float(mr.price_ref) if mr.price_ref is not None else None,
         sales_coefficient=float(mr.sales_coefficient) if mr.sales_coefficient is not None else None,
+        dispute_reason=mr.dispute_reason,
+        review_note=mr.review_note,
+        reviewed_at=mr.reviewed_at,
         item_name=rd.item_name if rd else None,
         item_url=rd.item_url if rd else None,
         brand_raw=rd.brand_raw if rd else None,

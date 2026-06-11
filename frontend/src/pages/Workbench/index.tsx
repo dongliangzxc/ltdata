@@ -25,24 +25,32 @@ type FilterOptions = {
 
 type DataRow = {
   id: number
+  sequence: number
+  year: number | null
   month: number | null
+  category_name: string | null
   platform: string | null
   item_name: string | null
+  item_url: string | null
+  item_image: string | null
+  brand_raw: string | null
   brand_code: string | null
   brand_name: string | null
   model_code: string | null
   model_name: string | null
-  shop_name: string | null
-  ref_price: number | null
+  model_aliases: string[]
+  judgement_type: string | null
   sales_qty: number | null
+  ref_price: number | null
+  operator: string | null
+  operated_at: string | null
+  shop_name: string | null
   calc_price: number | null
   corrected_sales_qty: number | null
   corrected_sales_amount: number | null
-  category_name: string | null
   category_lv0: string | null
   category_lv1: string | null
   category_lv2: string | null
-  item_url: string | null
 }
 
 function AttrPopoverContent({ itemId }: { itemId: number }) {
@@ -207,24 +215,34 @@ export default function WorkbenchPage() {
   }
 
   const columns = [
-    { title: '月份', dataIndex: 'month', width: 70 },
-    { title: '平台', dataIndex: 'platform', width: 70 },
+    { title: '序号', dataIndex: 'sequence', width: 70, fixed: 'left' as const },
+    { title: '年度', dataIndex: 'year', width: 70 },
+    { title: '月度', dataIndex: 'month', width: 90 },
+    { title: '品类', dataIndex: 'category_name', width: 120, ellipsis: true },
+    { title: '平台', dataIndex: 'platform', width: 80 },
     {
-      title: '宝贝名称', dataIndex: 'item_name', ellipsis: true,
+      title: '商品名称', dataIndex: 'item_name', width: 260, ellipsis: true,
       render: (v: string) => (
         <Tooltip title={v}><Text style={{ fontSize: 12 }}>{v}</Text></Tooltip>
       ),
     },
     {
-      title: '链接', width: 60,
+      title: '网址', width: 70,
       render: (_: unknown, row: DataRow) =>
         row.item_url
-          ? <a href={row.item_url} target="_blank" rel="noreferrer"><LinkOutlined /></a>
+          ? <a href={row.item_url} target="_blank" rel="noreferrer"><LinkOutlined /> 查看</a>
           : '-',
     },
-    { title: '品牌', dataIndex: 'brand_code', width: 90 },
     {
-      title: '型号', dataIndex: 'model_code', width: 100,
+      title: '图片地址', width: 90,
+      render: (_: unknown, row: DataRow) =>
+        row.item_image
+          ? <a href={row.item_image} target="_blank" rel="noreferrer">查看图片</a>
+          : '-',
+    },
+    { title: '原品牌', dataIndex: 'brand_raw', width: 110, ellipsis: true },
+    {
+      title: '型号', dataIndex: 'model_code', width: 110,
       render: (_: unknown, record: DataRow) => (
         <span>
           {record.model_code ?? '-'}
@@ -240,35 +258,21 @@ export default function WorkbenchPage() {
         </span>
       ),
     },
-    { title: '型号名称', dataIndex: 'model_name', width: 120, ellipsis: true },
-    { title: '店铺', dataIndex: 'shop_name', width: 130, ellipsis: true },
     {
-      title: '参考价', dataIndex: 'ref_price', width: 85,
-      render: (v: number | null) => v != null ? `¥${v.toFixed(2)}` : '-',
+      title: '型号别名', dataIndex: 'model_aliases', width: 150, ellipsis: true,
+      render: (v: string[]) => v?.length ? v.join('、') : '-',
     },
+    { title: '判断类型', dataIndex: 'judgement_type', width: 120, ellipsis: true },
     {
-      title: '销量', dataIndex: 'sales_qty', width: 70,
+      title: '销量', dataIndex: 'sales_qty', width: 80,
       render: (v: number | null) => v ?? '-',
     },
     {
-      title: '计算价格', dataIndex: 'calc_price', width: 85,
+      title: '平均价格', dataIndex: 'ref_price', width: 100,
       render: (v: number | null) => v != null ? `¥${v.toFixed(2)}` : '-',
     },
-    {
-      title: '修正销量', dataIndex: 'corrected_sales_qty', width: 80,
-      render: (v: number | null) => v ?? '-',
-    },
-    {
-      title: '修正销售额', dataIndex: 'corrected_sales_amount', width: 100,
-      render: (v: number | null) => v != null ? `¥${v.toFixed(2)}` : '-',
-    },
-    {
-      title: '品类', dataIndex: 'category_name', width: 110, ellipsis: true,
-    },
-    {
-      title: 'LV0类目', dataIndex: 'category_lv0', width: 90,
-      render: (v: string | null) => v ?? '-',
-    },
+    { title: '操作人', dataIndex: 'operator', width: 90, render: (v: string | null) => v || '-' },
+    { title: '操作时间', dataIndex: 'operated_at', width: 160, render: (v: string | null) => v || '-' },
   ]
 
   return (
@@ -401,7 +405,7 @@ export default function WorkbenchPage() {
             rowKey="id"
             size="small"
             loading={loading}
-            scroll={{ x: 1100 }}
+            scroll={{ x: 1780 }}
             pagination={{
               current: page,
               pageSize,

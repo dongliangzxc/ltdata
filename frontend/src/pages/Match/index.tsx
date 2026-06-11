@@ -2,19 +2,19 @@ import { useState, useEffect, useRef } from 'react'
 import {
   Card, Select, Button, Table, Tag, Space, Typography, Input,
   message, Row, Col, Statistic, Tooltip, Progress, Alert, Popconfirm, InputNumber, Tabs,
-  Popover, List,
+  List, Descriptions, Empty, Modal,
 } from 'antd'
-import { AimOutlined, CheckOutlined, StopOutlined, CloudUploadOutlined, LoadingOutlined, LinkOutlined, SwapOutlined, DownloadOutlined } from '@ant-design/icons'
+import { AimOutlined, CheckOutlined, StopOutlined, CloudUploadOutlined, LoadingOutlined, LinkOutlined, DownloadOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import { useSearchParams } from 'react-router-dom'
 import {
   listCleanJobs, runMatch, getMatchProgress, getMatchSummary, listPendingMatches,
   confirmMatch, listModels, runPublish, listPublishJobs,
-  listReviewedMatches, updateMatchCoefficient,
-  disableMatch, enableMatch, avgPriceDisable, listDisabled,
+  listReviewedMatches, updateMatchCoefficient, getMatchReviewDetail,
+  enableMatch, avgPriceDisable, listDisabled,
   triggerExport, getExportJob, getDownloadUrl,
 } from '../../services/api'
-import type { MatchCandidateOut, ReviewedMatchResultOut, PriceFlag } from '../../services/api'
+import type { MatchCandidateOut, ReviewedMatchResultOut, PriceFlag, MatchReviewDetail } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 import ProgressModal from '../../components/ProgressModal'
 
@@ -79,6 +79,7 @@ type MatchSummary = {
   pending: number
   confirmed: number
   excluded: number
+  disputed: number
   disabled: number
   unidentified_brand?: number
 }
@@ -95,6 +96,9 @@ type PendingItem = {
   category_name?: string
   attr_count?: number
   match_source?: string
+  dispute_reason?: string | null
+  review_note?: string | null
+  reviewed_at?: string | null
   candidates?: MatchCandidateOut[]
   sales_qty?: number | null
 }
@@ -169,11 +173,14 @@ export default function MatchPage() {
   const [disabledPage, setDisabledPage] = useState(1)
   const [disabledLoading, setDisabledLoading] = useState(false)
   const [avgPriceThreshold, setAvgPriceThreshold] = useState(200)
-  const [disableReasonMap, setDisableReasonMap] = useState<Record<number, string>>({})
   const [coefficientDrafts, setCoefficientDrafts] = useState<Record<number, number | null>>({})
   const [editedCoefficientIds, setEditedCoefficientIds] = useState<Set<number>>(new Set())
   const [savingCoefficientIds, setSavingCoefficientIds] = useState<Set<number>>(new Set())
-  const [activeTab, setActiveTab] = useState<'pending' | 'text_only' | 'unidentified_brand'>('text_only')
+  const [activeTab, setActiveTab] = useState<'pending' | 'text_only' | 'unidentified_brand' | 'disputed'>('text_only')
+  const [selectedReviewId, setSelectedReviewId] = useState<number | null>(null)
+  const [reviewDetail, setReviewDetail] = useState<MatchReviewDetail | null>(null)
+  const [reviewDetailLoading, setReviewDetailLoading] = useState(false)
+  const [reviewReason, setReviewReason] = useState('')
   const { data: jobsData } = useRequest(() => listCleanJobs().then(r => r.data))
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
   const [modelSearchLoading, setModelSearchLoading] = useState(false)
@@ -204,10 +211,33 @@ export default function MatchPage() {
       sort_by: sortBy !== 'default' ? sortBy : undefined,
     }).then(r => r.data),
     {
-      ready: selectedJobId != null && summary != null && (summary.pending > 0 || summary.text_only > 0 || (summary.unidentified_brand ?? 0) > 0),
+      ready: selectedJobId != null && summary != null && (summary.pending > 0 || summary.text_only > 0 || (summary.unidentified_brand ?? 0) > 0 || (summary.disputed ?? 0) > 0),
       refreshDeps: [selectedJobId, keyword, page, activeTab, categoryName, sortBy],
     }
   )
+
+  useEffect(() => {
+    const items = pendingData?.items ?? []
+    if (items.length === 0) {
+      setSelectedReviewId(null)
+      setReviewDetail(null)
+      return
+    }
+    if (!selectedReviewId || !items.some((item: PendingItem) => item.id === selectedReviewId)) {
+      setSelectedReviewId(items[0].id)
+    }
+  }, [pendingData, selectedReviewId])
+
+  useEffect(() => {
+    if (!selectedReviewId) return
+    setReviewDetailLoading(true)
+    getMatchReviewDetail(selectedReviewId)
+      .then(r => {
+        setReviewDetail(r.data)
+        setReviewReason(r.data.dispute_reason || r.data.review_note || '')
+      })
+      .finally(() => setReviewDetailLoading(false))
+  }, [selectedReviewId])
 
   const { data: reviewedData, loading: reviewedLoading, refresh: refreshReviewed } = useRequest(
     () => listReviewedMatches(selectedJobId!, {
@@ -228,6 +258,20 @@ export default function MatchPage() {
       },
     }
   )
+
+  useEffect(() => {
+    if (!summary) return
+    const counts = {
+      text_only: summary.text_only ?? 0,
+      pending: summary.pending ?? 0,
+      unidentified_brand: summary.unidentified_brand ?? 0,
+      disputed: summary.disputed ?? 0,
+    }
+    if (counts[activeTab] === 0) {
+      const nextTab = (Object.entries(counts).find(([, count]) => count > 0)?.[0] ?? 'text_only') as typeof activeTab
+      if (nextTab !== activeTab) setActiveTab(nextTab)
+    }
+  }, [summary, activeTab])
 
   // 组件卸载时清理轮询计时器，防止离开页面后仍持续请求
   useEffect(() => {
@@ -317,29 +361,55 @@ export default function MatchPage() {
     startPolling(selectedJobId)
   }
 
+  const selectNextReview = (matchId: number) => {
+    const items = pendingData?.items ?? []
+    const index = items.findIndex((item: PendingItem) => item.id === matchId)
+    const next = items[index + 1] ?? items[index - 1] ?? null
+    setSelectedReviewId(next?.id ?? null)
+    if (!next) setReviewDetail(null)
+  }
+
+  const refreshReviewWorkbench = (matchId: number) => {
+    selectNextReview(matchId)
+    refreshPending()
+    refreshReviewed()
+    getMatchSummary(selectedJobId!).then(r => setSummary(r.data))
+  }
+
   const handleConfirm = async (matchId: number) => {
-    const modelId = selectedModels[matchId]
+    const fallbackModelId = reviewDetail?.id === matchId ? reviewDetail.model_id : undefined
+    const modelId = selectedModels[matchId] ?? fallbackModelId
     if (!modelId) { message.warning('请先选择型号'); return }
     setConfirmingIds(prev => new Set(prev).add(matchId))
     try {
       await confirmMatch(matchId, { model_id: modelId })
       message.success('已确认')
-      refreshPending()
-      refreshReviewed()
-      getMatchSummary(selectedJobId!).then(r => setSummary(r.data))
+      refreshReviewWorkbench(matchId)
     } finally {
       setConfirmingIds(prev => { const s = new Set(prev); s.delete(matchId); return s })
     }
   }
 
   const handleExclude = async (matchId: number) => {
+    const reason = reviewReason.trim()
     setConfirmingIds(prev => new Set(prev).add(matchId))
     try {
-      await confirmMatch(matchId, { excluded: true })
+      await confirmMatch(matchId, { excluded: true, reason: reason || undefined })
       message.success('已排除')
-      refreshPending()
-      refreshReviewed()
-      getMatchSummary(selectedJobId!).then(r => setSummary(r.data))
+      refreshReviewWorkbench(matchId)
+    } finally {
+      setConfirmingIds(prev => { const s = new Set(prev); s.delete(matchId); return s })
+    }
+  }
+
+  const handleDispute = async (matchId: number) => {
+    const reason = reviewReason.trim()
+    if (!reason) { message.warning('请填写争议原因'); return }
+    setConfirmingIds(prev => new Set(prev).add(matchId))
+    try {
+      await confirmMatch(matchId, { disputed: true, reason })
+      message.success('已暂存争议')
+      refreshReviewWorkbench(matchId)
     } finally {
       setConfirmingIds(prev => { const s = new Set(prev); s.delete(matchId); return s })
     }
@@ -348,9 +418,7 @@ export default function MatchPage() {
   const handleSelectCandidate = async (matchId: number, modelId: number) => {
     await confirmMatch(matchId, { model_id: modelId })
     message.success('已选用候选型号')
-    refreshPending()
-    refreshReviewed()
-    getMatchSummary(selectedJobId!).then(r => setSummary(r.data))
+    refreshReviewWorkbench(matchId)
   }
 
   const handleSaveCoefficient = async (matchId: number) => {
@@ -378,9 +446,10 @@ export default function MatchPage() {
       const res = await runPublish(selectedJobId)
       const { published_count, skipped_pending_count } = res.data.data
       message.success(`发布成功，共写入 ${published_count} 条到分析库`)
-      if (skipped_pending_count > 0) {
+      const blockedCount = skipped_pending_count + (summary?.text_only ?? 0) + (summary?.disputed ?? 0)
+      if (blockedCount > 0) {
         message.warning(
-          `另有 ${skipped_pending_count} 条待确认（pending）条目未发布，如需发布请先人工确认`,
+          `另有 ${skipped_pending_count} 条待确认、${summary?.text_only ?? 0} 条URL映射待确认、${summary?.disputed ?? 0} 条争议未发布`,
           6,
         )
       }
@@ -460,200 +529,6 @@ export default function MatchPage() {
       setDisabledLoading(false)
     }
   }
-
-  const handleDisable = async (matchId: number) => {
-    const reason = disableReasonMap[matchId]
-    setConfirmingIds(prev => new Set(prev).add(matchId))
-    try {
-      await disableMatch(matchId, reason || undefined)
-      message.success('已禁用')
-      refreshPending()
-      refreshReviewed()
-      getMatchSummary(selectedJobId!).then(r => setSummary(r.data))
-      loadDisabled()
-    } finally {
-      setConfirmingIds(prev => { const s = new Set(prev); s.delete(matchId); return s })
-    }
-  }
-
-  const pendingColumns = [
-    {
-      title: '宝贝名称', dataIndex: 'item_name', width: 320, ellipsis: true,
-      render: (v: string) => <Tooltip title={v}><Text style={{ fontSize: 12 }}>{v}</Text></Tooltip>
-    },
-    { title: '原始品牌', dataIndex: 'brand_raw', width: 120 },
-    {
-      title: '销量', dataIndex: 'sales_qty', width: 80,
-      render: (v: number | null) => v != null ? v.toLocaleString() : '-',
-    },
-    { title: '品类', dataIndex: 'category_name', width: 100,
-      render: (v: string | null) => v ?? '-' },
-    ...(activeTab === 'text_only' ? [
-      {
-        title: '匹配型号', width: 160,
-        render: (_: unknown, row: PendingItem) =>
-          hasDisplayModel(row.brand_code, row.model_code)
-            ? (
-              <span>
-                <Text code style={{ fontSize: 12 }}>[{row.brand_code}] {row.model_code}</Text>
-                {row.candidates && row.candidates.filter(c => c.rank > 1).length > 0 && (
-                  <Popover
-                    title="其他候选型号"
-                    trigger="click"
-                    content={
-                      <List
-                        size="small"
-                        dataSource={row.candidates.filter(c => c.rank > 1)}
-                        renderItem={(c: MatchCandidateOut) => (
-                          <List.Item
-                            actions={[
-                              <Button
-                                size="small"
-                                onClick={() => handleSelectCandidate(row.id, c.model_id)}
-                              >
-                                选用
-                              </Button>,
-                            ]}
-                          >
-                            {c.model_code ?? '—'} ({c.brand_code ?? '—'}) · {matchSourceMeta(c.match_source)?.label ?? c.match_source ?? '—'}
-                          </List.Item>
-                        )}
-                      />
-                    }
-                  >
-                    <SwapOutlined style={{ marginLeft: 4, cursor: 'pointer', color: '#1677ff' }} />
-                  </Popover>
-                )}
-              </span>
-            )
-            : <Text type="secondary">-</Text>
-      },
-    ] : []),
-    {
-      title: '商品链接', width: 90,
-      render: (_: unknown, row: PendingItem) =>
-        row.item_url
-          ? <a href={row.item_url} target="_blank" rel="noreferrer"><LinkOutlined /> 查看</a>
-          : '-'
-    },
-    ...(activeTab !== 'text_only' ? [
-      {
-        title: '候选型号', width: 80,
-        render: (_: unknown, row: PendingItem) => {
-          const others = (row.candidates ?? []).filter(c => c.rank > 1)
-          if (others.length === 0) return <Text type="secondary">—</Text>
-          return (
-            <Popover
-              title="候选型号"
-              trigger="click"
-              content={
-                <List
-                  size="small"
-                  dataSource={others}
-                  renderItem={(c: MatchCandidateOut) => (
-                    <List.Item
-                      actions={[
-                        <Button
-                          size="small"
-                          onClick={() => handleSelectCandidate(row.id, c.model_id)}
-                        >
-                          选用
-                        </Button>,
-                      ]}
-                    >
-                      {c.model_code ?? '—'} ({c.brand_code ?? '—'}) · {matchSourceMeta(c.match_source)?.label ?? c.match_source ?? '—'}
-                    </List.Item>
-                  )}
-                />
-              }
-            >
-              <Button size="small" icon={<SwapOutlined />} type="link">
-                {others.length} 个
-              </Button>
-            </Popover>
-          )
-        }
-      },
-    ] : []),
-    {
-      title: '指定型号', width: 260,
-      render: (_: unknown, row: PendingItem) => (
-        <Select
-          showSearch
-          placeholder="输入品牌/型号码搜索"
-          style={{ width: '100%' }}
-          size="small"
-          allowClear
-          filterOption={false}
-          onSearch={handleModelSearch}
-          loading={modelSearchLoading}
-          options={modelOptions.map(m => ({
-            value: m.id,
-            label: `[${m.brand_code}] ${m.model_code}${m.model_name ? ' ' + m.model_name : ''}`,
-          }))}
-          value={selectedModels[row.id]}
-          onChange={v => setSelectedModels(prev => ({ ...prev, [row.id]: v }))}
-        />
-      )
-    },
-    {
-      title: '属性',
-      width: 100,
-      render: (_: unknown, row: PendingItem) =>
-        (row.attr_count ?? 0) > 0
-          ? <Tag color="green">已补 {row.attr_count} 个</Tag>
-          : <Tag color="default">未补</Tag>,
-    },
-    {
-      title: '来源', width: 130,
-      render: (_: unknown, row: PendingItem) => renderMatchSource(row.match_source),
-    },
-    {
-      title: '操作', width: 180, fixed: 'right' as const,
-      render: (_: unknown, row: PendingItem) => (
-        <Space size={4}>
-          <Button
-            type="primary" size="small" icon={<CheckOutlined />}
-            loading={confirmingIds.has(row.id)}
-            onClick={() => handleConfirm(row.id)}
-          >确认</Button>
-          <Button
-            size="small" danger icon={<StopOutlined />}
-            loading={confirmingIds.has(row.id)}
-            onClick={() => handleExclude(row.id)}
-          >排除</Button>
-          <Popconfirm
-            title={
-              <Space direction="vertical" size={4}>
-                <span>选择禁用原因</span>
-                <Select
-                  size="small"
-                  style={{ width: 130 }}
-                  placeholder="原因(可选)"
-                  allowClear
-                  onChange={(v: string) => setDisableReasonMap(prev => ({ ...prev, [row.id]: v }))}
-                  options={[
-                    { value: '商用', label: '商用' },
-                    { value: '配件', label: '配件' },
-                    { value: 'avg_price', label: '均价过低' },
-                    { value: '其他', label: '其他' },
-                  ]}
-                />
-              </Space>
-            }
-            onConfirm={() => handleDisable(row.id)}
-            okText="禁用"
-            cancelText="取消"
-          >
-            <Button
-              size="small"
-              loading={confirmingIds.has(row.id)}
-            >禁用</Button>
-          </Popconfirm>
-        </Space>
-      )
-    },
-  ]
 
   const reviewedColumns = [
     {
@@ -743,6 +618,14 @@ export default function MatchPage() {
     },
   ]
 
+  const queueTabs = [
+    { key: 'unidentified_brand', label: '未识别品牌', count: summary?.unidentified_brand ?? 0, color: '#722ed1' },
+    { key: 'text_only', label: 'URL映射待确认', count: summary?.text_only ?? 0, color: '#d48806' },
+    { key: 'pending', label: '待确认', count: summary?.pending ?? 0, color: '#d46b08' },
+    { key: 'disputed', label: '争议复核', count: summary?.disputed ?? 0, color: '#cf1322' },
+  ] as const
+
+  const currentQueueTitle = queueTabs.find(tab => tab.key === activeTab)?.label ?? '待处理'
   const doneJobs = (jobsData ?? []).filter((j: CleanJobOption) => j.status === 'done')
 
   return (
@@ -906,13 +789,13 @@ export default function MatchPage() {
         </Card>
       )}
 
-      {summary && (summary.pending > 0 || (summary.text_only ?? 0) > 0 || (summary.unidentified_brand ?? 0) > 0) && (
+      {summary && (summary.pending > 0 || (summary.text_only ?? 0) > 0 || (summary.unidentified_brand ?? 0) > 0 || (summary.disputed ?? 0) > 0) && (
         <Card
           title={
             <Space>
-              <span>待处理条目</span>
+              <span>待处理工作台</span>
               <span style={{ fontSize: 12, color: '#8c8c8c' }}>
-                URL映射待确认 {summary.text_only ?? 0} 条 · 待确认 {summary.pending} 条
+                URL映射待确认 {summary.text_only ?? 0} 条 · 待确认 {summary.pending} 条 · 争议 {summary.disputed ?? 0} 条
               </span>
             </Space>
           }
@@ -947,65 +830,32 @@ export default function MatchPage() {
           <Tabs
             activeKey={activeTab}
             onChange={key => {
-              setActiveTab(key as 'pending' | 'text_only' | 'unidentified_brand')
+              setActiveTab(key as 'pending' | 'text_only' | 'unidentified_brand' | 'disputed')
               setPage(1)
               setKeyword('')
               setCategoryName(undefined)
               setSortBy('default')
+              setSelectedReviewId(null)
+              setReviewDetail(null)
+              setReviewReason('')
             }}
-            items={[
-              {
-                key: 'unidentified_brand',
-                label: (
-                  <span>
-                    未识别品牌
-                    {(summary?.unidentified_brand ?? 0) > 0 && (
-                      <span style={{
-                        marginLeft: 6, background: '#722ed1', color: '#fff',
-                        borderRadius: 10, padding: '0 6px', fontSize: 11,
-                      }}>
-                        {summary?.unidentified_brand}
-                      </span>
-                    )}
-                  </span>
-                ),
-                children: null,
-              },
-              {
-                key: 'text_only',
-                label: (
-                  <span>
-                    URL映射待确认
-                    {(summary.text_only ?? 0) > 0 && (
-                      <span style={{
-                        marginLeft: 6, background: '#d48806', color: '#fff',
-                        borderRadius: 10, padding: '0 6px', fontSize: 11,
-                      }}>
-                        {summary.text_only}
-                      </span>
-                    )}
-                  </span>
-                ),
-                children: null,
-              },
-              {
-                key: 'pending',
-                label: (
-                  <span>
-                    待确认
-                    {summary.pending > 0 && (
-                      <span style={{
-                        marginLeft: 6, background: '#d46b08', color: '#fff',
-                        borderRadius: 10, padding: '0 6px', fontSize: 11,
-                      }}>
-                        {summary.pending}
-                      </span>
-                    )}
-                  </span>
-                ),
-                children: null,
-              },
-            ]}
+            items={queueTabs.map(tab => ({
+              key: tab.key,
+              label: (
+                <span>
+                  {tab.label}
+                  {tab.count > 0 && (
+                    <span style={{
+                      marginLeft: 6, background: tab.color, color: '#fff',
+                      borderRadius: 10, padding: '0 6px', fontSize: 11,
+                    }}>
+                      {tab.count}
+                    </span>
+                  )}
+                </span>
+              ),
+              children: null,
+            }))}
           />
           {activeTab === 'unidentified_brand' && (
             <Alert
@@ -1020,21 +870,161 @@ export default function MatchPage() {
               }
             />
           )}
-          <Table
-            dataSource={pendingData?.items ?? []}
-            columns={pendingColumns}
-            rowKey="id"
-            size="small"
-            loading={pendingLoading}
-            scroll={{ x: activeTab === 'text_only' ? 1360 : 1280 }}
-            pagination={{
-              current: page,
-              pageSize: 20,
-              total: pendingData?.total ?? 0,
-              onChange: setPage,
-              showTotal: t => `共 ${t} 条`,
-            }}
-          />
+          <Row gutter={16} align="top">
+            <Col span={9}>
+              <Card size="small" title={`${currentQueueTitle}队列`} bodyStyle={{ padding: 0 }}>
+                <List
+                  loading={pendingLoading}
+                  dataSource={pendingData?.items ?? []}
+                  locale={{ emptyText: '当前队列暂无数据' }}
+                  pagination={{
+                    current: page,
+                    pageSize: 20,
+                    total: pendingData?.total ?? 0,
+                    onChange: setPage,
+                    size: 'small',
+                    showSizeChanger: false,
+                  }}
+                  renderItem={(item: PendingItem) => (
+                    <List.Item
+                      onClick={() => setSelectedReviewId(item.id)}
+                      style={{
+                        cursor: 'pointer',
+                        padding: '10px 12px',
+                        background: selectedReviewId === item.id ? '#e6f4ff' : undefined,
+                      }}
+                    >
+                      <List.Item.Meta
+                        title={
+                          <Tooltip title={item.item_name}>
+                            <Text strong ellipsis style={{ maxWidth: 280 }}>{item.item_name || '-'}</Text>
+                          </Tooltip>
+                        }
+                        description={
+                          <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                            <Space wrap size={4}>
+                              <Tag>{item.category_name || '未归类'}</Tag>
+                              <Tag color="blue">{item.brand_raw || '无原品牌'}</Tag>
+                              {renderMatchSource(item.match_source)}
+                              {item.item_url && <Tag icon={<LinkOutlined />} color="green">有链接</Tag>}
+                            </Space>
+                            <Text type="secondary" style={{ fontSize: 12 }}>
+                              销量 {formatNumber(item.sales_qty)}{item.dispute_reason ? ` · ${item.dispute_reason}` : ''}
+                            </Text>
+                          </Space>
+                        }
+                      />
+                    </List.Item>
+                  )}
+                />
+              </Card>
+            </Col>
+            <Col span={15}>
+              <Card
+                size="small"
+                title="详情处理"
+                loading={reviewDetailLoading}
+                extra={reviewDetail?.item_url ? <a href={reviewDetail.item_url} target="_blank" rel="noreferrer"><LinkOutlined /> 打开商品</a> : null}
+              >
+                {!reviewDetail ? (
+                  <Empty description="请选择左侧待处理商品" />
+                ) : (
+                  <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                    <Descriptions size="small" column={2} bordered>
+                      <Descriptions.Item label="商品名称" span={2}>{reviewDetail.item_name || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="原品牌">{reviewDetail.brand_raw || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="店铺">{reviewDetail.shop_name || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="价格">{reviewDetail.price != null ? `¥${reviewDetail.price}` : '-'}</Descriptions.Item>
+                      <Descriptions.Item label="销量">{formatNumber(reviewDetail.sales_qty)}</Descriptions.Item>
+                      <Descriptions.Item label="系统来源">{renderMatchSource(reviewDetail.match_source)}</Descriptions.Item>
+                      <Descriptions.Item label="当前型号">
+                        {hasDisplayModel(reviewDetail.brand_code, reviewDetail.model_code)
+                          ? <Text code>[{reviewDetail.brand_code}] {reviewDetail.model_code}</Text>
+                          : '-'}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="URL线索" span={2}>
+                        {reviewDetail.url_mapping ? <Tag color="blue">URL映射库已有记录</Tag> : <Text type="secondary">暂无URL映射记录</Text>}
+                      </Descriptions.Item>
+                    </Descriptions>
+
+                    <Card size="small" title="候选型号" bodyStyle={{ padding: 8 }}>
+                      {(reviewDetail.candidates ?? []).length === 0 ? <Text type="secondary">暂无候选型号</Text> : (
+                        <List
+                          size="small"
+                          dataSource={reviewDetail.candidates}
+                          renderItem={(candidate: MatchCandidateOut) => (
+                            <List.Item
+                              actions={[
+                                <Button
+                                  size="small"
+                                  type={candidate.rank === 1 ? 'primary' : 'default'}
+                                  loading={confirmingIds.has(reviewDetail.id)}
+                                  onClick={() => handleSelectCandidate(reviewDetail.id, candidate.model_id)}
+                                >选用</Button>,
+                              ]}
+                            >
+                              <Space>
+                                <Tag color={candidate.rank === 1 ? 'blue' : 'default'}>#{candidate.rank}</Tag>
+                                <Text code>[{candidate.brand_code ?? '-'}] {candidate.model_code ?? '-'}</Text>
+                                {renderMatchSource(candidate.match_source)}
+                                <Text type="secondary">分数 {candidate.score}</Text>
+                              </Space>
+                            </List.Item>
+                          )}
+                        />
+                      )}
+                    </Card>
+
+                    <Space direction="vertical" style={{ width: '100%' }}>
+                      <Select
+                        showSearch
+                        placeholder="选择其他型号确认"
+                        style={{ width: '100%' }}
+                        allowClear
+                        filterOption={false}
+                        onSearch={handleModelSearch}
+                        loading={modelSearchLoading}
+                        options={modelOptions.map(m => ({
+                          value: m.id,
+                          label: `[${m.brand_code}] ${m.model_code}${m.model_name ? ' ' + m.model_name : ''}`,
+                        }))}
+                        value={selectedModels[reviewDetail.id]}
+                        onChange={v => setSelectedModels(prev => ({ ...prev, [reviewDetail.id]: v }))}
+                      />
+                      <Input.TextArea
+                        rows={3}
+                        placeholder="排除或暂存争议时填写原因"
+                        value={reviewReason}
+                        onChange={e => setReviewReason(e.target.value)}
+                      />
+                      <Space wrap>
+                        <Button
+                          type="primary"
+                          icon={<CheckOutlined />}
+                          loading={confirmingIds.has(reviewDetail.id)}
+                          onClick={() => handleConfirm(reviewDetail.id)}
+                        >确认型号</Button>
+                        <Button
+                          danger
+                          icon={<StopOutlined />}
+                          loading={confirmingIds.has(reviewDetail.id)}
+                          onClick={() => Modal.confirm({
+                            title: '确认排除此商品？',
+                            content: '排除后不会发布到分析库，也不会写入URL映射库。',
+                            onOk: () => handleExclude(reviewDetail.id),
+                          })}
+                        >排除</Button>
+                        <Button
+                          loading={confirmingIds.has(reviewDetail.id)}
+                          onClick={() => handleDispute(reviewDetail.id)}
+                        >暂存争议</Button>
+                      </Space>
+                    </Space>
+                  </Space>
+                )}
+              </Card>
+            </Col>
+          </Row>
         </Card>
       )}
 

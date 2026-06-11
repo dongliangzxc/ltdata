@@ -173,6 +173,126 @@ def test_confirm_historical_pending_does_not_query_historical_mappings(db, monke
     assert response.model_id == model.id
 
 
+def test_match_summary_counts_disputed(db):
+    from app.api.match_api import get_match_summary
+
+    db.add_all([
+        MatchResult(clean_job_id=9001, raw_data_id=1, match_status="pending"),
+        MatchResult(clean_job_id=9001, raw_data_id=2, match_status="disputed"),
+    ])
+    db.commit()
+
+    summary = get_match_summary(9001, db)
+
+    assert summary.pending == 1
+    assert summary.disputed == 1
+
+
+def test_confirm_match_can_mark_disputed(db):
+    upload = UploadFileRecord(filename="dispute.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+    raw = RawDataRecord(file_id=upload.id, item_name="争议商品", platform="jd", item_id="sku-9101")
+    db.add(raw)
+    db.flush()
+    mr = MatchResult(clean_job_id=9100, raw_data_id=raw.id, match_status="pending")
+    db.add(mr)
+    db.commit()
+
+    result = confirm_match(mr.id, {"disputed": True, "reason": "标题和链接信息冲突"}, db)
+
+    assert result.match_status == "disputed"
+    assert result.dispute_reason == "标题和链接信息冲突"
+    assert result.review_note == "标题和链接信息冲突"
+    assert result.reviewed_at is not None
+
+
+def test_confirm_match_rejects_disputed_without_reason(db):
+    upload = UploadFileRecord(filename="dispute-empty.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+    raw = RawDataRecord(file_id=upload.id, item_name="争议商品", platform="jd", item_id="sku-9102")
+    db.add(raw)
+    db.flush()
+    mr = MatchResult(clean_job_id=9100, raw_data_id=raw.id, match_status="pending")
+    db.add(mr)
+    db.commit()
+
+    with pytest.raises(Exception) as exc_info:
+        confirm_match(mr.id, {"disputed": True, "reason": ""}, db)
+
+    assert "暂存争议需填写原因" in str(exc_info.value)
+
+
+def test_confirm_match_excluded_saves_reason(db):
+    upload = UploadFileRecord(filename="exclude.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+    raw = RawDataRecord(file_id=upload.id, item_name="配件", platform="jd", item_id="sku-9111")
+    db.add(raw)
+    db.flush()
+    mr = MatchResult(clean_job_id=9110, raw_data_id=raw.id, match_status="pending", model_id=1)
+    db.add(mr)
+    db.commit()
+
+    result = confirm_match(mr.id, {"excluded": True, "reason": "配件不是整机"}, db)
+
+    assert result.match_status == "excluded"
+    assert result.model_id is None
+    assert result.review_note == "配件不是整机"
+    assert result.reviewed_at is not None
+
+
+def test_pending_endpoint_allows_disputed_and_review_detail(db, match_client):
+    model = ModelRecord(brand_code="Sony", model_code="WH-XM5", category_code="headphone")
+    db.add(model)
+    db.flush()
+    upload = UploadFileRecord(filename="review-detail.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+    clean_job = CleanJobRecord(file_ids=[upload.id], status="done")
+    db.add(clean_job)
+    db.flush()
+    raw = RawDataRecord(
+        file_id=upload.id,
+        platform="jd",
+        item_id="sku-9201",
+        item_url="https://item.jd.com/sku-9201.html",
+        item_name="索尼耳机",
+        brand_raw="SONY",
+        shop_name="索尼旗舰店",
+        sales_qty=12,
+    )
+    db.add(raw)
+    db.flush()
+    mr = MatchResult(
+        clean_job_id=clean_job.id,
+        raw_data_id=raw.id,
+        model_id=model.id,
+        match_status="disputed",
+        matched_by="manual",
+        match_source="s1",
+        dispute_reason="需要复核",
+    )
+    db.add(mr)
+    db.flush()
+    db.add(ItemUrlMapping(platform="jd", item_id="sku-9201", item_url=raw.item_url, model_id=None, brand_code="Sony"))
+    db.commit()
+
+    list_response = match_client.get(f"/api/match/{clean_job.id}/pending", params={"status": "disputed"})
+    assert list_response.status_code == 200
+    assert list_response.json()["total"] == 1
+    assert list_response.json()["items"][0]["dispute_reason"] == "需要复核"
+
+    detail_response = match_client.get(f"/api/match/items/{mr.id}/review-detail")
+    assert detail_response.status_code == 200
+    body = detail_response.json()
+    assert body["match_status"] == "disputed"
+    assert body["item_url"] == raw.item_url
+    assert body["shop_name"] == "索尼旗舰店"
+    assert body["url_mapping"]["brand_code"] == "Sony"
+
+
 def test_reviewed_endpoint_returns_only_reviewable_rows_with_price_and_quantity_fields(db, match_client):
     model = ModelRecord(brand_code="Sony", model_code="WH-XM5", category_code="headphone")
     db.add(model)

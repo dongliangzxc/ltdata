@@ -303,8 +303,12 @@ export const listReviewedMatches = (clean_job_id: number, params?: Record<string
   api.get<PaginatedResponse<ReviewedMatchResultOut>>(`/match/${clean_job_id}/reviewed`, { params })
 export const updateMatchCoefficient = (match_id: number, coefficient: number | null) =>
   api.patch<ReviewedMatchResultOut>(`/match/${match_id}/coefficient`, { coefficient })
-export const confirmMatch = (match_id: number, data: { model_id?: number; excluded?: boolean }) =>
-  api.put(`/match/confirm/${match_id}`, data)
+export const confirmMatch = (
+  match_id: number,
+  data: { model_id?: number; excluded?: boolean; disputed?: boolean; reason?: string }
+) => api.put(`/match/confirm/${match_id}`, data)
+export const getMatchReviewDetail = (match_id: number) =>
+  api.get<MatchReviewDetail>(`/match/items/${match_id}/review-detail`)
 
 // ─── Analytics Dashboard ─────────────────────────────────────
 export type AnalyticsGroupBy = 'model' | 'brand' | 'category' | 'platform'
@@ -672,6 +676,9 @@ export interface MatchResultOut {
   price_flag?: PriceFlag | null
   price_ref?: number | null
   sales_coefficient?: number | null
+  dispute_reason?: string | null
+  review_note?: string | null
+  reviewed_at?: string | null
   item_name?: string | null
   item_url?: string | null
   brand_raw?: string | null
@@ -683,6 +690,22 @@ export interface MatchResultOut {
   corrected_sales_qty?: number | null
   adjusted_sales_qty?: number | null
   category_name?: string | null
+}
+
+export interface MatchReviewDetail extends MatchResultOut {
+  item_image?: string | null
+  platform?: string | null
+  item_id?: string | null
+  shop_name?: string | null
+  ref_price?: number | null
+  price?: number | null
+  sales_amount?: number | null
+  url_mapping?: {
+    id: number
+    model_id: number | null
+    brand_code: string | null
+    source: string | null
+  } | null
 }
 
 export type ReviewedMatchResultOut = MatchResultOut

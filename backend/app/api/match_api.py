@@ -133,6 +133,10 @@ def get_match_summary(clean_job_id: int, db: Session = Depends(get_db)):
 
     disabled_count = sum(1 for r in rows if r.is_disabled == 1)
     unidentified_brand_count = sum(1 for r in rows if getattr(r, 'brand_identified', 1) == 0 and r.match_status == "pending")
+    precise_matched_count = sum(
+        1 for r in rows
+        if r.match_status in ("url_matched", "matched") and r.match_source in ("s0", "historical")
+    )
 
     confirmed_ids = {r.id for r in rows if r.match_status in ("matched", "confirmed", "url_matched")}
     if confirmed_ids:
@@ -151,6 +155,7 @@ def get_match_summary(clean_job_id: int, db: Session = Depends(get_db)):
         clean_job_id=clean_job_id,
         total=total,
         url_matched=status_count.get("url_matched", 0),
+        precise_matched=precise_matched_count,
         matched=status_count.get("matched", 0),
         text_only=status_count.get("text_only", 0),
         pending=status_count.get("pending", 0),
@@ -282,7 +287,7 @@ def list_missing_attrs(
     db: Session = Depends(get_db),
 ):
     """
-    列出已匹配/已确认但无属性标注的条目（用于「未补属性」Tab）。
+    列出已匹配/已确认但无属性标注的条目。
     match_status IN (matched, confirmed, url_matched) 且 match_result_attrs 为空。
     """
     subq = (

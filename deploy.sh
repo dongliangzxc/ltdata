@@ -3,7 +3,7 @@ set -e
 
 cd "$(dirname "$0")"
 
-SERVER="root@47.94.230.225"
+SERVER="root@39.107.251.184"
 SERVER_DIR="/root/luotu/ltdata"
 
 echo ">>> 推送代码到远端..."

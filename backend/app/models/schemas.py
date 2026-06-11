@@ -696,6 +696,7 @@ class MatchSummary(BaseModel):
     clean_job_id: int
     total:       int
     url_matched: int = 0
+    precise_matched: int = 0
     matched:     int
     text_only:   int = 0
     pending:     int

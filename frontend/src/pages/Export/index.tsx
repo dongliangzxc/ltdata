@@ -33,6 +33,14 @@ type MatchSummary = {
   disabled: number
 }
 
+type CleanJobOption = {
+  id: number
+  row_out: number
+  created_at: string
+  scope_desc?: string | null
+  status: string
+}
+
 export default function ExportPage() {
   const [selectedJobId, setSelectedJobId] = useState<number | null>(null)
   const [filenamePrefix, setFilenamePrefix] = useState('已处理数据')
@@ -148,7 +156,7 @@ export default function ExportPage() {
     },
   ]
 
-  const doneJobs = (jobsData ?? []).filter((j: { status: string }) => j.status === 'done')
+  const doneJobs = (jobsData ?? []).filter((j: CleanJobOption) => j.status === 'done')
   const readyMatched = matchSummary ? matchSummary.url_matched + matchSummary.matched + matchSummary.confirmed : 0
 
   return (
@@ -165,9 +173,9 @@ export default function ExportPage() {
                   value={selectedJobId}
                   onChange={v => { setSelectedJobId(v); setMatchSummary(null) }}
                 >
-                  {doneJobs.map((j: { id: number; row_out: number; created_at: string }) => (
+                  {doneJobs.map((j: CleanJobOption) => (
                     <Select.Option key={j.id} value={j.id}>
-                      任务 #{j.id} — 输出 {j.row_out} 条 —
+                      任务 #{j.id}｜{j.scope_desc || '未标识范围'}｜输出 {j.row_out} 条｜
                       <Text type="secondary" style={{ marginLeft: 4 }}>
                         {j.created_at?.slice(0, 10) || '-'}
                       </Text>

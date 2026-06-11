@@ -13,7 +13,9 @@ from app.api.historical_api import (
     _detect_sheet_and_mapping,
     _infer_category_code,
     _is_unknown_brand,
+    _pending_model_identity,
     _read_sheet_preview,
+    _usable_identity_value,
 )
 from app.models.schemas import MetadataSpec, ModelRecord, ModelSpec
 
@@ -209,14 +211,17 @@ def _model_identity(
     model_code_raw: str | None,
     category_code: str,
 ) -> dict | None:
-    model_code = model_code_raw or model_text
-    model_name = model_text or model_code_raw
-    if not model_code or not model_name:
-        return None
     brand_code = brand_code_raw if not _is_unknown_brand(brand_code_raw) else brand_raw
     if _is_unknown_brand(brand_code):
         return None
-    brand_name = brand_raw if not _is_unknown_brand(brand_raw) else brand_code
+    brand_name = _usable_identity_value(brand_raw) or brand_code
+    model_code = _usable_identity_value(model_code_raw)
+    model_name = _usable_identity_value(model_text)
+    if not model_code and not model_name:
+        model_code, model_name = _pending_model_identity(category_code)
+    else:
+        model_code = model_code or model_name
+        model_name = model_name or model_code
     return {
         "brand_code": brand_code,
         "brand_name": brand_name,

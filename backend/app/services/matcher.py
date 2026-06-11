@@ -48,7 +48,6 @@ brand_identified 标记：S1/S2/S3 任意阶段识别到品牌即置 1，即使�
 """
 import logging
 
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 from app.models.schemas import CleanedDataRecord, ModelRecord, ModelAlias, MatchResult, MatchResultCandidate, ItemUrlMapping, MatchRule, HistoricalMapping
 from app.utils.url_utils import extract_item_id
@@ -60,6 +59,15 @@ logger = logging.getLogger(__name__)
 
 def _norm(s: str | None) -> str:
     return (s or "").upper().strip()
+
+
+def _is_placeholder_code(s: str | None) -> bool:
+    value = _norm(s)
+    return value == "" or set(value) == {"-"}
+
+
+def _is_valid_model(m: ModelRecord) -> bool:
+    return not _is_placeholder_code(m.brand_code) and not _is_placeholder_code(m.model_code)
 
 
 def _normalize_history_name(s: str | None) -> str:
@@ -121,7 +129,7 @@ def _history_lookup(db: Session, row: CleanedDataRecord) -> HistoricalMapping | 
 
     for key_type, platform, value in deduped_keys:
         for year, month_num, week in _period_candidates(row):
-            q = db.query(HistoricalMapping).filter(func.lower(HistoricalMapping.platform) == platform.lower())
+            q = db.query(HistoricalMapping).filter(HistoricalMapping.platform == platform.lower())
             if key_type == "item_id":
                 q = q.filter(HistoricalMapping.item_id == value)
             elif key_type == "item_url":
@@ -155,8 +163,11 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
     # ── S0: 预加载 URL 映射表 ─────────────────────────────────────
     url_map: dict[tuple[str, str], int] = {}        # model_id 已知的条目
     url_brand_map: dict[tuple[str, str], str] = {}  # 品牌已知但 model_id=NULL 的条目
+    model_rows = db.query(ModelRecord).all()
+    valid_model_ids = {m.id for m in model_rows if _is_valid_model(m)}
+
     for um in db.query(ItemUrlMapping).all():
-        if um.model_id:
+        if um.model_id and um.model_id in valid_model_ids:
             url_map[(um.platform, um.item_id)] = um.model_id
         elif um.brand_code:
             url_brand_map[(um.platform, um.item_id)] = um.brand_code
@@ -164,13 +175,13 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
     # ── S0.5: 预加载显式匹配规则（按 priority 升序）────────────────
     explicit_rules = (
         db.query(MatchRule)
-        .filter(MatchRule.is_active == 1)
+        .filter(MatchRule.is_active == 1, MatchRule.model_id.in_(valid_model_ids))
         .order_by(MatchRule.priority)
         .all()
     )
 
     # ── 构建内存索引 ─────────────────────────────────────────────
-    all_models = db.query(ModelRecord).all()
+    all_models = [m for m in model_rows if m.id in valid_model_ids]
 
     brand_code_index: dict[str, list[ModelRecord]] = {}
     for m in all_models:
@@ -325,17 +336,18 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
         # ── S0.2: 历史库精确匹配 ─────────────────────────────────
         hist_hit = _history_lookup(db, row)
         if hist_hit:
-            historical_status = "matched" if hist_hit.model_id else "pending"
+            historical_model_id = hist_hit.model_id if hist_hit.model_id in valid_model_ids else None
+            historical_status = "matched" if historical_model_id else "pending"
             results.append(MatchResult(
                 clean_job_id=clean_job_id,
                 raw_data_id=row.raw_data_id,
-                model_id=hist_hit.model_id,
+                model_id=historical_model_id,
                 match_status=historical_status,
                 matched_by="auto",
                 match_source="historical",
                 brand_identified=1,
             ))
-            if hist_hit.model_id:
+            if historical_model_id:
                 matched_count += 1
             if len(results) >= BATCH:
                 db.bulk_save_objects(results)

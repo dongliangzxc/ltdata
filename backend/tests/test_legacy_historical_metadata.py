@@ -249,6 +249,56 @@ def test_import_legacy_metadata_uses_brand_code_as_name_when_brand_name_unknown(
     assert model.brand_name == "BRANDA"
 
 
+def test_import_legacy_metadata_keeps_brand_only_model_as_pending_completion(db, tmp_path):
+    db.add(Category(code="door_lock", name="门锁"))
+    db.commit()
+    path = tmp_path / "2023-2026.04门锁-传统+新兴.xlsx"
+    path.write_bytes(_excel([{
+        "年度": 2026,
+        "月度": 4,
+        "平台": "京东",
+        "宝贝名称": "门锁商品",
+        "宝贝链接": "https://item.jd.com/1.html",
+        "品牌": "品牌A",
+        "机型": "-",
+        "把手形态": "推拉式",
+    }]))
+
+    report = import_legacy_historical_metadata(db, [path], dry_run=False)
+
+    assert report["totals"]["models"] == 1
+    assert report["totals"]["model_specs"] == 1
+    model = db.query(ModelRecord).one()
+    assert model.brand_code == "品牌A"
+    assert model.model_code == "待补型号-door_lock"
+    assert model.model_name == "待补型号"
+    spec = db.query(ModelSpec).filter_by(model_id=model.id, spec_name="把手形态").one()
+    assert spec.spec_value == "推拉式"
+
+
+def test_import_legacy_metadata_skips_model_specs_when_brand_and_model_unusable(db, tmp_path):
+    db.add(Category(code="door_lock", name="门锁"))
+    db.commit()
+    path = tmp_path / "2023-2026.04门锁-传统+新兴.xlsx"
+    path.write_bytes(_excel([{
+        "年度": 2026,
+        "月度": 4,
+        "平台": "京东",
+        "宝贝名称": "门锁商品",
+        "宝贝链接": "https://item.jd.com/1.html",
+        "品牌": "-",
+        "机型": "-",
+        "把手形态": "推拉式",
+    }]))
+
+    report = import_legacy_historical_metadata(db, [path], dry_run=False)
+
+    assert report["totals"]["models"] == 0
+    assert report["totals"]["model_specs"] == 0
+    assert db.query(ModelRecord).count() == 0
+    assert db.query(ModelSpec).count() == 0
+
+
 def test_import_legacy_metadata_tie_conflict_uses_latest_value(db, tmp_path):
     db.add(Category(code="router", name="路由器"))
     db.commit()

@@ -12,7 +12,6 @@ import {
   confirmMatch, listModels, runPublish, listPublishJobs,
   listReviewedMatches, updateMatchCoefficient,
   disableMatch, enableMatch, avgPriceDisable, listDisabled,
-  applyAttrRules, listMissingAttrs,
   triggerExport, getExportJob, getDownloadUrl,
 } from '../../services/api'
 import type { MatchCandidateOut, ReviewedMatchResultOut, PriceFlag } from '../../services/api'
@@ -41,10 +40,40 @@ const getAdjustedSalesQty = (row: ReviewedMatchResultOut, draftCoefficient?: num
   return base != null && coefficient != null ? Math.round(base * coefficient) : base
 }
 
+const isPlaceholderCode = (value?: string | null) => {
+  const normalized = (value ?? '').trim()
+  return normalized === '' || /^-+$/.test(normalized)
+}
+
+const hasDisplayModel = (brandCode?: string | null, modelCode?: string | null) => (
+  !isPlaceholderCode(brandCode) && !isPlaceholderCode(modelCode)
+)
+
+const matchSourceMeta = (source?: string | null) => {
+  const map: Record<string, { label: string; color: string }> = {
+    s0: { label: 'URL映射命中', color: 'blue' },
+    historical: { label: '历史库命中', color: 'purple' },
+    's0.5': { label: '规则命中', color: 'cyan' },
+    s1: { label: '品牌字段匹配', color: 'green' },
+    s2: { label: '标题品牌码匹配', color: 'green' },
+    s3: { label: '标题品牌名匹配', color: 'green' },
+    s4: { label: '型号码兜底匹配', color: 'orange' },
+    manual: { label: '人工确认', color: 'blue' },
+  }
+  return source ? map[source] : undefined
+}
+
+const renderMatchSource = (source?: string | null) => {
+  const entry = matchSourceMeta(source)
+  if (!source) return <Tag color="default">未知</Tag>
+  return entry ? <Tag color={entry.color}>{entry.label}</Tag> : <Tag>{source}</Tag>
+}
+
 type MatchSummary = {
   clean_job_id: number
   total: number
   url_matched: number
+  precise_matched?: number
   matched: number
   text_only: number
   pending: number
@@ -52,7 +81,6 @@ type MatchSummary = {
   excluded: number
   disabled: number
   unidentified_brand?: number
-  missing_attrs?: number
 }
 
 type PendingItem = {
@@ -95,6 +123,14 @@ type PublishJob = {
   created_at: string
 }
 
+type CleanJobOption = {
+  id: number
+  row_out: number
+  created_at: string
+  scope_desc?: string | null
+  status: string
+}
+
 type MatchProgress = {
   status: 'idle' | 'running' | 'done' | 'error'
   total: number
@@ -103,87 +139,6 @@ type MatchProgress = {
   rate: number | null
   eta_seconds: number | null
   error?: string
-}
-
-function MissingAttrsTabContent({
-  cleanJobId,
-  onApplyDone,
-}: {
-  cleanJobId: number
-  onApplyDone: () => void
-}) {
-  const [page, setPage] = useState(1)
-  const [applying, setApplying] = useState(false)
-  const [filterCategory, setFilterCategory] = useState<string | undefined>()
-  const { options: categoryOptions } = useCategoryOptions()
-  const { data, loading, refresh } = useRequest(
-    () => listMissingAttrs(cleanJobId, {
-      page, page_size: 20,
-      ...(filterCategory ? { category_name: filterCategory } : {}),
-    }).then(r => r.data),
-    { refreshDeps: [cleanJobId, page, filterCategory] }
-  )
-
-  const handleApply = async () => {
-    setApplying(true)
-    try {
-      const res = await applyAttrRules(cleanJobId)
-      message.success(`重跑完成，共命中 ${res.data.matched_attrs} 个属性`)
-      refresh()
-      onApplyDone()
-    } finally {
-      setApplying(false)
-    }
-  }
-
-  const columns = [
-    { title: '商品名称', dataIndex: 'item_name', ellipsis: true },
-    { title: '品牌', dataIndex: 'brand_raw', width: 120 },
-    { title: '型号', dataIndex: 'model_code', width: 150 },
-    { title: '品类', dataIndex: 'category_name', width: 120 },
-  ]
-
-  return (
-    <Space direction="vertical" size={12} style={{ width: '100%' }}>
-      <Alert
-        type="warning"
-        showIcon
-        message="以下商品型号已确认，但未匹配到属性规则。建议先前往「规则管理 → 属性规则」补充规则后重跑，或手动前往型号管理补充规格。"
-        action={
-          <Space>
-            <Button size="small" onClick={() => window.open('/rules?tab=attr', '_blank')}>
-              前往属性规则
-            </Button>
-            <Button size="small" type="primary" loading={applying} onClick={handleApply}>
-              重跑属性规则
-            </Button>
-          </Space>
-        }
-      />
-      <Select
-        placeholder="品类筛选"
-        allowClear
-        style={{ width: 160 }}
-        options={categoryOptions}
-        value={filterCategory}
-        onChange={v => { setFilterCategory(v); setPage(1) }}
-      />
-      <Table
-        dataSource={data?.items ?? []}
-        columns={columns}
-        rowKey="id"
-        size="small"
-        loading={loading}
-        pagination={{
-          current: page,
-          pageSize: 20,
-          total: data?.total ?? 0,
-          onChange: setPage,
-          showTotal: (t: number) => `共 ${t} 条`,
-        }}
-      />
-    </Space>
-  )
 }
 
 export default function MatchPage() {
@@ -218,11 +173,13 @@ export default function MatchPage() {
   const [coefficientDrafts, setCoefficientDrafts] = useState<Record<number, number | null>>({})
   const [editedCoefficientIds, setEditedCoefficientIds] = useState<Set<number>>(new Set())
   const [savingCoefficientIds, setSavingCoefficientIds] = useState<Set<number>>(new Set())
-  const [activeTab, setActiveTab] = useState<'pending' | 'text_only' | 'unidentified_brand' | 'missing_attrs'>('text_only')
+  const [activeTab, setActiveTab] = useState<'pending' | 'text_only' | 'unidentified_brand'>('text_only')
   const { data: jobsData } = useRequest(() => listCleanJobs().then(r => r.data))
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
   const [modelSearchLoading, setModelSearchLoading] = useState(false)
   const { options: categoryOptions } = useCategoryOptions()
+  const preciseMatchedCount = summary?.precise_matched ?? summary?.url_matched ?? 0
+  const otherAutoMatchedCount = summary ? Math.max(summary.matched - Math.max(preciseMatchedCount - (summary.url_matched ?? 0), 0), 0) : 0
   const readyCount = summary ? (summary?.url_matched ?? 0) + summary.matched + summary.confirmed : 0
 
   const handleModelSearch = async (keyword: string) => {
@@ -247,7 +204,7 @@ export default function MatchPage() {
       sort_by: sortBy !== 'default' ? sortBy : undefined,
     }).then(r => r.data),
     {
-      ready: selectedJobId != null && summary != null && activeTab !== 'missing_attrs' && (summary.pending > 0 || summary.text_only > 0 || (summary.unidentified_brand ?? 0) > 0),
+      ready: selectedJobId != null && summary != null && (summary.pending > 0 || summary.text_only > 0 || (summary.unidentified_brand ?? 0) > 0),
       refreshDeps: [selectedJobId, keyword, page, activeTab, categoryName, sortBy],
     }
   )
@@ -535,7 +492,7 @@ export default function MatchPage() {
       {
         title: '匹配型号', width: 160,
         render: (_: unknown, row: PendingItem) =>
-          row.brand_code && row.model_code
+          hasDisplayModel(row.brand_code, row.model_code)
             ? (
               <span>
                 <Text code style={{ fontSize: 12 }}>[{row.brand_code}] {row.model_code}</Text>
@@ -558,7 +515,7 @@ export default function MatchPage() {
                               </Button>,
                             ]}
                           >
-                            {c.model_code ?? '—'} ({c.brand_code ?? '—'}) · {c.match_source ?? '—'}
+                            {c.model_code ?? '—'} ({c.brand_code ?? '—'}) · {matchSourceMeta(c.match_source)?.label ?? c.match_source ?? '—'}
                           </List.Item>
                         )}
                       />
@@ -604,7 +561,7 @@ export default function MatchPage() {
                         </Button>,
                       ]}
                     >
-                      {c.model_code ?? '—'} ({c.brand_code ?? '—'}) · {c.match_source ?? '—'}
+                      {c.model_code ?? '—'} ({c.brand_code ?? '—'}) · {matchSourceMeta(c.match_source)?.label ?? c.match_source ?? '—'}
                     </List.Item>
                   )}
                 />
@@ -648,24 +605,8 @@ export default function MatchPage() {
           : <Tag color="default">未补</Tag>,
     },
     {
-      title: '来源', width: 90,
-      render: (_: unknown, row: PendingItem) => {
-        const map: Record<string, { label: string; color: string }> = {
-          's0':         { label: 'URL映射',  color: 'blue'   },
-          'historical': { label: '历史库',   color: 'purple' },
-          's0.5':       { label: '规则',     color: 'cyan'   },
-          's1':         { label: '算法S1',   color: 'green'  },
-          's2':         { label: '算法S2',   color: 'green'  },
-          's3':         { label: '算法S3',   color: 'green'  },
-          's4':         { label: '算法S4',   color: 'orange' },
-        }
-        const src = row.match_source
-        if (!src) return <Tag color="default">未知</Tag>
-        const entry = map[src]
-        return entry
-          ? <Tag color={entry.color}>{entry.label}</Tag>
-          : <Tag>{src}</Tag>
-      },
+      title: '来源', width: 130,
+      render: (_: unknown, row: PendingItem) => renderMatchSource(row.match_source),
     },
     {
       title: '操作', width: 180, fixed: 'right' as const,
@@ -723,7 +664,7 @@ export default function MatchPage() {
     {
       title: '匹配型号', width: 160,
       render: (_: unknown, row: ReviewedMatchResultOut) =>
-        row.brand_code && row.model_code
+        hasDisplayModel(row.brand_code, row.model_code)
           ? <Text code style={{ fontSize: 12 }}>[{row.brand_code}] {row.model_code}</Text>
           : <Text type="secondary">-</Text>
     },
@@ -784,8 +725,8 @@ export default function MatchPage() {
       render: (v: string) => <Tag color={v === 'confirmed' ? 'blue' : 'green'}>{v}</Tag>,
     },
     {
-      title: '来源', width: 90,
-      render: (_: unknown, row: ReviewedMatchResultOut) => row.match_source ? <Tag>{row.match_source}</Tag> : '-'
+      title: '来源', width: 130,
+      render: (_: unknown, row: ReviewedMatchResultOut) => renderMatchSource(row.match_source),
     },
   ]
 
@@ -802,7 +743,7 @@ export default function MatchPage() {
     },
   ]
 
-  const doneJobs = (jobsData ?? []).filter((j: { status: string }) => j.status === 'done')
+  const doneJobs = (jobsData ?? []).filter((j: CleanJobOption) => j.status === 'done')
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -817,9 +758,9 @@ export default function MatchPage() {
               placeholder="选择任务"
               value={selectedJobId}
               onChange={v => { setSelectedJobId(v); setSummary(null); setPage(1); setReviewedPage(1); setPublishJobs([]); setCoefficientDrafts({}); setEditedCoefficientIds(new Set()) }}
-              options={doneJobs.map((j: { id: number; created_at: string; row_out: number }) => ({
+              options={doneJobs.map((j: CleanJobOption) => ({
                 value: j.id,
-                label: `任务#${j.id}（${j.row_out}条，${j.created_at?.slice(0, 10) || '-'}）`,
+                label: `任务#${j.id}｜${j.scope_desc || '未标识范围'}｜${j.row_out}条｜${j.created_at?.slice(0, 10) || '-'}`,
               }))}
             />
           </Col>
@@ -937,9 +878,9 @@ export default function MatchPage() {
         <Card>
           <Row gutter={16}>
             <Col span={3}><Statistic title="总条数" value={summary.total} /></Col>
-            <Col span={3}><Statistic title="URL匹配" value={summary.url_matched ?? 0} valueStyle={{ color: '#389e0d' }} /></Col>
-            <Col span={3}><Statistic title="文本匹配" value={summary.matched} valueStyle={{ color: '#3f8600' }} /></Col>
-            <Col span={3}><Statistic title="URL待审" value={summary.text_only ?? 0} valueStyle={{ color: '#d48806' }} /></Col>
+            <Col span={3}><Statistic title="精准匹配" value={preciseMatchedCount} valueStyle={{ color: '#389e0d' }} /></Col>
+            <Col span={3}><Statistic title="其他自动匹配" value={otherAutoMatchedCount} valueStyle={{ color: '#3f8600' }} /></Col>
+            <Col span={3}><Statistic title="URL映射待确认" value={summary.text_only ?? 0} valueStyle={{ color: '#d48806' }} /></Col>
             <Col span={3}><Statistic title="待确认" value={summary.pending} valueStyle={{ color: '#d46b08' }} /></Col>
             <Col span={3}><Statistic title="已人工确认" value={summary.confirmed} valueStyle={{ color: '#1677ff' }} /></Col>
             <Col span={2}><Statistic title="已排除" value={summary.excluded} valueStyle={{ color: '#cf1322' }} /></Col>
@@ -965,13 +906,13 @@ export default function MatchPage() {
         </Card>
       )}
 
-      {summary && (summary.pending > 0 || (summary.text_only ?? 0) > 0 || (summary.unidentified_brand ?? 0) > 0 || (summary.missing_attrs ?? 0) > 0) && (
+      {summary && (summary.pending > 0 || (summary.text_only ?? 0) > 0 || (summary.unidentified_brand ?? 0) > 0) && (
         <Card
           title={
             <Space>
               <span>待处理条目</span>
               <span style={{ fontSize: 12, color: '#8c8c8c' }}>
-                URL待审 {summary.text_only ?? 0} 条 · 待确认 {summary.pending} 条
+                URL映射待确认 {summary.text_only ?? 0} 条 · 待确认 {summary.pending} 条
               </span>
             </Space>
           }
@@ -1006,7 +947,7 @@ export default function MatchPage() {
           <Tabs
             activeKey={activeTab}
             onChange={key => {
-              setActiveTab(key as 'pending' | 'text_only' | 'unidentified_brand' | 'missing_attrs')
+              setActiveTab(key as 'pending' | 'text_only' | 'unidentified_brand')
               setPage(1)
               setKeyword('')
               setCategoryName(undefined)
@@ -1034,7 +975,7 @@ export default function MatchPage() {
                 key: 'text_only',
                 label: (
                   <span>
-                    URL待审
+                    URL映射待确认
                     {(summary.text_only ?? 0) > 0 && (
                       <span style={{
                         marginLeft: 6, background: '#d48806', color: '#fff',
@@ -1064,23 +1005,6 @@ export default function MatchPage() {
                 ),
                 children: null,
               },
-              {
-                key: 'missing_attrs',
-                label: (
-                  <span>
-                    未补属性
-                    {(summary?.missing_attrs ?? 0) > 0 && (
-                      <Tag color="orange" style={{ marginLeft: 4 }}>{summary?.missing_attrs}</Tag>
-                    )}
-                  </span>
-                ),
-                children: activeTab === 'missing_attrs' && selectedJobId ? (
-                  <MissingAttrsTabContent
-                    cleanJobId={selectedJobId}
-                    onApplyDone={() => getMatchSummary(selectedJobId).then(r => setSummary(r.data))}
-                  />
-                ) : null,
-              },
             ]}
           />
           {activeTab === 'unidentified_brand' && (
@@ -1096,23 +1020,21 @@ export default function MatchPage() {
               }
             />
           )}
-          {activeTab !== 'missing_attrs' && (
-            <Table
-              dataSource={pendingData?.items ?? []}
-              columns={pendingColumns}
-              rowKey="id"
-              size="small"
-              loading={pendingLoading}
-              scroll={{ x: 800 }}
-              pagination={{
-                current: page,
-                pageSize: 20,
-                total: pendingData?.total ?? 0,
-                onChange: setPage,
-                showTotal: t => `共 ${t} 条`,
-              }}
-            />
-          )}
+          <Table
+            dataSource={pendingData?.items ?? []}
+            columns={pendingColumns}
+            rowKey="id"
+            size="small"
+            loading={pendingLoading}
+            scroll={{ x: 800 }}
+            pagination={{
+              current: page,
+              pageSize: 20,
+              total: pendingData?.total ?? 0,
+              onChange: setPage,
+              showTotal: t => `共 ${t} 条`,
+            }}
+          />
         </Card>
       )}
 

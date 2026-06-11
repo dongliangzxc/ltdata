@@ -12,6 +12,7 @@ from app.models.schemas import (
     DispatchBatch,
     DispatchItem,
     UploadFileRecord,
+    Category,
 )
 from app.services.data_cleaner import run_clean
 from app.utils.time_utils import format_beijing_datetime
@@ -25,14 +26,21 @@ def _build_clean_scope_desc(db: Session, job: CleanJobRecord) -> str:
         files = db.query(UploadFileRecord).filter(UploadFileRecord.id.in_(job.file_ids)).all()
     platforms = sorted({f.platform for f in files if f.platform})
     months = sorted({f.month_range for f in files if f.month_range})
+    filenames = [f.filename for f in files if f.filename]
 
     parts = []
+    if job.dispatch_batch_id:
+        parts.append(f"分发批次#{job.dispatch_batch_id}")
+    if job.dispatch_category_code:
+        category = db.query(Category).filter(Category.code == job.dispatch_category_code).first()
+        category_label = f"{category.name}（{category.code}）" if category else job.dispatch_category_code
+        parts.append(f"品类：{category_label}")
     if platforms:
         parts.append(f"平台：{'、'.join(platforms)}")
-    if job.dispatch_category_code:
-        parts.append(f"品类：{job.dispatch_category_code}")
     if months:
         parts.append(f"月份：{'、'.join(months)}")
+    if filenames:
+        parts.append(f"文件：{'、'.join(filenames[:2])}{' 等' if len(filenames) > 2 else ''}")
     if parts:
         return " / ".join(parts)
     if job.file_ids:

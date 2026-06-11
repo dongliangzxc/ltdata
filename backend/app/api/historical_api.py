@@ -111,11 +111,20 @@ def _clean_value(value) -> Optional[str]:
     return text
 
 
-def _is_unknown_brand(value: Optional[str]) -> bool:
+def _is_unusable_identity_value(value: Optional[str]) -> bool:
     text = _clean_value(value)
     if text is None:
         return True
-    return text.strip().upper() in {"UNKNOWN", "UNKNOWN BRAND", "未知"}
+    return text.strip().upper() in {"-", "—", "–", "UNKNOWN", "UNKNOWN BRAND", "未知"}
+
+
+def _usable_identity_value(value: Optional[str]) -> Optional[str]:
+    text = _clean_value(value)
+    return None if _is_unusable_identity_value(text) else text
+
+
+def _is_unknown_brand(value: Optional[str]) -> bool:
+    return _is_unusable_identity_value(value)
 
 
 def _clean_int(value) -> Optional[int]:
@@ -714,6 +723,11 @@ def _resolve_category_code(
     return None
 
 
+def _pending_model_identity(category_code: Optional[str]) -> tuple[str, str]:
+    suffix = category_code or "unknown"
+    return f"待补型号-{suffix}", "待补型号"
+
+
 def _model_identity_values(
     *,
     brand_code_raw: Optional[str],
@@ -721,21 +735,25 @@ def _model_identity_values(
     model_code_raw: Optional[str],
     model_text: Optional[str],
     category_code: Optional[str],
+    allow_pending_model: bool = False,
 ) -> Optional[dict]:
-    if not model_text and not model_code_raw:
-        return None
     brand_code = _effective_brand_code(brand_code_raw, brand_raw)
     if _is_unknown_brand(brand_code):
         return None
-    model_code = model_code_raw or model_text
-    model_name = model_text or model_code_raw
-    if not model_code or not model_name:
-        return None
+    model_code = _usable_identity_value(model_code_raw)
+    model_name = _usable_identity_value(model_text)
+    if not model_code and not model_name:
+        if not allow_pending_model:
+            return None
+        model_code, model_name = _pending_model_identity(category_code)
+    else:
+        model_code = model_code or model_name
+        model_name = model_name or model_code
     return {
         "brand_code": brand_code,
         "model_code": model_code,
         "model_name": model_name,
-        "brand_name": brand_raw or brand_code,
+        "brand_name": _usable_identity_value(brand_raw) or brand_code,
         "category_code": category_code,
     }
 

@@ -478,7 +478,7 @@ export default function MatchPage() {
 
   const pendingColumns = [
     {
-      title: '宝贝名称', dataIndex: 'item_name', ellipsis: true,
+      title: '宝贝名称', dataIndex: 'item_name', width: 320, ellipsis: true,
       render: (v: string) => <Tooltip title={v}><Text style={{ fontSize: 12 }}>{v}</Text></Tooltip>
     },
     { title: '原始品牌', dataIndex: 'brand_raw', width: 120 },
@@ -1026,7 +1026,7 @@ export default function MatchPage() {
             rowKey="id"
             size="small"
             loading={pendingLoading}
-            scroll={{ x: 800 }}
+            scroll={{ x: activeTab === 'text_only' ? 1360 : 1280 }}
             pagination={{
               current: page,
               pageSize: 20,

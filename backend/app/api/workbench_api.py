@@ -25,14 +25,15 @@ router = APIRouter(prefix="/api/workbench", tags=["workbench"])
 
 
 class WorkbenchExportParams(BaseModel):
+    year:          Optional[int] = None
     month:         Optional[int] = None
+    category_name: Optional[str] = None
     platform:      Optional[str] = None
     brand_code:    Optional[str] = None
     model_code:    Optional[str] = None
-    category_name: Optional[str] = None
+    item_url:      Optional[str] = None
     keyword:       Optional[str] = None
-    year:     Optional[int] = None
-    quarter:  Optional[int] = None
+    quarter:       Optional[int] = None
 
 
 # 内存进度表：job_id → 0-100，线程结束后清除
@@ -42,6 +43,15 @@ _wb_progress: dict[int, int] = {}
 def _build_query(db: Session, params: dict):
     q = db.query(PublishedItem)
 
+    if params.get("year") and params.get("quarter"):
+        year = int(params["year"])
+        start_m = year * 100 + (int(params["quarter"]) - 1) * 3 + 1
+        end_m = year * 100 + int(params["quarter"]) * 3
+        q = q.filter(PublishedItem.month >= start_m, PublishedItem.month <= end_m)
+    elif params.get("year"):
+        start_m = int(params["year"]) * 100 + 1
+        end_m = int(params["year"]) * 100 + 12
+        q = q.filter(PublishedItem.month >= start_m, PublishedItem.month <= end_m)
     if params.get("month"):
         q = q.filter(PublishedItem.month == int(params["month"]))
     if params.get("platform"):
@@ -56,6 +66,8 @@ def _build_query(db: Session, params: dict):
         q = q.filter(PublishedItem.category_lv1 == params["category_lv1"])
     if params.get("category_lv2"):
         q = q.filter(PublishedItem.category_lv2 == params["category_lv2"])
+    if params.get("item_url"):
+        q = q.filter(PublishedItem.item_url.ilike(f"%{params['item_url']}%"))
     if params.get("keyword"):
         q = q.filter(PublishedItem.item_name.ilike(f"%{params['keyword']}%"))
 
@@ -79,14 +91,6 @@ def _run_wb_export_thread(job_id: int, params: dict):
 
         # 1. 查询 PublishedItems（5→20%）
         q = _build_query(adb, params)
-        if params.get("year") and params.get("quarter"):
-            start_m = int(params["year"]) * 100 + (int(params["quarter"]) - 1) * 3 + 1
-            end_m   = int(params["year"]) * 100 + int(params["quarter"]) * 3
-            q = q.filter(PublishedItem.month >= start_m, PublishedItem.month <= end_m)
-        elif params.get("year"):
-            start_m = int(params["year"]) * 100 + 1
-            end_m   = int(params["year"]) * 100 + 12
-            q = q.filter(PublishedItem.month >= start_m, PublishedItem.month <= end_m)
 
         total = q.count()
         if total == 0:
@@ -199,6 +203,7 @@ def get_filters(db: Session = Depends(get_analytics_db)):
         reverse=True,
     )
     return {
+        "years": sorted({m // 100 for m in months}, reverse=True),
         "months": months,
         "platforms": _vals(PublishedItem.platform),
         "brands": _vals(PublishedItem.brand_code),
@@ -209,11 +214,13 @@ def get_filters(db: Session = Depends(get_analytics_db)):
 
 @router.get("/data")
 def query_data(
+    year: Optional[int] = Query(None),
     month: Optional[int] = Query(None),
+    category_name: Optional[str] = Query(None),
     platform: Optional[str] = Query(None),
     brand_code: Optional[str] = Query(None),
     model_code: Optional[str] = Query(None),
-    category_name: Optional[str] = Query(None),
+    item_url: Optional[str] = Query(None),
     category_lv1: Optional[str] = Query(None),
     category_lv2: Optional[str] = Query(None),
     keyword: Optional[str] = Query(None),
@@ -222,8 +229,9 @@ def query_data(
     db: Session = Depends(get_analytics_db),
 ):
     params = dict(
-        month=month, platform=platform, brand_code=brand_code,
-        model_code=model_code, category_name=category_name,
+        year=year, month=month, category_name=category_name,
+        platform=platform, brand_code=brand_code,
+        model_code=model_code, item_url=item_url,
         category_lv1=category_lv1,
         category_lv2=category_lv2, keyword=keyword,
     )
@@ -268,13 +276,14 @@ def query_data(
 def export_data(payload: WorkbenchExportParams, db: Session = Depends(get_db)):
     """异步触发工作台导出，立即返回 job_id。"""
     params = {
+        "year":          payload.year,
         "month":         payload.month,
+        "category_name": payload.category_name,
         "platform":      payload.platform,
         "brand_code":    payload.brand_code,
         "model_code":    payload.model_code,
-        "category_name": payload.category_name,
+        "item_url":      payload.item_url,
         "keyword":       payload.keyword,
-        "year":          payload.year,
         "quarter":       payload.quarter,
     }
     params = {k: v for k, v in params.items() if v not in (None, "", [])}

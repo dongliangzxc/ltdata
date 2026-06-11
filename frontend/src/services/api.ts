@@ -387,14 +387,15 @@ export function fetchItemAttrs(publishedItemId: number): Promise<{ attr_name: st
 }
 
 export interface WorkbenchExportParams {
+  year?: number
   month?: number
+  category_name?: string
   platform?: string
   brand_code?: string
   model_code?: string
-  category_name?: string
+  item_url?: string
   keyword?: string
   statuses?: string[]
-  year?: number
   quarter?: number
 }
 

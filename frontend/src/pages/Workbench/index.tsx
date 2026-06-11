@@ -15,6 +15,7 @@ import ProgressModal from '../../components/ProgressModal'
 const { Text } = Typography
 
 type FilterOptions = {
+  years: number[]
   months: number[]
   platforms: string[]
   brands: string[]
@@ -72,7 +73,7 @@ function AttrPopoverContent({ itemId }: { itemId: number }) {
 export default function WorkbenchPage() {
   const [form] = Form.useForm()
   const [filters, setFilters] = useState<FilterOptions>({
-    months: [], platforms: [], brands: [], models: [], categories: [],
+    years: [], months: [], platforms: [], brands: [], models: [], categories: [],
   })
   const [filtersLoaded, setFiltersLoaded] = useState(false)
   const [page, setPage] = useState(1)
@@ -155,14 +156,15 @@ export default function WorkbenchPage() {
     try {
       const vals = form.getFieldsValue()
       const res = await exportWorkbench({
+        year: vals.year ?? exportYear,
         month: vals.month,
+        category_name: vals.category_name,
         platform: vals.platform,
         brand_code: vals.brand_code,
         model_code: vals.model_code,
-        category_name: vals.category_name,
+        item_url: vals.item_url,
         keyword: vals.keyword,
         statuses: exportStatuses,
-        year: exportYear,
         quarter: exportQuarter,
       })
       const { job_id } = res.data as { job_id: number }
@@ -274,12 +276,32 @@ export default function WorkbenchPage() {
       {/* 筛选面板 */}
       <Card>
         <Form form={form} layout="inline" style={{ rowGap: 8 }}>
+          <Form.Item name="year" style={{ marginBottom: 8 }}>
+            <Select
+              placeholder="年度"
+              allowClear
+              style={{ width: 100 }}
+              options={filters.years.map(y => ({ value: y, label: String(y) }))}
+            />
+          </Form.Item>
           <Form.Item name="month" style={{ marginBottom: 8 }}>
             <Select
-              placeholder="月份"
+              placeholder="月度"
               allowClear
               style={{ width: 110 }}
               options={filters.months.map(m => ({ value: m, label: String(m) }))}
+            />
+          </Form.Item>
+          <Form.Item name="category_name" style={{ marginBottom: 8 }}>
+            <Select
+              showSearch
+              placeholder="品类"
+              allowClear
+              style={{ width: 150 }}
+              options={filters.categories.map(c => ({ value: c, label: c }))}
+              filterOption={(input, option) =>
+                (option?.label as string ?? '').toLowerCase().includes(input.toLowerCase())
+              }
             />
           </Form.Item>
           <Form.Item name="platform" style={{ marginBottom: 8 }}>
@@ -314,16 +336,12 @@ export default function WorkbenchPage() {
               }
             />
           </Form.Item>
-          <Form.Item name="category_name" style={{ marginBottom: 8 }}>
-            <Select
-              showSearch
-              placeholder="品类"
+          <Form.Item name="item_url" style={{ marginBottom: 8 }}>
+            <Input
+              placeholder="网址"
               allowClear
-              style={{ width: 150 }}
-              options={filters.categories.map(c => ({ value: c, label: c }))}
-              filterOption={(input, option) =>
-                (option?.label as string ?? '').toLowerCase().includes(input.toLowerCase())
-              }
+              style={{ width: 180 }}
+              onPressEnter={handleSearch}
             />
           </Form.Item>
           <Form.Item name="keyword" style={{ marginBottom: 8 }}>

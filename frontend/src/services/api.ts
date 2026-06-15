@@ -188,7 +188,11 @@ export const upsertMonthlyCleanTask = (payload: UpsertMonthlyCleanTaskPayload) =
 export const createCleanTask = (payload: CreateCleanTaskPayload) =>
   api.post<CreateCleanTaskResponse>('/clean/tasks', payload)
 
-export const listCleanJobs = () => api.get<CleanJobItem[]>('/clean/jobs')
+export const listCleanJobs = (params?: {
+  category_code?: string
+  platform?: string
+  month?: number
+}) => api.get<CleanJobItem[]>('/clean/jobs', { params })
 
 export const previewCleanJob = (jobId: number, params?: Record<string, unknown>) =>
   api.get(`/clean/jobs/${jobId}/preview`, { params })

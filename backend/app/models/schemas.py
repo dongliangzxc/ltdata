@@ -702,6 +702,9 @@ class AttrRule(Base):
 
 class MatchResult(Base):
     __tablename__ = "match_results"
+    __table_args__ = (
+        Index("idx_match_results_job_status", "clean_job_id", "match_status"),
+    )
 
     id           = Column(Integer, primary_key=True, index=True)
     clean_job_id = Column(Integer, nullable=False)
@@ -1070,6 +1073,7 @@ class DispatchItem(Base):
     __tablename__ = "dispatch_items"
     __table_args__ = (
         UniqueConstraint('batch_id', 'raw_data_id', 'category_code', name='uq_dispatch_items_batch_row_category'),
+        Index("idx_dispatch_items_raw_category_id", "raw_data_id", "category_code", "id"),
     )
 
     id = Column(Integer, primary_key=True, index=True)

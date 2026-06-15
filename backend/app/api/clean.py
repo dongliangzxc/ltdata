@@ -101,14 +101,14 @@ def _job_month(job: CleanJobRecord) -> int | None:
         return None
 
 
-def _clean_job_to_dict(db: Session, job: CleanJobRecord) -> dict:
-    match_counts = _match_status_counts(db, job.id)
-    pending_count = match_counts.get("pending", 0) + match_counts.get("text_only", 0)
-    disputed_count = match_counts.get("disputed", 0)
-    confirmed_count = match_counts.get("confirmed", 0)
+def _clean_job_to_dict(db: Session, job: CleanJobRecord, match_counts: dict[str, int] | None = None) -> dict:
+    counts = match_counts if match_counts is not None else _match_status_counts(db, job.id)
+    pending_count = counts.get("pending", 0) + counts.get("text_only", 0)
+    disputed_count = counts.get("disputed", 0)
+    confirmed_count = counts.get("confirmed", 0)
     publishable_count = (
-        match_counts.get("url_matched", 0)
-        + match_counts.get("matched", 0)
+        counts.get("url_matched", 0)
+        + counts.get("matched", 0)
         + confirmed_count
     )
     return {
@@ -428,9 +428,34 @@ def run_dispatch_batch_clean(payload: dict, db: Session = Depends(get_db)):
 
 
 @router.get("/jobs")
-def list_clean_jobs(db: Session = Depends(get_db)):
-    jobs = db.query(CleanJobRecord).order_by(CleanJobRecord.created_at.desc()).all()
-    return [_clean_job_to_dict(db, job) for job in jobs]
+def list_clean_jobs(
+    category_code: Optional[str] = Query(None),
+    platform: Optional[str] = Query(None),
+    month: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+):
+    q = db.query(CleanJobRecord)
+    if category_code:
+        q = q.filter(CleanJobRecord.category_code == category_code)
+    if platform:
+        q = q.filter(func.lower(CleanJobRecord.platform) == platform.lower())
+    jobs = q.order_by(CleanJobRecord.created_at.desc()).all()
+    if month is not None:
+        jobs = [job for job in jobs if _job_month(job) == month]
+
+    job_ids = [job.id for job in jobs]
+    counts_by_job: dict[int, dict[str, int]] = {job_id: {} for job_id in job_ids}
+    if job_ids:
+        rows = (
+            db.query(MatchResult.clean_job_id, MatchResult.match_status, func.count(MatchResult.id))
+            .filter(MatchResult.clean_job_id.in_(job_ids))
+            .group_by(MatchResult.clean_job_id, MatchResult.match_status)
+            .all()
+        )
+        for job_id, status, count in rows:
+            counts_by_job.setdefault(job_id, {})[status] = count
+
+    return [_clean_job_to_dict(db, job, counts_by_job.get(job.id, {})) for job in jobs]
 
 
 @router.get("/jobs/{job_id}/preview")

@@ -256,18 +256,11 @@ export default function CleanPage() {
   } = useRequest(() => getCleanMonthlyPool(requestParams).then(r => r.data), { refreshDeps: [requestParams] })
 
   const { data: jobsData, loading: jobsLoading, refresh: refreshJobs } = useRequest(
-    () => listCleanJobs().then(r => r.data as CleanJobItem[])
+    () => listCleanJobs(requestParams).then(r => r.data as CleanJobItem[]),
+    { refreshDeps: [requestParams] }
   )
 
-  const jobs = useMemo(() => {
-    const allJobs = jobsData ?? []
-    return allJobs.filter(job => {
-      if (requestParams.category_code && job.category_code !== requestParams.category_code) return false
-      if (requestParams.platform && job.platform !== requestParams.platform) return false
-      if (requestParams.month != null && job.month !== requestParams.month) return false
-      return true
-    })
-  }, [jobsData, requestParams])
+  const jobs = jobsData ?? []
   const monthlyPool = monthlyPoolData ?? []
   const monthOptions = useMemo(() => collectMonths(monthlyPool, jobsData ?? []), [monthlyPool, jobsData])
   const summary = useMemo(() => {

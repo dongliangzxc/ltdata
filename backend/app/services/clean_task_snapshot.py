@@ -214,6 +214,29 @@ def get_clean_pool_summary(db: Session, dispatch_batch_id: int | None = None) ->
     return result
 
 
+def _monthly_jobs_by_scope(
+    db: Session,
+    *,
+    category_code: str | None = None,
+    platform: str | None = None,
+) -> dict[tuple[str, str, int], CleanJobRecord]:
+    q = db.query(CleanJobRecord).filter(CleanJobRecord.category_code.isnot(None))
+    if category_code:
+        q = q.filter(CleanJobRecord.category_code == category_code)
+    normalized_platform = normalize_platform(platform)
+    if normalized_platform:
+        q = q.filter(func.lower(CleanJobRecord.platform).in_(platform_aliases_for(normalized_platform)))
+
+    jobs_by_scope: dict[tuple[str, str, int], CleanJobRecord] = {}
+    for job in q.order_by(CleanJobRecord.id.desc()).all():
+        job_platform = normalize_platform(job.platform)
+        if not job.category_code or not job_platform:
+            continue
+        for job_month in _job_months(job):
+            jobs_by_scope.setdefault((job.category_code, job_platform, job_month), job)
+    return jobs_by_scope
+
+
 def get_monthly_clean_pool(
     db: Session,
     *,
@@ -222,32 +245,45 @@ def get_monthly_clean_pool(
     month: int | None = None,
 ) -> list[dict]:
     platform_label = _platform_label_expr()
-    pending = _monthly_pending_rows(db, category_code=category_code, platform=platform, month=month)
-    grouped = (
-        pending.with_entities(
+    q = (
+        db.query(
             DispatchItem.category_code.label("category_code"),
             Category.name.label("category_name"),
             platform_label.label("platform"),
             RawDataRecord.month.label("month"),
-            func.count(DispatchItem.id).label("pending_count"),
+            func.count(func.distinct(DispatchItem.raw_data_id)).label("pending_count"),
         )
+        .join(RawDataRecord, RawDataRecord.id == DispatchItem.raw_data_id)
         .join(Category, Category.code == DispatchItem.category_code)
-        .filter(RawDataRecord.month.isnot(None))
-        .group_by(DispatchItem.category_code, Category.name, platform_label, RawDataRecord.month)
+        .outerjoin(
+            CleanJobItemRecord,
+            and_(
+                CleanJobItemRecord.raw_data_id == DispatchItem.raw_data_id,
+                CleanJobItemRecord.category_code == DispatchItem.category_code,
+            ),
+        )
+        .filter(CleanJobItemRecord.id.is_(None), RawDataRecord.month.isnot(None))
+    )
+    if category_code:
+        q = q.filter(DispatchItem.category_code == category_code)
+    normalized_filter_platform = normalize_platform(platform)
+    if normalized_filter_platform:
+        q = q.filter(func.lower(RawDataRecord.platform).in_(platform_aliases_for(normalized_filter_platform)))
+    if month is not None:
+        q = q.filter(RawDataRecord.month == month)
+
+    grouped = (
+        q.group_by(DispatchItem.category_code, Category.name, platform_label, RawDataRecord.month)
         .order_by(DispatchItem.category_code, platform_label, RawDataRecord.month)
         .all()
     )
+    jobs_by_scope = _monthly_jobs_by_scope(db, category_code=category_code, platform=platform)
 
     result = []
     for row in grouped:
         normalized_platform = normalize_platform(row.platform)
         row_month = int(row.month)
-        job = _find_monthly_job(
-            db,
-            category_code=row.category_code,
-            platform=normalized_platform,
-            month=row_month,
-        )
+        job = jobs_by_scope.get((row.category_code, normalized_platform, row_month))
         result.append({
             "category_code": row.category_code,
             "category_name": row.category_name,

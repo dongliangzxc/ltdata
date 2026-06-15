@@ -8,7 +8,6 @@ import {
   ExportOutlined,
   ProfileOutlined,
   AppstoreAddOutlined,
-  AimOutlined,
   UserOutlined,
   LogoutOutlined,
   FundOutlined,
@@ -51,9 +50,8 @@ const menuItems: MenuProps['items'] = [
       { key: '/brands',       icon: <ShopOutlined />,        label: '品牌管理' },
       { key: '/url-mappings', icon: <LinkOutlined />,        label: '映射管理' },
       { key: '/historical',   icon: <HistoryOutlined />,     label: '历史库' },
-      { key: '/clean',        icon: <ClearOutlined />,       label: '数据清洗' },
+      { key: '/clean',        icon: <ClearOutlined />,       label: '清洗任务' },
       { key: '/rules',        icon: <FilterOutlined />,      label: '规则管理' },
-      { key: '/match',        icon: <AimOutlined />,         label: '匹配确认' },
     ],
   },
   {
@@ -81,6 +79,7 @@ menuItems.forEach(item => {
     pageTitles.set(String(item.key), String(item.label))
   }
 })
+pageTitles.set('/match', '清洗任务详情')
 
 interface Props {
   children: React.ReactNode

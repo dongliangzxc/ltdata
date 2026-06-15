@@ -161,15 +161,24 @@ def run_clean(
     brand_alias_map = _load_brand_alias_map(db)
 
     # ── 数据源选取 ─────────────────────────────────────────────
-    if dispatch_batch_id and dispatch_category_code:
-        from app.models.schemas import DispatchItem
-        raw_data_ids = select(DispatchItem.raw_data_id).filter(
-            DispatchItem.batch_id == dispatch_batch_id,
-            DispatchItem.category_code == dispatch_category_code,
-        )
-        records = db.query(RawDataRecord).filter(RawDataRecord.id.in_(raw_data_ids)).all()
-    else:
-        records = db.query(RawDataRecord).filter(RawDataRecord.file_id.in_(file_ids)).all()
+    from app.models.schemas import CleanJobItemRecord
+    records = (
+        db.query(RawDataRecord)
+        .join(CleanJobItemRecord, CleanJobItemRecord.raw_data_id == RawDataRecord.id)
+        .filter(CleanJobItemRecord.clean_job_id == clean_job_id)
+        .order_by(CleanJobItemRecord.id)
+        .all()
+    )
+    if not records:
+        if dispatch_batch_id and dispatch_category_code:
+            from app.models.schemas import DispatchItem
+            raw_data_ids = select(DispatchItem.raw_data_id).filter(
+                DispatchItem.batch_id == dispatch_batch_id,
+                DispatchItem.category_code == dispatch_category_code,
+            )
+            records = db.query(RawDataRecord).filter(RawDataRecord.id.in_(raw_data_ids)).all()
+        else:
+            records = db.query(RawDataRecord).filter(RawDataRecord.file_id.in_(file_ids)).all()
 
     cleaned: list[CleanedDataRecord] = []
     filtered: list[FilteredItem] = []

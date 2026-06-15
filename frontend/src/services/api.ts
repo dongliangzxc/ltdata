@@ -98,8 +98,39 @@ export interface CleanJobItem {
   row_filtered: number
   dispatch_batch_id?: number | null
   dispatch_category_code?: string | null
+  task_name?: string | null
+  category_code?: string | null
+  platform?: string | null
+  source_scope?: Record<string, unknown> | null
+  pending_count?: number | null
+  disputed_count?: number | null
+  confirmed_count?: number | null
+  publishable_count?: number | null
   scope_desc?: string | null
   created_at: string
+}
+
+export interface CleanPoolCategoryItem {
+  category_code: string
+  category_name: string | null
+  platform: string | null
+  current_batch_count: number
+  pending_count: number
+  active_job_count: number
+}
+
+export interface CreateCleanTaskPayload {
+  category_code: string
+  platform?: string | null
+  dispatch_batch_id?: number
+  task_name?: string
+  rules?: Record<string, unknown>
+}
+
+export interface CreateCleanTaskResponse {
+  job: CleanJobItem
+  snapshot_count: number
+  match_status: string
 }
 
 export const runCleanJob = (payload: {
@@ -116,7 +147,13 @@ export const runDispatchBatchClean = (payload: {
 }) =>
   api.post<{ dispatch_batch_id: number; jobs: CleanJobItem[] }>('/clean/run-dispatch-batch', payload)
 
-export const listCleanJobs = () => api.get('/clean/jobs')
+export const getCleanPoolSummary = (params?: { dispatch_batch_id?: number }) =>
+  api.get<CleanPoolCategoryItem[]>('/clean/pool/summary', { params })
+
+export const createCleanTask = (payload: CreateCleanTaskPayload) =>
+  api.post<CreateCleanTaskResponse>('/clean/tasks', payload)
+
+export const listCleanJobs = () => api.get<CleanJobItem[]>('/clean/jobs')
 
 export const previewCleanJob = (jobId: number, params?: Record<string, unknown>) =>
   api.get(`/clean/jobs/${jobId}/preview`, { params })

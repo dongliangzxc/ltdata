@@ -13,8 +13,9 @@ import {
   listReviewedMatches, updateMatchCoefficient, getMatchReviewDetail,
   enableMatch, avgPriceDisable, listDisabled,
   triggerExport, getExportJob, getDownloadUrl,
+  getCleanPoolSummary,
 } from '../../services/api'
-import type { MatchCandidateOut, ReviewedMatchResultOut, PriceFlag, MatchReviewDetail } from '../../services/api'
+import type { CleanJobItem, MatchCandidateOut, ReviewedMatchResultOut, PriceFlag, MatchReviewDetail } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 import ProgressModal from '../../components/ProgressModal'
 
@@ -125,14 +126,6 @@ type PublishJob = {
   status: string
   published_count: number
   created_at: string
-}
-
-type CleanJobOption = {
-  id: number
-  row_out: number
-  created_at: string
-  scope_desc?: string | null
-  status: string
 }
 
 type MatchProgress = {
@@ -443,6 +436,19 @@ export default function MatchPage() {
     }
     setPublishing(true)
     try {
+      if (selectedJob?.category_code) {
+        try {
+          const poolSummary = await getCleanPoolSummary().then(r => r.data)
+          const sameCategoryPending = poolSummary
+            .filter(item => item.category_code === selectedJob.category_code)
+            .reduce((sum, item) => sum + item.pending_count, 0)
+          if (sameCategoryPending > 0) {
+            message.info(`该品类另有 ${sameCategoryPending} 条新增数据尚未创建任务，不会随本次发布。`, 6)
+          }
+        } catch (error) {
+          console.warn('Failed to load clean pool summary before publishing', error)
+        }
+      }
       const res = await runPublish(selectedJobId)
       const { published_count, skipped_pending_count } = res.data.data
       message.success(`发布成功，共写入 ${published_count} 条到分析库`)
@@ -626,14 +632,20 @@ export default function MatchPage() {
   ] as const
 
   const currentQueueTitle = queueTabs.find(tab => tab.key === activeTab)?.label ?? '待处理'
-  const doneJobs = (jobsData ?? []).filter((j: CleanJobOption) => j.status === 'done')
+  const selectedJob = (jobsData ?? []).find((job: CleanJobItem) => job.id === selectedJobId)
+  const cleanJobs = jobsData ?? []
+  const canRetryMatch = selectedJob?.status === 'failed' || selectedJob?.status === 'error'
+  const metadataPendingCount = summary
+    ? (summary.pending ?? 0) + (summary.text_only ?? 0) + (summary.disputed ?? 0)
+    : selectedJob?.pending_count ?? 0
+  const metadataPublishableCount = summary ? readyCount : selectedJob?.publishable_count ?? 0
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Card>
+      <Card title="清洗任务详情">
         <Row gutter={16} align="middle">
           <Col>
-            <Text strong>选择清洗任务：</Text>
+            <Text strong>当前清洗任务：</Text>
           </Col>
           <Col flex="200px">
             <Select
@@ -641,23 +653,25 @@ export default function MatchPage() {
               placeholder="选择任务"
               value={selectedJobId}
               onChange={v => { setSelectedJobId(v); setSummary(null); setPage(1); setReviewedPage(1); setPublishJobs([]); setCoefficientDrafts({}); setEditedCoefficientIds(new Set()) }}
-              options={doneJobs.map((j: CleanJobOption) => ({
+              options={cleanJobs.map((j: CleanJobItem) => ({
                 value: j.id,
-                label: `任务#${j.id}｜${j.scope_desc || '未标识范围'}｜${j.row_out}条｜${j.created_at?.slice(0, 10) || '-'}`,
+                label: `${j.task_name || j.scope_desc || `任务#${j.id}`}｜${j.row_out}条｜${j.created_at?.slice(0, 10) || '-'}`,
               }))}
             />
           </Col>
-          <Col>
-            <Button
-              type="primary"
-              icon={<AimOutlined />}
-              loading={running}
-              onClick={handleRunMatch}
-              disabled={!selectedJobId}
-            >
-              执行匹配
-            </Button>
-          </Col>
+          {canRetryMatch && (
+            <Col>
+              <Button
+                type="primary"
+                icon={<AimOutlined />}
+                loading={running}
+                onClick={handleRunMatch}
+                disabled={!selectedJobId}
+              >
+                重新匹配
+              </Button>
+            </Col>
+          )}
           <Col>
             <Button
               icon={<CloudUploadOutlined />}
@@ -681,6 +695,37 @@ export default function MatchPage() {
           </Col>
         </Row>
       </Card>
+
+      {selectedJob && (
+        <Card size="small">
+          <Descriptions column={4} size="small" bordered>
+            <Descriptions.Item label="任务名称">
+              {selectedJob.task_name || selectedJob.scope_desc || `任务 #${selectedJob.id}`}
+            </Descriptions.Item>
+            <Descriptions.Item label="品类">
+              {selectedJob.category_code || selectedJob.dispatch_category_code || '-'}
+            </Descriptions.Item>
+            <Descriptions.Item label="平台">
+              {selectedJob.platform || '全部'}
+            </Descriptions.Item>
+            <Descriptions.Item label="状态">
+              <Tag>{selectedJob.status || '-'}</Tag>
+            </Descriptions.Item>
+            <Descriptions.Item label="原始行数">
+              {formatNumber(selectedJob.row_in)}
+            </Descriptions.Item>
+            <Descriptions.Item label="清洗后">
+              {formatNumber(selectedJob.row_out)}
+            </Descriptions.Item>
+            <Descriptions.Item label="待处理">
+              {formatNumber(metadataPendingCount)}
+            </Descriptions.Item>
+            <Descriptions.Item label="可发布">
+              {formatNumber(metadataPublishableCount)}
+            </Descriptions.Item>
+          </Descriptions>
+        </Card>
+      )}
 
       {selectedJobId && summary && summary.total > 0 && (
         <Card size="small">
@@ -864,7 +909,7 @@ export default function MatchPage() {
               style={{ marginBottom: 12 }}
               message={
                 <span>
-                  以下商品的品牌在系统中未能识别，建议先前往「规则管理 → 品牌写法库」补充写法后重新执行匹配，效率高于逐条人工确认。
+                  以下商品的品牌在系统中未能识别，建议先前往「规则管理 → 品牌写法库」补充写法后重新匹配，效率高于逐条人工确认。
                   <Button type="link" size="small" onClick={() => window.open('/rules', '_blank')}>前往规则管理 →</Button>
                 </span>
               }
@@ -1102,7 +1147,7 @@ export default function MatchPage() {
 
       {summary && summary.total === 0 && (
         <Card>
-          <Text type="secondary">该任务尚未执行匹配，请点击「执行匹配」开始匹配。</Text>
+          <Text type="secondary">该任务暂无匹配结果，请稍后刷新；如任务失败，可使用「重新匹配」。</Text>
         </Card>
       )}
 

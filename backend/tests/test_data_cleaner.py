@@ -54,6 +54,102 @@ def _make_dispatch_job(db, file_id, raw, category_code="projector"):
     return batch, job
 
 
+def test_run_clean_prefers_clean_job_snapshot_items_over_file_scope(db):
+    from app.models.schemas import CleanJobItemRecord
+
+    f = _make_file(db)
+    included = _make_raw(db, f.id, "快照内路由器", brand_raw="SONY")
+    excluded = _make_raw(db, f.id, "同文件但不在快照", brand_raw="SONY")
+    job = CleanJobRecord(
+        file_ids=[f.id],
+        rules={"dedup": True},
+        status="created",
+        row_in=0,
+        row_out=0,
+        category_code="router",
+        dispatch_category_code="router",
+    )
+    db.add(job)
+    db.flush()
+    db.add(CleanJobItemRecord(
+        clean_job_id=job.id,
+        raw_data_id=included.id,
+        category_code="router",
+        platform="jd",
+    ))
+    db.commit()
+
+    run_clean(db, job.id, [f.id], {"dedup": True}, None, "router")
+
+    cleaned_rows = db.query(CleanedDataRecord).all()
+    assert len(cleaned_rows) == 1
+    assert cleaned_rows[0].raw_data_id == included.id
+    assert cleaned_rows[0].raw_data_id != excluded.id
+
+
+def test_run_clean_dedup_uses_clean_job_snapshot_order(db):
+    from app.models.schemas import CleanJobItemRecord
+
+    f = _make_file(db)
+    later_duplicate = RawDataRecord(
+        file_id=f.id,
+        platform="jd",
+        month=202507,
+        item_id="same-item",
+        item_name="后入快照但先插入原始表",
+        brand_raw="SONY",
+        shop_name="同店铺",
+        sales_qty=10,
+        price=500,
+    )
+    earlier_snapshot = RawDataRecord(
+        file_id=f.id,
+        platform="jd",
+        month=202507,
+        item_id="same-item",
+        item_name="先入快照但后插入原始表",
+        brand_raw="SONY",
+        shop_name="同店铺",
+        sales_qty=20,
+        price=600,
+    )
+    db.add_all([later_duplicate, earlier_snapshot])
+    db.flush()
+    job = CleanJobRecord(
+        file_ids=[f.id],
+        rules={"dedup": True},
+        status="created",
+        row_in=0,
+        row_out=0,
+        category_code="router",
+        dispatch_category_code="router",
+    )
+    db.add(job)
+    db.flush()
+    db.add_all([
+        CleanJobItemRecord(
+            clean_job_id=job.id,
+            raw_data_id=earlier_snapshot.id,
+            category_code="router",
+            platform="jd",
+        ),
+        CleanJobItemRecord(
+            clean_job_id=job.id,
+            raw_data_id=later_duplicate.id,
+            category_code="router",
+            platform="jd",
+        ),
+    ])
+    db.commit()
+
+    run_clean(db, job.id, [f.id], {"dedup": True}, None, "router")
+
+    cleaned_rows = db.query(CleanedDataRecord).all()
+    assert len(cleaned_rows) == 1
+    assert cleaned_rows[0].raw_data_id == earlier_snapshot.id
+    assert cleaned_rows[0].raw_data_id != later_duplicate.id
+
+
 # ── 清洗干预规则 ──────────────────────────────────────────────
 
 def test_intervention_name_keyword_filters_matching_item(db):

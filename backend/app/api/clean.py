@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from app.models.database import get_db
 from app.models.schemas import (
@@ -9,12 +9,19 @@ from app.models.schemas import (
     CleanedDataRecord,
     CleanJobOut,
     CleanedDataOut,
+    CleanPoolCategoryOut,
+    CreateCleanTaskIn,
+    CreateCleanTaskOut,
     DispatchBatch,
     DispatchItem,
+    MatchResult,
     UploadFileRecord,
     Category,
+    CleanJobItemRecord,
 )
+from app.services.clean_task_snapshot import create_category_task_snapshot, get_clean_pool_summary
 from app.services.data_cleaner import run_clean
+from app.services.matcher import run_match
 from app.utils.time_utils import format_beijing_datetime
 
 router = APIRouter(prefix="/api/clean", tags=["clean"])
@@ -28,19 +35,32 @@ def _build_clean_scope_desc(db: Session, job: CleanJobRecord) -> str:
     months = sorted({f.month_range for f in files if f.month_range})
     filenames = [f.filename for f in files if f.filename]
 
+    is_task_snapshot = bool(job.task_name or job.source_scope)
+
     parts = []
-    if job.dispatch_batch_id:
-        parts.append(f"分发批次#{job.dispatch_batch_id}")
-    if job.dispatch_category_code:
-        category = db.query(Category).filter(Category.code == job.dispatch_category_code).first()
-        category_label = f"{category.name}（{category.code}）" if category else job.dispatch_category_code
-        parts.append(f"品类：{category_label}")
-    if platforms:
-        parts.append(f"平台：{'、'.join(platforms)}")
-    if months:
-        parts.append(f"月份：{'、'.join(months)}")
-    if filenames:
-        parts.append(f"文件：{'、'.join(filenames[:2])}{' 等' if len(filenames) > 2 else ''}")
+    if is_task_snapshot:
+        if job.task_name:
+            parts.append(job.task_name)
+        category_code = job.category_code or job.dispatch_category_code
+        if category_code:
+            category = db.query(Category).filter(Category.code == category_code).first()
+            category_label = f"{category.name}（{category.code}）" if category else category_code
+            parts.append(f"品类：{category_label}")
+        if job.platform:
+            parts.append(f"平台：{job.platform}")
+    else:
+        if job.dispatch_batch_id:
+            parts.append(f"分发批次#{job.dispatch_batch_id}")
+        if job.dispatch_category_code:
+            category = db.query(Category).filter(Category.code == job.dispatch_category_code).first()
+            category_label = f"{category.name}（{category.code}）" if category else job.dispatch_category_code
+            parts.append(f"品类：{category_label}")
+        if platforms:
+            parts.append(f"平台：{'、'.join(platforms)}")
+        if months:
+            parts.append(f"月份：{'、'.join(months)}")
+        if filenames:
+            parts.append(f"文件：{'、'.join(filenames[:2])}{' 等' if len(filenames) > 2 else ''}")
     if parts:
         return " / ".join(parts)
     if job.file_ids:
@@ -48,7 +68,26 @@ def _build_clean_scope_desc(db: Session, job: CleanJobRecord) -> str:
     return "-"
 
 
+def _match_status_counts(db: Session, clean_job_id: int) -> dict[str, int]:
+    return {
+        status: count
+        for status, count in db.query(MatchResult.match_status, func.count(MatchResult.id))
+        .filter(MatchResult.clean_job_id == clean_job_id)
+        .group_by(MatchResult.match_status)
+        .all()
+    }
+
+
 def _clean_job_to_dict(db: Session, job: CleanJobRecord) -> dict:
+    match_counts = _match_status_counts(db, job.id)
+    pending_count = match_counts.get("pending", 0) + match_counts.get("text_only", 0)
+    disputed_count = match_counts.get("disputed", 0)
+    confirmed_count = match_counts.get("confirmed", 0)
+    publishable_count = (
+        match_counts.get("url_matched", 0)
+        + match_counts.get("matched", 0)
+        + confirmed_count
+    )
     return {
         "id": job.id,
         "file_ids": job.file_ids,
@@ -59,6 +98,14 @@ def _clean_job_to_dict(db: Session, job: CleanJobRecord) -> dict:
         "row_filtered": job.row_filtered,
         "dispatch_batch_id": job.dispatch_batch_id,
         "dispatch_category_code": job.dispatch_category_code,
+        "task_name": job.task_name,
+        "category_code": job.category_code or job.dispatch_category_code,
+        "platform": job.platform,
+        "source_scope": job.source_scope,
+        "pending_count": pending_count,
+        "disputed_count": disputed_count,
+        "confirmed_count": confirmed_count,
+        "publishable_count": publishable_count,
         "created_at": format_beijing_datetime(job.created_at),
         "scope_desc": _build_clean_scope_desc(db, job),
     }
@@ -102,6 +149,69 @@ def _run_clean_for_dispatch_category(
         raise HTTPException(status_code=500, detail=f"清洗失败: {str(e)}")
 
     return job
+
+
+@router.get("/pool/summary", response_model=list[CleanPoolCategoryOut])
+def get_clean_pool_summary_endpoint(
+    dispatch_batch_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+):
+    return get_clean_pool_summary(db, dispatch_batch_id=dispatch_batch_id)
+
+
+@router.post("/tasks", response_model=CreateCleanTaskOut)
+def create_clean_task(payload: CreateCleanTaskIn, db: Session = Depends(get_db)):
+    try:
+        job, snapshot_count = create_category_task_snapshot(
+            db,
+            category_code=payload.category_code,
+            platform=payload.platform,
+            dispatch_batch_id=payload.dispatch_batch_id,
+            task_name=payload.task_name,
+            rules=payload.rules,
+        )
+        db.commit()
+        db.refresh(job)
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"没有可创建任务的数据: {str(e)}") from e
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"创建清洗任务失败: {str(e)}") from e
+
+    job_id = job.id
+    try:
+        job.status = "cleaning"
+        db.commit()
+        db.refresh(job)
+
+        row_out = run_clean(
+            db,
+            job.id,
+            job.file_ids or [],
+            job.rules or {},
+            job.dispatch_batch_id,
+            job.dispatch_category_code,
+        )
+        job.row_out = row_out
+        job.status = "matching"
+        db.commit()
+        db.refresh(job)
+
+        run_match(db, job.id)
+        job.status = "reviewing"
+        db.commit()
+        db.refresh(job)
+    except Exception as e:
+        db.rollback()
+        failed_job = db.query(CleanJobRecord).filter(CleanJobRecord.id == job_id).first()
+        if failed_job:
+            db.query(CleanJobItemRecord).filter(CleanJobItemRecord.clean_job_id == job_id).delete(synchronize_session=False)
+            failed_job.status = "failed"
+            db.commit()
+        raise HTTPException(status_code=500, detail=f"创建清洗任务失败: {str(e)}") from e
+
+    return {"job": job, "snapshot_count": snapshot_count, "match_status": "done"}
 
 
 @router.post("/run", response_model=CleanJobOut)

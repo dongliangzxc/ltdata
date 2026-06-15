@@ -27,9 +27,9 @@ export default function ManualPage() {
             { key: 'models',      href: '#models',      title: '型号管理' },
             { key: 'url-mapping', href: '#url-mapping', title: 'URL映射管理' },
             { key: 'historical',  href: '#historical',  title: '历史库' },
-            { key: 'clean',       href: '#clean',       title: '数据清洗' },
+            { key: 'clean',       href: '#clean',       title: '清洗任务' },
             { key: 'rules',       href: '#rules',       title: '规则管理' },
-            { key: 'match',       href: '#match',       title: '匹配确认' },
+            { key: 'match',       href: '#match',       title: '清洗任务详情' },
             { key: 'workbench',   href: '#workbench',   title: '查询工作台' },
             { key: 'export',      href: '#export',      title: '数据导出' },
             { key: 'faq',         href: '#faq',         title: '常见问题' },
@@ -71,8 +71,9 @@ export default function ManualPage() {
                   style={{ marginTop: 4 }}
                   items={[
                     { title: '数据上传', icon: <UploadOutlined /> },
-                    { title: '数据清洗', icon: <ClearOutlined /> },
-                    { title: '匹配确认', icon: <AimOutlined /> },
+                    { title: '数据分发', icon: <DatabaseOutlined /> },
+                    { title: '创建清洗任务', icon: <ClearOutlined /> },
+                    { title: '清洗任务详情', icon: <AimOutlined /> },
                     { title: '发布 → 查询工作台 / 导出', icon: <ExportOutlined /> },
                   ]}
                 />
@@ -223,19 +224,19 @@ export default function ManualPage() {
 
           <Divider />
 
-          {/* ── 数据清洗 ── */}
-          <Title level={3} id="clean"><ClearOutlined /> 数据清洗</Title>
+          {/* ── 清洗任务 ── */}
+          <Title level={3} id="clean"><ClearOutlined /> 清洗任务</Title>
           <Paragraph>
             对原始数据进行标准化处理，生成供后续匹配使用的干净数据集。清洗会自动应用「规则管理」中配置的干扰词过滤和品牌写法标准化。
           </Paragraph>
           <Paragraph>
-            <S>操作步骤</S>：勾选一个或多个已上传文件（可跨平台合并）→ 选择是否开启去重 → 点「开始清洗」。
+            <S>操作步骤</S>：上传文件 → 执行数据分发 → 在品类统计中创建清洗任务。清洗任务按品类组织，平台可作为二级筛选。
           </Paragraph>
           <Paragraph>
             <Tag color="blue">去重</Tag> 同一商品（相同 item_id）在同月份同店铺只保留第一条，避免重复计算。
           </Paragraph>
           <Alert type="info" showIcon style={{ marginBottom: 16 }}
-            message="清洗结果独立保存，不影响原始数据，同一批文件可反复清洗。清洗完成后点「执行匹配」跳转到匹配页面。" />
+            message="清洗结果独立保存，不影响原始数据。清洗任务创建后会自动完成清洗和匹配，可进入清洗任务详情处理待确认条目。" />
 
           <Divider />
 
@@ -277,19 +278,19 @@ export default function ManualPage() {
             <br />配置字段：关键词、匹配方式、属性名、属性值、品类（可空=全局）、优先级。
           </Paragraph>
           <Paragraph>
-            属性规则在每批匹配完成后自动执行，匹配结果可在「匹配确认」→「未补属性」Tab 查看。
+            属性规则在每批匹配完成后自动执行，匹配结果可在「清洗任务详情」中查看。
           </Paragraph>
 
           <Divider />
 
-          {/* ── 匹配确认 ── */}
-          <Title level={3} id="match"><AimOutlined /> 匹配确认</Title>
+          {/* ── 清洗任务详情 ── */}
+          <Title level={3} id="match"><AimOutlined /> 清洗任务详情</Title>
           <Paragraph>
             将清洗后数据与型号库自动匹配，识别每条销售记录对应的品牌型号。
           </Paragraph>
-          <Title level={5}>第一步：执行自动匹配</Title>
+          <Title level={5}>第一步：处理任务待办</Title>
           <Paragraph>
-            选择清洗任务 → 点「执行匹配」→ 实时进度条展示速度、预计剩余时间和已匹配条数 → 完成后显示统计面板。
+            进入清洗任务详情后处理未识别品牌、URL 映射待确认、待确认和争议复核。任务创建后会自动完成清洗和匹配，不需要手动执行匹配。
           </Paragraph>
           <Title level={5}>匹配统计说明</Title>
           <Paragraph>
@@ -317,11 +318,7 @@ export default function ManualPage() {
           <Paragraph>
             切换到「未识别品牌」Tab，查看品牌无法识别的条目。可直接在此处确认型号，或回到「规则管理」→「品牌写法库」补充映射后重新匹配。
           </Paragraph>
-          <Title level={5}>第四步：（可选）检查未补属性</Title>
-          <Paragraph>
-            切换到「未补属性」Tab，查看已匹配但属性尚未补全的条目。可手动补充，或回到「规则管理」→「属性规则」补充规则后重新应用。
-          </Paragraph>
-          <Title level={5}>第五步：发布到分析库</Title>
+          <Title level={5}>第四步：发布到分析库</Title>
           <Paragraph>
             匹配完成后，点「发布到分析库」将已匹配数据写入分析数据库，发布后可在「查询工作台」查询。
           </Paragraph>
@@ -367,9 +364,9 @@ export default function ManualPage() {
             系统会跳过表头、合计行等无效行，并自动跳过重复记录（同 item_id + 月份 + 平台已存在的）。以页面提示的「写入条数」为准。
           </Paragraph>
 
-          <Title level={5}>Q：执行匹配后匹配率很低怎么办？</Title>
+          <Title level={5}>Q：清洗任务匹配率很低怎么办？</Title>
           <Paragraph>
-            常见原因：① <S>型号库缺少对应品类数据</S>——前往「型号管理」补充；② <S>品牌名称不统一</S>——在「规则管理」→「品牌写法库」补充写法映射；③ <S>商品名称噪声多</S>——在「规则管理」→「干扰词库」添加干扰词后重新清洗匹配；④ 部分数据本身不属于目标品类，可在「匹配确认」中选「排除」。
+            常见原因：① <S>型号库缺少对应品类数据</S>——前往「型号管理」补充；② <S>品牌名称不统一</S>——在「规则管理」→「品牌写法库」补充写法映射；③ <S>商品名称噪声多</S>——在「规则管理」→「干扰词库」添加干扰词后重新创建清洗任务；④ 部分数据本身不属于目标品类，可在「清洗任务详情」中选「排除」。
           </Paragraph>
 
           <Title level={5}>Q：历史数据怎么导入系统？</Title>
@@ -390,7 +387,7 @@ export default function ManualPage() {
 
           <Title level={5}>Q：发布后查询工作台看不到数据？</Title>
           <Paragraph>
-            确认：① 已执行匹配且匹配率 &gt; 0；② 在「匹配确认」页面点击了「发布到分析库」并成功；③ 回到查询工作台后点「查询」按钮（首次进入不会自动加载）。
+            确认：① 清洗任务已有可发布数据；② 在「清洗任务详情」页面点击了「发布到分析库」并成功；③ 回到查询工作台后点「查询」按钮（首次进入不会自动加载）。
           </Paragraph>
 
           <Title level={5}>Q：导出任务一直显示「排队中」？</Title>

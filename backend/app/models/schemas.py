@@ -5,7 +5,7 @@ from sqlalchemy import (
     ForeignKey, JSON, SmallInteger, UniqueConstraint, CheckConstraint, Enum, Index
 )
 from sqlalchemy.orm import relationship
-from pydantic import BaseModel, field_serializer
+from pydantic import BaseModel, Field, field_serializer
 from app.models.database import Base
 from app.utils.time_utils import format_beijing_datetime
 
@@ -74,9 +74,33 @@ class CleanJobRecord(Base):
     row_filtered = Column(Integer, default=0)
     dispatch_batch_id = Column(Integer, nullable=True)
     dispatch_category_code = Column(String(50), nullable=True)
+    task_name = Column(String(200), nullable=True)
+    category_code = Column(String(50), nullable=True, index=True)
+    platform = Column(String(50), nullable=True, index=True)
+    source_scope = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     cleaned_data = relationship("CleanedDataRecord", back_populates="job", cascade="all, delete-orphan")
+    snapshot_items = relationship("CleanJobItemRecord", back_populates="job", cascade="all, delete-orphan")
+
+
+class CleanJobItemRecord(Base):
+    __tablename__ = "clean_job_items"
+    __table_args__ = (
+        UniqueConstraint("raw_data_id", "category_code", name="uq_clean_job_item_raw_category"),
+        Index("idx_clean_job_items_job", "clean_job_id"),
+        Index("idx_clean_job_items_category_platform", "category_code", "platform"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    clean_job_id = Column(Integer, ForeignKey("clean_jobs.id", ondelete="CASCADE"), nullable=False)
+    raw_data_id = Column(Integer, ForeignKey("raw_data.id"), nullable=False)
+    category_code = Column(String(50), nullable=False)
+    platform = Column(String(50), nullable=True)
+    dispatch_batch_id = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    job = relationship("CleanJobRecord", back_populates="snapshot_items")
 
 
 class CleanedDataRecord(Base):
@@ -168,6 +192,10 @@ class CleanJobOut(BaseModel):
     row_filtered: int = 0
     dispatch_batch_id: Optional[int] = None
     dispatch_category_code: Optional[str] = None
+    task_name: Optional[str] = None
+    category_code: Optional[str] = None
+    platform: Optional[str] = None
+    source_scope: Optional[dict] = None
     created_at: datetime
 
     @field_serializer("created_at")
@@ -175,6 +203,29 @@ class CleanJobOut(BaseModel):
         return format_beijing_datetime(value)
 
     model_config = {"from_attributes": True}
+
+
+class CleanPoolCategoryOut(BaseModel):
+    category_code: str
+    category_name: Optional[str] = None
+    platform: Optional[str] = None
+    current_batch_count: int = 0
+    pending_count: int = 0
+    active_job_count: int = 0
+
+
+class CreateCleanTaskIn(BaseModel):
+    category_code: str
+    platform: Optional[str] = None
+    dispatch_batch_id: Optional[int] = None
+    task_name: Optional[str] = None
+    rules: dict = Field(default_factory=lambda: {"dedup": True})
+
+
+class CreateCleanTaskOut(BaseModel):
+    job: CleanJobOut
+    snapshot_count: int
+    match_status: str
 
 
 class CleanedDataOut(BaseModel):

@@ -6,7 +6,7 @@ from sqlalchemy.pool import StaticPool
 from fastapi.testclient import TestClient
 from app.main import app
 from app.models.database import Base, get_db
-from app.models.schemas import UploadFileRecord, RawDataRecord
+from app.models.schemas import CleanJobItemRecord, CleanJobRecord, CleanedDataRecord, FilteredItem, UploadFileRecord, RawDataRecord
 from app.core.security import create_access_token
 
 _AUTH_HEADERS = {"Authorization": f"Bearer {create_access_token('test')}"}
@@ -128,6 +128,47 @@ def test_delete_removes_raw_data_rows(db):
     # Verify all RawDataRecord rows linked to this file are gone
     after = db.query(RawDataRecord).filter(RawDataRecord.file_id == record.id).count()
     assert after == 0, f"Expected 0 RawDataRecord rows after delete, found {after}"
+
+
+@pytest.mark.parametrize(
+    ("reference_name", "make_reference"),
+    [
+        (
+            "clean_job_items",
+            lambda job, raw: CleanJobItemRecord(clean_job_id=job.id, raw_data_id=raw.id, category_code="soundbar", platform="jd"),
+        ),
+        (
+            "cleaned_data",
+            lambda job, raw: CleanedDataRecord(clean_job_id=job.id, raw_data_id=raw.id, item_id=raw.item_id),
+        ),
+        (
+            "filtered_items",
+            lambda job, raw: FilteredItem(clean_job_id=job.id, raw_data_id=raw.id, matched_keyword="test"),
+        ),
+    ],
+)
+def test_delete_rejects_file_with_downstream_raw_data_reference(db, reference_name, make_reference):
+    record = UploadFileRecord(filename=f"{reference_name}.xlsx", platform="jd", month_range="202501")
+    db.add(record)
+    db.flush()
+    raw = RawDataRecord(file_id=record.id, platform="jd", item_id="ITEM1", item_name="Title 1", month=202501)
+    db.add(raw)
+    db.flush()
+    job = CleanJobRecord(file_ids=[record.id], rules={"dedup": True}, status="reviewing", row_in=1, row_out=1)
+    db.add(job)
+    db.flush()
+    db.add(make_reference(job, raw))
+    db.commit()
+
+    app.dependency_overrides[get_db] = _override_db(db)
+    client = TestClient(app, headers=_AUTH_HEADERS)
+    resp = client.delete(f"/api/upload/files/{record.id}")
+    app.dependency_overrides.clear()
+
+    assert resp.status_code == 400
+    assert "已进入分发/清洗任务" in resp.json()["detail"]
+    assert db.query(UploadFileRecord).filter_by(id=record.id).count() == 1
+    assert db.query(RawDataRecord).filter_by(id=raw.id).count() == 1
 
 
 def test_delete_nullifies_dispatch_batch_file_id():

@@ -4,10 +4,19 @@ import uuid
 from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Query
-from sqlalchemy import func, or_, tuple_, text
+from sqlalchemy import func, or_, select, tuple_, text
 from sqlalchemy.orm import Session
 from app.models.database import get_db
-from app.models.schemas import UploadFileRecord, RawDataRecord, UploadFileOut, RawDataOut, ColumnTemplate
+from app.models.schemas import (
+    CleanJobItemRecord,
+    CleanedDataRecord,
+    FilteredItem,
+    UploadFileRecord,
+    RawDataRecord,
+    UploadFileOut,
+    RawDataOut,
+    ColumnTemplate,
+)
 from app.services.excel_parser import parse_raw_excel, parse_with_mapping
 from app.core.config import settings
 from app.services.import_helper import (
@@ -263,10 +272,22 @@ def list_upload_files(
 
 @router.delete("/files/{file_id}")
 def delete_upload_file(file_id: int, db: Session = Depends(get_db)):
-    """删除上传文件记录及其原始数据（保留下游清洗/派发数据）"""
+    """删除上传文件记录及其原始数据；已有下游清洗任务时拒绝删除。"""
     record = db.query(UploadFileRecord).filter(UploadFileRecord.id == file_id).first()
     if not record:
         raise HTTPException(status_code=404, detail="文件记录不存在")
+
+    raw_data_ids = select(RawDataRecord.id).filter(RawDataRecord.file_id == file_id)
+    has_downstream_refs = (
+        db.query(CleanJobItemRecord.id).filter(CleanJobItemRecord.raw_data_id.in_(raw_data_ids)).first()
+        or db.query(CleanedDataRecord.id).filter(CleanedDataRecord.raw_data_id.in_(raw_data_ids)).first()
+        or db.query(FilteredItem.id).filter(FilteredItem.raw_data_id.in_(raw_data_ids)).first()
+    )
+    if has_downstream_refs:
+        raise HTTPException(
+            status_code=400,
+            detail="该文件的数据已进入分发/清洗任务，不能直接删除。请先处理或保留相关清洗任务记录。",
+        )
 
     # Batch-delete raw_data in one SQL — avoids 7000+ ORM cascade operations
     db.execute(text("DELETE FROM raw_data WHERE file_id = :fid"), {"fid": file_id})

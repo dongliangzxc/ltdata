@@ -13,7 +13,7 @@ import {
   listReviewedMatches, updateMatchCoefficient, getMatchReviewDetail,
   enableMatch, avgPriceDisable, listDisabled,
   triggerExport, getExportJob, getDownloadUrl,
-  getCleanPoolSummary,
+  getCleanMonthlyPool,
 } from '../../services/api'
 import type { CleanJobItem, MatchCandidateOut, ReviewedMatchResultOut, PriceFlag, MatchReviewDetail } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
@@ -436,17 +436,19 @@ export default function MatchPage() {
     }
     setPublishing(true)
     try {
-      if (selectedJob?.category_code) {
+      if (selectedJob?.category_code && selectedJob.platform && selectedJob.month) {
         try {
-          const poolSummary = await getCleanPoolSummary().then(r => r.data)
-          const sameCategoryPending = poolSummary
-            .filter(item => item.category_code === selectedJob.category_code)
-            .reduce((sum, item) => sum + item.pending_count, 0)
-          if (sameCategoryPending > 0) {
-            message.info(`该品类另有 ${sameCategoryPending} 条新增数据尚未创建任务，不会随本次发布。`, 6)
+          const poolSummary = await getCleanMonthlyPool({
+            category_code: selectedJob.category_code,
+            platform: selectedJob.platform,
+            month: selectedJob.month,
+          }).then(r => r.data)
+          const pendingInScope = poolSummary.reduce((sum, item) => sum + item.pending_count, 0)
+          if (pendingInScope > 0) {
+            message.info(`该任务范围还有 ${pendingInScope} 条数据未进入清洗任务，本次发布不会包含这些数据。`, 6)
           }
         } catch (error) {
-          console.warn('Failed to load clean pool summary before publishing', error)
+          console.warn('Failed to load monthly clean pool before publishing', error)
         }
       }
       const res = await runPublish(selectedJobId)

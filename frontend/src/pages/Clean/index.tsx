@@ -1,16 +1,17 @@
 import { useMemo, useState } from 'react'
 import {
   Card, Button, Table, Tag, Modal, Row, Col,
-  Space, Statistic
+  Space, Statistic, Select, message
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { EyeOutlined, AimOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import { useNavigate } from 'react-router-dom'
 import {
-  listCleanJobs, previewCleanJob,
+  getCleanMonthlyPool, listCleanJobs, previewCleanJob, upsertMonthlyCleanTask,
 } from '../../services/api'
-import type { CleanJobItem } from '../../services/api'
+import type { CleanJobItem, CleanMonthlyPoolItem } from '../../services/api'
+import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 
 type CleanJobStatus = 'created' | 'cleaning' | 'matching' | 'processing' | 'reviewing' | 'published' | 'failed' | 'done' | 'error'
 
@@ -34,6 +35,27 @@ type TaggedCleanPreviewResponse = CleanPreviewResponse & {
   jobId: number
 }
 
+type FilterState = {
+  category_code?: string
+  platform?: string
+  month?: number
+}
+
+const platformOptions = [
+  { value: 'jd', label: '京东' },
+  { value: 'tmall', label: '天猫' },
+  { value: 'taobao', label: '淘宝' },
+  { value: 'douyin', label: '抖音' },
+]
+
+const platformLabelMap = platformOptions.reduce<Record<string, string>>((acc, option) => {
+  acc[option.value] = option.label
+  return acc
+}, {})
+
+const appendableStatuses = new Set(['reviewing', 'done', 'published'])
+const processingStatuses = new Set(['created', 'cleaning', 'matching', 'processing'])
+
 const statusMap: Record<CleanJobStatus, { label: string; color: string }> = {
   created: { label: '已创建', color: 'default' },
   cleaning: { label: '清洗中', color: 'processing' },
@@ -49,6 +71,26 @@ const statusMap: Record<CleanJobStatus, { label: string; color: string }> = {
 const formatNumber = (value?: number | null) => value ?? 0
 
 const formatText = (value?: string | number | null) => value ?? '-'
+
+const formatPlatform = (value?: string | null) => value ? (platformLabelMap[value] ?? value) : '-'
+
+const cleanParams = (params: FilterState) => Object.fromEntries(
+  Object.entries(params).filter(([, value]) => value != null && value !== '')
+) as FilterState
+
+const collectMonths = (monthlyPool: CleanMonthlyPoolItem[], jobs: CleanJobItem[]) => {
+  const months = new Set<number>()
+  monthlyPool.forEach(row => {
+    if (row.month != null) months.add(Number(row.month))
+  })
+  jobs.forEach(row => {
+    if (row.month != null) months.add(Number(row.month))
+  })
+  return Array.from(months)
+    .filter(month => Number.isFinite(month))
+    .sort((a, b) => b - a)
+    .map(month => ({ value: month, label: String(month) }))
+}
 
 const renderStatus = (status: string) => {
   const statusInfo = statusMap[status as CleanJobStatus] ?? { label: status || '-', color: 'default' }
@@ -66,7 +108,7 @@ const jobColumns = (onPreview: (id: number) => void, onEnter: (id: number) => vo
   },
   {
     title: '平台', dataIndex: 'platform', width: 100,
-    render: formatText,
+    render: formatPlatform,
   },
   {
     title: '原始行', dataIndex: 'row_in', width: 90,
@@ -107,6 +149,69 @@ const jobColumns = (onPreview: (id: number) => void, onEnter: (id: number) => vo
   },
 ]
 
+const getMonthlyQueueRowKey = (row: CleanMonthlyPoolItem) => `${row.category_code}-${row.platform ?? 'none'}-${row.month}`
+
+const getQueueAction = (row: CleanMonthlyPoolItem) => {
+  if (!row.platform) return { label: '缺少平台', disabled: true, action: 'blocked' as const }
+  if (!row.existing_job_id) return { label: '创建任务', disabled: false, action: 'created' as const }
+  if (row.existing_job_status && appendableStatuses.has(row.existing_job_status)) {
+    return { label: '追加到任务', disabled: false, action: 'appended' as const }
+  }
+  if (row.existing_job_status && processingStatuses.has(row.existing_job_status)) {
+    return { label: '处理中', disabled: true, action: 'processing' as const }
+  }
+  return { label: '先处理失败任务', disabled: true, action: 'blocked' as const }
+}
+
+const monthlyQueueColumns = (
+  onUpsert: (row: CleanMonthlyPoolItem) => void,
+  upsertingRowKey: string | null,
+): ColumnsType<CleanMonthlyPoolItem> => [
+  {
+    title: '品类', dataIndex: 'category_name', width: 140,
+    render: (_: string | null | undefined, row) => row.category_name || row.category_code,
+  },
+  {
+    title: '平台', dataIndex: 'platform', width: 100,
+    render: formatPlatform,
+  },
+  {
+    title: '月份', dataIndex: 'month', width: 100,
+    render: formatText,
+  },
+  {
+    title: '待入队数量', dataIndex: 'pending_count', width: 120,
+    render: formatNumber,
+  },
+  {
+    title: '已有任务', dataIndex: 'existing_job_name', width: 180,
+    render: (_: string | null | undefined, row) => row.existing_job_name || (row.existing_job_id ? `任务 #${row.existing_job_id}` : '-'),
+  },
+  {
+    title: '任务状态', dataIndex: 'existing_job_status', width: 110,
+    render: (status?: string | null) => status ? renderStatus(status) : '-',
+  },
+  {
+    title: '操作', width: 120, fixed: 'right',
+    render: (_: unknown, row) => {
+      const action = getQueueAction(row)
+      const rowKey = getMonthlyQueueRowKey(row)
+      const isCurrentRowUpserting = upsertingRowKey === rowKey
+      return (
+        <Button
+          type="primary"
+          size="small"
+          disabled={action.disabled || (!!upsertingRowKey && !isCurrentRowUpserting)}
+          loading={isCurrentRowUpserting}
+          onClick={() => onUpsert(row)}
+        >
+          {action.label}
+        </Button>
+      )
+    },
+  },
+]
+
 const previewCols: ColumnsType<CleanPreviewRow> = [
   {
     title: '平台', dataIndex: 'platform', width: 90,
@@ -136,22 +241,67 @@ const previewCols: ColumnsType<CleanPreviewRow> = [
 
 export default function CleanPage() {
   const navigate = useNavigate()
+  const { options: categoryOptions, loading: categoryLoading } = useCategoryOptions()
+  const [filters, setFilters] = useState<FilterState>({})
   const [previewJobId, setPreviewJobId] = useState<number | null>(null)
   const [previewPage, setPreviewPage] = useState(1)
+  const [upsertingRowKey, setUpsertingRowKey] = useState<string | null>(null)
 
-  const { data: jobsData, loading: jobsLoading } = useRequest(() => listCleanJobs().then(r => r.data as CleanJobItem[]))
+  const requestParams = useMemo(() => cleanParams(filters), [filters])
 
-  const jobs = jobsData ?? []
+  const {
+    data: monthlyPoolData,
+    loading: monthlyPoolLoading,
+    refresh: refreshMonthlyPool,
+  } = useRequest(() => getCleanMonthlyPool(requestParams).then(r => r.data), { refreshDeps: [requestParams] })
+
+  const { data: jobsData, loading: jobsLoading, refresh: refreshJobs } = useRequest(
+    () => listCleanJobs().then(r => r.data as CleanJobItem[])
+  )
+
+  const jobs = useMemo(() => {
+    const allJobs = jobsData ?? []
+    return allJobs.filter(job => {
+      if (requestParams.category_code && job.category_code !== requestParams.category_code) return false
+      if (requestParams.platform && job.platform !== requestParams.platform) return false
+      if (requestParams.month != null && job.month !== requestParams.month) return false
+      return true
+    })
+  }, [jobsData, requestParams])
+  const monthlyPool = monthlyPoolData ?? []
+  const monthOptions = useMemo(() => collectMonths(monthlyPool, jobsData ?? []), [monthlyPool, jobsData])
   const summary = useMemo(() => {
-    const processingStatuses = new Set(['cleaning', 'matching', 'processing'])
+    const activeProcessingStatuses = new Set(['cleaning', 'matching', 'processing'])
 
     return {
       pendingTasks: jobs.filter(job => (job.pending_count ?? 0) + (job.disputed_count ?? 0) > 0).length,
-      processingTasks: jobs.filter(job => processingStatuses.has(job.status)).length,
+      processingTasks: jobs.filter(job => activeProcessingStatuses.has(job.status)).length,
       publishableRecords: jobs.reduce((sum, job) => sum + (job.publishable_count ?? 0), 0),
       totalTasks: jobs.length,
     }
   }, [jobs])
+
+  const { run: handleUpsertMonthlyTask } = useRequest(
+    async (row: CleanMonthlyPoolItem) => {
+      const rowKey = getMonthlyQueueRowKey(row)
+      setUpsertingRowKey(rowKey)
+      try {
+        const action = getQueueAction(row).action
+        const response = await upsertMonthlyCleanTask({
+          category_code: row.category_code,
+          platform: row.platform!,
+          month: row.month,
+          rules: { dedup: true },
+        })
+        message.success(action === 'appended' || response.data.action === 'appended' ? '已追加到清洗任务' : '已创建清洗任务')
+        refreshMonthlyPool()
+        refreshJobs()
+      } finally {
+        setUpsertingRowKey(null)
+      }
+    },
+    { manual: true }
+  )
 
   const { data: previewData, loading: previewLoading } = useRequest(
     async () => {
@@ -165,6 +315,53 @@ export default function CleanPage() {
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Card title="待入清洗队列">
+        <Row gutter={16} style={{ marginBottom: 16 }}>
+          <Col span={6}>
+            <Select
+              allowClear
+              showSearch
+              placeholder="全部品类"
+              loading={categoryLoading}
+              options={categoryOptions}
+              value={filters.category_code}
+              onChange={value => setFilters(prev => ({ ...prev, category_code: value }))}
+              optionFilterProp="label"
+              style={{ width: '100%' }}
+            />
+          </Col>
+          <Col span={6}>
+            <Select
+              allowClear
+              placeholder="全部平台"
+              options={platformOptions}
+              value={filters.platform}
+              onChange={value => setFilters(prev => ({ ...prev, platform: value }))}
+              style={{ width: '100%' }}
+            />
+          </Col>
+          <Col span={6}>
+            <Select
+              allowClear
+              placeholder="全部月份"
+              options={monthOptions}
+              value={filters.month}
+              onChange={value => setFilters(prev => ({ ...prev, month: value }))}
+              style={{ width: '100%' }}
+            />
+          </Col>
+        </Row>
+        <Table
+          dataSource={monthlyPool}
+          columns={monthlyQueueColumns(handleUpsertMonthlyTask, upsertingRowKey)}
+          rowKey={getMonthlyQueueRowKey}
+          size="small"
+          loading={monthlyPoolLoading}
+          scroll={{ x: 900 }}
+          pagination={{ pageSize: 10 }}
+        />
+      </Card>
+
       <Card title="清洗任务">
         <Row gutter={16} style={{ marginBottom: 16 }}>
           <Col span={6}><Statistic title="待处理任务" value={summary.pendingTasks} valueStyle={{ color: '#d48806' }} /></Col>

@@ -5,7 +5,7 @@ from sqlalchemy import (
     ForeignKey, JSON, SmallInteger, UniqueConstraint, CheckConstraint, Enum, Index
 )
 from sqlalchemy.orm import relationship
-from pydantic import BaseModel, Field, field_serializer
+from pydantic import BaseModel, Field, field_serializer, field_validator
 from app.models.database import Base
 from app.utils.time_utils import format_beijing_datetime
 
@@ -195,6 +195,7 @@ class CleanJobOut(BaseModel):
     task_name: Optional[str] = None
     category_code: Optional[str] = None
     platform: Optional[str] = None
+    month: Optional[int] = None
     source_scope: Optional[dict] = None
     created_at: datetime
 
@@ -212,6 +213,49 @@ class CleanPoolCategoryOut(BaseModel):
     current_batch_count: int = 0
     pending_count: int = 0
     active_job_count: int = 0
+
+
+class CleanMonthlyPoolOut(BaseModel):
+    category_code: str
+    category_name: Optional[str] = None
+    platform: Optional[str] = None
+    month: int
+    pending_count: int = 0
+    existing_job_id: Optional[int] = None
+    existing_job_name: Optional[str] = None
+    existing_job_status: Optional[str] = None
+
+
+class UpsertMonthlyCleanTaskIn(BaseModel):
+    category_code: str
+    platform: str
+    month: int
+    rules: Optional[dict] = None
+
+    @field_validator("category_code", "platform")
+    @classmethod
+    def validate_non_blank_string(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("不能为空")
+        return stripped
+
+    @field_validator("month")
+    @classmethod
+    def validate_month(cls, value: int) -> int:
+        if value < 100000 or value > 999999:
+            raise ValueError("月份必须为 YYYYMM 格式")
+        month_part = value % 100
+        if month_part < 1 or month_part > 12:
+            raise ValueError("月份必须为 YYYYMM 格式")
+        return value
+
+
+class UpsertMonthlyCleanTaskOut(BaseModel):
+    job: CleanJobOut
+    snapshot_count: int
+    action: str
+    match_status: str
 
 
 class CreateCleanTaskIn(BaseModel):

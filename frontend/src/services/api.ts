@@ -101,6 +101,7 @@ export interface CleanJobItem {
   task_name?: string | null
   category_code?: string | null
   platform?: string | null
+  month?: number | null
   source_scope?: Record<string, unknown> | null
   pending_count?: number | null
   disputed_count?: number | null
@@ -117,6 +118,31 @@ export interface CleanPoolCategoryItem {
   current_batch_count: number
   pending_count: number
   active_job_count: number
+}
+
+export interface CleanMonthlyPoolItem {
+  category_code: string
+  category_name: string | null
+  platform: string | null
+  month: number
+  pending_count: number
+  existing_job_id: number | null
+  existing_job_name: string | null
+  existing_job_status: string | null
+}
+
+export interface UpsertMonthlyCleanTaskPayload {
+  category_code: string
+  platform: string
+  month: number
+  rules?: Record<string, unknown>
+}
+
+export interface UpsertMonthlyCleanTaskResponse {
+  job: CleanJobItem
+  snapshot_count: number
+  action: 'created' | 'appended'
+  match_status: string
 }
 
 export interface CreateCleanTaskPayload {
@@ -149,6 +175,15 @@ export const runDispatchBatchClean = (payload: {
 
 export const getCleanPoolSummary = (params?: { dispatch_batch_id?: number }) =>
   api.get<CleanPoolCategoryItem[]>('/clean/pool/summary', { params })
+
+export const getCleanMonthlyPool = (params?: {
+  category_code?: string
+  platform?: string
+  month?: number
+}) => api.get<CleanMonthlyPoolItem[]>('/clean/pool/monthly', { params })
+
+export const upsertMonthlyCleanTask = (payload: UpsertMonthlyCleanTaskPayload) =>
+  api.post<UpsertMonthlyCleanTaskResponse>('/clean/tasks/upsert-monthly', payload)
 
 export const createCleanTask = (payload: CreateCleanTaskPayload) =>
   api.post<CreateCleanTaskResponse>('/clean/tasks', payload)

@@ -71,8 +71,8 @@ export default function ManualPage() {
                   style={{ marginTop: 4 }}
                   items={[
                     { title: '数据上传', icon: <UploadOutlined /> },
-                    { title: '数据分发', icon: <DatabaseOutlined /> },
-                    { title: '创建清洗任务', icon: <ClearOutlined /> },
+                    { title: '数据分发入池', icon: <DatabaseOutlined /> },
+                    { title: '创建/追加清洗任务', icon: <ClearOutlined /> },
                     { title: '清洗任务详情', icon: <AimOutlined /> },
                     { title: '发布 → 查询工作台 / 导出', icon: <ExportOutlined /> },
                   ]}
@@ -230,13 +230,16 @@ export default function ManualPage() {
             对原始数据进行标准化处理，生成供后续匹配使用的干净数据集。清洗会自动应用「规则管理」中配置的干扰词过滤和品牌写法标准化。
           </Paragraph>
           <Paragraph>
-            <S>操作步骤</S>：上传文件 → 执行数据分发 → 在品类统计中创建清洗任务。清洗任务按品类组织，平台可作为二级筛选。
+            <S>操作步骤</S>：上传文件 → 执行数据分发 → 进入「清洗任务」页查看待入清洗队列。分发页只负责入池，不创建清洗任务。
+          </Paragraph>
+          <Paragraph>
+            <S>待入清洗队列</S>：按品类、平台、月份聚合展示尚未进入清洗任务的数据。若该范围没有任务，点「创建任务」；若已有任务，点「追加到任务」。系统会自动完成清洗和匹配。
           </Paragraph>
           <Paragraph>
             <Tag color="blue">去重</Tag> 同一商品（相同 item_id）在同月份同店铺只保留第一条，避免重复计算。
           </Paragraph>
           <Alert type="info" showIcon style={{ marginBottom: 16 }}
-            message="清洗结果独立保存，不影响原始数据。清洗任务创建后会自动完成清洗和匹配，可进入清洗任务详情处理待确认条目。" />
+            message="清洗结果独立保存，不影响原始数据。清洗任务创建或追加后会自动完成清洗和匹配，可进入清洗任务详情处理待确认条目。" />
 
           <Divider />
 

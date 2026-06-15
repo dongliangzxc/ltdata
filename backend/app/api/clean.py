@@ -1,4 +1,3 @@
-from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
@@ -10,16 +9,27 @@ from app.models.schemas import (
     CleanJobOut,
     CleanedDataOut,
     CleanPoolCategoryOut,
+    CleanMonthlyPoolOut,
+    UpsertMonthlyCleanTaskIn,
+    UpsertMonthlyCleanTaskOut,
     CreateCleanTaskIn,
     CreateCleanTaskOut,
     DispatchBatch,
     DispatchItem,
+    FilteredItem,
     MatchResult,
+    MatchResultAttr,
+    MatchResultCandidate,
     UploadFileRecord,
     Category,
     CleanJobItemRecord,
 )
-from app.services.clean_task_snapshot import create_category_task_snapshot, get_clean_pool_summary
+from app.services.clean_task_snapshot import (
+    create_category_task_snapshot,
+    get_clean_pool_summary,
+    get_monthly_clean_pool,
+    upsert_monthly_task_snapshot,
+)
 from app.services.data_cleaner import run_clean
 from app.services.matcher import run_match
 from app.utils.time_utils import format_beijing_datetime
@@ -78,6 +88,19 @@ def _match_status_counts(db: Session, clean_job_id: int) -> dict[str, int]:
     }
 
 
+def _job_month(job: CleanJobRecord) -> int | None:
+    scope = job.source_scope
+    if not isinstance(scope, dict):
+        return None
+    months = scope.get("months")
+    if not isinstance(months, list) or len(months) != 1:
+        return None
+    try:
+        return int(months[0])
+    except (TypeError, ValueError):
+        return None
+
+
 def _clean_job_to_dict(db: Session, job: CleanJobRecord) -> dict:
     match_counts = _match_status_counts(db, job.id)
     pending_count = match_counts.get("pending", 0) + match_counts.get("text_only", 0)
@@ -101,6 +124,7 @@ def _clean_job_to_dict(db: Session, job: CleanJobRecord) -> dict:
         "task_name": job.task_name,
         "category_code": job.category_code or job.dispatch_category_code,
         "platform": job.platform,
+        "month": _job_month(job),
         "source_scope": job.source_scope,
         "pending_count": pending_count,
         "disputed_count": disputed_count,
@@ -109,6 +133,58 @@ def _clean_job_to_dict(db: Session, job: CleanJobRecord) -> dict:
         "created_at": format_beijing_datetime(job.created_at),
         "scope_desc": _build_clean_scope_desc(db, job),
     }
+
+
+def _clear_clean_job_outputs(db: Session, clean_job_id: int) -> None:
+    old_match_result_ids = [
+        row.id
+        for row in db.query(MatchResult.id)
+        .filter(MatchResult.clean_job_id == clean_job_id)
+        .all()
+    ]
+    if old_match_result_ids:
+        db.query(MatchResultAttr).filter(
+            MatchResultAttr.match_result_id.in_(old_match_result_ids)
+        ).delete(synchronize_session=False)
+        db.query(MatchResultCandidate).filter(
+            MatchResultCandidate.match_result_id.in_(old_match_result_ids)
+        ).delete(synchronize_session=False)
+    db.query(MatchResult).filter(MatchResult.clean_job_id == clean_job_id).delete(synchronize_session=False)
+    db.query(FilteredItem).filter(FilteredItem.clean_job_id == clean_job_id).delete(synchronize_session=False)
+    db.query(CleanedDataRecord).filter(CleanedDataRecord.clean_job_id == clean_job_id).delete(synchronize_session=False)
+
+
+def _maybe_commit_and_refresh(db: Session, job: CleanJobRecord, commit: bool) -> None:
+    if commit:
+        db.commit()
+        db.refresh(job)
+    else:
+        db.flush()
+
+
+def _run_clean_and_match_for_job(db: Session, job: CleanJobRecord, commit: bool = True) -> None:
+    job.status = "cleaning"
+    _maybe_commit_and_refresh(db, job, commit)
+
+    _clear_clean_job_outputs(db, job.id)
+    _maybe_commit_and_refresh(db, job, commit)
+
+    row_out = run_clean(
+        db,
+        job.id,
+        job.file_ids or [],
+        job.rules or {},
+        job.dispatch_batch_id,
+        job.dispatch_category_code or job.category_code,
+        commit=commit,
+    )
+    job.row_out = row_out
+    job.status = "matching"
+    _maybe_commit_and_refresh(db, job, commit)
+
+    run_match(db, job.id, commit=commit)
+    job.status = "reviewing"
+    _maybe_commit_and_refresh(db, job, commit)
 
 
 def _run_clean_for_dispatch_category(
@@ -157,6 +233,21 @@ def get_clean_pool_summary_endpoint(
     db: Session = Depends(get_db),
 ):
     return get_clean_pool_summary(db, dispatch_batch_id=dispatch_batch_id)
+
+
+@router.get("/pool/monthly", response_model=list[CleanMonthlyPoolOut])
+def get_monthly_clean_pool_endpoint(
+    category_code: Optional[str] = Query(None),
+    platform: Optional[str] = Query(None),
+    month: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+):
+    return get_monthly_clean_pool(
+        db,
+        category_code=category_code,
+        platform=platform,
+        month=month,
+    )
 
 
 @router.post("/tasks", response_model=CreateCleanTaskOut)
@@ -212,6 +303,29 @@ def create_clean_task(payload: CreateCleanTaskIn, db: Session = Depends(get_db))
         raise HTTPException(status_code=500, detail=f"创建清洗任务失败: {str(e)}") from e
 
     return {"job": job, "snapshot_count": snapshot_count, "match_status": "done"}
+
+
+@router.post("/tasks/upsert-monthly", response_model=UpsertMonthlyCleanTaskOut)
+def upsert_monthly_clean_task(payload: UpsertMonthlyCleanTaskIn, db: Session = Depends(get_db)):
+    try:
+        job, snapshot_count, action, _new_snapshot_ids = upsert_monthly_task_snapshot(
+            db,
+            category_code=payload.category_code,
+            platform=payload.platform,
+            month=payload.month,
+            rules=payload.rules,
+        )
+        _run_clean_and_match_for_job(db, job, commit=False)
+        db.commit()
+        db.refresh(job)
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"更新清洗任务失败: {str(e)}") from e
+
+    return {"job": job, "snapshot_count": snapshot_count, "action": action, "match_status": "done"}
 
 
 @router.post("/run", response_model=CleanJobOut)

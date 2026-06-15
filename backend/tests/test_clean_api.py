@@ -1,5 +1,6 @@
 from datetime import datetime
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -12,7 +13,12 @@ from app.models.schemas import (
     CleanedDataRecord,
     DispatchBatch,
     DispatchItem,
+    FilteredItem,
     MatchResult,
+    MatchResultAttr,
+    MatchResultCandidate,
+    ModelRecord,
+    PublishJob,
     RawDataRecord,
     UploadFileRecord,
 )
@@ -191,6 +197,53 @@ def test_list_clean_jobs_returns_match_summary_counts(db):
     assert payload["disputed_count"] == 1
 
 
+def test_list_clean_jobs_includes_month_for_monthly_task(db):
+    client = _make_client(db)
+    job = CleanJobRecord(
+        file_ids=[],
+        rules={"dedup": True},
+        status="reviewing",
+        task_name="回音壁 / jd / 202605",
+        category_code="soundbar",
+        platform="jd",
+        source_scope={"months": [202605], "platforms": ["jd"], "dispatch_batch_ids": [], "file_ids": []},
+    )
+    db.add(job)
+    db.commit()
+
+    response = client.get("/api/clean/jobs")
+
+    assert response.status_code == 200
+    jobs_by_id = {item["id"]: item for item in response.json()}
+    assert jobs_by_id[job.id]["month"] == 202605
+
+
+@pytest.mark.parametrize("source_scope", [
+    {"months": [202605, 202606]},
+    {"months": ["bad"]},
+    {"months": None},
+])
+def test_list_clean_jobs_returns_no_month_for_malformed_source_scope(db, source_scope):
+    client = _make_client(db)
+    job = CleanJobRecord(
+        file_ids=[],
+        rules={"dedup": True},
+        status="reviewing",
+        task_name="回音壁 / jd / malformed",
+        category_code="soundbar",
+        platform="jd",
+        source_scope=source_scope,
+    )
+    db.add(job)
+    db.commit()
+
+    response = client.get("/api/clean/jobs")
+
+    assert response.status_code == 200
+    jobs_by_id = {item["id"]: item for item in response.json()}
+    assert jobs_by_id[job.id]["month"] is None
+
+
 def test_get_clean_pool_summary_endpoint_returns_pending_counts(db):
     client = _make_client(db)
     category = Category(code="router", name="路由器")
@@ -221,6 +274,794 @@ def test_get_clean_pool_summary_endpoint_returns_pending_counts(db):
     }]
 
 
+def test_get_monthly_clean_pool_groups_pending_by_category_platform_month(db):
+    client = _make_client(db)
+    category = Category(code="soundbar", name="回音壁")
+    upload = UploadFileRecord(filename="monthly-pool.xlsx", platform="jd", row_count=3, status="done")
+    db.add_all([category, upload])
+    db.flush()
+
+    first = RawDataRecord(file_id=upload.id, platform="jd", month=202605, item_id="sb-1", item_name="索尼回音壁")
+    second = RawDataRecord(file_id=upload.id, platform="京东", month=202605, item_id="sb-2", item_name="三星回音壁")
+    third = RawDataRecord(file_id=upload.id, platform="jd", month=202606, item_id="sb-3", item_name="BOSE回音壁")
+    db.add_all([first, second, third])
+    db.flush()
+
+    batch = DispatchBatch(file_id=upload.id, status="done", total_rows=3, dispatched_rows=3, unmatched_rows=0)
+    db.add(batch)
+    db.flush()
+    db.add_all([
+        DispatchItem(batch_id=batch.id, raw_data_id=first.id, category_code="soundbar"),
+        DispatchItem(batch_id=batch.id, raw_data_id=second.id, category_code="soundbar"),
+        DispatchItem(batch_id=batch.id, raw_data_id=third.id, category_code="soundbar"),
+    ])
+    db.commit()
+
+    response = client.get("/api/clean/pool/monthly")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "category_code": "soundbar",
+            "category_name": "回音壁",
+            "platform": "jd",
+            "month": 202605,
+            "pending_count": 2,
+            "existing_job_id": None,
+            "existing_job_name": None,
+            "existing_job_status": None,
+        },
+        {
+            "category_code": "soundbar",
+            "category_name": "回音壁",
+            "platform": "jd",
+            "month": 202606,
+            "pending_count": 1,
+            "existing_job_id": None,
+            "existing_job_name": None,
+            "existing_job_status": None,
+        },
+    ]
+
+
+def test_get_monthly_clean_pool_excludes_existing_snapshot_items_from_pending_count(db):
+    client = _make_client(db)
+    category = Category(code="soundbar", name="回音壁")
+    upload = UploadFileRecord(filename="monthly-pending-exclusion.xlsx", platform="jd", row_count=2, status="done")
+    db.add_all([category, upload])
+    db.flush()
+
+    first = RawDataRecord(file_id=upload.id, platform="jd", month=202605, item_id="sb-1", item_name="索尼回音壁")
+    second = RawDataRecord(file_id=upload.id, platform="jd", month=202605, item_id="sb-2", item_name="三星回音壁")
+    db.add_all([first, second])
+    db.flush()
+
+    batch = DispatchBatch(file_id=upload.id, status="done", total_rows=2, dispatched_rows=2, unmatched_rows=0)
+    db.add(batch)
+    db.flush()
+    db.add_all([
+        DispatchItem(batch_id=batch.id, raw_data_id=first.id, category_code="soundbar"),
+        DispatchItem(batch_id=batch.id, raw_data_id=second.id, category_code="soundbar"),
+    ])
+    job = CleanJobRecord(
+        file_ids=[],
+        rules={"dedup": True},
+        status="reviewing",
+        task_name="回音壁 / 京东 / 202605",
+        category_code="soundbar",
+        platform="jd",
+        source_scope={"months": [202605], "platforms": ["jd"], "dispatch_batch_ids": [], "file_ids": []},
+    )
+    db.add(job)
+    db.flush()
+    db.add(CleanJobItemRecord(
+        clean_job_id=job.id,
+        raw_data_id=first.id,
+        category_code="soundbar",
+        platform="jd",
+        dispatch_batch_id=batch.id,
+    ))
+    db.commit()
+
+    response = client.get("/api/clean/pool/monthly?category_code=soundbar&platform=jd&month=202605")
+
+    assert response.status_code == 200
+    assert response.json()[0]["pending_count"] == 1
+
+
+def test_get_monthly_clean_pool_reports_existing_monthly_job(db):
+    client = _make_client(db)
+    category = Category(code="soundbar", name="回音壁")
+    upload = UploadFileRecord(filename="monthly-existing.xlsx", platform="jd", row_count=1, status="done")
+    db.add_all([category, upload])
+    db.flush()
+
+    raw = RawDataRecord(file_id=upload.id, platform="jd", month=202605, item_id="sb-1", item_name="索尼回音壁")
+    db.add(raw)
+    db.flush()
+    batch = DispatchBatch(file_id=upload.id, status="done", total_rows=1, dispatched_rows=1, unmatched_rows=0)
+    db.add(batch)
+    db.flush()
+    db.add(DispatchItem(batch_id=batch.id, raw_data_id=raw.id, category_code="soundbar"))
+    job = CleanJobRecord(
+        file_ids=[],
+        rules={"dedup": True},
+        status="reviewing",
+        task_name="回音壁 / 京东 / 202605",
+        category_code="soundbar",
+        platform="jd",
+        source_scope={"months": [202605], "platforms": ["jd"], "dispatch_batch_ids": [], "file_ids": []},
+    )
+    db.add(job)
+    db.commit()
+
+    response = client.get("/api/clean/pool/monthly?category_code=soundbar&platform=jd&month=202605")
+
+    assert response.status_code == 200
+    assert response.json()[0]["existing_job_id"] == job.id
+    assert response.json()[0]["existing_job_name"] == "回音壁 / 京东 / 202605"
+    assert response.json()[0]["existing_job_status"] == "reviewing"
+
+
+def test_get_monthly_clean_pool_reports_existing_monthly_job_stored_with_platform_alias(db):
+    client = _make_client(db)
+    category = Category(code="soundbar", name="回音壁")
+    upload = UploadFileRecord(filename="monthly-existing-alias.xlsx", platform="jd", row_count=1, status="done")
+    db.add_all([category, upload])
+    db.flush()
+
+    raw = RawDataRecord(file_id=upload.id, platform="jd", month=202605, item_id="sb-1", item_name="索尼回音壁")
+    db.add(raw)
+    db.flush()
+    batch = DispatchBatch(file_id=upload.id, status="done", total_rows=1, dispatched_rows=1, unmatched_rows=0)
+    db.add(batch)
+    db.flush()
+    db.add(DispatchItem(batch_id=batch.id, raw_data_id=raw.id, category_code="soundbar"))
+    job = CleanJobRecord(
+        file_ids=[],
+        rules={"dedup": True},
+        status="reviewing",
+        task_name="回音壁 / 京东 / 202605",
+        category_code="soundbar",
+        platform="京东",
+        source_scope={"months": [202605], "platforms": ["京东"], "dispatch_batch_ids": [], "file_ids": []},
+    )
+    db.add(job)
+    db.commit()
+
+    response = client.get("/api/clean/pool/monthly?category_code=soundbar&platform=jd&month=202605")
+
+    assert response.status_code == 200
+    assert response.json()[0]["existing_job_id"] == job.id
+    assert response.json()[0]["existing_job_name"] == "回音壁 / 京东 / 202605"
+    assert response.json()[0]["existing_job_status"] == "reviewing"
+
+
+def _create_monthly_pending_row(db, *, category_code="soundbar", category_name="回音壁", platform="jd", month=202605, item_id="sb-1"):
+    category = db.query(Category).filter_by(code=category_code).first()
+    if not category:
+        category = Category(code=category_code, name=category_name)
+        db.add(category)
+        db.flush()
+    upload = UploadFileRecord(filename=f"{category_code}-{month}-{item_id}.xlsx", platform=platform, row_count=1, status="done")
+    db.add(upload)
+    db.flush()
+    raw = RawDataRecord(file_id=upload.id, platform=platform, month=month, item_id=item_id, item_name=f"{category_name}{item_id}")
+    db.add(raw)
+    db.flush()
+    batch = DispatchBatch(file_id=upload.id, status="done", total_rows=1, dispatched_rows=1, unmatched_rows=0)
+    db.add(batch)
+    db.flush()
+    db.add(DispatchItem(batch_id=batch.id, raw_data_id=raw.id, category_code=category_code))
+    db.commit()
+    return raw, batch, upload
+
+
+def test_monthly_pool_filter_supports_publish_warning_scope(db):
+    client = _make_client(db)
+    _create_monthly_pending_row(db, item_id="sb-1", month=202605)
+    _create_monthly_pending_row(db, item_id="sb-2", month=202606)
+
+    response = client.get("/api/clean/pool/monthly?category_code=soundbar&platform=jd&month=202605")
+
+    assert response.status_code == 200
+    assert len(response.json()) == 1
+    assert response.json()[0]["month"] == 202605
+    assert response.json()[0]["pending_count"] == 1
+
+
+def test_monthly_pool_ignores_existing_job_with_malformed_month_scope(db):
+    client = _make_client(db)
+    _create_monthly_pending_row(db, item_id="sb-1", month=202605)
+    job = CleanJobRecord(
+        file_ids=[],
+        rules={"dedup": True},
+        status="reviewing",
+        task_name="回音壁 / jd / malformed",
+        category_code="soundbar",
+        platform="jd",
+        source_scope={"months": ["bad"], "platforms": ["jd"], "dispatch_batch_ids": [], "file_ids": []},
+    )
+    db.add(job)
+    db.commit()
+
+    response = client.get("/api/clean/pool/monthly?category_code=soundbar&platform=jd&month=202605")
+
+    assert response.status_code == 200
+    assert len(response.json()) == 1
+    assert response.json()[0]["pending_count"] == 1
+    assert response.json()[0]["existing_job_id"] is None
+
+
+def test_upsert_monthly_clean_task_creates_new_monthly_task(db, monkeypatch):
+    client = _make_client(db)
+    _create_monthly_pending_row(db, item_id="sb-1")
+    run_match_calls = []
+
+    def fake_run_match(match_db, clean_job_id, **kwargs):
+        run_match_calls.append(clean_job_id)
+        return {"total": 1, "matched": 0}
+
+    monkeypatch.setattr("app.api.clean.run_match", fake_run_match)
+
+    response = client.post("/api/clean/tasks/upsert-monthly", json={
+        "category_code": "soundbar",
+        "platform": "jd",
+        "month": 202605,
+    })
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["action"] == "created"
+    assert payload["snapshot_count"] == 1
+    assert payload["match_status"] == "done"
+    assert payload["job"]["task_name"] == "回音壁 / jd / 202605"
+    assert payload["job"]["category_code"] == "soundbar"
+    assert payload["job"]["platform"] == "jd"
+    assert payload["job"]["source_scope"]["months"] == [202605]
+    assert run_match_calls == [payload["job"]["id"]]
+
+
+def test_upsert_monthly_clean_task_appends_with_malformed_existing_scope_lists(db, monkeypatch):
+    client = _make_client(db)
+    first_raw, first_batch, first_upload = _create_monthly_pending_row(db, item_id="sb-1")
+    job = CleanJobRecord(
+        file_ids=[first_upload.id],
+        rules={"dedup": True},
+        status="reviewing",
+        row_in=1,
+        row_out=1,
+        task_name="回音壁 / jd / 202605",
+        category_code="soundbar",
+        platform="jd",
+        source_scope={"months": [202605], "platforms": "jd", "dispatch_batch_ids": None, "file_ids": [first_upload.id]},
+    )
+    db.add(job)
+    db.flush()
+    db.add(CleanJobItemRecord(clean_job_id=job.id, raw_data_id=first_raw.id, category_code="soundbar", platform="jd", dispatch_batch_id=first_batch.id))
+    db.commit()
+
+    _, second_batch, second_upload = _create_monthly_pending_row(db, item_id="sb-2")
+
+    monkeypatch.setattr("app.api.clean.run_match", lambda match_db, clean_job_id, **kwargs: {"total": 2, "matched": 0})
+
+    response = client.post("/api/clean/tasks/upsert-monthly", json={
+        "category_code": "soundbar",
+        "platform": "jd",
+        "month": 202605,
+    })
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["action"] == "appended"
+    assert payload["job"]["id"] == job.id
+    assert payload["job"]["source_scope"]["months"] == [202605]
+    assert payload["job"]["source_scope"]["platforms"] == ["jd"]
+    assert payload["job"]["source_scope"]["dispatch_batch_ids"] == [second_batch.id]
+    assert set(payload["job"]["source_scope"]["file_ids"]) == {first_upload.id, second_upload.id}
+
+
+
+def test_upsert_monthly_clean_task_appends_skips_malformed_existing_scope_values(db, monkeypatch):
+    client = _make_client(db)
+    first_raw, first_batch, first_upload = _create_monthly_pending_row(db, item_id="sb-1")
+    job = CleanJobRecord(
+        file_ids=["bad"],
+        rules={"dedup": True},
+        status="reviewing",
+        row_in=1,
+        row_out=1,
+        task_name="回音壁 / jd / 202605",
+        category_code="soundbar",
+        platform="jd",
+        source_scope={
+            "months": [202605, "bad"],
+            "platforms": ["jd"],
+            "dispatch_batch_ids": ["bad"],
+            "file_ids": ["bad"],
+        },
+    )
+    db.add(job)
+    db.flush()
+    db.add(CleanJobItemRecord(clean_job_id=job.id, raw_data_id=first_raw.id, category_code="soundbar", platform="jd", dispatch_batch_id=first_batch.id))
+    db.commit()
+
+    _, second_batch, second_upload = _create_monthly_pending_row(db, item_id="sb-2")
+
+    monkeypatch.setattr("app.api.clean.run_clean", lambda *args, **kwargs: 2)
+    monkeypatch.setattr("app.api.clean.run_match", lambda match_db, clean_job_id, **kwargs: {"total": 2, "matched": 0})
+
+    response = client.post("/api/clean/tasks/upsert-monthly", json={
+        "category_code": "soundbar",
+        "platform": "jd",
+        "month": 202605,
+    })
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["action"] == "appended"
+    assert payload["job"]["source_scope"]["months"] == [202605]
+    assert payload["job"]["source_scope"]["dispatch_batch_ids"] == [second_batch.id]
+    assert payload["job"]["source_scope"]["file_ids"] == [second_upload.id]
+    assert payload["job"]["file_ids"] == [second_upload.id]
+
+
+
+def test_upsert_monthly_clean_task_appends_to_existing_task_and_reruns(db, monkeypatch):
+    client = _make_client(db)
+    first_raw, first_batch, first_upload = _create_monthly_pending_row(db, item_id="sb-1")
+    job = CleanJobRecord(
+        file_ids=[first_upload.id],
+        rules={"dedup": True},
+        status="reviewing",
+        row_in=1,
+        row_out=1,
+        task_name="回音壁 / jd / 202605",
+        category_code="soundbar",
+        platform="jd",
+        source_scope={"months": [202605], "platforms": ["jd"], "dispatch_batch_ids": [first_batch.id], "file_ids": [first_upload.id]},
+    )
+    db.add(job)
+    db.flush()
+    db.add(CleanJobItemRecord(clean_job_id=job.id, raw_data_id=first_raw.id, category_code="soundbar", platform="jd", dispatch_batch_id=first_batch.id))
+    db.commit()
+
+    _, second_batch, second_upload = _create_monthly_pending_row(db, item_id="sb-2")
+    run_match_calls = []
+
+    def fake_run_match(match_db, clean_job_id, **kwargs):
+        run_match_calls.append(clean_job_id)
+        return {"total": 2, "matched": 0}
+
+    monkeypatch.setattr("app.api.clean.run_match", fake_run_match)
+
+    response = client.post("/api/clean/tasks/upsert-monthly", json={
+        "category_code": "soundbar",
+        "platform": "jd",
+        "month": 202605,
+    })
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["action"] == "appended"
+    assert payload["snapshot_count"] == 1
+    assert payload["job"]["id"] == job.id
+    assert payload["job"]["status"] == "reviewing"
+    assert set(payload["job"]["source_scope"]["dispatch_batch_ids"]) == {first_batch.id, second_batch.id}
+    assert set(payload["job"]["source_scope"]["file_ids"]) == {first_upload.id, second_upload.id}
+    assert db.query(CleanJobItemRecord).filter_by(clean_job_id=job.id).count() == 2
+    assert db.query(CleanedDataRecord).filter_by(clean_job_id=job.id).count() == 2
+    assert run_match_calls == [job.id]
+
+
+@pytest.mark.parametrize(
+    ("match_status", "extra_fields"),
+    [
+        ("confirmed", {"model_id": 1, "matched_by": "manual", "review_note": "已确认"}),
+        ("excluded", {"disable_reason": "不属于分析范围", "is_disabled": 1}),
+        ("disputed", {"dispute_reason": "型号不确定"}),
+    ],
+)
+def test_upsert_monthly_clean_task_rejects_existing_review_state(db, match_status, extra_fields):
+    client = _make_client(db)
+    first_raw, first_batch, first_upload = _create_monthly_pending_row(db, item_id="sb-1")
+    job = CleanJobRecord(
+        file_ids=[first_upload.id],
+        rules={"dedup": True},
+        status="reviewing",
+        row_in=1,
+        row_out=1,
+        task_name="回音壁 / jd / 202605",
+        category_code="soundbar",
+        platform="jd",
+        source_scope={"months": [202605], "platforms": ["jd"], "dispatch_batch_ids": [first_batch.id], "file_ids": [first_upload.id]},
+    )
+    db.add(job)
+    db.flush()
+    db.add(CleanJobItemRecord(clean_job_id=job.id, raw_data_id=first_raw.id, category_code="soundbar", platform="jd", dispatch_batch_id=first_batch.id))
+    db.add(MatchResult(clean_job_id=job.id, raw_data_id=first_raw.id, match_status=match_status, **extra_fields))
+    db.commit()
+    _create_monthly_pending_row(db, item_id="sb-2")
+
+    response = client.post("/api/clean/tasks/upsert-monthly", json={
+        "category_code": "soundbar",
+        "platform": "jd",
+        "month": 202605,
+    })
+
+    assert response.status_code == 400
+    assert "已有人工处理或发布记录" in response.json()["detail"]
+    assert db.query(CleanJobItemRecord).filter_by(clean_job_id=job.id).count() == 1
+
+
+@pytest.mark.parametrize(
+    "extra_fields",
+    [
+        {"is_disabled": 1},
+        {"sales_coefficient": 0.8},
+        {"dispute_reason": "原因待复核"},
+        {"review_note": "人工备注"},
+        {"reviewed_at": datetime.utcnow()},
+    ],
+)
+def test_upsert_monthly_clean_task_rejects_existing_review_markers(db, extra_fields):
+    client = _make_client(db)
+    first_raw, first_batch, first_upload = _create_monthly_pending_row(db, item_id="sb-1")
+    job = CleanJobRecord(
+        file_ids=[first_upload.id],
+        rules={"dedup": True},
+        status="reviewing",
+        row_in=1,
+        row_out=1,
+        task_name="回音壁 / jd / 202605",
+        category_code="soundbar",
+        platform="jd",
+        source_scope={"months": [202605], "platforms": ["jd"], "dispatch_batch_ids": [first_batch.id], "file_ids": [first_upload.id]},
+    )
+    db.add(job)
+    db.flush()
+    db.add(CleanJobItemRecord(clean_job_id=job.id, raw_data_id=first_raw.id, category_code="soundbar", platform="jd", dispatch_batch_id=first_batch.id))
+    db.add(MatchResult(clean_job_id=job.id, raw_data_id=first_raw.id, match_status="matched", **extra_fields))
+    db.commit()
+    _create_monthly_pending_row(db, item_id="sb-2")
+
+    response = client.post("/api/clean/tasks/upsert-monthly", json={
+        "category_code": "soundbar",
+        "platform": "jd",
+        "month": 202605,
+    })
+
+    assert response.status_code == 400
+    assert "已有人工处理或发布记录" in response.json()["detail"]
+    assert db.query(CleanJobItemRecord).filter_by(clean_job_id=job.id).count() == 1
+
+
+def test_upsert_monthly_clean_task_rejects_existing_attrs(db):
+    client = _make_client(db)
+    first_raw, first_batch, first_upload = _create_monthly_pending_row(db, item_id="sb-1")
+    job = CleanJobRecord(
+        file_ids=[first_upload.id],
+        rules={"dedup": True},
+        status="reviewing",
+        row_in=1,
+        row_out=1,
+        task_name="回音壁 / jd / 202605",
+        category_code="soundbar",
+        platform="jd",
+        source_scope={"months": [202605], "platforms": ["jd"], "dispatch_batch_ids": [first_batch.id], "file_ids": [first_upload.id]},
+    )
+    db.add(job)
+    db.flush()
+    db.add(CleanJobItemRecord(clean_job_id=job.id, raw_data_id=first_raw.id, category_code="soundbar", platform="jd", dispatch_batch_id=first_batch.id))
+    match_result = MatchResult(clean_job_id=job.id, raw_data_id=first_raw.id, match_status="matched")
+    db.add(match_result)
+    db.flush()
+    db.add(MatchResultAttr(match_result_id=match_result.id, attr_name="尺寸", attr_value="65寸", rule_id=None))
+    db.commit()
+    _create_monthly_pending_row(db, item_id="sb-2")
+
+    response = client.post("/api/clean/tasks/upsert-monthly", json={
+        "category_code": "soundbar",
+        "platform": "jd",
+        "month": 202605,
+    })
+
+    assert response.status_code == 400
+    assert "已有人工处理或发布记录" in response.json()["detail"]
+    assert db.query(CleanJobItemRecord).filter_by(clean_job_id=job.id).count() == 1
+
+
+def test_upsert_monthly_clean_task_rejects_existing_publish_history(db):
+    client = _make_client(db)
+    first_raw, first_batch, first_upload = _create_monthly_pending_row(db, item_id="sb-1")
+    job = CleanJobRecord(
+        file_ids=[first_upload.id],
+        rules={"dedup": True},
+        status="reviewing",
+        row_in=1,
+        row_out=1,
+        task_name="回音壁 / jd / 202605",
+        category_code="soundbar",
+        platform="jd",
+        source_scope={"months": [202605], "platforms": ["jd"], "dispatch_batch_ids": [first_batch.id], "file_ids": [first_upload.id]},
+    )
+    db.add(job)
+    db.flush()
+    db.add(CleanJobItemRecord(clean_job_id=job.id, raw_data_id=first_raw.id, category_code="soundbar", platform="jd", dispatch_batch_id=first_batch.id))
+    db.add(PublishJob(clean_job_id=job.id, status="done", published_count=1))
+    db.commit()
+    _create_monthly_pending_row(db, item_id="sb-2")
+
+    response = client.post("/api/clean/tasks/upsert-monthly", json={
+        "category_code": "soundbar",
+        "platform": "jd",
+        "month": 202605,
+    })
+
+    assert response.status_code == 400
+    assert "已有人工处理或发布记录" in response.json()["detail"]
+    assert db.query(CleanJobItemRecord).filter_by(clean_job_id=job.id).count() == 1
+
+
+@pytest.mark.parametrize("status", ["matching", "processing"])
+def test_upsert_monthly_clean_task_rejects_processing_existing_task(db, status):
+    client = _make_client(db)
+    _create_monthly_pending_row(db, item_id="sb-1")
+    job = CleanJobRecord(
+        file_ids=[],
+        rules={"dedup": True},
+        status=status,
+        task_name="回音壁 / jd / 202605",
+        category_code="soundbar",
+        platform="jd",
+        source_scope={"months": [202605], "platforms": ["jd"], "dispatch_batch_ids": [], "file_ids": []},
+    )
+    db.add(job)
+    db.commit()
+
+    response = client.post("/api/clean/tasks/upsert-monthly", json={
+        "category_code": "soundbar",
+        "platform": "jd",
+        "month": 202605,
+    })
+
+    assert response.status_code == 400
+    assert "不能追加" in response.json()["detail"]
+
+
+def test_run_match_rerun_clears_old_match_attrs(db, monkeypatch):
+    from app.services.matcher import run_match
+
+    upload = UploadFileRecord(filename="matcher-rerun.xlsx", platform="jd", row_count=1, status="done")
+    db.add(upload)
+    db.flush()
+    raw = RawDataRecord(file_id=upload.id, platform="jd", month=202605, item_id="sb-1", item_name="未匹配回音壁")
+    job = CleanJobRecord(file_ids=[upload.id], rules={"dedup": True}, status="reviewing", row_in=1, row_out=1)
+    db.add_all([raw, job])
+    db.flush()
+    cleaned = CleanedDataRecord(clean_job_id=job.id, raw_data_id=raw.id, platform="jd", month=202605, item_id="sb-1", item_name="未匹配回音壁")
+    old_match = MatchResult(clean_job_id=job.id, raw_data_id=raw.id, match_status="matched", matched_by="auto", model_id=1)
+    db.add_all([cleaned, old_match])
+    db.flush()
+    old_match_id = old_match.id
+    db.add(MatchResultAttr(match_result_id=old_match_id, attr_name="尺寸", attr_value="旧", rule_id=None))
+    db.commit()
+
+    monkeypatch.setattr("app.services.matcher.audit_price", lambda match_db, match_result_ids, commit=True: {"audited": 0})
+
+    result = run_match(db, job.id)
+
+    assert result["total"] == 1
+    assert db.query(MatchResultAttr).filter_by(match_result_id=old_match_id).count() == 0
+
+
+def test_upsert_monthly_clean_task_clears_old_filtered_items_on_rerun(db, monkeypatch):
+    client = _make_client(db)
+    first_raw, first_batch, first_upload = _create_monthly_pending_row(db, item_id="sb-1")
+    job = CleanJobRecord(
+        file_ids=[first_upload.id],
+        rules={"dedup": True},
+        status="reviewing",
+        row_in=1,
+        row_out=1,
+        task_name="回音壁 / jd / 202605",
+        category_code="soundbar",
+        platform="jd",
+        source_scope={"months": [202605], "platforms": ["jd"], "dispatch_batch_ids": [first_batch.id], "file_ids": [first_upload.id]},
+    )
+    db.add(job)
+    db.flush()
+    db.add_all([
+        CleanJobItemRecord(clean_job_id=job.id, raw_data_id=first_raw.id, category_code="soundbar", platform="jd", dispatch_batch_id=first_batch.id),
+        FilteredItem(clean_job_id=job.id, raw_data_id=first_raw.id, matched_keyword="stale"),
+    ])
+    db.commit()
+    _create_monthly_pending_row(db, item_id="sb-2")
+
+    monkeypatch.setattr("app.api.clean.run_match", lambda match_db, clean_job_id, **kwargs: {"total": 2, "matched": 0})
+
+    response = client.post("/api/clean/tasks/upsert-monthly", json={
+        "category_code": "soundbar",
+        "platform": "jd",
+        "month": 202605,
+    })
+
+    assert response.status_code == 200
+    assert db.query(FilteredItem).filter_by(clean_job_id=job.id).count() == 0
+
+
+def test_run_match_commit_false_passes_commit_false_to_audit_price(db, monkeypatch):
+    from app.services.matcher import run_match
+
+    model = ModelRecord(brand_code="SONY", model_code="HTA9", brand_name="索尼", model_name="HT-A9", category_code="soundbar")
+    upload = UploadFileRecord(filename="audit-commit-false.xlsx", platform="jd", row_count=1, status="done")
+    db.add_all([model, upload])
+    db.flush()
+    raw = RawDataRecord(file_id=upload.id, platform="jd", month=202605, item_id="sb-1", item_name="索尼 HTA9 回音壁", brand_raw="SONY")
+    job = CleanJobRecord(file_ids=[upload.id], rules={"dedup": True}, status="reviewing", row_in=1, row_out=1)
+    db.add_all([raw, job])
+    db.flush()
+    db.add(CleanedDataRecord(clean_job_id=job.id, raw_data_id=raw.id, platform="jd", month=202605, item_id="sb-1", item_name="索尼 HTA9 回音壁", brand_raw="SONY"))
+    db.commit()
+    audit_calls = []
+
+    def fake_audit_price(match_db, match_result_ids, commit=True):
+        audit_calls.append((list(match_result_ids), commit))
+        return {"audited": len(match_result_ids)}
+
+    monkeypatch.setattr("app.services.matcher.audit_price", fake_audit_price)
+
+    result = run_match(db, job.id, commit=False)
+
+    assert result["matched"] == 1
+    assert len(audit_calls) == 1
+    assert audit_calls[0][1] is False
+
+
+def test_upsert_monthly_clean_task_preserves_existing_rules_when_not_provided(db, monkeypatch):
+    client = _make_client(db)
+    first_raw, first_batch, first_upload = _create_monthly_pending_row(db, item_id="sb-1")
+    custom_rules = {"dedup": False, "custom": "keep"}
+    job = CleanJobRecord(
+        file_ids=[first_upload.id],
+        rules=custom_rules,
+        status="reviewing",
+        row_in=1,
+        row_out=1,
+        task_name="回音壁 / jd / 202605",
+        category_code="soundbar",
+        platform="jd",
+        source_scope={"months": [202605], "platforms": ["jd"], "dispatch_batch_ids": [first_batch.id], "file_ids": [first_upload.id]},
+    )
+    db.add(job)
+    db.flush()
+    db.add(CleanJobItemRecord(clean_job_id=job.id, raw_data_id=first_raw.id, category_code="soundbar", platform="jd", dispatch_batch_id=first_batch.id))
+    db.commit()
+    _create_monthly_pending_row(db, item_id="sb-2")
+
+    monkeypatch.setattr("app.api.clean.run_match", lambda match_db, clean_job_id, **kwargs: {"total": 2, "matched": 0})
+
+    response = client.post("/api/clean/tasks/upsert-monthly", json={
+        "category_code": "soundbar",
+        "platform": "jd",
+        "month": 202605,
+    })
+
+    assert response.status_code == 200
+    assert response.json()["job"]["rules"] == custom_rules
+    db.refresh(job)
+    assert job.rules == custom_rules
+
+
+def test_upsert_monthly_clean_task_rejects_blank_platform(db):
+    client = _make_client(db)
+
+    response = client.post("/api/clean/tasks/upsert-monthly", json={
+        "category_code": "soundbar",
+        "platform": "   ",
+        "month": 202605,
+    })
+
+    assert response.status_code == 422
+
+
+def test_upsert_monthly_clean_task_rejects_invalid_month(db):
+    client = _make_client(db)
+
+    response = client.post("/api/clean/tasks/upsert-monthly", json={
+        "category_code": "soundbar",
+        "platform": "jd",
+        "month": 202613,
+    })
+
+    assert response.status_code == 422
+
+
+def test_upsert_monthly_clean_task_rolls_back_failed_rerun_and_allows_retry(db, monkeypatch):
+    client = _make_client(db, raise_server_exceptions=False)
+    _create_monthly_pending_row(db, item_id="sb-1")
+
+    def failing_run_clean(*args, **kwargs):
+        raise RuntimeError("clean failed")
+
+    monkeypatch.setattr("app.api.clean.run_clean", failing_run_clean)
+
+    response = client.post("/api/clean/tasks/upsert-monthly", json={
+        "category_code": "soundbar",
+        "platform": "jd",
+        "month": 202605,
+    })
+
+    assert response.status_code == 500
+    assert db.query(CleanJobRecord).filter_by(category_code="soundbar", platform="jd").count() == 0
+    assert db.query(CleanJobItemRecord).filter_by(category_code="soundbar", platform="jd").count() == 0
+    assert db.query(CleanedDataRecord).count() == 0
+    assert db.query(MatchResult).count() == 0
+
+    monkeypatch.setattr("app.api.clean.run_clean", lambda *args, **kwargs: 1)
+    monkeypatch.setattr("app.api.clean.run_match", lambda match_db, clean_job_id, **kwargs: {"total": 1, "matched": 0})
+
+    retry = client.post("/api/clean/tasks/upsert-monthly", json={
+        "category_code": "soundbar",
+        "platform": "jd",
+        "month": 202605,
+    })
+
+    assert retry.status_code == 200
+    assert retry.json()["action"] == "created"
+    assert db.query(CleanJobRecord).filter_by(category_code="soundbar", platform="jd").count() == 1
+    assert db.query(CleanJobItemRecord).filter_by(category_code="soundbar", platform="jd").count() == 1
+
+
+def test_upsert_monthly_clean_task_clears_old_match_child_rows_on_rerun(db, monkeypatch):
+    client = _make_client(db)
+    first_raw, first_batch, first_upload = _create_monthly_pending_row(db, item_id="sb-1")
+    job = CleanJobRecord(
+        file_ids=[first_upload.id],
+        rules={"dedup": True},
+        status="reviewing",
+        row_in=1,
+        row_out=1,
+        task_name="回音壁 / jd / 202605",
+        category_code="soundbar",
+        platform="jd",
+        source_scope={"months": [202605], "platforms": ["jd"], "dispatch_batch_ids": [first_batch.id], "file_ids": [first_upload.id]},
+    )
+    db.add(job)
+    db.flush()
+    db.add(CleanJobItemRecord(clean_job_id=job.id, raw_data_id=first_raw.id, category_code="soundbar", platform="jd", dispatch_batch_id=first_batch.id))
+    old_cleaned = CleanedDataRecord(clean_job_id=job.id, raw_data_id=first_raw.id, item_id="old-cleaned")
+    old_match = MatchResult(clean_job_id=job.id, raw_data_id=first_raw.id, match_status="matched", matched_by="auto", model_id=1)
+    db.add_all([old_cleaned, old_match])
+    db.flush()
+    old_match_id = old_match.id
+    db.add(MatchResultCandidate(match_result_id=old_match_id, model_id=1, match_source="s1", score=10, rank=1))
+    db.commit()
+    _create_monthly_pending_row(db, item_id="sb-2")
+
+    monkeypatch.setattr("app.api.clean.run_match", lambda match_db, clean_job_id, **kwargs: {"total": 2, "matched": 0})
+
+    response = client.post("/api/clean/tasks/upsert-monthly", json={
+        "category_code": "soundbar",
+        "platform": "jd",
+        "month": 202605,
+    })
+
+    assert response.status_code == 200
+    assert db.query(MatchResult).filter_by(id=old_match_id).count() == 0
+    assert db.query(MatchResultCandidate).filter_by(match_result_id=old_match_id).count() == 0
+    assert db.query(MatchResultAttr).filter_by(match_result_id=old_match_id).count() == 0
+    remaining_match_ids = {row.id for row in db.query(MatchResult.id).all()}
+    assert all(
+        candidate.match_result_id in remaining_match_ids
+        for candidate in db.query(MatchResultCandidate).all()
+    )
+    assert all(
+        attr.match_result_id in remaining_match_ids
+        for attr in db.query(MatchResultAttr).all()
+    )
+
+
 def test_create_clean_task_endpoint_creates_snapshot_and_runs_clean_and_match(db, monkeypatch):
     client = _make_client(db)
     category = Category(code="router", name="路由器")
@@ -240,7 +1081,7 @@ def test_create_clean_task_endpoint_creates_snapshot_and_runs_clean_and_match(db
 
     run_match_calls = []
 
-    def fake_run_match(match_db, clean_job_id):
+    def fake_run_match(match_db, clean_job_id, **kwargs):
         run_match_calls.append(clean_job_id)
         return {"total": 1, "matched": 0}
 

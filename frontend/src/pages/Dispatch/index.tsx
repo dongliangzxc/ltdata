@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   Tabs, Table, Button, Tag, Space, Modal, Form, Select,
   Input, InputNumber, Switch, message, Descriptions, Typography,
@@ -12,9 +12,8 @@ import {
   listUploadFiles, listDispatchBatches, runDispatch,
   getDispatchBatchStats, listDispatchUnmatched, listDispatchRules,
   createDispatchRule, updateDispatchRule, deleteDispatchRule,
-  createCleanTask, getCleanPoolSummary,
   type DispatchBatchStatsResponse, type DispatchCategoryStat, type DispatchRuleStat,
-  type DispatchUnmatchedRow, type CleanPoolCategoryItem
+  type DispatchUnmatchedRow
 } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 
@@ -118,12 +117,6 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
   const [statsVisible, setStatsVisible] = useState(false)
   const [statsData, setStatsData] = useState<DispatchBatchStatsResponse | null>(null)
   const [currentStatsBatch, setCurrentStatsBatch] = useState<DispatchBatch | null>(null)
-  const [taskModalOpen, setTaskModalOpen] = useState(false)
-  const [taskCategory, setTaskCategory] = useState<DispatchCategoryStat | null>(null)
-  const [taskBatchId, setTaskBatchId] = useState<number | null>(null)
-  const [taskPlatform, setTaskPlatform] = useState<string | null>(null)
-  const [taskName, setTaskName] = useState('')
-  const [creatingTask, setCreatingTask] = useState(false)
   const [unmatchedVisible, setUnmatchedVisible] = useState(false)
   const [unmatchedPage, setUnmatchedPage] = useState(1)
   const [unmatchedPageSize, setUnmatchedPageSize] = useState(20)
@@ -154,41 +147,6 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
       refreshDeps: [currentStatsBatch?.id, unmatchedPage, unmatchedPageSize, unmatchedKeyword],
     }
   )
-  const {
-    data: poolSummaryResult,
-    loading: poolSummaryLoading,
-    refresh: refreshPoolSummary,
-  } = useRequest(
-    async () => {
-      if (!currentStatsBatch) return { dispatchBatchId: null, items: [] as CleanPoolCategoryItem[] }
-      const dispatchBatchId = currentStatsBatch.id
-      const res = await getCleanPoolSummary({ dispatch_batch_id: dispatchBatchId })
-      return { dispatchBatchId, items: res.data }
-    },
-    {
-      ready: !!currentStatsBatch,
-      refreshDeps: [currentStatsBatch?.id],
-    }
-  )
-
-  const poolSummaryReady = !!currentStatsBatch
-    && poolSummaryResult?.dispatchBatchId === currentStatsBatch.id
-    && !poolSummaryLoading
-  const currentPoolSummary = poolSummaryReady ? poolSummaryResult.items : []
-  const poolByCategory = useMemo(() => (
-    currentPoolSummary.reduce<Record<string, CleanPoolCategoryItem[]>>((acc, item) => {
-      if (!acc[item.category_code]) acc[item.category_code] = []
-      acc[item.category_code].push(item)
-      return acc
-    }, {})
-  ), [currentPoolSummary])
-  const taskPoolRows = taskCategory && taskBatchId === currentStatsBatch?.id
-    ? (poolByCategory[taskCategory.category_code] ?? [])
-    : []
-  const taskPlatformOptions = taskPoolRows
-    .filter(row => row.platform)
-    .map(row => ({ value: row.platform as string, label: formatPlatform(row.platform) }))
-
   // 构建 file_id → latest done batch 映射
   const batchByFile = (batches ?? []).reduce<Record<number, DispatchBatch>>((acc, b) => {
     if (b.status === 'done') {
@@ -205,44 +163,6 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
       refreshBatches()
     } finally {
       setRunningIds(prev => { const s = new Set(prev); s.delete(fileId); return s })
-    }
-  }
-
-  const openCreateTask = (category: DispatchCategoryStat) => {
-    if (!currentStatsBatch || !poolSummaryReady) return
-    const rows = poolByCategory[category.category_code] ?? []
-    setTaskCategory(category)
-    setTaskBatchId(currentStatsBatch.id)
-    setTaskPlatform(rows.length === 1 ? rows[0].platform : null)
-    setTaskName('')
-    setTaskModalOpen(true)
-  }
-
-  const closeTaskModal = () => {
-    setTaskModalOpen(false)
-    setTaskCategory(null)
-    setTaskBatchId(null)
-    setTaskPlatform(null)
-    setTaskName('')
-  }
-
-  const handleCreateTask = async () => {
-    if (!currentStatsBatch || !taskCategory || taskBatchId !== currentStatsBatch.id || !poolSummaryReady) return
-    setCreatingTask(true)
-    try {
-      await createCleanTask({
-        category_code: taskCategory.category_code,
-        platform: taskPlatform,
-        dispatch_batch_id: currentStatsBatch.id,
-        task_name: taskName.trim() || undefined,
-        rules: { dedup: true },
-      })
-      message.success('清洗任务已创建，将自动执行清洗匹配')
-      closeTaskModal()
-      await refreshStats(currentStatsBatch.id)
-      refreshPoolSummary()
-    } finally {
-      setCreatingTask(false)
     }
   }
 
@@ -385,6 +305,12 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
               style={{ marginBottom: 12 }}
               message="同一原始行可分发到多个类目；分发结果数可能大于总行数。同一类目命中多条规则时只记录优先级最高的规则。规则内容为当前配置，修改规则后需重新分发才会改变命中结果。"
             />
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="分发完成后，命中的数据会进入清洗任务页的待入清洗队列。请在清洗任务页按品类、平台和月份创建或追加清洗任务。"
+            />
             <Table<DispatchCategoryStat>
               size="small"
               rowKey={row => row.category_code || 'unknown'}
@@ -421,79 +347,10 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
                 { title: '品类', dataIndex: 'category_name', render: (v: string | null) => v || '未知品类' },
                 { title: '品类编码', dataIndex: 'category_code', width: 160 },
                 { title: '行数', dataIndex: 'count', width: 120 },
-                {
-                  title: '待创建任务', width: 120,
-                  render: (_: unknown, row) => poolSummaryReady
-                    ? (poolByCategory[row.category_code] ?? []).reduce((sum, item) => sum + item.pending_count, 0)
-                    : '-'
-                },
-                {
-                  title: '进行中任务', width: 120,
-                  render: (_: unknown, row) => poolSummaryReady
-                    ? (poolByCategory[row.category_code] ?? []).reduce((sum, item) => sum + item.active_job_count, 0)
-                    : '-'
-                },
-                {
-                  title: '操作', width: 140,
-                  render: (_: unknown, row) => (
-                    <Button
-                      type="link"
-                      size="small"
-                      disabled={!poolSummaryReady}
-                      onClick={() => openCreateTask(row)}
-                    >
-                      创建清洗任务
-                    </Button>
-                  )
-                },
               ]}
             />
           </>
         )}
-      </Modal>
-      <Modal
-        title="创建清洗任务"
-        open={taskModalOpen}
-        onCancel={closeTaskModal}
-        onOk={handleCreateTask}
-        confirmLoading={creatingTask}
-        okButtonProps={{ disabled: !poolSummaryReady || taskBatchId !== currentStatsBatch?.id }}
-        okText="创建并自动清洗匹配"
-        cancelText="取消"
-      >
-        <Space direction="vertical" style={{ width: '100%' }} size="middle">
-          <Descriptions size="small" column={1} bordered>
-            <Descriptions.Item label="品类">
-              {taskCategory ? `${taskCategory.category_name || '未知品类'}（${taskCategory.category_code}）` : '-'}
-            </Descriptions.Item>
-          </Descriptions>
-          <div>
-            <Text>平台</Text>
-            <Select
-              allowClear
-              placeholder="全部平台"
-              value={taskPlatform ?? undefined}
-              options={taskPlatformOptions}
-              style={{ width: '100%', marginTop: 8 }}
-              onChange={value => setTaskPlatform(value ?? null)}
-            />
-          </div>
-          <div>
-            <Text>任务名称</Text>
-            <Input
-              allowClear
-              value={taskName}
-              placeholder="留空则使用系统默认名称"
-              style={{ marginTop: 8 }}
-              onChange={e => setTaskName(e.target.value)}
-            />
-          </div>
-          <Alert
-            type="info"
-            showIcon
-            message="任务会基于当前待处理池创建快照，后续新增数据不会影响本次任务范围，确保清洗与匹配过程稳定可追溯。"
-          />
-        </Space>
       </Modal>
       <Modal
         title="未识别明细"

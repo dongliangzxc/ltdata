@@ -8,6 +8,9 @@ from app.models.schemas import (
     CleanJobItemRecord,
     CleanJobRecord,
     DispatchItem,
+    MatchResult,
+    MatchResultAttr,
+    PublishJob,
     RawDataRecord,
 )
 
@@ -101,6 +104,61 @@ def _pending_dispatch_query(
     return q
 
 
+def _job_months(job: CleanJobRecord) -> list[int]:
+    scope = job.source_scope
+    if not isinstance(scope, dict):
+        return []
+    months = scope.get("months")
+    if not isinstance(months, list):
+        return []
+    parsed = []
+    for month in months:
+        try:
+            parsed.append(int(month))
+        except (TypeError, ValueError):
+            continue
+    return parsed
+
+
+def _find_monthly_job(
+    db: Session,
+    *,
+    category_code: str,
+    platform: str | None,
+    month: int,
+) -> CleanJobRecord | None:
+    normalized_platform = normalize_platform(platform)
+    platform_aliases = platform_aliases_for(normalized_platform)
+    if not platform_aliases:
+        return None
+    candidates = (
+        db.query(CleanJobRecord)
+        .filter(
+            CleanJobRecord.category_code == category_code,
+            func.lower(CleanJobRecord.platform).in_(platform_aliases),
+        )
+        .order_by(CleanJobRecord.id.desc())
+        .all()
+    )
+    for job in candidates:
+        if month in _job_months(job):
+            return job
+    return None
+
+
+def _monthly_pending_rows(
+    db: Session,
+    *,
+    category_code: str | None = None,
+    platform: str | None = None,
+    month: int | None = None,
+):
+    q = _pending_dispatch_query(db, category_code=category_code, platform=platform)
+    if month is not None:
+        q = q.filter(RawDataRecord.month == month)
+    return q
+
+
 def get_clean_pool_summary(db: Session, dispatch_batch_id: int | None = None) -> list[dict]:
     platform_label = _platform_label_expr()
     current_batch_count = func.count(DispatchItem.id)
@@ -153,6 +211,53 @@ def get_clean_pool_summary(db: Session, dispatch_batch_id: int | None = None) ->
             "active_job_count": active_job_count,
         })
 
+    return result
+
+
+def get_monthly_clean_pool(
+    db: Session,
+    *,
+    category_code: str | None = None,
+    platform: str | None = None,
+    month: int | None = None,
+) -> list[dict]:
+    platform_label = _platform_label_expr()
+    pending = _monthly_pending_rows(db, category_code=category_code, platform=platform, month=month)
+    grouped = (
+        pending.with_entities(
+            DispatchItem.category_code.label("category_code"),
+            Category.name.label("category_name"),
+            platform_label.label("platform"),
+            RawDataRecord.month.label("month"),
+            func.count(DispatchItem.id).label("pending_count"),
+        )
+        .join(Category, Category.code == DispatchItem.category_code)
+        .filter(RawDataRecord.month.isnot(None))
+        .group_by(DispatchItem.category_code, Category.name, platform_label, RawDataRecord.month)
+        .order_by(DispatchItem.category_code, platform_label, RawDataRecord.month)
+        .all()
+    )
+
+    result = []
+    for row in grouped:
+        normalized_platform = normalize_platform(row.platform)
+        row_month = int(row.month)
+        job = _find_monthly_job(
+            db,
+            category_code=row.category_code,
+            platform=normalized_platform,
+            month=row_month,
+        )
+        result.append({
+            "category_code": row.category_code,
+            "category_name": row.category_name,
+            "platform": normalized_platform,
+            "month": row_month,
+            "pending_count": row.pending_count,
+            "existing_job_id": job.id if job else None,
+            "existing_job_name": job.task_name if job else None,
+            "existing_job_status": job.status if job else None,
+        })
     return result
 
 
@@ -218,3 +323,157 @@ def create_category_task_snapshot(
     ])
     db.flush()
     return job, len(rows)
+
+
+APPENDABLE_TASK_STATUSES = {"reviewing", "done", "published"}
+REVIEWED_MATCH_STATUSES = {"confirmed", "excluded", "disputed"}
+
+
+def _default_monthly_task_name(db: Session, category_code: str, platform: str, month: int) -> str:
+    category = db.query(Category).filter(Category.code == category_code).first()
+    category_name = category.name if category else category_code
+    return f"{category_name} / {platform} / {month}"
+
+
+def _scope_list(scope: dict, key: str) -> list:
+    value = scope.get(key, [])
+    return value if isinstance(value, list) else []
+
+
+def _safe_int_values(values: list) -> list[int]:
+    parsed = []
+    for value in values:
+        if value is None:
+            continue
+        try:
+            parsed.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    return parsed
+
+
+def _safe_existing_int_list(value) -> list[int]:
+    return _safe_int_values(value if isinstance(value, list) else [])
+
+
+def _merge_scope(scope: dict | None, *, months: list[int], platforms: list[str], dispatch_batch_ids: list[int], file_ids: list[int]) -> dict:
+    current = scope if isinstance(scope, dict) else {}
+    return {
+        "months": sorted({*_safe_int_values(_scope_list(current, "months")), *months}),
+        "platforms": sorted({str(v) for v in _scope_list(current, "platforms") + platforms if v}),
+        "dispatch_batch_ids": sorted({*_safe_int_values(_scope_list(current, "dispatch_batch_ids")), *dispatch_batch_ids}),
+        "file_ids": sorted({*_safe_int_values(_scope_list(current, "file_ids")), *file_ids}),
+    }
+
+
+def _has_reviewed_or_published_state(db: Session, clean_job_id: int) -> bool:
+    reviewed_exists = db.query(MatchResult.id).filter(
+        MatchResult.clean_job_id == clean_job_id,
+        or_(
+            MatchResult.match_status.in_(REVIEWED_MATCH_STATUSES),
+            MatchResult.is_disabled == 1,
+            MatchResult.sales_coefficient.isnot(None),
+            MatchResult.dispute_reason.isnot(None),
+            MatchResult.review_note.isnot(None),
+            MatchResult.reviewed_at.isnot(None),
+        ),
+    ).first()
+    if reviewed_exists:
+        return True
+
+    attr_exists = (
+        db.query(MatchResultAttr.id)
+        .join(MatchResult, MatchResult.id == MatchResultAttr.match_result_id)
+        .filter(MatchResult.clean_job_id == clean_job_id)
+        .first()
+    )
+    if attr_exists:
+        return True
+
+    return db.query(PublishJob.id).filter(PublishJob.clean_job_id == clean_job_id).first() is not None
+
+
+def upsert_monthly_task_snapshot(
+    db: Session,
+    *,
+    category_code: str,
+    platform: str,
+    month: int,
+    rules: dict | None,
+):
+    normalized_platform = normalize_platform(platform)
+    rows = (
+        _monthly_pending_rows(
+            db,
+            category_code=category_code,
+            platform=normalized_platform,
+            month=month,
+        )
+        .order_by(DispatchItem.id)
+        .all()
+    )
+    if not rows:
+        raise ValueError("该任务范围没有待入清洗队列的数据")
+
+    job = _find_monthly_job(
+        db,
+        category_code=category_code,
+        platform=normalized_platform,
+        month=month,
+    )
+    action = "appended" if job else "created"
+    if job and job.status not in APPENDABLE_TASK_STATUSES:
+        raise ValueError(f"任务状态为 {job.status}，不能追加数据")
+    if job and _has_reviewed_or_published_state(db, job.id):
+        raise ValueError("任务已有人工处理或发布记录，不能直接追加数据")
+
+    file_ids = sorted({raw.file_id for _, raw in rows if raw.file_id is not None})
+    dispatch_batch_ids = sorted({dispatch_item.batch_id for dispatch_item, _ in rows if dispatch_item.batch_id is not None})
+
+    if job is None:
+        job = CleanJobRecord(
+            file_ids=file_ids,
+            rules=rules or {"dedup": True},
+            status="created",
+            row_in=0,
+            row_out=0,
+            task_name=_default_monthly_task_name(db, category_code, normalized_platform, month),
+            category_code=category_code,
+            platform=normalized_platform,
+            dispatch_category_code=category_code,
+            source_scope={
+                "months": [month],
+                "platforms": [normalized_platform],
+                "dispatch_batch_ids": dispatch_batch_ids,
+                "file_ids": file_ids,
+            },
+        )
+        db.add(job)
+        db.flush()
+    else:
+        job.file_ids = sorted({*_safe_existing_int_list(job.file_ids), *file_ids})
+        if rules is not None:
+            job.rules = rules
+        job.source_scope = _merge_scope(
+            job.source_scope,
+            months=[month],
+            platforms=[normalized_platform],
+            dispatch_batch_ids=dispatch_batch_ids,
+            file_ids=file_ids,
+        )
+
+    new_items = [
+        CleanJobItemRecord(
+            clean_job_id=job.id,
+            raw_data_id=raw.id,
+            category_code=dispatch_item.category_code,
+            platform=normalize_platform(raw.platform),
+            dispatch_batch_id=dispatch_item.batch_id,
+        )
+        for dispatch_item, raw in rows
+    ]
+    db.add_all(new_items)
+    db.flush()
+    new_snapshot_ids = [item.id for item in new_items]
+    job.row_in = db.query(CleanJobItemRecord).filter(CleanJobItemRecord.clean_job_id == job.id).count()
+    return job, len(rows), action, new_snapshot_ids

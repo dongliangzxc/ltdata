@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.models.schemas import AttrRule, MatchResult, MatchResultAttr, RawDataRecord, ModelRecord
 
 
-def run_attribute_matching(db: Session, match_result_ids: list[int]) -> dict:
+def run_attribute_matching(db: Session, match_result_ids: list[int], commit: bool = True) -> dict:
     """
     对指定 match_result_ids 执行属性规则匹配。
     返回 {"matched_attrs": N, "items_processed": N}
@@ -97,5 +97,6 @@ def run_attribute_matching(db: Session, match_result_ids: list[int]) -> dict:
                 existing_attrs[key] = new_attr
             total_attrs += 1
 
-    db.commit()
+    if commit:
+        db.commit()
     return {"matched_attrs": total_attrs, "items_processed": items_processed}

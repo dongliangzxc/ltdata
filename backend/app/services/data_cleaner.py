@@ -152,6 +152,7 @@ def run_clean(
     rules: dict,
     dispatch_batch_id: int | None = None,
     dispatch_category_code: str | None = None,
+    commit: bool = True,
 ) -> int:
     """执行清洗逻辑，返回写入 cleaned_data 的行数"""
     dedup: bool = rules.get("dedup", True)
@@ -268,5 +269,6 @@ def run_clean(
         job.row_out = len(cleaned)
         job.row_filtered = len(filtered)
 
-    db.commit()
+    if commit:
+        db.commit()
     return len(cleaned)

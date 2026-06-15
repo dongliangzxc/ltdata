@@ -52,7 +52,7 @@ def _round_price_ref(avg_price) -> Decimal:
     return average.quantize(Decimal("0.01"))
 
 
-def audit_price(db: Session, match_result_ids: list[int]) -> dict:
+def audit_price(db: Session, match_result_ids: list[int], commit: bool = True) -> dict:
     if not match_result_ids:
         return {"audited": 0}
 
@@ -85,7 +85,8 @@ def audit_price(db: Session, match_result_ids: list[int]) -> dict:
             match_result.price_flag = flag
             match_result.price_ref = None if flag == "no_history" else _round_price_ref(avg_price)
 
-        db.commit()
+        if commit:
+            db.commit()
     finally:
         analytics_db.close()
 

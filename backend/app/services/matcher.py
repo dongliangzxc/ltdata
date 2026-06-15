@@ -49,7 +49,7 @@ brand_identified 标记：S1/S2/S3 任意阶段识别到品牌即置 1，即使�
 import logging
 
 from sqlalchemy.orm import Session
-from app.models.schemas import CleanedDataRecord, ModelRecord, ModelAlias, MatchResult, MatchResultCandidate, ItemUrlMapping, MatchRule, HistoricalMapping
+from app.models.schemas import CleanedDataRecord, ModelRecord, ModelAlias, MatchResult, MatchResultAttr, MatchResultCandidate, ItemUrlMapping, MatchRule, HistoricalMapping
 from app.utils.url_utils import extract_item_id
 from app.services.attribute_matcher import run_attribute_matching
 from app.services.price_auditor import audit_price
@@ -142,7 +142,7 @@ def _history_lookup(db: Session, row: CleanedDataRecord) -> HistoricalMapping | 
     return None
 
 
-def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
+def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = True) -> dict:
     """
     progress_cb(processed: int, total: int, matched: int) — 每批次调用一次
     """
@@ -153,6 +153,9 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
         .all()
     ]
     if old_mr_ids:
+        db.query(MatchResultAttr).filter(
+            MatchResultAttr.match_result_id.in_(old_mr_ids)
+        ).delete(synchronize_session=False)
         db.query(MatchResultCandidate).filter(
             MatchResultCandidate.match_result_id.in_(old_mr_ids)
         ).delete(synchronize_session=False)
@@ -325,7 +328,10 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
                 matched_count += 1
                 if len(results) >= BATCH:
                     db.bulk_save_objects(results)
-                    db.commit()
+                    if commit:
+                        db.commit()
+                    else:
+                        db.flush()
                     if progress_cb:
                         progress_cb(i + 1, total, matched_count)
                     results = []
@@ -351,7 +357,10 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
                 matched_count += 1
             if len(results) >= BATCH:
                 db.bulk_save_objects(results)
-                db.commit()
+                if commit:
+                    db.commit()
+                else:
+                    db.flush()
                 if progress_cb:
                     progress_cb(i + 1, total, matched_count)
                 results = []
@@ -384,7 +393,10 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
             matched_count += 1
             if len(results) >= BATCH:
                 db.bulk_save_objects(results)
-                db.commit()
+                if commit:
+                    db.commit()
+                else:
+                    db.flush()
                 if progress_cb:
                     progress_cb(i + 1, total, matched_count)
                 results = []
@@ -480,14 +492,20 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
 
         if len(results) >= BATCH:
             db.bulk_save_objects(results)
-            db.commit()
+            if commit:
+                db.commit()
+            else:
+                db.flush()
             if progress_cb:
                 progress_cb(i + 1, total, matched_count)
             results = []
 
     if results:
         db.bulk_save_objects(results)
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
 
     # ── 写入候选记录 ──────────────────────────────────────────────
     if raw_data_candidates:
@@ -519,7 +537,10 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
                 ))
         if candidate_records:
             db.bulk_save_objects(candidate_records)
-            db.commit()
+            if commit:
+                db.commit()
+            else:
+                db.flush()
 
     # 触发属性匹配（仅对 matched/url_matched 状态）
     matched_result_ids = [
@@ -531,11 +552,14 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None) -> dict:
         .all()
     ]
     if matched_result_ids:
-        run_attribute_matching(db, matched_result_ids)
-        try:
-            audit_price(db, matched_result_ids)
-        except Exception:
-            logger.exception("Price audit failed after matching clean_job_id=%s", clean_job_id)
-            db.rollback()
+        run_attribute_matching(db, matched_result_ids, commit=commit)
+        if commit:
+            try:
+                audit_price(db, matched_result_ids, commit=commit)
+            except Exception:
+                logger.exception("Price audit failed after matching clean_job_id=%s", clean_job_id)
+                db.rollback()
+        else:
+            audit_price(db, matched_result_ids, commit=commit)
 
     return {"total": total, "matched": matched_count, "pending": total - matched_count}

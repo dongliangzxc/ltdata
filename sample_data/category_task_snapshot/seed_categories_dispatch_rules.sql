@@ -9,5 +9,5 @@ ON DUPLICATE KEY UPDATE name = VALUES(name), updated_at = NOW();
 
 INSERT INTO dispatch_rules (category_code, platform, field, match_type, value, item_name_keyword, priority, is_active, created_at, updated_at)
 VALUES
-  ('soundbar', 'jd', 'category_lv2', 'contains', '回音壁', NULL, 10, 1, NOW(), NOW()),
-  ('router', 'jd', 'category_lv2', 'contains', '路由器', NULL, 20, 1, NOW(), NOW());
+  ('soundbar', 'jd', 'category_lv2', 'equals', '回音壁/Soundbar音响', NULL, 10, 1, NOW(), NOW()),
+  ('router', 'jd', 'category_lv2', 'equals', '路由器', NULL, 20, 1, NOW(), NOW());

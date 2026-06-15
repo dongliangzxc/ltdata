@@ -4,7 +4,7 @@
 
 - `jd_category_snapshot_batch1.xlsx`：4 行，京东格式；2 行回音壁 + 2 行路由器，月份 202605。
 - `jd_category_snapshot_batch2.xlsx`：2 行，京东格式；1 行回音壁 + 1 行路由器，月份 202606。
-- `seed_categories_dispatch_rules.sql`：可选种子 SQL，用于创建 `soundbar` / `router` 品类和按 Lv2 类目分发的规则。
+- `seed_categories_dispatch_rules.sql`：可选种子 SQL，用于创建 `soundbar` / `router` 品类和按 Lv2 类目分发的规则；规则值支持用 `/`、`、`、`,` 分隔多个候选值。
 
 ## 推荐验证路径
 

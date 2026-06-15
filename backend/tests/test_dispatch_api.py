@@ -192,6 +192,75 @@ def test_run_dispatch_deduplicates_same_category_by_priority_then_id(client_and_
 
 
 
+def test_run_dispatch_rule_value_matches_any_split_value(client_and_db):
+    client, db = client_and_db
+    file_record = UploadFileRecord(filename="value-split.xlsx", platform="JD", row_count=3, status="done")
+    db.add(file_record)
+    db.flush()
+    db.add(DispatchRule(
+        category_code="soundbar",
+        platform="jd",
+        field="category_lv2",
+        match_type="equals",
+        value="回音壁/Soundbar音响、条形音箱",
+        priority=1,
+        is_active=1,
+    ))
+    for idx, category_lv2 in enumerate(["回音壁", "Soundbar音响", "家庭影院"], start=1):
+        db.add(RawDataRecord(
+            file_id=file_record.id,
+            platform="jd",
+            month=202605,
+            item_id=f"item-{idx}",
+            category_lv2=category_lv2,
+            item_name=f"商品 {idx}",
+        ))
+    db.commit()
+
+    response = client.post("/api/dispatch/run", json={"file_id": file_record.id})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["dispatched_rows"] == 2
+    assert payload["unmatched_rows"] == 1
+    items = db.query(DispatchItem).filter_by(batch_id=payload["id"]).all()
+    assert [item.raw_data_id for item in items] == [1, 2]
+
+
+
+def test_run_dispatch_rule_value_still_matches_full_value_with_slash(client_and_db):
+    client, db = client_and_db
+    file_record = UploadFileRecord(filename="value-full-slash.xlsx", platform="TMALL", row_count=1, status="done")
+    db.add(file_record)
+    db.flush()
+    db.add(DispatchRule(
+        category_code="tablet",
+        platform="tmall",
+        field="category_lv1",
+        match_type="equals",
+        value="平板电脑/MID",
+        priority=1,
+        is_active=1,
+    ))
+    db.add(RawDataRecord(
+        file_id=file_record.id,
+        platform="tmall",
+        month=202605,
+        item_id="item-1",
+        category_lv1="平板电脑/MID",
+        item_name="平板商品",
+    ))
+    db.commit()
+
+    response = client.post("/api/dispatch/run", json={"file_id": file_record.id})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["dispatched_rows"] == 1
+    assert payload["unmatched_rows"] == 0
+
+
+
 def test_run_dispatch_item_name_keyword_matches_any_split_keyword(client_and_db):
     client, db = client_and_db
     file_record = UploadFileRecord(filename="keyword.xlsx", platform="JD", row_count=5, status="done")

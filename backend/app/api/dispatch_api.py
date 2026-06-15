@@ -40,6 +40,14 @@ def _field_value(row: RawDataRecord, field: str) -> str:
     return (field_map.get(field) or "")
 
 
+def _split_match_values(value: str | None) -> list[str]:
+    if not value:
+        return []
+    parts = [value.strip()]
+    parts.extend(part.strip() for part in re.split(r"[/,，、\n\r]+", value) if part.strip())
+    return list(dict.fromkeys(parts))
+
+
 def _split_item_name_keywords(keyword: str | None) -> list[str]:
     if not keyword:
         return []
@@ -49,10 +57,11 @@ def _split_item_name_keywords(keyword: str | None) -> list[str]:
 def _rule_matches(row: RawDataRecord, rule: DispatchRule) -> bool:
     """判断一条规则是否命中该行"""
     val = _field_value(row, rule.field)
+    match_values = _split_match_values(rule.value)
     if rule.match_type == "contains":
-        main_match = rule.value in val
+        main_match = any(match_value in val for match_value in match_values)
     elif rule.match_type == "equals":
-        main_match = val == rule.value
+        main_match = any(val == match_value for match_value in match_values)
     else:
         main_match = False
 

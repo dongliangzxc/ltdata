@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
@@ -20,6 +21,10 @@ from app.models.schemas import (
     MatchResult,
     MatchResultAttr,
     MatchResultCandidate,
+    ModelRecord,
+    ItemUrlMapping,
+    PublishJob,
+    RawDataRecord,
     UploadFileRecord,
     Category,
     CleanJobItemRecord,
@@ -187,6 +192,102 @@ def _run_clean_and_match_for_job(db: Session, job: CleanJobRecord, commit: bool 
     _maybe_commit_and_refresh(db, job, commit)
 
 
+def _manual_confirmation_snapshot(db: Session, clean_job_id: int) -> dict[int, dict]:
+    rows = (
+        db.query(MatchResult)
+        .filter(
+            MatchResult.clean_job_id == clean_job_id,
+            MatchResult.match_status == "confirmed",
+            MatchResult.model_id.isnot(None),
+            MatchResult.matched_by == "manual",
+        )
+        .all()
+    )
+    return {
+        row.raw_data_id: {
+            "model_id": row.model_id,
+            "reviewed_at": row.reviewed_at,
+            "review_note": row.review_note,
+        }
+        for row in rows
+    }
+
+
+def _upsert_url_mapping_from_match(db: Session, raw: RawDataRecord, model: ModelRecord) -> bool:
+    if not raw.platform or not raw.item_id or not raw.item_url:
+        return False
+    existing = db.query(ItemUrlMapping).filter_by(platform=raw.platform, item_id=raw.item_id).first()
+    if existing:
+        existing.model_id = model.id
+        existing.brand_code = model.brand_code
+        existing.item_url = raw.item_url
+        existing.price = raw.price
+        existing.source = "match_confirm"
+        return True
+    db.add(ItemUrlMapping(
+        platform=raw.platform,
+        item_id=raw.item_id,
+        item_url=raw.item_url,
+        model_id=model.id,
+        brand_code=model.brand_code,
+        price=raw.price,
+        source="match_confirm",
+    ))
+    return True
+
+
+def _restore_manual_confirmations(db: Session, clean_job_id: int, snapshot: dict[int, dict]) -> tuple[int, list[int]]:
+    if not snapshot:
+        return 0, []
+    rows = (
+        db.query(MatchResult, RawDataRecord)
+        .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
+        .filter(
+            MatchResult.clean_job_id == clean_job_id,
+            MatchResult.raw_data_id.in_(snapshot.keys()),
+        )
+        .all()
+    )
+    model_ids = {saved["model_id"] for saved in snapshot.values()}
+    models = {model.id: model for model in db.query(ModelRecord).filter(ModelRecord.id.in_(model_ids)).all()}
+    restored_ids: list[int] = []
+    now = datetime.utcnow()
+    for mr, raw in rows:
+        saved = snapshot[mr.raw_data_id]
+        model = models.get(saved["model_id"])
+        if not model:
+            continue
+        mr.model_id = saved["model_id"]
+        mr.match_status = "confirmed"
+        mr.matched_by = "manual"
+        mr.match_source = "manual"
+        mr.dispute_reason = None
+        mr.review_note = saved.get("review_note")
+        mr.reviewed_at = saved.get("reviewed_at") or now
+        _upsert_url_mapping_from_match(db, raw, model)
+        restored_ids.append(mr.id)
+    return len(restored_ids), restored_ids
+
+
+def _finalize_rerun_metadata(db: Session, clean_job_id: int, restored_ids: list[int]) -> None:
+    final_ids = [
+        row.id
+        for row in db.query(MatchResult.id)
+        .filter(
+            MatchResult.clean_job_id == clean_job_id,
+            MatchResult.match_status.in_(["matched", "url_matched", "confirmed"]),
+        )
+        .all()
+    ]
+    from app.services.attribute_matcher import run_attribute_matching
+    from app.services.price_auditor import audit_price
+    ids = sorted(set(final_ids + restored_ids))
+    if not ids:
+        return
+    run_attribute_matching(db, ids, commit=False)
+    audit_price(db, ids, commit=False)
+
+
 def _run_clean_for_dispatch_category(
     db: Session,
     file_id: int,
@@ -326,6 +427,58 @@ def upsert_monthly_clean_task(payload: UpsertMonthlyCleanTaskIn, db: Session = D
         raise HTTPException(status_code=500, detail=f"更新清洗任务失败: {str(e)}") from e
 
     return {"job": job, "snapshot_count": snapshot_count, "action": action, "match_status": "done"}
+
+
+@router.post("/tasks/{job_id}/rerun-with-current-rules")
+def rerun_clean_task_with_current_rules(job_id: int, db: Session = Depends(get_db)):
+    job = db.query(CleanJobRecord).filter(CleanJobRecord.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="清洗任务不存在")
+    if db.query(PublishJob.id).filter(PublishJob.clean_job_id == job_id).first():
+        raise HTTPException(status_code=400, detail="已发布任务不支持重新处理")
+
+    snapshot = _manual_confirmation_snapshot(db, job_id)
+    try:
+        job.status = "cleaning"
+        db.flush()
+        _clear_clean_job_outputs(db, job_id)
+        row_out = run_clean(
+            db,
+            job.id,
+            job.file_ids or [],
+            job.rules or {},
+            job.dispatch_batch_id,
+            job.dispatch_category_code or job.category_code,
+            commit=False,
+        )
+        job.row_out = row_out
+        job.status = "matching"
+        db.flush()
+        run_match(db, job.id, commit=False)
+        restored_count, restored_ids = _restore_manual_confirmations(db, job.id, snapshot)
+        _finalize_rerun_metadata(db, job.id, restored_ids)
+        job.status = "reviewing"
+        db.flush()
+        db.commit()
+        db.refresh(job)
+    except Exception as e:
+        db.rollback()
+        failed_job = db.query(CleanJobRecord).filter(CleanJobRecord.id == job_id).first()
+        if failed_job:
+            failed_job.status = "failed"
+            db.commit()
+        raise HTTPException(status_code=500, detail=f"重新处理任务失败: {str(e)}") from e
+
+    counts = _match_status_counts(db, job.id)
+    filtered_count = db.query(FilteredItem).filter(FilteredItem.clean_job_id == job.id).count()
+    return {
+        "clean_job_id": job.id,
+        "row_out": job.row_out or 0,
+        "filtered_count": filtered_count,
+        "matched_count": counts.get("matched", 0) + counts.get("url_matched", 0) + counts.get("confirmed", 0),
+        "restored_confirmed_count": restored_count,
+        "pending_count": counts.get("pending", 0) + counts.get("text_only", 0) + counts.get("disputed", 0),
+    }
 
 
 @router.post("/run", response_model=CleanJobOut)

@@ -14,6 +14,8 @@ from app.models.schemas import (
     DispatchBatch,
     DispatchItem,
     FilteredItem,
+    InterventionRule,
+    ItemUrlMapping,
     MatchResult,
     MatchResultAttr,
     MatchResultCandidate,
@@ -951,6 +953,149 @@ def test_upsert_monthly_clean_task_preserves_existing_rules_when_not_provided(db
     assert response.json()["job"]["rules"] == custom_rules
     db.refresh(job)
     assert job.rules == custom_rules
+
+
+def test_rerun_with_current_rules_rejects_published_job(db):
+    client = _make_client(db)
+    job = CleanJobRecord(file_ids=[], status="published", row_in=1, row_out=1)
+    db.add(job)
+    db.flush()
+    db.add(PublishJob(clean_job_id=job.id, status="done", published_count=1))
+    db.commit()
+
+    response = client.post(f"/api/clean/tasks/{job.id}/rerun-with-current-rules")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "已发布任务不支持重新处理"
+
+
+def test_rerun_with_current_rules_filters_rows_and_restores_manual_confirm(db):
+    client = _make_client(db)
+    category = Category(code="projector", name="投影仪")
+    model = ModelRecord(brand_code="SONY", model_code="PX1", category_code="projector")
+    upload = UploadFileRecord(filename="rerun.xlsx", platform="jd", status="done")
+    db.add_all([category, model, upload])
+    db.flush()
+    job = CleanJobRecord(
+        file_ids=[upload.id],
+        rules={"dedup": True},
+        status="reviewing",
+        row_in=2,
+        row_out=2,
+        category_code="projector",
+        dispatch_category_code="projector",
+    )
+    db.add(job)
+    db.flush()
+    keep_raw = RawDataRecord(file_id=upload.id, platform="jd", item_id="keep-1", item_url="https://item.jd.com/keep-1.html", item_name="索尼投影仪 PX1", brand_raw="SONY")
+    filter_raw = RawDataRecord(file_id=upload.id, platform="jd", item_id="filter-1", item_url="https://item.jd.com/filter-1.html", item_name="投影仪支架", brand_raw="配件")
+    db.add_all([keep_raw, filter_raw])
+    db.flush()
+    db.add_all([
+        CleanJobItemRecord(clean_job_id=job.id, raw_data_id=keep_raw.id, category_code="projector"),
+        CleanJobItemRecord(clean_job_id=job.id, raw_data_id=filter_raw.id, category_code="projector"),
+        CleanedDataRecord(clean_job_id=job.id, raw_data_id=keep_raw.id, platform="jd", item_id="keep-1", item_name="索尼投影仪 PX1", brand_raw="SONY"),
+        CleanedDataRecord(clean_job_id=job.id, raw_data_id=filter_raw.id, platform="jd", item_id="filter-1", item_name="投影仪支架", brand_raw="配件"),
+        MatchResult(clean_job_id=job.id, raw_data_id=keep_raw.id, model_id=model.id, match_status="confirmed", matched_by="manual", match_source="manual"),
+        MatchResult(clean_job_id=job.id, raw_data_id=filter_raw.id, match_status="pending"),
+        InterventionRule(name="配件过滤", category_code="projector", action="filter", priority=10, conditions={"item_name_contains_any": ["支架"]}),
+    ])
+    db.commit()
+
+    response = client.post(f"/api/clean/tasks/{job.id}/rerun-with-current-rules")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["row_out"] == 1
+    assert body["filtered_count"] == 1
+    assert body["restored_confirmed_count"] == 1
+    assert body["pending_count"] == 0
+    assert db.query(FilteredItem).filter_by(clean_job_id=job.id).count() == 1
+    restored = db.query(MatchResult).filter_by(clean_job_id=job.id, raw_data_id=keep_raw.id).one()
+    assert restored.match_status == "confirmed"
+    assert restored.model_id == model.id
+    assert restored.matched_by == "manual"
+    assert db.query(ItemUrlMapping).filter_by(platform="jd", item_id="keep-1").one().model_id == model.id
+
+
+def test_rerun_with_current_rules_restores_manual_metadata_over_same_url_match(db):
+    client = _make_client(db)
+    category = Category(code="projector", name="投影仪")
+    model = ModelRecord(brand_code="SONY", model_code="PX1", category_code="projector")
+    upload = UploadFileRecord(filename="rerun-url.xlsx", platform="jd", status="done")
+    db.add_all([category, model, upload])
+    db.flush()
+    job = CleanJobRecord(
+        file_ids=[upload.id],
+        rules={"dedup": True},
+        status="reviewing",
+        row_in=1,
+        row_out=1,
+        category_code="projector",
+        dispatch_category_code="projector",
+    )
+    db.add(job)
+    db.flush()
+    raw = RawDataRecord(
+        file_id=upload.id,
+        platform="jd",
+        item_id="url-1",
+        item_url="https://item.jd.com/url-1.html",
+        item_name="索尼投影仪 PX1",
+        brand_raw="SONY",
+    )
+    db.add(raw)
+    db.flush()
+    reviewed_at = datetime(2026, 6, 1, 2, 3, 4)
+    db.add_all([
+        CleanJobItemRecord(clean_job_id=job.id, raw_data_id=raw.id, category_code="projector"),
+        CleanedDataRecord(
+            clean_job_id=job.id,
+            raw_data_id=raw.id,
+            platform="jd",
+            item_id="url-1",
+            item_url="https://item.jd.com/url-1.html",
+            item_name="索尼投影仪 PX1",
+            brand_raw="SONY",
+        ),
+        ItemUrlMapping(
+            platform="jd",
+            item_id="url-1",
+            item_url="https://item.jd.com/url-1.html",
+            model_id=model.id,
+            brand_code="SONY",
+            source="match_confirm",
+        ),
+        MatchResult(
+            clean_job_id=job.id,
+            raw_data_id=raw.id,
+            model_id=model.id,
+            match_status="confirmed",
+            matched_by="manual",
+            match_source="manual",
+            reviewed_at=reviewed_at,
+            review_note="人工确认保留",
+        ),
+    ])
+    db.commit()
+
+    response = client.post(f"/api/clean/tasks/{job.id}/rerun-with-current-rules")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["restored_confirmed_count"] == 1
+    assert body["matched_count"] == 1
+    assert body["pending_count"] == 0
+    restored = db.query(MatchResult).filter_by(clean_job_id=job.id, raw_data_id=raw.id).one()
+    assert restored.match_status == "confirmed"
+    assert restored.model_id == model.id
+    assert restored.matched_by == "manual"
+    assert restored.match_source == "manual"
+    assert restored.review_note == "人工确认保留"
+    assert restored.reviewed_at == reviewed_at
+    mapping = db.query(ItemUrlMapping).filter_by(platform="jd", item_id="url-1").one()
+    assert mapping.model_id == model.id
+    assert mapping.source == "match_confirm"
 
 
 def test_upsert_monthly_clean_task_rejects_blank_platform(db):

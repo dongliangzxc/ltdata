@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -5,7 +7,7 @@ from app.models.database import get_db
 from app.models.schemas import (
     ModelRecord, UploadFileRecord, RawDataRecord,
     CleanJobRecord, MatchResult, ItemUrlMapping, CleanedDataRecord,
-    HistoricalMapping,
+    HistoricalMapping, MatchResultAttr, MetadataSpec, ModelSpec, Category,
 )
 from app.api.match_api import confirm_match, router as match_router
 
@@ -293,6 +295,65 @@ def test_pending_endpoint_allows_disputed_and_review_detail(db, match_client):
     assert body["url_mapping"]["brand_code"] == "Sony"
 
 
+def test_review_detail_returns_category_model_specs_and_match_attrs(db, match_client):
+    category = Category(code="headphone", name="耳机")
+    model = ModelRecord(brand_code="Sony", model_code="WH-1000XM5", category_code="headphone")
+    db.add_all([category, model])
+    db.flush()
+    metadata_spec_noise = MetadataSpec(category_code="headphone", spec_name="降噪", spec_type="text", spec_values="主动降噪,被动降噪", required=1, single_select=1)
+    metadata_spec_fit = MetadataSpec(category_code="headphone", spec_name="佩戴方式", spec_type="text", spec_values="头戴式,入耳式", required=0, single_select=1)
+    model_spec = ModelSpec(model_id=model.id, spec_name="降噪", spec_value="主动降噪")
+    db.add_all([
+        metadata_spec_noise,
+        metadata_spec_fit,
+        model_spec,
+    ])
+    upload = UploadFileRecord(filename="detail-attrs.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+    clean_job = CleanJobRecord(file_ids=[upload.id], status="reviewing", category_code="headphone")
+    db.add(clean_job)
+    db.flush()
+    raw = RawDataRecord(file_id=upload.id, platform="jd", item_id="sku-attr", item_name="Sony WH-1000XM5 主动降噪", brand_raw="Sony")
+    db.add(raw)
+    db.flush()
+    mr = MatchResult(clean_job_id=clean_job.id, raw_data_id=raw.id, model_id=model.id, match_status="confirmed")
+    db.add(mr)
+    db.flush()
+    match_attr = MatchResultAttr(match_result_id=mr.id, attr_name="佩戴方式", attr_value="头戴式")
+    db.add(match_attr)
+    db.commit()
+
+    response = match_client.get(f"/api/match/items/{mr.id}/review-detail")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["category_code"] == "headphone"
+    assert body["category_name"] == "耳机"
+    assert body["metadata_specs"] == [
+        {
+            "id": metadata_spec_noise.id,
+            "spec_name": "降噪",
+            "spec_type": "text",
+            "spec_values": "主动降噪,被动降噪",
+            "required": True,
+            "decimal_places": None,
+            "single_select": True,
+        },
+        {
+            "id": metadata_spec_fit.id,
+            "spec_name": "佩戴方式",
+            "spec_type": "text",
+            "spec_values": "头戴式,入耳式",
+            "required": False,
+            "decimal_places": None,
+            "single_select": True,
+        },
+    ]
+    assert body["model_specs"] == [{"id": model_spec.id, "spec_name": "降噪", "spec_value": "主动降噪"}]
+    assert body["match_attrs"] == [{"id": match_attr.id, "attr_name": "佩戴方式", "attr_value": "头戴式", "rule_id": None}]
+
+
 def test_reviewed_endpoint_returns_only_reviewable_rows_with_price_and_quantity_fields(db, match_client):
     model = ModelRecord(brand_code="Sony", model_code="WH-XM5", category_code="headphone")
     db.add(model)
@@ -447,3 +508,246 @@ def test_patch_coefficient_validation_rejects_out_of_range_and_accepts_zero(db, 
     assert response.status_code == 200
     assert response.json()["sales_coefficient"] == 0.0
     assert response.json()["adjusted_sales_qty"] == 0
+
+
+def test_same_title_preview_uses_normalized_title_and_actionable_statuses(db, match_client):
+    upload = UploadFileRecord(filename="same-title.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+    clean_job = CleanJobRecord(file_ids=[upload.id], status="reviewing")
+    db.add(clean_job)
+    db.flush()
+
+    raw_rows = [
+        RawDataRecord(file_id=upload.id, platform="jd", item_id="sku-1", item_name=" Sony  WH-1000XM5！", brand_raw="Sony", sales_qty=10),
+        RawDataRecord(file_id=upload.id, platform="jd", item_id="sku-2", item_name="sony wh 1000xm5", brand_raw="Sony", sales_qty=20),
+        RawDataRecord(file_id=upload.id, platform="jd", item_id="sku-3", item_name="SONY、WH·1000XM5", brand_raw="Sony", sales_qty=30),
+        RawDataRecord(file_id=upload.id, platform="jd", item_id="sku-4", item_name="Bose QC Ultra", brand_raw="Bose", sales_qty=40),
+    ]
+    db.add_all(raw_rows)
+    db.flush()
+    match_rows = [
+        MatchResult(clean_job_id=clean_job.id, raw_data_id=raw_rows[0].id, match_status="pending"),
+        MatchResult(clean_job_id=clean_job.id, raw_data_id=raw_rows[1].id, match_status="text_only"),
+        MatchResult(clean_job_id=clean_job.id, raw_data_id=raw_rows[2].id, match_status="confirmed"),
+        MatchResult(clean_job_id=clean_job.id, raw_data_id=raw_rows[3].id, match_status="pending"),
+    ]
+    db.add_all(match_rows)
+    db.commit()
+
+    response = match_client.get(f"/api/match/items/{match_rows[0].id}/same-title-preview")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 3
+    assert body["actionable_count"] == 2
+    assert body["status_counts"] == {"confirmed": 1, "pending": 1, "text_only": 1}
+    assert [item["id"] for item in body["items"]] == [match_rows[0].id, match_rows[1].id, match_rows[2].id]
+    assert body["items"][0]["item_name"] == " Sony  WH-1000XM5！"
+    assert body["items"][0]["sales_qty"] == 10
+
+
+def test_same_title_confirm_updates_actionable_rows_and_writes_url_mappings(db, match_client):
+    model = ModelRecord(brand_code="Sony", model_code="WH-1000XM5", category_code="headphone")
+    existing_model = ModelRecord(brand_code="Bose", model_code="QC-Ultra", category_code="headphone")
+    db.add_all([model, existing_model])
+    db.flush()
+    upload = UploadFileRecord(filename="same-confirm.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+    clean_job = CleanJobRecord(file_ids=[upload.id], status="reviewing")
+    db.add(clean_job)
+    db.flush()
+
+    raw_rows = [
+        RawDataRecord(file_id=upload.id, platform="jd", item_id="sku-a", item_url="https://item.jd.com/sku-a.html", item_name="Sony WH-1000XM5", brand_raw="Sony"),
+        RawDataRecord(file_id=upload.id, platform="jd", item_id="sku-b", item_url="https://item.jd.com/sku-b.html", item_name="sony wh 1000xm5", brand_raw="Sony"),
+        RawDataRecord(file_id=upload.id, platform="jd", item_id="sku-c", item_url="https://item.jd.com/sku-c.html", item_name="Sony WH-1000XM5", brand_raw="Sony"),
+    ]
+    db.add_all(raw_rows)
+    db.flush()
+    existing_reviewed_at = datetime(2026, 1, 2, 3, 4, 5)
+    match_rows = [
+        MatchResult(clean_job_id=clean_job.id, raw_data_id=raw_rows[0].id, match_status="pending"),
+        MatchResult(clean_job_id=clean_job.id, raw_data_id=raw_rows[1].id, match_status="disputed", dispute_reason="待复核"),
+        MatchResult(
+            clean_job_id=clean_job.id,
+            raw_data_id=raw_rows[2].id,
+            match_status="confirmed",
+            model_id=existing_model.id,
+            matched_by="legacy",
+            match_source="s1",
+            review_note="人工已确认，禁止覆盖",
+            reviewed_at=existing_reviewed_at,
+        ),
+    ]
+    db.add_all(match_rows)
+    db.commit()
+
+    response = match_client.post(
+        f"/api/match/items/{match_rows[0].id}/same-title-confirm",
+        json={"model_id": model.id, "include_statuses": ["pending", "text_only", "disputed"]},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["affected_count"] == 2
+    assert body["url_mapping_count"] == 2
+    refreshed = {row.id: row for row in db.query(MatchResult).all()}
+    assert refreshed[match_rows[0].id].match_status == "confirmed"
+    assert refreshed[match_rows[0].id].model_id == model.id
+    assert refreshed[match_rows[0].id].match_source == "manual"
+    assert refreshed[match_rows[1].id].match_status == "confirmed"
+    assert refreshed[match_rows[1].id].dispute_reason is None
+    assert refreshed[match_rows[2].id].match_status == "confirmed"
+    assert refreshed[match_rows[2].id].model_id == existing_model.id
+    assert refreshed[match_rows[2].id].matched_by == "legacy"
+    assert refreshed[match_rows[2].id].match_source == "s1"
+    assert refreshed[match_rows[2].id].review_note == "人工已确认，禁止覆盖"
+    assert refreshed[match_rows[2].id].reviewed_at == existing_reviewed_at
+    assert db.query(ItemUrlMapping).filter(ItemUrlMapping.model_id == model.id).count() == 2
+
+
+def test_same_title_exclude_updates_actionable_rows_without_url_mapping(db, match_client):
+    model = ModelRecord(brand_code="Sony", model_code="WH-1000XM5", category_code="headphone")
+    db.add(model)
+    db.flush()
+    upload = UploadFileRecord(filename="same-exclude.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+    clean_job = CleanJobRecord(file_ids=[upload.id], status="reviewing")
+    db.add(clean_job)
+    db.flush()
+
+    raw_rows = [
+        RawDataRecord(file_id=upload.id, platform="jd", item_id="sku-x", item_url="https://item.jd.com/sku-x.html", item_name="投影仪支架", brand_raw="配件"),
+        RawDataRecord(file_id=upload.id, platform="jd", item_id="sku-y", item_url="https://item.jd.com/sku-y.html", item_name="投影仪 支架", brand_raw="配件"),
+        RawDataRecord(file_id=upload.id, platform="jd", item_id="sku-z", item_url="https://item.jd.com/sku-z.html", item_name="投影仪支架", brand_raw="配件"),
+    ]
+    db.add_all(raw_rows)
+    db.flush()
+    match_rows = [
+        MatchResult(clean_job_id=clean_job.id, raw_data_id=raw_rows[0].id, match_status="pending", model_id=model.id),
+        MatchResult(clean_job_id=clean_job.id, raw_data_id=raw_rows[1].id, match_status="text_only", model_id=model.id),
+        MatchResult(clean_job_id=clean_job.id, raw_data_id=raw_rows[2].id, match_status="confirmed", model_id=model.id),
+    ]
+    db.add_all(match_rows)
+    db.commit()
+
+    response = match_client.post(
+        f"/api/match/items/{match_rows[0].id}/same-title-exclude",
+        json={"reason": "不属于该品类", "include_statuses": ["pending", "text_only", "disputed"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["affected_count"] == 2
+    refreshed = {row.id: row for row in db.query(MatchResult).all()}
+    assert refreshed[match_rows[0].id].match_status == "excluded"
+    assert refreshed[match_rows[0].id].model_id is None
+    assert refreshed[match_rows[0].id].review_note == "不属于该品类"
+    assert refreshed[match_rows[1].id].match_status == "excluded"
+    assert refreshed[match_rows[2].id].match_status == "confirmed"
+    assert db.query(ItemUrlMapping).count() == 0
+
+
+def test_same_title_confirm_empty_include_statuses_affects_zero_rows(db, match_client):
+    model = ModelRecord(brand_code="Sony", model_code="WH-1000XM5", category_code="headphone")
+    db.add(model)
+    db.flush()
+    upload = UploadFileRecord(filename="same-empty.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+    clean_job = CleanJobRecord(file_ids=[upload.id], status="reviewing")
+    db.add(clean_job)
+    db.flush()
+    raw_rows = [
+        RawDataRecord(file_id=upload.id, platform="jd", item_id="empty-a", item_url="https://item.jd.com/empty-a.html", item_name="Sony WH-1000XM5", brand_raw="Sony"),
+        RawDataRecord(file_id=upload.id, platform="jd", item_id="empty-b", item_url="https://item.jd.com/empty-b.html", item_name="sony wh 1000xm5", brand_raw="Sony"),
+    ]
+    db.add_all(raw_rows)
+    db.flush()
+    match_rows = [
+        MatchResult(clean_job_id=clean_job.id, raw_data_id=raw_rows[0].id, match_status="pending"),
+        MatchResult(clean_job_id=clean_job.id, raw_data_id=raw_rows[1].id, match_status="pending"),
+    ]
+    db.add_all(match_rows)
+    db.commit()
+
+    response = match_client.post(
+        f"/api/match/items/{match_rows[0].id}/same-title-confirm",
+        json={"model_id": model.id, "include_statuses": []},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["affected_count"] == 0
+    refreshed = {row.id: row for row in db.query(MatchResult).all()}
+    assert refreshed[match_rows[0].id].match_status == "pending"
+    assert refreshed[match_rows[0].id].model_id is None
+    assert refreshed[match_rows[1].id].match_status == "pending"
+    assert refreshed[match_rows[1].id].model_id is None
+    assert db.query(ItemUrlMapping).count() == 0
+
+
+def test_same_title_confirm_rejects_invalid_include_statuses(db, match_client):
+    model = ModelRecord(brand_code="Sony", model_code="WH-1000XM5", category_code="headphone")
+    db.add(model)
+    db.flush()
+    upload = UploadFileRecord(filename="same-invalid.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+    clean_job = CleanJobRecord(file_ids=[upload.id], status="reviewing")
+    db.add(clean_job)
+    db.flush()
+    raw = RawDataRecord(file_id=upload.id, platform="jd", item_id="invalid-a", item_name="Sony WH-1000XM5", brand_raw="Sony")
+    db.add(raw)
+    db.flush()
+    match_row = MatchResult(clean_job_id=clean_job.id, raw_data_id=raw.id, match_status="pending")
+    db.add(match_row)
+    db.commit()
+
+    non_list_response = match_client.post(
+        f"/api/match/items/{match_row.id}/same-title-confirm",
+        json={"model_id": model.id, "include_statuses": "pending"},
+    )
+    invalid_response = match_client.post(
+        f"/api/match/items/{match_row.id}/same-title-confirm",
+        json={"model_id": model.id, "include_statuses": ["confirmed"]},
+    )
+
+    assert non_list_response.status_code == 400
+    assert "include_statuses 必须是数组" in non_list_response.json()["detail"]
+    assert invalid_response.status_code == 400
+    assert "不支持批量处理状态" in invalid_response.json()["detail"]
+
+
+def test_same_title_confirm_runs_price_audit_without_committing(db, match_client, monkeypatch):
+    model = ModelRecord(brand_code="Sony", model_code="WH-1000XM5", category_code="headphone")
+    db.add(model)
+    db.flush()
+    upload = UploadFileRecord(filename="same-audit.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+    clean_job = CleanJobRecord(file_ids=[upload.id], status="reviewing")
+    db.add(clean_job)
+    db.flush()
+    raw = RawDataRecord(file_id=upload.id, platform="jd", item_id="audit-a", item_url="https://item.jd.com/audit-a.html", item_name="Sony WH-1000XM5", brand_raw="Sony")
+    db.add(raw)
+    db.flush()
+    match_row = MatchResult(clean_job_id=clean_job.id, raw_data_id=raw.id, match_status="pending")
+    db.add(match_row)
+    db.commit()
+    audit_calls = []
+
+    def fake_audit_price(_db, match_result_ids, commit=True):
+        audit_calls.append({"match_result_ids": match_result_ids, "commit": commit})
+        return {"items_processed": len(match_result_ids)}
+
+    monkeypatch.setattr("app.api.match_api.audit_price", fake_audit_price)
+
+    response = match_client.post(
+        f"/api/match/items/{match_row.id}/same-title-confirm",
+        json={"model_id": model.id, "include_statuses": ["pending"]},
+    )
+
+    assert response.status_code == 200
+    assert audit_calls == [{"match_result_ids": [match_row.id], "commit": False}]

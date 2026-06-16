@@ -159,6 +159,15 @@ export interface CreateCleanTaskResponse {
   match_status: string
 }
 
+export type RerunCleanTaskResult = {
+  clean_job_id: number
+  row_out: number
+  filtered_count: number
+  matched_count: number
+  restored_confirmed_count: number
+  pending_count: number
+}
+
 export const runCleanJob = (payload: {
   file_ids: number[]
   rules: Record<string, unknown>
@@ -197,7 +206,10 @@ export const listCleanJobs = (params?: {
 export const previewCleanJob = (jobId: number, params?: Record<string, unknown>) =>
   api.get(`/clean/jobs/${jobId}/preview`, { params })
 
-export interface InterventionRuleConditions {
+export const rerunCleanTaskWithCurrentRules = (cleanJobId: number) =>
+  api.post<RerunCleanTaskResult>(`/clean/tasks/${cleanJobId}/rerun-with-current-rules`)
+
+export interface InterventionRuleConditions extends Record<string, unknown> {
   brand_in?: string[]
   item_name_contains_any?: string[]
   item_name_not_contains_any?: string[]
@@ -222,10 +234,21 @@ export interface InterventionRuleItem {
 export const listInterventionRules = (params?: { category_code?: string }) =>
   api.get<InterventionRuleItem[]>('/rules/intervention-rules', { params })
 
-export const createInterventionRule = (payload: Omit<InterventionRuleItem, 'id' | 'summary' | 'is_active' | 'created_at' | 'updated_at'>) =>
+export const createInterventionRule = (payload: {
+  name: string
+  category_code: string
+  action: 'filter' | 'allow'
+  priority: number
+  conditions: Record<string, unknown>
+}) =>
   api.post<InterventionRuleItem>('/rules/intervention-rules', payload)
 
-export const updateInterventionRule = (id: number, payload: Partial<Omit<InterventionRuleItem, 'id' | 'summary' | 'created_at' | 'updated_at'>>) =>
+type UpdateInterventionRulePayload = Partial<Pick<
+  InterventionRuleItem,
+  'name' | 'action' | 'priority' | 'conditions' | 'is_active'
+>>
+
+export const updateInterventionRule = (id: number, payload: UpdateInterventionRulePayload) =>
   api.patch<InterventionRuleItem>(`/rules/intervention-rules/${id}`, payload)
 
 export const deleteInterventionRule = (id: number) =>
@@ -385,6 +408,15 @@ export const confirmMatch = (
 ) => api.put(`/match/confirm/${match_id}`, data)
 export const getMatchReviewDetail = (match_id: number) =>
   api.get<MatchReviewDetail>(`/match/items/${match_id}/review-detail`)
+
+export const previewSameTitleMatches = (matchId: number) =>
+  api.get<SameTitlePreview>(`/match/items/${matchId}/same-title-preview`)
+
+export const confirmSameTitleMatches = (matchId: number, payload: { model_id: number; include_statuses?: string[] }) =>
+  api.post<SameTitleBatchResult>(`/match/items/${matchId}/same-title-confirm`, payload)
+
+export const excludeSameTitleMatches = (matchId: number, payload: { reason?: string; include_statuses?: string[] }) =>
+  api.post<SameTitleBatchResult>(`/match/items/${matchId}/same-title-exclude`, payload)
 
 // ─── Analytics Dashboard ─────────────────────────────────────
 export type AnalyticsGroupBy = 'model' | 'brand' | 'category' | 'platform'
@@ -738,6 +770,56 @@ export interface MatchCandidateOut {
   rank: number
 }
 
+export type MatchMetadataSpec = {
+  id: number
+  spec_name: string
+  spec_type: string
+  spec_values: string | null
+  required: boolean
+  decimal_places: number | null
+  single_select: boolean
+}
+
+export type MatchModelSpec = {
+  id: number
+  spec_name: string
+  spec_value: string | null
+}
+
+export type MatchAutoAttr = {
+  id: number
+  attr_name: string
+  attr_value: string
+  rule_id: number | null
+}
+
+export type SameTitlePreviewItem = {
+  id: number
+  raw_data_id: number
+  item_name: string | null
+  item_url: string | null
+  brand_raw: string | null
+  match_status: string
+  model_id: number | null
+  model_code: string | null
+  brand_code: string | null
+  sales_qty: number | null
+  actionable: boolean
+}
+
+export type SameTitlePreview = {
+  total: number
+  actionable_count: number
+  status_counts: Record<string, number>
+  items: SameTitlePreviewItem[]
+}
+
+export type SameTitleBatchResult = {
+  affected_count: number
+  url_mapping_count?: number
+  attr_result?: { matched_attrs: number; items_processed: number }
+}
+
 export interface MatchResultOut {
   id: number
   clean_job_id: number
@@ -769,6 +851,10 @@ export interface MatchResultOut {
 }
 
 export interface MatchReviewDetail extends MatchResultOut {
+  category_code?: string | null
+  metadata_specs?: MatchMetadataSpec[]
+  model_specs?: MatchModelSpec[]
+  match_attrs?: MatchAutoAttr[]
   item_image?: string | null
   platform?: string | null
   item_id?: string | null

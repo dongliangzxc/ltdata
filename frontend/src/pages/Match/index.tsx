@@ -13,11 +13,14 @@ import {
   listReviewedMatches, updateMatchCoefficient, getMatchReviewDetail,
   enableMatch, avgPriceDisable, listDisabled,
   triggerExport, getExportJob, getDownloadUrl,
-  getCleanMonthlyPool,
+  getCleanMonthlyPool, rerunCleanTaskWithCurrentRules,
 } from '../../services/api'
 import type { CleanJobItem, MatchCandidateOut, ReviewedMatchResultOut, PriceFlag, MatchReviewDetail } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 import ProgressModal from '../../components/ProgressModal'
+import AttributeInsightCard from './components/AttributeInsightCard'
+import SameTitleBatchActions from './components/SameTitleBatchActions'
+import InterventionRuleModal from './components/InterventionRuleModal'
 
 const { Text } = Typography
 
@@ -174,7 +177,9 @@ export default function MatchPage() {
   const [reviewDetail, setReviewDetail] = useState<MatchReviewDetail | null>(null)
   const [reviewDetailLoading, setReviewDetailLoading] = useState(false)
   const [reviewReason, setReviewReason] = useState('')
-  const { data: jobsData } = useRequest(() => listCleanJobs().then(r => r.data))
+  const [interventionModalOpen, setInterventionModalOpen] = useState(false)
+  const [rerunningRules, setRerunningRules] = useState(false)
+  const { data: jobsData, refresh: refreshJobs } = useRequest(() => listCleanJobs().then(r => r.data))
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
   const [modelSearchLoading, setModelSearchLoading] = useState(false)
   const { options: categoryOptions } = useCategoryOptions()
@@ -367,6 +372,39 @@ export default function MatchPage() {
     refreshPending()
     refreshReviewed()
     getMatchSummary(selectedJobId!).then(r => setSummary(r.data))
+  }
+
+  const refreshCurrentJobState = () => {
+    if (!selectedJobId) return
+    setSelectedReviewId(null)
+    setReviewDetail(null)
+    setReviewReason('')
+    setSelectedModels({})
+    setPage(1)
+    setReviewedPage(1)
+    refreshJobs()
+    getMatchSummary(selectedJobId).then(r => setSummary(r.data))
+    refreshPending()
+    refreshReviewed()
+    loadDisabled()
+  }
+
+  const handleRerunWithCurrentRules = async () => {
+    if (!selectedJobId) { message.warning('请先选择清洗任务'); return }
+    Modal.confirm({
+      title: '应用规则并重新处理当前任务？',
+      content: '将使用最新干预规则重新处理当前任务。已沉淀 URL 映射的人工确认结果会自动复用，系统也会按原始行恢复本任务内已确认结果。被新规则过滤的数据将进入干扰项存档，不会发布。',
+      onOk: async () => {
+        setRerunningRules(true)
+        try {
+          const res = await rerunCleanTaskWithCurrentRules(selectedJobId)
+          message.success(`重新处理完成：清洗后 ${res.data.row_out} 条，过滤 ${res.data.filtered_count} 条，恢复确认 ${res.data.restored_confirmed_count} 条`)
+          refreshCurrentJobState()
+        } finally {
+          setRerunningRules(false)
+        }
+      },
+    })
   }
 
   const handleConfirm = async (matchId: number) => {
@@ -848,6 +886,21 @@ export default function MatchPage() {
           }
           extra={
             <Space>
+              <Button
+                size="small"
+                onClick={() => setInterventionModalOpen(true)}
+                disabled={!selectedJob?.category_code && !selectedJob?.dispatch_category_code}
+              >
+                干扰项规则
+              </Button>
+              <Button
+                size="small"
+                loading={rerunningRules}
+                onClick={handleRerunWithCurrentRules}
+                disabled={!selectedJobId}
+              >
+                应用规则并重新处理当前任务
+              </Button>
               <Select
                 placeholder="品类筛选"
                 allowClear
@@ -1022,6 +1075,15 @@ export default function MatchPage() {
                       )}
                     </Card>
 
+                    <AttributeInsightCard detail={reviewDetail} />
+
+                    <SameTitleBatchActions
+                      detail={reviewDetail}
+                      selectedModelId={selectedModels[reviewDetail.id]}
+                      reason={reviewReason.trim() || undefined}
+                      onDone={() => refreshReviewWorkbench(reviewDetail.id)}
+                    />
+
                     <Space direction="vertical" style={{ width: '100%' }}>
                       <Select
                         showSearch
@@ -1170,6 +1232,14 @@ export default function MatchPage() {
           />
         </Card>
       )}
+
+      <InterventionRuleModal
+        open={interventionModalOpen}
+        categoryCode={selectedJob?.category_code || selectedJob?.dispatch_category_code || null}
+        detail={reviewDetail}
+        onClose={() => setInterventionModalOpen(false)}
+        onRulesChanged={() => {}}
+      />
 
       <ProgressModal
         visible={exportProgressVisible}

@@ -2,7 +2,10 @@
 型号匹配 API
 """
 import logging
+import re
 import time
+import unicodedata
+from collections import Counter
 from datetime import datetime
 from threading import Thread
 from typing import Optional
@@ -14,7 +17,7 @@ from app.models.schemas import (
     MatchResult, MatchResultOut, MatchSummary,
     CleanJobRecord, RawDataRecord, ModelRecord,
     MatchResultAttr, MatchResultCandidate, MatchCandidateOut, ItemUrlMapping, Category,
-    CleanedDataRecord,
+    MetadataSpec, ModelSpec, CleanedDataRecord,
     DispatchItem,
     PaginatedResponse,
 )
@@ -38,6 +41,109 @@ logger = logging.getLogger(__name__)
 #   }
 # }
 _progress: dict[int, dict] = {}
+
+SAME_TITLE_ACTIONABLE_STATUSES = {"pending", "text_only", "disputed"}
+_TITLE_PUNCT_RE = re.compile(
+    r"[\s\-‐‑‒–—―_/\\|,，、.。·・•!！?？:：;；'‘’\"“”()（）\[\]【】{}<>《》&+@#＃$￥%％^*＊=~～`｀…]+"
+)
+
+
+def _same_title_key(value: str | None) -> str:
+    normalized = unicodedata.normalize("NFKC", value or "").casefold().strip()
+    return _TITLE_PUNCT_RE.sub("", normalized)
+
+
+def _same_title_rows(db: Session, match_id: int):
+    current = (
+        db.query(MatchResult, RawDataRecord)
+        .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
+        .filter(MatchResult.id == match_id)
+        .first()
+    )
+    if not current:
+        raise HTTPException(status_code=404, detail="匹配记录不存在")
+
+    current_mr, current_raw = current
+    key = _same_title_key(current_raw.item_name)
+    if not key:
+        return current_mr, []
+
+    candidates = (
+        db.query(MatchResult, RawDataRecord, ModelRecord)
+        .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
+        .outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
+        .filter(MatchResult.clean_job_id == current_mr.clean_job_id)
+        .order_by(MatchResult.id)
+        .all()
+    )
+    rows = [row for row in candidates if _same_title_key(row[1].item_name) == key]
+    return current_mr, rows
+
+
+def _same_title_item_payload(mr: MatchResult, rd: RawDataRecord, model: ModelRecord | None) -> dict:
+    return {
+        "id": mr.id,
+        "raw_data_id": mr.raw_data_id,
+        "item_name": rd.item_name,
+        "item_url": rd.item_url,
+        "brand_raw": rd.brand_raw,
+        "match_status": mr.match_status,
+        "model_id": mr.model_id,
+        "model_code": model.model_code if model else None,
+        "brand_code": model.brand_code if model else None,
+        "sales_qty": rd.sales_qty,
+        "actionable": mr.match_status in SAME_TITLE_ACTIONABLE_STATUSES,
+    }
+
+
+def _allowed_same_title_statuses(payload: dict) -> set[str]:
+    raw_statuses = payload.get("include_statuses")
+    if raw_statuses is None:
+        raw_statuses = list(SAME_TITLE_ACTIONABLE_STATUSES)
+    if not isinstance(raw_statuses, list):
+        raise HTTPException(status_code=400, detail="include_statuses 必须是数组")
+    statuses = {str(status) for status in raw_statuses}
+    invalid = statuses - SAME_TITLE_ACTIONABLE_STATUSES
+    if invalid:
+        raise HTTPException(status_code=400, detail=f"不支持批量处理状态: {sorted(invalid)[0]}")
+    return statuses
+
+
+def _upsert_url_mapping_for_raw(db: Session, rd: RawDataRecord, model: ModelRecord, source: str = "match_confirm") -> bool:
+    if not rd or not rd.item_url or not rd.platform or not rd.item_id:
+        return False
+    existing = db.query(ItemUrlMapping).filter_by(platform=rd.platform, item_id=rd.item_id).first()
+    if existing:
+        changed = existing.model_id != model.id or existing.brand_code != model.brand_code or existing.item_url != rd.item_url
+        existing.model_id = model.id
+        existing.item_url = rd.item_url
+        existing.brand_code = model.brand_code
+        existing.price = rd.price
+        existing.source = source
+        return changed
+    db.add(ItemUrlMapping(
+        platform=rd.platform,
+        item_id=rd.item_id,
+        item_url=rd.item_url,
+        model_id=model.id,
+        brand_code=model.brand_code,
+        price=rd.price,
+        source=source,
+    ))
+    return True
+
+
+def _run_post_confirm_hooks(db: Session, match_result_ids: list[int]) -> dict:
+    if not match_result_ids:
+        return {"matched_attrs": 0, "items_processed": 0}
+    from app.services.attribute_matcher import run_attribute_matching
+    attr_result = run_attribute_matching(db, match_result_ids, commit=False)
+    try:
+        audit_price(db, match_result_ids, commit=False)
+    except Exception:
+        logger.exception("Price audit failed after batch confirming match_result_ids=%s", match_result_ids)
+        raise
+    return attr_result
 
 
 def _run_match_thread(clean_job_id: int):
@@ -283,6 +389,84 @@ def list_pending(
     return PaginatedResponse(total=total, page=page, page_size=page_size, items=items)
 
 
+@router.get("/items/{match_id}/same-title-preview")
+def preview_same_title_matches(match_id: int, db: Session = Depends(get_db)):
+    _current_mr, rows = _same_title_rows(db, match_id)
+    status_counts = Counter(mr.match_status for mr, _rd, _model in rows)
+    actionable_count = sum(1 for mr, _rd, _model in rows if mr.match_status in SAME_TITLE_ACTIONABLE_STATUSES)
+    return {
+        "total": len(rows),
+        "actionable_count": actionable_count,
+        "status_counts": dict(sorted(status_counts.items())),
+        "items": [
+            _same_title_item_payload(mr, rd, model)
+            for mr, rd, model in rows[:20]
+        ],
+    }
+
+
+@router.post("/items/{match_id}/same-title-confirm")
+def confirm_same_title_matches(match_id: int, payload: dict, db: Session = Depends(get_db)):
+    model_id = payload.get("model_id")
+    if model_id is None:
+        raise HTTPException(status_code=400, detail="model_id 不能为空")
+    model = db.query(ModelRecord).filter(ModelRecord.id == int(model_id)).first()
+    if not model:
+        raise HTTPException(status_code=404, detail="型号不存在")
+
+    include_statuses = _allowed_same_title_statuses(payload)
+    _current_mr, rows = _same_title_rows(db, match_id)
+    now = datetime.utcnow()
+    affected_ids: list[int] = []
+    url_mapping_count = 0
+
+    for mr, rd, _old_model in rows:
+        if mr.match_status not in include_statuses:
+            continue
+        mr.model_id = model.id
+        mr.match_status = "confirmed"
+        mr.matched_by = "manual"
+        mr.match_source = "manual"
+        mr.dispute_reason = None
+        mr.review_note = None
+        mr.reviewed_at = now
+        affected_ids.append(mr.id)
+        if _upsert_url_mapping_for_raw(db, rd, model):
+            url_mapping_count += 1
+
+    attr_result = _run_post_confirm_hooks(db, affected_ids)
+    db.commit()
+    return {
+        "affected_count": len(affected_ids),
+        "url_mapping_count": url_mapping_count,
+        "attr_result": attr_result,
+    }
+
+
+@router.post("/items/{match_id}/same-title-exclude")
+def exclude_same_title_matches(match_id: int, payload: dict, db: Session = Depends(get_db)):
+    include_statuses = _allowed_same_title_statuses(payload)
+    reason = (payload.get("reason") or "").strip() or None
+    _current_mr, rows = _same_title_rows(db, match_id)
+    now = datetime.utcnow()
+    affected_ids: list[int] = []
+
+    for mr, _rd, _model in rows:
+        if mr.match_status not in include_statuses:
+            continue
+        mr.match_status = "excluded"
+        mr.model_id = None
+        mr.matched_by = "manual"
+        mr.match_source = "manual"
+        mr.dispute_reason = None
+        mr.review_note = reason
+        mr.reviewed_at = now
+        affected_ids.append(mr.id)
+
+    db.commit()
+    return {"affected_count": len(affected_ids)}
+
+
 @router.get("/items/{match_id}/review-detail")
 def get_match_review_detail(match_id: int, db: Session = Depends(get_db)):
     row = (
@@ -308,6 +492,47 @@ def get_match_review_detail(match_id: int, db: Session = Depends(get_db)):
     if rd.platform and rd.item_id:
         mapping = db.query(ItemUrlMapping).filter_by(platform=rd.platform, item_id=rd.item_id).first()
 
+    category_code = model.category_code if model and model.category_code else None
+    if not category_code:
+        clean_job = db.query(CleanJobRecord).filter(CleanJobRecord.id == mr.clean_job_id).first()
+        category_code = (clean_job.category_code or clean_job.dispatch_category_code) if clean_job else None
+
+    metadata_specs = []
+    if category_code:
+        metadata_specs = [
+            {
+                "id": spec.id,
+                "spec_name": spec.spec_name,
+                "spec_type": spec.spec_type,
+                "spec_values": spec.spec_values,
+                "required": bool(spec.required),
+                "decimal_places": spec.decimal_places,
+                "single_select": bool(spec.single_select),
+            }
+            for spec in db.query(MetadataSpec)
+            .filter(MetadataSpec.category_code == category_code)
+            .order_by(MetadataSpec.id)
+            .all()
+        ]
+
+    model_specs = []
+    if model:
+        model_specs = [
+            {"id": spec.id, "spec_name": spec.spec_name, "spec_value": spec.spec_value}
+            for spec in db.query(ModelSpec).filter(ModelSpec.model_id == model.id).order_by(ModelSpec.id).all()
+        ]
+
+    match_attrs = [
+        {"id": attr.id, "attr_name": attr.attr_name, "attr_value": attr.attr_value, "rule_id": attr.rule_id}
+        for attr in db.query(MatchResultAttr)
+        .filter(MatchResultAttr.match_result_id == match_id)
+        .order_by(MatchResultAttr.id)
+        .all()
+    ]
+
+    if not cat and category_code:
+        cat = db.query(Category).filter(Category.code == category_code).first()
+
     return {
         "id": mr.id,
         "clean_job_id": mr.clean_job_id,
@@ -315,7 +540,11 @@ def get_match_review_detail(match_id: int, db: Session = Depends(get_db)):
         "model_id": mr.model_id,
         "model_code": model.model_code if model else None,
         "brand_code": model.brand_code if model else None,
+        "category_code": category_code,
         "category_name": cat.name if cat else None,
+        "metadata_specs": metadata_specs,
+        "model_specs": model_specs,
+        "match_attrs": match_attrs,
         "match_status": mr.match_status,
         "matched_by": mr.matched_by,
         "match_source": mr.match_source,

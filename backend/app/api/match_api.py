@@ -288,8 +288,8 @@ def list_pending(
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
-    """分页查询待处理条目，status=pending、text_only 或 disputed"""
-    allowed_statuses = {"pending", "text_only", "disputed"}
+    """分页查询复核队列条目。"""
+    allowed_statuses = {"pending", "text_only", "disputed", "matched", "url_matched", "confirmed", "excluded"}
     if status not in allowed_statuses:
         status = "pending"
 
@@ -313,12 +313,14 @@ def list_pending(
         .outerjoin(DispatchItem, di_join_cond)
         .outerjoin(Category, DispatchItem.category_code == Category.code)
         .outerjoin(MatchResultAttr, MatchResultAttr.match_result_id == MatchResult.id)
-        .filter(
-            MatchResult.clean_job_id == clean_job_id,
-            MatchResult.match_status == status,
-        )
+        .filter(MatchResult.clean_job_id == clean_job_id)
         .group_by(MatchResult.id, RawDataRecord.id, ModelRecord.id, Category.id)
     )
+    if status == "matched":
+        q = q.filter(MatchResult.match_status.in_(["matched", "url_matched"]))
+    else:
+        q = q.filter(MatchResult.match_status == status)
+
     if keyword:
         q = q.filter(RawDataRecord.item_name.ilike(f"%{keyword}%"))
     if brand_identified is not None:

@@ -73,6 +73,22 @@ const renderMatchSource = (source?: string | null) => {
   return entry ? <Tag color={entry.color}>{entry.label}</Tag> : <Tag>{source}</Tag>
 }
 
+const statusMeta: Record<string, { label: string; color: string }> = {
+  pending: { label: '待确认', color: 'orange' },
+  text_only: { label: 'URL待确认', color: 'gold' },
+  disputed: { label: '争议', color: 'red' },
+  matched: { label: '已匹配', color: 'green' },
+  url_matched: { label: '精准匹配', color: 'green' },
+  confirmed: { label: '已人工确认', color: 'blue' },
+  excluded: { label: '已排除', color: 'default' },
+}
+
+const renderMatchStatus = (status?: string | null) => {
+  if (!status) return <Tag color="default">未知</Tag>
+  const meta = statusMeta[status]
+  return meta ? <Tag color={meta.color}>{meta.label}</Tag> : <Tag>{status}</Tag>
+}
+
 type MatchSummary = {
   clean_job_id: number
   total: number
@@ -141,6 +157,8 @@ type MatchProgress = {
   error?: string
 }
 
+type ReviewTabKey = 'text_only' | 'pending' | 'unidentified_brand' | 'disputed' | 'matched' | 'confirmed' | 'excluded'
+
 export default function MatchPage() {
   const [searchParams] = useSearchParams()
   const [selectedJobId, setSelectedJobId] = useState<number | null>(
@@ -172,7 +190,7 @@ export default function MatchPage() {
   const [coefficientDrafts, setCoefficientDrafts] = useState<Record<number, number | null>>({})
   const [editedCoefficientIds, setEditedCoefficientIds] = useState<Set<number>>(new Set())
   const [savingCoefficientIds, setSavingCoefficientIds] = useState<Set<number>>(new Set())
-  const [activeTab, setActiveTab] = useState<'pending' | 'text_only' | 'unidentified_brand' | 'disputed'>('text_only')
+  const [activeTab, setActiveTab] = useState<ReviewTabKey>('text_only')
   const [selectedReviewId, setSelectedReviewId] = useState<number | null>(null)
   const [reviewDetail, setReviewDetail] = useState<MatchReviewDetail | null>(null)
   const [reviewDetailLoading, setReviewDetailLoading] = useState(false)
@@ -209,7 +227,7 @@ export default function MatchPage() {
       sort_by: sortBy !== 'default' ? sortBy : undefined,
     }).then(r => r.data),
     {
-      ready: selectedJobId != null && summary != null && (summary.pending > 0 || summary.text_only > 0 || (summary.unidentified_brand ?? 0) > 0 || (summary.disputed ?? 0) > 0),
+      ready: selectedJobId != null && summary != null && summary.total > 0,
       refreshDeps: [selectedJobId, keyword, page, activeTab, categoryName, sortBy],
     }
   )
@@ -259,14 +277,17 @@ export default function MatchPage() {
 
   useEffect(() => {
     if (!summary) return
-    const counts = {
+    const counts: Record<ReviewTabKey, number> = {
       text_only: summary.text_only ?? 0,
       pending: summary.pending ?? 0,
       unidentified_brand: summary.unidentified_brand ?? 0,
       disputed: summary.disputed ?? 0,
+      matched: (summary.matched ?? 0) + (summary.url_matched ?? 0),
+      confirmed: summary.confirmed ?? 0,
+      excluded: summary.excluded ?? 0,
     }
     if (counts[activeTab] === 0) {
-      const nextTab = (Object.entries(counts).find(([, count]) => count > 0)?.[0] ?? 'text_only') as typeof activeTab
+      const nextTab = (Object.entries(counts).find(([, count]) => count > 0)?.[0] ?? 'text_only') as ReviewTabKey
       if (nextTab !== activeTab) setActiveTab(nextTab)
     }
   }, [summary, activeTab])
@@ -374,6 +395,21 @@ export default function MatchPage() {
     getMatchSummary(selectedJobId!).then(r => setSummary(r.data))
   }
 
+  const refreshReviewDetailInPlace = async (matchId: number) => {
+    refreshPending()
+    refreshReviewed()
+    if (selectedJobId) getMatchSummary(selectedJobId).then(r => setSummary(r.data))
+    setReviewDetailLoading(true)
+    try {
+      const res = await getMatchReviewDetail(matchId)
+      setReviewDetail(res.data)
+      setSelectedReviewId(matchId)
+      setReviewReason(res.data.dispute_reason || res.data.review_note || '')
+    } finally {
+      setReviewDetailLoading(false)
+    }
+  }
+
   const refreshCurrentJobState = () => {
     if (!selectedJobId) return
     setSelectedReviewId(null)
@@ -414,8 +450,8 @@ export default function MatchPage() {
     setConfirmingIds(prev => new Set(prev).add(matchId))
     try {
       await confirmMatch(matchId, { model_id: modelId })
-      message.success('已确认')
-      refreshReviewWorkbench(matchId)
+      message.success('已确认，右侧已刷新确认结果')
+      await refreshReviewDetailInPlace(matchId)
     } finally {
       setConfirmingIds(prev => { const s = new Set(prev); s.delete(matchId); return s })
     }
@@ -448,8 +484,8 @@ export default function MatchPage() {
 
   const handleSelectCandidate = async (matchId: number, modelId: number) => {
     await confirmMatch(matchId, { model_id: modelId })
-    message.success('已选用候选型号')
-    refreshReviewWorkbench(matchId)
+    message.success('已选用候选型号，右侧已刷新确认结果')
+    await refreshReviewDetailInPlace(matchId)
   }
 
   const handleSaveCoefficient = async (matchId: number) => {
@@ -664,14 +700,17 @@ export default function MatchPage() {
     },
   ]
 
-  const queueTabs = [
+  const queueTabs: Array<{ key: ReviewTabKey; label: string; count: number; color: string }> = [
     { key: 'unidentified_brand', label: '未识别品牌', count: summary?.unidentified_brand ?? 0, color: '#722ed1' },
     { key: 'text_only', label: 'URL映射待确认', count: summary?.text_only ?? 0, color: '#d48806' },
     { key: 'pending', label: '待确认', count: summary?.pending ?? 0, color: '#d46b08' },
     { key: 'disputed', label: '争议复核', count: summary?.disputed ?? 0, color: '#cf1322' },
-  ] as const
+    { key: 'matched', label: '已匹配', count: (summary?.matched ?? 0) + (summary?.url_matched ?? 0), color: '#389e0d' },
+    { key: 'confirmed', label: '已人工确认', count: summary?.confirmed ?? 0, color: '#1677ff' },
+    { key: 'excluded', label: '已排除', count: summary?.excluded ?? 0, color: '#8c8c8c' },
+  ]
 
-  const currentQueueTitle = queueTabs.find(tab => tab.key === activeTab)?.label ?? '待处理'
+  const currentQueueTitle = queueTabs.find(tab => tab.key === activeTab)?.label ?? '复核'
   const selectedJob = (jobsData ?? []).find((job: CleanJobItem) => job.id === selectedJobId)
   const cleanJobs = jobsData ?? []
   const canRetryMatch = selectedJob?.status === 'failed' || selectedJob?.status === 'error'
@@ -874,13 +913,13 @@ export default function MatchPage() {
         </Card>
       )}
 
-      {summary && (summary.pending > 0 || (summary.text_only ?? 0) > 0 || (summary.unidentified_brand ?? 0) > 0 || (summary.disputed ?? 0) > 0) && (
+      {summary && summary.total > 0 && (
         <Card
           title={
             <Space>
-              <span>待处理工作台</span>
+              <span>任务复核工作台</span>
               <span style={{ fontSize: 12, color: '#8c8c8c' }}>
-                URL映射待确认 {summary.text_only ?? 0} 条 · 待确认 {summary.pending} 条 · 争议 {summary.disputed ?? 0} 条
+                待处理 {(summary.text_only ?? 0) + summary.pending + (summary.disputed ?? 0)} 条 · 已匹配/确认 {readyCount} 条 · 已排除 {summary.excluded ?? 0} 条
               </span>
             </Space>
           }
@@ -930,7 +969,7 @@ export default function MatchPage() {
           <Tabs
             activeKey={activeTab}
             onChange={key => {
-              setActiveTab(key as 'pending' | 'text_only' | 'unidentified_brand' | 'disputed')
+              setActiveTab(key as ReviewTabKey)
               setPage(1)
               setKeyword('')
               setCategoryName(undefined)
@@ -1024,10 +1063,16 @@ export default function MatchPage() {
                 size="small"
                 title="详情处理"
                 loading={reviewDetailLoading}
-                extra={reviewDetail?.item_url ? <a href={reviewDetail.item_url} target="_blank" rel="noreferrer"><LinkOutlined /> 打开商品</a> : null}
+                extra={reviewDetail ? (
+                  <Space>
+                    {renderMatchStatus(reviewDetail.match_status)}
+                    <Button size="small" onClick={() => refreshReviewWorkbench(reviewDetail.id)}>继续下一条</Button>
+                    {reviewDetail.item_url ? <a href={reviewDetail.item_url} target="_blank" rel="noreferrer"><LinkOutlined /> 打开商品</a> : null}
+                  </Space>
+                ) : null}
               >
                 {!reviewDetail ? (
-                  <Empty description="请选择左侧待处理商品" />
+                  <Empty description="请选择左侧复核商品" />
                 ) : (
                   <Space direction="vertical" size={12} style={{ width: '100%' }}>
                     <Descriptions size="small" column={2} bordered>
@@ -1036,6 +1081,7 @@ export default function MatchPage() {
                       <Descriptions.Item label="店铺">{reviewDetail.shop_name || '-'}</Descriptions.Item>
                       <Descriptions.Item label="价格">{reviewDetail.price != null ? `¥${reviewDetail.price}` : '-'}</Descriptions.Item>
                       <Descriptions.Item label="销量">{formatNumber(reviewDetail.sales_qty)}</Descriptions.Item>
+                      <Descriptions.Item label="当前状态">{renderMatchStatus(reviewDetail.match_status)}</Descriptions.Item>
                       <Descriptions.Item label="系统来源">{renderMatchSource(reviewDetail.match_source)}</Descriptions.Item>
                       <Descriptions.Item label="当前型号">
                         {hasDisplayModel(reviewDetail.brand_code, reviewDetail.model_code)

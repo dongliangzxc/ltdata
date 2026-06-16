@@ -295,6 +295,40 @@ def test_pending_endpoint_allows_disputed_and_review_detail(db, match_client):
     assert body["url_mapping"]["brand_code"] == "Sony"
 
 
+def test_pending_endpoint_supports_reviewed_and_excluded_statuses(db, match_client):
+    model = ModelRecord(brand_code="Sony", model_code="WH-XM5", category_code="headphone")
+    db.add(model)
+    db.flush()
+    upload = UploadFileRecord(filename="review-queue.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+    clean_job = CleanJobRecord(file_ids=[upload.id], status="done")
+    db.add(clean_job)
+    db.flush()
+
+    matched = _seed_review_row(db, clean_job_id=clean_job.id, upload_id=upload.id, model_id=model.id, status="matched", item_name="matched row")
+    url_matched = _seed_review_row(db, clean_job_id=clean_job.id, upload_id=upload.id, model_id=model.id, status="url_matched", item_name="url row")
+    confirmed = _seed_review_row(db, clean_job_id=clean_job.id, upload_id=upload.id, model_id=model.id, status="confirmed", item_name="confirmed row")
+    excluded = _seed_review_row(db, clean_job_id=clean_job.id, upload_id=upload.id, status="excluded", item_name="excluded row")
+    _seed_review_row(db, clean_job_id=clean_job.id, upload_id=upload.id, status="pending", item_name="pending row")
+    db.commit()
+
+    matched_response = match_client.get(f"/api/match/{clean_job.id}/pending", params={"status": "matched"})
+    assert matched_response.status_code == 200
+    assert matched_response.json()["total"] == 2
+    assert {item["id"] for item in matched_response.json()["items"]} == {matched.id, url_matched.id}
+
+    confirmed_response = match_client.get(f"/api/match/{clean_job.id}/pending", params={"status": "confirmed"})
+    assert confirmed_response.status_code == 200
+    assert confirmed_response.json()["total"] == 1
+    assert confirmed_response.json()["items"][0]["id"] == confirmed.id
+
+    excluded_response = match_client.get(f"/api/match/{clean_job.id}/pending", params={"status": "excluded"})
+    assert excluded_response.status_code == 200
+    assert excluded_response.json()["total"] == 1
+    assert excluded_response.json()["items"][0]["id"] == excluded.id
+
+
 def test_review_detail_returns_category_model_specs_and_match_attrs(db, match_client):
     category = Category(code="headphone", name="耳机")
     model = ModelRecord(brand_code="Sony", model_code="WH-1000XM5", category_code="headphone")

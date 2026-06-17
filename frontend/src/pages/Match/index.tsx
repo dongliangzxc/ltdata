@@ -14,8 +14,9 @@ import {
   enableMatch, avgPriceDisable, listDisabled,
   triggerExport, getExportJob, getDownloadUrl,
   getCleanMonthlyPool, rerunCleanTaskWithCurrentRules,
+  listFilteredItems, recoverFilteredItem,
 } from '../../services/api'
-import type { CleanJobItem, MatchCandidateOut, ReviewedMatchResultOut, PriceFlag, MatchReviewDetail } from '../../services/api'
+import type { CleanJobItem, MatchCandidateOut, ReviewedMatchResultOut, PriceFlag, MatchReviewDetail, FilteredItemOut } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 import ProgressModal from '../../components/ProgressModal'
 import AttributeInsightCard from './components/AttributeInsightCard'
@@ -157,7 +158,7 @@ type MatchProgress = {
   error?: string
 }
 
-type ReviewTabKey = 'text_only' | 'pending' | 'unidentified_brand' | 'disputed' | 'matched' | 'confirmed' | 'excluded'
+type ReviewTabKey = 'text_only' | 'pending' | 'unidentified_brand' | 'disputed' | 'matched' | 'confirmed' | 'excluded' | 'filtered'
 
 export default function MatchPage() {
   const [searchParams] = useSearchParams()
@@ -180,6 +181,7 @@ export default function MatchPage() {
   const [page, setPage] = useState(1)
   const [reviewedPage, setReviewedPage] = useState(1)
   const [confirmingIds, setConfirmingIds] = useState<Set<number>>(new Set())
+  const [recoveringFilteredIds, setRecoveringFilteredIds] = useState<Set<number>>(new Set())
   const [selectedModels, setSelectedModels] = useState<Record<number, number>>({})
   const [publishJobs, setPublishJobs] = useState<PublishJob[]>([])
   const [disabledItems, setDisabledItems] = useState<DisabledItem[]>([])
@@ -192,7 +194,9 @@ export default function MatchPage() {
   const [savingCoefficientIds, setSavingCoefficientIds] = useState<Set<number>>(new Set())
   const [activeTab, setActiveTab] = useState<ReviewTabKey>('text_only')
   const [selectedReviewId, setSelectedReviewId] = useState<number | null>(null)
+  const [selectedFilteredId, setSelectedFilteredId] = useState<number | null>(null)
   const [reviewDetail, setReviewDetail] = useState<MatchReviewDetail | null>(null)
+  const [filteredDetail, setFilteredDetail] = useState<FilteredItemOut | null>(null)
   const [reviewDetailLoading, setReviewDetailLoading] = useState(false)
   const [reviewReason, setReviewReason] = useState('')
   const [interventionModalOpen, setInterventionModalOpen] = useState(false)
@@ -227,12 +231,26 @@ export default function MatchPage() {
       sort_by: sortBy !== 'default' ? sortBy : undefined,
     }).then(r => r.data),
     {
-      ready: selectedJobId != null && summary != null && summary.total > 0,
+      ready: selectedJobId != null && summary != null && summary.total > 0 && activeTab !== 'filtered',
       refreshDeps: [selectedJobId, keyword, page, activeTab, categoryName, sortBy],
     }
   )
 
+  const { data: filteredData, loading: filteredLoading, refresh: refreshFiltered } = useRequest(
+    () => listFilteredItems({
+      clean_job_id: selectedJobId!,
+      keyword: keyword || undefined,
+      page,
+      page_size: 20,
+    }).then(r => r.data),
+    {
+      ready: selectedJobId != null && activeTab === 'filtered',
+      refreshDeps: [selectedJobId, keyword, page, activeTab],
+    }
+  )
+
   useEffect(() => {
+    if (activeTab === 'filtered') return
     const items = pendingData?.items ?? []
     if (items.length === 0) {
       setSelectedReviewId(null)
@@ -242,10 +260,24 @@ export default function MatchPage() {
     if (!selectedReviewId || !items.some((item: PendingItem) => item.id === selectedReviewId)) {
       setSelectedReviewId(items[0].id)
     }
-  }, [pendingData, selectedReviewId])
+  }, [activeTab, pendingData, selectedReviewId])
 
   useEffect(() => {
-    if (!selectedReviewId) return
+    if (activeTab !== 'filtered') return
+    const items = filteredData?.items ?? []
+    if (items.length === 0) {
+      setSelectedFilteredId(null)
+      setFilteredDetail(null)
+      return
+    }
+    if (!selectedFilteredId || !items.some((item: FilteredItemOut) => item.id === selectedFilteredId)) {
+      setSelectedFilteredId(items[0].id)
+      setFilteredDetail(items[0])
+    }
+  }, [activeTab, filteredData, selectedFilteredId])
+
+  useEffect(() => {
+    if (!selectedReviewId || activeTab === 'filtered') return
     setReviewDetailLoading(true)
     getMatchReviewDetail(selectedReviewId)
       .then(r => {
@@ -253,7 +285,7 @@ export default function MatchPage() {
         setReviewReason(r.data.dispute_reason || r.data.review_note || '')
       })
       .finally(() => setReviewDetailLoading(false))
-  }, [selectedReviewId])
+  }, [activeTab, selectedReviewId])
 
   const { data: reviewedData, loading: reviewedLoading, refresh: refreshReviewed } = useRequest(
     () => listReviewedMatches(selectedJobId!, {
@@ -285,12 +317,13 @@ export default function MatchPage() {
       matched: (summary.matched ?? 0) + (summary.url_matched ?? 0),
       confirmed: summary.confirmed ?? 0,
       excluded: summary.excluded ?? 0,
+      filtered: filteredData?.total ?? 0,
     }
     if (counts[activeTab] === 0) {
       const nextTab = (Object.entries(counts).find(([, count]) => count > 0)?.[0] ?? 'text_only') as ReviewTabKey
       if (nextTab !== activeTab) setActiveTab(nextTab)
     }
-  }, [summary, activeTab])
+  }, [summary, activeTab, filteredData?.total])
 
   // 组件卸载时清理轮询计时器，防止离开页面后仍持续请求
   useEffect(() => {
@@ -413,7 +446,9 @@ export default function MatchPage() {
   const refreshCurrentJobState = () => {
     if (!selectedJobId) return
     setSelectedReviewId(null)
+    setSelectedFilteredId(null)
     setReviewDetail(null)
+    setFilteredDetail(null)
     setReviewReason('')
     setSelectedModels({})
     setPage(1)
@@ -486,6 +521,21 @@ export default function MatchPage() {
     await confirmMatch(matchId, { model_id: modelId })
     message.success('已选用候选型号，右侧已刷新确认结果')
     await refreshReviewDetailInPlace(matchId)
+  }
+
+  const handleRecoverFilteredItem = async (item: FilteredItemOut) => {
+    setRecoveringFilteredIds(prev => new Set(prev).add(item.id))
+    try {
+      await recoverFilteredItem(item.id)
+      message.success('已恢复到清洗结果，重新匹配后可进入复核队列')
+      setSelectedFilteredId(null)
+      setFilteredDetail(null)
+      refreshFiltered()
+      refreshJobs()
+      if (selectedJobId) getMatchSummary(selectedJobId).then(r => setSummary(r.data))
+    } finally {
+      setRecoveringFilteredIds(prev => { const s = new Set(prev); s.delete(item.id); return s })
+    }
   }
 
   const handleSaveCoefficient = async (matchId: number) => {
@@ -708,6 +758,7 @@ export default function MatchPage() {
     { key: 'matched', label: '已匹配', count: (summary?.matched ?? 0) + (summary?.url_matched ?? 0), color: '#389e0d' },
     { key: 'confirmed', label: '已人工确认', count: summary?.confirmed ?? 0, color: '#1677ff' },
     { key: 'excluded', label: '已排除', count: summary?.excluded ?? 0, color: '#8c8c8c' },
+    { key: 'filtered', label: '干扰项过滤', count: filteredData?.total ?? 0, color: '#fa8c16' },
   ]
 
   const currentQueueTitle = queueTabs.find(tab => tab.key === activeTab)?.label ?? '复核'
@@ -919,7 +970,7 @@ export default function MatchPage() {
             <Space>
               <span>任务复核工作台</span>
               <span style={{ fontSize: 12, color: '#8c8c8c' }}>
-                待处理 {(summary.text_only ?? 0) + summary.pending + (summary.disputed ?? 0)} 条 · 已匹配/确认 {readyCount} 条 · 已排除 {summary.excluded ?? 0} 条
+                待处理 {(summary.text_only ?? 0) + summary.pending + (summary.disputed ?? 0)} 条 · 已匹配/确认 {readyCount} 条 · 已排除 {summary.excluded ?? 0} 条 · 干扰过滤 {filteredData?.total ?? 0} 条
               </span>
             </Space>
           }
@@ -975,7 +1026,9 @@ export default function MatchPage() {
               setCategoryName(undefined)
               setSortBy('default')
               setSelectedReviewId(null)
+              setSelectedFilteredId(null)
               setReviewDetail(null)
+              setFilteredDetail(null)
               setReviewReason('')
             }}
             items={queueTabs.map(tab => ({
@@ -1012,66 +1065,160 @@ export default function MatchPage() {
           <Row gutter={16} align="top">
             <Col span={9}>
               <Card size="small" title={`${currentQueueTitle}队列`} bodyStyle={{ padding: 0 }}>
-                <List
-                  loading={pendingLoading}
-                  dataSource={pendingData?.items ?? []}
-                  locale={{ emptyText: '当前队列暂无数据' }}
-                  pagination={{
-                    current: page,
-                    pageSize: 20,
-                    total: pendingData?.total ?? 0,
-                    onChange: setPage,
-                    size: 'small',
-                    showSizeChanger: false,
-                  }}
-                  renderItem={(item: PendingItem) => (
-                    <List.Item
-                      onClick={() => setSelectedReviewId(item.id)}
-                      style={{
-                        cursor: 'pointer',
-                        padding: '10px 12px',
-                        background: selectedReviewId === item.id ? '#e6f4ff' : undefined,
-                      }}
-                    >
-                      <List.Item.Meta
-                        title={
-                          <Tooltip title={item.item_name}>
-                            <Text strong ellipsis style={{ maxWidth: 280 }}>{item.item_name || '-'}</Text>
-                          </Tooltip>
-                        }
-                        description={
-                          <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                            <Space wrap size={4}>
-                              <Tag>{item.category_name || '未归类'}</Tag>
-                              <Tag color="blue">{item.brand_raw || '无原品牌'}</Tag>
-                              {renderMatchSource(item.match_source)}
-                              {item.item_url && <Tag icon={<LinkOutlined />} color="green">有链接</Tag>}
+                {activeTab === 'filtered' ? (
+                  <List
+                    loading={filteredLoading}
+                    dataSource={filteredData?.items ?? []}
+                    locale={{ emptyText: '当前暂无干扰项过滤记录' }}
+                    pagination={{
+                      current: page,
+                      pageSize: 20,
+                      total: filteredData?.total ?? 0,
+                      onChange: setPage,
+                      size: 'small',
+                      showSizeChanger: false,
+                    }}
+                    renderItem={(item: FilteredItemOut) => (
+                      <List.Item
+                        onClick={() => { setSelectedFilteredId(item.id); setFilteredDetail(item) }}
+                        style={{
+                          cursor: 'pointer',
+                          padding: '10px 12px',
+                          background: selectedFilteredId === item.id ? '#fff7e6' : undefined,
+                        }}
+                      >
+                        <List.Item.Meta
+                          title={
+                            <Tooltip title={item.item_name}>
+                              <Text strong ellipsis style={{ maxWidth: 280 }}>{item.item_name || '-'}</Text>
+                            </Tooltip>
+                          }
+                          description={
+                            <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                              <Space wrap size={4}>
+                                <Tag color="orange">干扰过滤</Tag>
+                                <Tag color="blue">{item.brand_raw || '无原品牌'}</Tag>
+                                {item.item_url && <Tag icon={<LinkOutlined />} color="green">有链接</Tag>}
+                              </Space>
+                              <Text type="secondary" style={{ fontSize: 12 }}>
+                                规则 {item.intervention_rule_name || '-'} · 关键词 {item.matched_keyword || '-'}
+                              </Text>
                             </Space>
-                            <Text type="secondary" style={{ fontSize: 12 }}>
-                              销量 {formatNumber(item.sales_qty)}{item.dispute_reason ? ` · ${item.dispute_reason}` : ''}
-                            </Text>
-                          </Space>
-                        }
-                      />
-                    </List.Item>
-                  )}
-                />
+                          }
+                        />
+                      </List.Item>
+                    )}
+                  />
+                ) : (
+                  <List
+                    loading={pendingLoading}
+                    dataSource={pendingData?.items ?? []}
+                    locale={{ emptyText: '当前队列暂无数据' }}
+                    pagination={{
+                      current: page,
+                      pageSize: 20,
+                      total: pendingData?.total ?? 0,
+                      onChange: setPage,
+                      size: 'small',
+                      showSizeChanger: false,
+                    }}
+                    renderItem={(item: PendingItem) => (
+                      <List.Item
+                        onClick={() => setSelectedReviewId(item.id)}
+                        style={{
+                          cursor: 'pointer',
+                          padding: '10px 12px',
+                          background: selectedReviewId === item.id ? '#e6f4ff' : undefined,
+                        }}
+                      >
+                        <List.Item.Meta
+                          title={
+                            <Tooltip title={item.item_name}>
+                              <Text strong ellipsis style={{ maxWidth: 280 }}>{item.item_name || '-'}</Text>
+                            </Tooltip>
+                          }
+                          description={
+                            <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                              <Space wrap size={4}>
+                                <Tag>{item.category_name || '未归类'}</Tag>
+                                <Tag color="blue">{item.brand_raw || '无原品牌'}</Tag>
+                                {renderMatchSource(item.match_source)}
+                                {item.item_url && <Tag icon={<LinkOutlined />} color="green">有链接</Tag>}
+                              </Space>
+                              <Text type="secondary" style={{ fontSize: 12 }}>
+                                销量 {formatNumber(item.sales_qty)}{item.dispute_reason ? ` · ${item.dispute_reason}` : ''}
+                              </Text>
+                            </Space>
+                          }
+                        />
+                      </List.Item>
+                    )}
+                  />
+                )}
               </Card>
             </Col>
             <Col span={15}>
               <Card
                 size="small"
-                title="详情处理"
-                loading={reviewDetailLoading}
-                extra={reviewDetail ? (
-                  <Space>
-                    {renderMatchStatus(reviewDetail.match_status)}
-                    <Button size="small" onClick={() => refreshReviewWorkbench(reviewDetail.id)}>继续下一条</Button>
-                    {reviewDetail.item_url ? <a href={reviewDetail.item_url} target="_blank" rel="noreferrer"><LinkOutlined /> 打开商品</a> : null}
-                  </Space>
-                ) : null}
+                title={activeTab === 'filtered' ? '干扰项详情' : '详情处理'}
+                loading={activeTab === 'filtered' ? filteredLoading : reviewDetailLoading}
+                extra={activeTab === 'filtered'
+                  ? (filteredDetail ? (
+                    <Space>
+                      <Tag color="orange">干扰过滤</Tag>
+                      {filteredDetail.item_url ? <a href={filteredDetail.item_url} target="_blank" rel="noreferrer"><LinkOutlined /> 打开商品</a> : null}
+                    </Space>
+                  ) : null)
+                  : (reviewDetail ? (
+                    <Space>
+                      {renderMatchStatus(reviewDetail.match_status)}
+                      <Button size="small" onClick={() => refreshReviewWorkbench(reviewDetail.id)}>继续下一条</Button>
+                      {reviewDetail.item_url ? <a href={reviewDetail.item_url} target="_blank" rel="noreferrer"><LinkOutlined /> 打开商品</a> : null}
+                    </Space>
+                  ) : null)}
               >
-                {!reviewDetail ? (
+                {activeTab === 'filtered' ? (
+                  !filteredDetail ? (
+                    <Empty description="请选择左侧干扰项记录" />
+                  ) : (
+                    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                      <Descriptions size="small" column={2} bordered>
+                        <Descriptions.Item label="商品名称" span={2}>{filteredDetail.item_name || '-'}</Descriptions.Item>
+                        <Descriptions.Item label="原品牌">{filteredDetail.brand_raw || '-'}</Descriptions.Item>
+                        <Descriptions.Item label="店铺">{filteredDetail.shop_name || '-'}</Descriptions.Item>
+                        <Descriptions.Item label="平台">{filteredDetail.platform || '-'}</Descriptions.Item>
+                        <Descriptions.Item label="商品ID">{filteredDetail.item_id || '-'}</Descriptions.Item>
+                        <Descriptions.Item label="价格">{filteredDetail.price != null ? `¥${filteredDetail.price}` : '-'}</Descriptions.Item>
+                        <Descriptions.Item label="销量">{formatNumber(filteredDetail.sales_qty)}</Descriptions.Item>
+                        <Descriptions.Item label="销售额">{filteredDetail.sales_amount != null ? `¥${formatNumber(filteredDetail.sales_amount)}` : '-'}</Descriptions.Item>
+                        <Descriptions.Item label="过滤时间">{filteredDetail.created_at || '-'}</Descriptions.Item>
+                        <Descriptions.Item label="命中规则">{filteredDetail.intervention_rule_name || '-'}</Descriptions.Item>
+                        <Descriptions.Item label="命中关键词">{filteredDetail.matched_keyword || '-'}</Descriptions.Item>
+                        <Descriptions.Item label="过滤原因" span={2}>{filteredDetail.matched_reason || '-'}</Descriptions.Item>
+                      </Descriptions>
+
+                      <Alert
+                        type="warning"
+                        showIcon
+                        message="恢复后会回到清洗结果中，不会自动发布；如需进入复核队列，请重新匹配或重新处理当前任务。"
+                      />
+
+                      <Space wrap>
+                        <Popconfirm
+                          title="确认恢复此干扰项？"
+                          description="恢复后该商品会重新进入清洗结果，不再作为干扰项存档排除。"
+                          onConfirm={() => handleRecoverFilteredItem(filteredDetail)}
+                        >
+                          <Button
+                            type="primary"
+                            loading={recoveringFilteredIds.has(filteredDetail.id)}
+                          >恢复/放行</Button>
+                        </Popconfirm>
+                        {filteredDetail.item_url ? <Button onClick={() => window.open(filteredDetail.item_url!, '_blank')}>打开商品链接</Button> : null}
+                      </Space>
+                    </Space>
+                  )
+                ) : !reviewDetail ? (
                   <Empty description="请选择左侧复核商品" />
                 ) : (
                   <Space direction="vertical" size={12} style={{ width: '100%' }}>

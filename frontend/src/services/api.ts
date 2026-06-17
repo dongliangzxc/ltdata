@@ -586,11 +586,32 @@ export const deleteMatchRule = (id: number) =>
   api.delete(`/rules/match-rules/${id}`)
 
 // ─── Rules - Filtered Items ─────────────────────────────────
+export type FilteredItemOut = {
+  id: number
+  raw_data_id: number
+  clean_job_id: number
+  matched_keyword: string | null
+  intervention_rule_id: number | null
+  intervention_rule_name: string | null
+  matched_reason: string | null
+  item_name: string | null
+  item_url: string | null
+  item_image: string | null
+  brand_raw: string | null
+  shop_name: string | null
+  platform: string | null
+  item_id: string | null
+  price: number | null
+  sales_qty: number | null
+  sales_amount: number | null
+  created_at: string | null
+}
+
 export const listFilteredItems = (params: Record<string, unknown>) =>
-  api.get('/rules/filtered-items', { params })
+  api.get<PaginatedResponse<FilteredItemOut>>('/rules/filtered-items', { params })
 
 export const recoverFilteredItem = (id: number) =>
-  api.post(`/rules/filtered-items/${id}/recover`)
+  api.post<{ recovered: number }>(`/rules/filtered-items/${id}/recover`)
 
 export const recoverFilteredItemsBatch = (ids: number[]) =>
   api.post('/rules/filtered-items/recover-batch', { ids })

@@ -431,13 +431,13 @@ function FilteredItemTab() {
     { title: '商品名称', dataIndex: 'item_name', ellipsis: true },
     { title: '原始品牌', dataIndex: 'brand_raw', width: 120 },
     { title: '命中规则', dataIndex: 'intervention_rule_name', width: 160,
-      render: (v: string | null, row: { matched_keyword?: string }) => v || row.matched_keyword || '-' },
+      render: (v: string | null, row: { matched_keyword?: string | null }) => v || row.matched_keyword || '-' },
     { title: '命中原因', dataIndex: 'matched_reason', ellipsis: true,
       render: (v: string | null) => v || '-' },
     { title: '清洗任务', dataIndex: 'clean_job_id', width: 90 },
     {
       title: '操作', width: 80,
-      render: (_: unknown, row: { id: number; matched_keyword?: string }) => (
+      render: (_: unknown, row: { id: number; matched_keyword?: string | null }) => (
         <Button size="small" type="link" onClick={() => handleRecover(row.id)}>恢复</Button>
       ),
     },

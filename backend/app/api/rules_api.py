@@ -466,8 +466,15 @@ def list_filtered_items(
             "intervention_rule_name": fi.intervention_rule_name,
             "matched_reason": fi.matched_reason,
             "item_name": rd.item_name,
+            "item_url": rd.item_url,
+            "item_image": rd.item_image,
             "brand_raw": rd.brand_raw,
             "shop_name": rd.shop_name,
+            "platform": rd.platform,
+            "item_id": rd.item_id,
+            "price": float(rd.price) if rd.price is not None else None,
+            "sales_qty": rd.sales_qty,
+            "sales_amount": float(rd.sales_amount) if rd.sales_amount is not None else None,
             "created_at": format_beijing_datetime(fi.created_at),
         }
         for fi, rd in rows

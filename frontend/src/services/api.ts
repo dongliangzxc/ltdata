@@ -377,16 +377,14 @@ export const getDispatchBatchStats = (batchId: number) =>
 export const listDispatchUnmatched = (batchId: number, params?: { page?: number; page_size?: number; keyword?: string }) =>
   api.get<DispatchUnmatchedResponse>(`/dispatch/batches/${batchId}/unmatched`, { params })
 
-export const exportDispatchedRawData = (
-  batchId: number,
-  params: { category_code: string; platform?: string | null }
-) => api.get(`/dispatch/batches/${batchId}/export`, {
-  params: {
-    category_code: params.category_code,
-    ...(params.platform ? { platform: params.platform } : {}),
-  },
-  responseType: 'blob',
-})
+export const exportDispatchedRawData = (params: { category_code?: string; platform?: string | null }) =>
+  api.get('/dispatch/export', {
+    params: {
+      ...(params.category_code ? { category_code: params.category_code } : {}),
+      ...(params.platform ? { platform: params.platform } : {}),
+    },
+    responseType: 'blob',
+  })
 
 export const listDispatchRules = (params?: Record<string, unknown>) =>
   api.get('/dispatch/rules', { params })

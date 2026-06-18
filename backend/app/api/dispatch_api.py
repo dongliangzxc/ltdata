@@ -124,6 +124,47 @@ def _build_fallback_row(raw: RawDataRecord, file_record: UploadFileRecord) -> di
     return row
 
 
+def _build_dispatch_export_response(rows, filename: str):
+    if not rows:
+        raise HTTPException(status_code=404, detail="没有可导出的分发数据")
+
+    grouped_rows: dict[tuple[int | None, str], dict] = {}
+    for _, raw, file_record, template in rows:
+        template_id = template.id if template else None
+        template_name = template.name if template else "无模板"
+        key = (template_id, template_name)
+        if key not in grouped_rows:
+            grouped_rows[key] = {"template": template, "rows": []}
+        if template:
+            grouped_rows[key]["rows"].append(_build_export_row(raw, file_record, template))
+        else:
+            grouped_rows[key]["rows"].append(_build_fallback_row(raw, file_record))
+
+    buf = io.BytesIO()
+    used_sheet_names: set[str] = set()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        for (template_id, template_name), group in grouped_rows.items():
+            sheet_base = template_name if template_id is None else f"{template_name}_{template_id}"
+            sheet_name = _unique_sheet_name(sheet_base, used_sheet_names)
+            data = group["rows"]
+            columns = list(data[0].keys()) if data else []
+            for trace_column in TRACE_COLUMNS:
+                if trace_column in columns:
+                    columns.remove(trace_column)
+                    columns.append(trace_column)
+            pd.DataFrame(data, columns=columns).to_excel(writer, index=False, sheet_name=sheet_name)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
+def _safe_filename_part(value: str | None, fallback: str) -> str:
+    return re.sub(r"[^\w\-一-鿿]+", "_", value or fallback).strip("_") or fallback
+
+
 def _field_value(row: RawDataRecord, field: str) -> str:
     """从 raw_data 行取指定字段值，返回空字符串如果字段不存在"""
     field_map = {
@@ -493,44 +534,49 @@ def export_batch_raw_data(
         query = query.filter(RawDataRecord.platform == platform)
 
     rows = query.order_by(UploadFileRecord.template_id, RawDataRecord.id).all()
-    if not rows:
-        raise HTTPException(status_code=404, detail="没有可导出的分发数据")
-
-    grouped_rows: dict[tuple[int | None, str], dict] = {}
-    for _, raw, file_record, template in rows:
-        template_id = template.id if template else None
-        template_name = template.name if template else "无模板"
-        key = (template_id, template_name)
-        if key not in grouped_rows:
-            grouped_rows[key] = {"template": template, "rows": []}
-        if template:
-            grouped_rows[key]["rows"].append(_build_export_row(raw, file_record, template))
-        else:
-            grouped_rows[key]["rows"].append(_build_fallback_row(raw, file_record))
-
-    buf = io.BytesIO()
-    used_sheet_names: set[str] = set()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        for (template_id, template_name), group in grouped_rows.items():
-            sheet_base = template_name if template_id is None else f"{template_name}_{template_id}"
-            sheet_name = _unique_sheet_name(sheet_base, used_sheet_names)
-            data = group["rows"]
-            columns = list(data[0].keys()) if data else []
-            for trace_column in TRACE_COLUMNS:
-                if trace_column in columns:
-                    columns.remove(trace_column)
-                    columns.append(trace_column)
-            pd.DataFrame(data, columns=columns).to_excel(writer, index=False, sheet_name=sheet_name)
-    buf.seek(0)
-
-    category_part = re.sub(r"[^\w\-一-鿿]+", "_", category_code).strip("_") or "category"
-    platform_part = re.sub(r"[^\w\-一-鿿]+", "_", platform or "all").strip("_") or "all"
-    filename = f"已分发原始数据_批次{batch_id}_{category_part}_{platform_part}.xlsx"
-    return StreamingResponse(
-        buf,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    filename = (
+        f"已分发原始数据_批次{batch_id}_"
+        f"{_safe_filename_part(category_code, 'category')}_"
+        f"{_safe_filename_part(platform, 'all')}.xlsx"
     )
+    return _build_dispatch_export_response(rows, filename)
+
+
+@router.get("/export")
+def export_dispatched_raw_data(
+    category_code: Optional[str] = Query(None),
+    platform: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    latest_batches = (
+        db.query(
+            DispatchBatch.file_id.label("file_id"),
+            func.max(DispatchBatch.id).label("batch_id"),
+        )
+        .filter(DispatchBatch.status == "done", DispatchBatch.file_id.isnot(None))
+        .group_by(DispatchBatch.file_id)
+        .subquery()
+    )
+    query = (
+        db.query(DispatchItem, RawDataRecord, UploadFileRecord, ColumnTemplate)
+        .join(latest_batches, DispatchItem.batch_id == latest_batches.c.batch_id)
+        .join(RawDataRecord, DispatchItem.raw_data_id == RawDataRecord.id)
+        .join(UploadFileRecord, RawDataRecord.file_id == UploadFileRecord.id)
+        .outerjoin(ColumnTemplate, UploadFileRecord.template_id == ColumnTemplate.id)
+        .filter(DispatchItem.raw_data_id.isnot(None))
+    )
+    if category_code:
+        query = query.filter(DispatchItem.category_code == category_code)
+    if platform:
+        query = query.filter(RawDataRecord.platform == platform)
+
+    rows = query.order_by(UploadFileRecord.template_id, RawDataRecord.id).all()
+    filename = (
+        "分发结果_"
+        f"{_safe_filename_part(category_code, '全部品类')}_"
+        f"{_safe_filename_part(platform, '全部平台')}.xlsx"
+    )
+    return _build_dispatch_export_response(rows, filename)
 
 
 @router.get("/rules", response_model=list[DispatchRuleOut])

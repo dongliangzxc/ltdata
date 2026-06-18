@@ -780,6 +780,67 @@ def test_export_batch_raw_data_splits_multiple_templates_into_sheets(client_and_
     assert headers == ["京东ID", "天猫ID"]
 
 
+def test_export_dispatched_raw_data_uses_latest_done_batch_per_file(client_and_db):
+    client, db = client_and_db
+    template = ColumnTemplate(name="下载模板", module="sales", mapping={"商品ID": "item_id"}, ignore_columns=[])
+    db.add(template)
+    db.flush()
+    file_record = UploadFileRecord(filename="latest.xlsx", platform="JD", row_count=2, status="done", template_id=template.id)
+    other_file = UploadFileRecord(filename="other.xlsx", platform="JD", row_count=1, status="done", template_id=template.id)
+    db.add_all([file_record, other_file])
+    db.flush()
+    old_raw = RawDataRecord(file_id=file_record.id, platform="jd", item_id="old-row")
+    latest_raw = RawDataRecord(file_id=file_record.id, platform="jd", item_id="latest-row")
+    other_raw = RawDataRecord(file_id=other_file.id, platform="tmall", item_id="other-row")
+    db.add_all([old_raw, latest_raw, other_raw])
+    db.flush()
+    old_batch = DispatchBatch(file_id=file_record.id, status="done", total_rows=2, dispatched_rows=1, unmatched_rows=1)
+    latest_batch = DispatchBatch(file_id=file_record.id, status="done", total_rows=2, dispatched_rows=1, unmatched_rows=1)
+    other_batch = DispatchBatch(file_id=other_file.id, status="done", total_rows=1, dispatched_rows=1, unmatched_rows=0)
+    db.add_all([old_batch, latest_batch, other_batch])
+    db.flush()
+    db.add_all([
+        DispatchItem(batch_id=old_batch.id, raw_data_id=old_raw.id, category_code="headphone"),
+        DispatchItem(batch_id=latest_batch.id, raw_data_id=latest_raw.id, category_code="headphone"),
+        DispatchItem(batch_id=other_batch.id, raw_data_id=other_raw.id, category_code="headphone"),
+    ])
+    db.commit()
+
+    response = client.get("/api/dispatch/export", params={"category_code": "headphone"})
+
+    assert response.status_code == 200
+    rows = _sheet_rows(_read_workbook(response).active)
+    assert [row[0] for row in rows[1:]] == ["latest-row", "other-row"]
+
+
+def test_export_dispatched_raw_data_filters_by_platform(client_and_db):
+    client, db = client_and_db
+    template = ColumnTemplate(name="平台模板", module="sales", mapping={"商品ID": "item_id", "平台": "platform"}, ignore_columns=[])
+    db.add(template)
+    db.flush()
+    file_record = UploadFileRecord(filename="platform.xlsx", platform="JD", row_count=2, status="done", template_id=template.id)
+    db.add(file_record)
+    db.flush()
+    jd_raw = RawDataRecord(file_id=file_record.id, platform="jd", item_id="jd-row")
+    tmall_raw = RawDataRecord(file_id=file_record.id, platform="tmall", item_id="tmall-row")
+    db.add_all([jd_raw, tmall_raw])
+    db.flush()
+    batch = DispatchBatch(file_id=file_record.id, status="done", total_rows=2, dispatched_rows=2, unmatched_rows=0)
+    db.add(batch)
+    db.flush()
+    db.add_all([
+        DispatchItem(batch_id=batch.id, raw_data_id=jd_raw.id, category_code="headphone"),
+        DispatchItem(batch_id=batch.id, raw_data_id=tmall_raw.id, category_code="headphone"),
+    ])
+    db.commit()
+
+    response = client.get("/api/dispatch/export", params={"category_code": "headphone", "platform": "jd"})
+
+    assert response.status_code == 200
+    rows = _sheet_rows(_read_workbook(response).active)
+    assert [row[0] for row in rows[1:]] == ["jd-row"]
+
+
 def test_export_batch_raw_data_rejects_unfinished_batch(client_and_db):
     client, db = client_and_db
     batch = DispatchBatch(status="running")

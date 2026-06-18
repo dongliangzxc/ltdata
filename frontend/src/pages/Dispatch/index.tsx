@@ -127,7 +127,6 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
   const [runningIds, setRunningIds] = useState<Set<number>>(new Set())
   const [statsVisible, setStatsVisible] = useState(false)
   const [statsData, setStatsData] = useState<DispatchBatchStatsResponse | null>(null)
-  const [exportingKey, setExportingKey] = useState<string | null>(null)
   const [currentStatsBatch, setCurrentStatsBatch] = useState<DispatchBatch | null>(null)
   const [unmatchedVisible, setUnmatchedVisible] = useState(false)
   const [unmatchedPage, setUnmatchedPage] = useState(1)
@@ -194,28 +193,6 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
     setUnmatchedSearchInput('')
     setUnmatchedKeyword('')
     setUnmatchedVisible(true)
-  }
-
-  const handleExport = async (categoryCode: string, platform?: string | null) => {
-    if (!currentStatsBatch) return
-    const key = `${currentStatsBatch.id}-${categoryCode}-${platform ?? 'all'}`
-    setExportingKey(key)
-    try {
-      const res = await exportDispatchedRawData(currentStatsBatch.id, { category_code: categoryCode, platform })
-      const disposition = res.headers['content-disposition'] as string | undefined
-      const filename = getFilenameFromDisposition(disposition) ?? `dispatch_raw_${currentStatsBatch.id}_${categoryCode}_${platform ?? 'all'}.xlsx`
-      const url = URL.createObjectURL(new Blob([res.data]))
-      const link = document.createElement('a')
-      link.href = url
-      link.download = filename
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      URL.revokeObjectURL(url)
-      message.success('下载已开始')
-    } finally {
-      setExportingKey(null)
-    }
   }
 
   const formatCategoryPath = (row: DispatchUnmatchedRow) => (
@@ -397,40 +374,6 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
                     )
                   }
                 },
-                {
-                  title: '下载', width: 260,
-                  render: (_: unknown, row) => {
-                    const platforms = row.platforms ?? []
-                    const allKey = `${currentStatsBatch?.id}-${row.category_code}-all`
-                    return (
-                      <Space size={4} wrap>
-                        <Button
-                          type="link"
-                          size="small"
-                          icon={<DownloadOutlined />}
-                          loading={exportingKey === allKey}
-                          onClick={() => handleExport(row.category_code)}
-                        >
-                          全部
-                        </Button>
-                        {platforms.filter(item => item.platform).map(item => {
-                          const key = `${currentStatsBatch?.id}-${row.category_code}-${item.platform}`
-                          return (
-                            <Button
-                              key={item.platform}
-                              type="link"
-                              size="small"
-                              loading={exportingKey === key}
-                              onClick={() => handleExport(row.category_code, item.platform)}
-                            >
-                              {formatDataPlatform(item.platform)}
-                            </Button>
-                          )
-                        })}
-                      </Space>
-                    )
-                  }
-                },
               ]}
             />
           </>
@@ -505,7 +448,74 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
   )
 }
 
-// ─── Tab 2: 分发规则 ──────────────────────────────────────────
+// ─── Tab 2: 分发结果下载 ──────────────────────────────────────
+function DispatchExportTab() {
+  const [categoryCode, setCategoryCode] = useState<string | undefined>()
+  const [platform, setPlatform] = useState<string | undefined>()
+  const [exporting, setExporting] = useState(false)
+  const { options: categoryOptions } = useCategoryOptions()
+
+  const handleExport = async () => {
+    setExporting(true)
+    try {
+      const res = await exportDispatchedRawData({ category_code: categoryCode, platform })
+      const disposition = res.headers['content-disposition'] as string | undefined
+      const filename = getFilenameFromDisposition(disposition) ?? `dispatch_result_${categoryCode ?? 'all'}_${platform ?? 'all'}.xlsx`
+      const url = URL.createObjectURL(new Blob([res.data]))
+      const link = document.createElement('a')
+      link.href = url
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(url)
+      message.success('下载已开始')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  return (
+    <>
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 16 }}
+        message="按品类和平台下载当前分发结果池。系统会按每个上传文件的最新已完成分发批次取数，多个文件命中的数据会串联导出。"
+      />
+      <Space wrap>
+        <Select
+          allowClear
+          showSearch
+          optionFilterProp="label"
+          placeholder="选择品类（可选）"
+          style={{ width: 220 }}
+          options={categoryOptions}
+          value={categoryCode}
+          onChange={value => setCategoryCode(value || undefined)}
+        />
+        <Select
+          allowClear
+          showSearch
+          optionFilterProp="label"
+          placeholder="选择平台（可选）"
+          style={{ width: 160 }}
+          options={PLATFORM_OPTIONS}
+          value={platform}
+          onChange={value => setPlatform(value || undefined)}
+        />
+        <Button type="primary" icon={<DownloadOutlined />} loading={exporting} onClick={handleExport}>
+          下载分发结果
+        </Button>
+      </Space>
+      <Text type="secondary" style={{ display: 'block', marginTop: 12 }}>
+        不选择品类或平台时表示导出全部；如导出范围内包含多个上传模板，会按模板分 Sheet。
+      </Text>
+    </>
+  )
+}
+
+// ─── Tab 3: 分发规则 ──────────────────────────────────────────
 function DispatchRulesTab({ refreshVersion }: { refreshVersion: number }) {
   const [filterPlatform, setFilterPlatform] = useState<string | undefined>()
   const [filterCategory, setFilterCategory] = useState<string | undefined>()
@@ -646,6 +656,7 @@ export default function DispatchPage() {
     <Tabs
       items={[
         { key: 'management', label: '分发管理', children: <DispatchManagementTab onRulesChanged={notifyRulesChanged} /> },
+        { key: 'export', label: '分发结果下载', children: <DispatchExportTab /> },
         { key: 'rules', label: '分发规则', children: <DispatchRulesTab refreshVersion={rulesRefreshVersion} /> },
       ]}
     />

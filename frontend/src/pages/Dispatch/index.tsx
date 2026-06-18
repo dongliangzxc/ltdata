@@ -5,13 +5,13 @@ import {
   Alert, Drawer
 } from 'antd'
 import {
-  PlayCircleOutlined, PlusOutlined, EditOutlined, DeleteOutlined
+  PlayCircleOutlined, PlusOutlined, EditOutlined, DeleteOutlined, DownloadOutlined
 } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import {
   listUploadFiles, listDispatchBatches, runDispatch,
   getDispatchBatchStats, listDispatchUnmatched, listDispatchRules,
-  createDispatchRule, updateDispatchRule, deleteDispatchRule,
+  createDispatchRule, updateDispatchRule, deleteDispatchRule, exportDispatchedRawData,
   type DispatchBatchStatsResponse, type DispatchCategoryStat, type DispatchRuleStat,
   type DispatchUnmatchedRow
 } from '../../services/api'
@@ -62,6 +62,17 @@ const formatRuleDescription = (rule: DispatchRuleStat) => {
 const formatPlatform = (platform: string | null) => (
   platform ? (PLATFORM_OPTIONS.find(o => o.value === platform)?.label ?? platform) : '不限'
 )
+
+const formatDataPlatform = (platform: string | null) => (
+  platform ? (PLATFORM_OPTIONS.find(o => o.value === platform)?.label ?? platform) : '未知平台'
+)
+
+const getFilenameFromDisposition = (disposition?: string) => {
+  const utf8Match = disposition?.match(/filename\*=UTF-8''([^;]+)/)
+  if (utf8Match?.[1]) return decodeURIComponent(utf8Match[1])
+  const fallbackMatch = disposition?.match(/filename="?([^";]+)"?/)
+  return fallbackMatch?.[1] ?? null
+}
 
 const splitItemNameKeywords = (keyword: string | null) => (
   keyword?.split(/[,，、\n\r]+/).map(part => part.trim()).filter(Boolean) ?? []
@@ -116,6 +127,7 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
   const [runningIds, setRunningIds] = useState<Set<number>>(new Set())
   const [statsVisible, setStatsVisible] = useState(false)
   const [statsData, setStatsData] = useState<DispatchBatchStatsResponse | null>(null)
+  const [exportingKey, setExportingKey] = useState<string | null>(null)
   const [currentStatsBatch, setCurrentStatsBatch] = useState<DispatchBatch | null>(null)
   const [unmatchedVisible, setUnmatchedVisible] = useState(false)
   const [unmatchedPage, setUnmatchedPage] = useState(1)
@@ -182,6 +194,28 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
     setUnmatchedSearchInput('')
     setUnmatchedKeyword('')
     setUnmatchedVisible(true)
+  }
+
+  const handleExport = async (categoryCode: string, platform?: string | null) => {
+    if (!currentStatsBatch) return
+    const key = `${currentStatsBatch.id}-${categoryCode}-${platform ?? 'all'}`
+    setExportingKey(key)
+    try {
+      const res = await exportDispatchedRawData(currentStatsBatch.id, { category_code: categoryCode, platform })
+      const disposition = res.headers['content-disposition'] as string | undefined
+      const filename = getFilenameFromDisposition(disposition) ?? `dispatch_raw_${currentStatsBatch.id}_${categoryCode}_${platform ?? 'all'}.xlsx`
+      const url = URL.createObjectURL(new Blob([res.data]))
+      const link = document.createElement('a')
+      link.href = url
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(url)
+      message.success('下载已开始')
+    } finally {
+      setExportingKey(null)
+    }
   }
 
   const formatCategoryPath = (row: DispatchUnmatchedRow) => (
@@ -346,7 +380,57 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
               columns={[
                 { title: '品类', dataIndex: 'category_name', render: (v: string | null) => v || '未知品类' },
                 { title: '品类编码', dataIndex: 'category_code', width: 160 },
-                { title: '行数', dataIndex: 'count', width: 120 },
+                { title: '行数', dataIndex: 'count', width: 100 },
+                {
+                  title: '平台分布', width: 220,
+                  render: (_: unknown, row) => {
+                    const platforms = row.platforms ?? []
+                    if (!platforms.length) return <Text type="secondary">-</Text>
+                    return (
+                      <Space size={[4, 4]} wrap>
+                        {platforms.map(item => (
+                          <Tag key={item.platform ?? 'unknown'} color="blue">
+                            {formatDataPlatform(item.platform)} {item.count}
+                          </Tag>
+                        ))}
+                      </Space>
+                    )
+                  }
+                },
+                {
+                  title: '下载', width: 260,
+                  render: (_: unknown, row) => {
+                    const platforms = row.platforms ?? []
+                    const allKey = `${currentStatsBatch?.id}-${row.category_code}-all`
+                    return (
+                      <Space size={4} wrap>
+                        <Button
+                          type="link"
+                          size="small"
+                          icon={<DownloadOutlined />}
+                          loading={exportingKey === allKey}
+                          onClick={() => handleExport(row.category_code)}
+                        >
+                          全部
+                        </Button>
+                        {platforms.filter(item => item.platform).map(item => {
+                          const key = `${currentStatsBatch?.id}-${row.category_code}-${item.platform}`
+                          return (
+                            <Button
+                              key={item.platform}
+                              type="link"
+                              size="small"
+                              loading={exportingKey === key}
+                              onClick={() => handleExport(row.category_code, item.platform)}
+                            >
+                              {formatDataPlatform(item.platform)}
+                            </Button>
+                          )
+                        })}
+                      </Space>
+                    )
+                  }
+                },
               ]}
             />
           </>

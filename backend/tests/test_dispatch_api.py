@@ -1,3 +1,6 @@
+import io
+
+import openpyxl
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -8,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 from app.api import dispatch_api
 from app.api.dispatch_api import router
 from app.models.database import Base, get_db
-from app.models.schemas import Category, DispatchBatch, DispatchItem, DispatchRule, RawDataRecord, UploadFileRecord
+from app.models.schemas import Category, ColumnTemplate, DispatchBatch, DispatchItem, DispatchRule, RawDataRecord, UploadFileRecord
 
 
 @pytest.fixture
@@ -343,6 +346,13 @@ def test_get_batch_stats_returns_category_names_and_rule_counts(client_and_db):
     file_record = UploadFileRecord(filename="stats.xlsx", platform="JD", row_count=4, status="done")
     db.add(file_record)
     db.flush()
+    raw_rows = [
+        RawDataRecord(file_id=file_record.id, platform="jd", item_id="item-1"),
+        RawDataRecord(file_id=file_record.id, platform="tmall", item_id="item-2"),
+        RawDataRecord(file_id=file_record.id, platform="jd", item_id="item-3"),
+    ]
+    db.add_all(raw_rows)
+    db.flush()
     rule_one = DispatchRule(
         category_code="headphone",
         platform="jd",
@@ -376,9 +386,9 @@ def test_get_batch_stats_returns_category_names_and_rule_counts(client_and_db):
     db.add(batch)
     db.flush()
     db.add_all([
-        DispatchItem(batch_id=batch.id, raw_data_id=1, category_code="headphone", matched_rule_id=rule_one.id),
-        DispatchItem(batch_id=batch.id, raw_data_id=2, category_code="headphone", matched_rule_id=rule_one.id),
-        DispatchItem(batch_id=batch.id, raw_data_id=3, category_code="speaker", matched_rule_id=rule_two.id),
+        DispatchItem(batch_id=batch.id, raw_data_id=raw_rows[0].id, category_code="headphone", matched_rule_id=rule_one.id),
+        DispatchItem(batch_id=batch.id, raw_data_id=raw_rows[1].id, category_code="headphone", matched_rule_id=rule_one.id),
+        DispatchItem(batch_id=batch.id, raw_data_id=raw_rows[2].id, category_code="speaker", matched_rule_id=rule_two.id),
     ])
     db.commit()
 
@@ -391,8 +401,18 @@ def test_get_batch_stats_returns_category_names_and_rule_counts(client_and_db):
     assert payload["dispatched_rows"] == 3
     assert payload["unmatched_rows"] == 1
     assert payload["categories"] == [
-        {"category_code": "headphone", "category_name": "耳机", "count": 2},
-        {"category_code": "speaker", "category_name": "音箱", "count": 1},
+        {
+            "category_code": "headphone",
+            "category_name": "耳机",
+            "count": 2,
+            "platforms": [{"platform": "jd", "count": 1}, {"platform": "tmall", "count": 1}],
+        },
+        {
+            "category_code": "speaker",
+            "category_name": "音箱",
+            "count": 1,
+            "platforms": [{"platform": "jd", "count": 1}],
+        },
     ]
     assert payload["rules"] == [
         {
@@ -632,3 +652,153 @@ def test_get_batch_unmatched_returns_empty_when_batch_has_no_file(client_and_db)
 
     assert response.status_code == 200
     assert response.json() == {"total": 0, "page": 1, "page_size": 20, "items": []}
+
+
+def _read_workbook(response):
+    return openpyxl.load_workbook(io.BytesIO(response.content))
+
+
+def _sheet_rows(sheet):
+    return list(sheet.iter_rows(values_only=True))
+
+
+def test_export_batch_raw_data_filters_by_category_and_platform(client_and_db):
+    client, db = client_and_db
+    template = ColumnTemplate(
+        name="京东模板",
+        module="sales",
+        mapping={"平台": "platform", "宝贝ID": "item_id", "宝贝名称": "item_name"},
+        ignore_columns=[],
+    )
+    db.add(template)
+    db.flush()
+    file_record = UploadFileRecord(filename="export.xlsx", platform="JD", row_count=3, status="done", template_id=template.id)
+    db.add(file_record)
+    db.flush()
+    rows = [
+        RawDataRecord(file_id=file_record.id, platform="jd", item_id="jd-1", item_name="京东商品1"),
+        RawDataRecord(file_id=file_record.id, platform="jd", item_id="jd-2", item_name="京东商品2"),
+        RawDataRecord(file_id=file_record.id, platform="tmall", item_id="tm-1", item_name="天猫商品"),
+    ]
+    db.add_all(rows)
+    db.flush()
+    batch = DispatchBatch(file_id=file_record.id, status="done", total_rows=3, dispatched_rows=3, unmatched_rows=0)
+    db.add(batch)
+    db.flush()
+    db.add_all([
+        DispatchItem(batch_id=batch.id, raw_data_id=rows[0].id, category_code="headphone"),
+        DispatchItem(batch_id=batch.id, raw_data_id=rows[1].id, category_code="headphone"),
+        DispatchItem(batch_id=batch.id, raw_data_id=rows[2].id, category_code="headphone"),
+    ])
+    db.commit()
+
+    response = client.get(
+        f"/api/dispatch/batches/{batch.id}/export",
+        params={"category_code": "headphone", "platform": "jd"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    workbook = _read_workbook(response)
+    rows = _sheet_rows(workbook.active)
+    assert rows[0][:3] == ("平台", "宝贝ID", "宝贝名称")
+    assert [row[1] for row in rows[1:]] == ["jd-1", "jd-2"]
+
+
+def test_export_batch_raw_data_restores_template_columns_and_extra_data(client_and_db):
+    client, db = client_and_db
+    template = ColumnTemplate(
+        name="扩展模板",
+        module="sales",
+        mapping={
+            "平台": "platform",
+            "月份": "month",
+            "宝贝ID": "item_id",
+            "宝贝名称": "item_name",
+            "自定义字段": "__ext__",
+        },
+        ignore_columns=[],
+    )
+    db.add(template)
+    db.flush()
+    file_record = UploadFileRecord(filename="template.xlsx", platform="JD", row_count=1, status="done", template_id=template.id)
+    db.add(file_record)
+    db.flush()
+    raw = RawDataRecord(
+        file_id=file_record.id,
+        platform="jd",
+        month=202605,
+        item_id="sku-1",
+        item_name="模板商品",
+        extra_data={"自定义字段": "扩展值", "额外保留": "保留值"},
+    )
+    db.add(raw)
+    db.flush()
+    batch = DispatchBatch(file_id=file_record.id, status="done", total_rows=1, dispatched_rows=1, unmatched_rows=0)
+    db.add(batch)
+    db.flush()
+    db.add(DispatchItem(batch_id=batch.id, raw_data_id=raw.id, category_code="headphone"))
+    db.commit()
+
+    response = client.get(f"/api/dispatch/batches/{batch.id}/export", params={"category_code": "headphone"})
+
+    assert response.status_code == 200
+    rows = _sheet_rows(_read_workbook(response).active)
+    assert rows[0] == ("平台", "月份", "宝贝ID", "宝贝名称", "自定义字段", "额外保留", "_raw_data_id", "_source_filename")
+    assert rows[1][:6] == ("jd", 202605, "sku-1", "模板商品", "扩展值", "保留值")
+
+
+def test_export_batch_raw_data_splits_multiple_templates_into_sheets(client_and_db):
+    client, db = client_and_db
+    template_one = ColumnTemplate(name="京东模板", module="sales", mapping={"京东ID": "item_id"}, ignore_columns=[])
+    template_two = ColumnTemplate(name="天猫模板", module="sales", mapping={"天猫ID": "item_id"}, ignore_columns=[])
+    db.add_all([template_one, template_two])
+    db.flush()
+    file_one = UploadFileRecord(filename="jd.xlsx", platform="JD", row_count=1, status="done", template_id=template_one.id)
+    file_two = UploadFileRecord(filename="tmall.xlsx", platform="TMALL", row_count=1, status="done", template_id=template_two.id)
+    db.add_all([file_one, file_two])
+    db.flush()
+    raw_one = RawDataRecord(file_id=file_one.id, platform="jd", item_id="jd-1")
+    raw_two = RawDataRecord(file_id=file_two.id, platform="tmall", item_id="tm-1")
+    db.add_all([raw_one, raw_two])
+    db.flush()
+    batch = DispatchBatch(file_id=file_one.id, status="done", total_rows=2, dispatched_rows=2, unmatched_rows=0)
+    db.add(batch)
+    db.flush()
+    db.add_all([
+        DispatchItem(batch_id=batch.id, raw_data_id=raw_one.id, category_code="headphone"),
+        DispatchItem(batch_id=batch.id, raw_data_id=raw_two.id, category_code="headphone"),
+    ])
+    db.commit()
+
+    response = client.get(f"/api/dispatch/batches/{batch.id}/export", params={"category_code": "headphone"})
+
+    assert response.status_code == 200
+    workbook = _read_workbook(response)
+    assert len(workbook.sheetnames) == 2
+    headers = [workbook[sheet_name][1][0].value for sheet_name in workbook.sheetnames]
+    assert headers == ["京东ID", "天猫ID"]
+
+
+def test_export_batch_raw_data_rejects_unfinished_batch(client_and_db):
+    client, db = client_and_db
+    batch = DispatchBatch(status="running")
+    db.add(batch)
+    db.commit()
+
+    response = client.get(f"/api/dispatch/batches/{batch.id}/export", params={"category_code": "headphone"})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "批次尚未完成，不能导出"
+
+
+def test_export_batch_raw_data_returns_404_when_no_data(client_and_db):
+    client, db = client_and_db
+    batch = DispatchBatch(status="done")
+    db.add(batch)
+    db.commit()
+
+    response = client.get(f"/api/dispatch/batches/{batch.id}/export", params={"category_code": "headphone"})
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "没有可导出的分发数据"

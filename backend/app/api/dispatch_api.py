@@ -9,21 +9,119 @@ PUT  /rules/{id}    — 修改规则
 DELETE /rules/{id}  — 删除规则
 """
 from datetime import datetime
+from decimal import Decimal
+import io
 import re
 from typing import Optional
+from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
+import pandas as pd
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 from app.models.database import get_db
 from app.models.schemas import (
     Category, DispatchRule, DispatchBatch, DispatchItem,
     DispatchRuleIn, DispatchRuleOut, DispatchBatchOut,
-    RawDataRecord, UploadFileRecord,
+    RawDataRecord, UploadFileRecord, ColumnTemplate,
 )
 
 router = APIRouter(prefix="/api/dispatch", tags=["dispatch"])
 
 DISPATCH_PAGE_SIZE = 2000
+
+FALLBACK_EXPORT_COLUMNS = [
+    ("platform", "平台"),
+    ("month", "月份"),
+    ("week", "周"),
+    ("category_lv0", "Lv0类目"),
+    ("category_lv1", "Lv1类目"),
+    ("category_lv2", "Lv2类目"),
+    ("category_lv3", "Lv3类目"),
+    ("category_lv4", "Lv4类目"),
+    ("category_lv5", "Lv5类目"),
+    ("item_id", "商品ID"),
+    ("item_name", "商品名称"),
+    ("item_image", "商品图片"),
+    ("item_url", "商品链接"),
+    ("ref_price", "参考价格"),
+    ("brand_raw", "原品牌"),
+    ("shop_name", "店铺名"),
+    ("sales_qty", "销量"),
+    ("sales_amount", "销售额"),
+    ("price", "价格"),
+    ("brand_std", "标准品牌"),
+    ("model_std", "型号"),
+]
+TRACE_COLUMNS = ["_raw_data_id", "_source_filename"]
+
+
+def _excel_value(value):
+    if isinstance(value, Decimal):
+        return float(value)
+    return value
+
+
+def _safe_sheet_name(name: str) -> str:
+    cleaned = re.sub(r"[\[\]:*?/\\]", "_", name or "Sheet")[:31]
+    return cleaned or "Sheet"
+
+
+def _unique_sheet_name(name: str, used_names: set[str]) -> str:
+    base = _safe_sheet_name(name)
+    candidate = base
+    index = 2
+    while candidate in used_names:
+        suffix = f"_{index}"
+        candidate = f"{base[:31 - len(suffix)]}{suffix}"
+        index += 1
+    used_names.add(candidate)
+    return candidate
+
+
+def _template_columns(template: ColumnTemplate | None) -> list[tuple[str, str]]:
+    if not template or not isinstance(template.mapping, dict):
+        return []
+    ignored = set(template.ignore_columns or [])
+    return [
+        (original_column, target_field)
+        for original_column, target_field in template.mapping.items()
+        if original_column not in ignored
+    ]
+
+
+def _build_export_row(raw: RawDataRecord, file_record: UploadFileRecord, template: ColumnTemplate | None) -> dict:
+    extra = raw.extra_data if isinstance(raw.extra_data, dict) else {}
+    row = {}
+    included_extra_columns = set()
+    for original_column, target_field in _template_columns(template):
+        if target_field == "__ext__":
+            row[original_column] = _excel_value(extra.get(original_column))
+            included_extra_columns.add(original_column)
+        elif hasattr(raw, target_field):
+            row[original_column] = _excel_value(getattr(raw, target_field))
+        else:
+            row[original_column] = _excel_value(extra.get(original_column))
+            included_extra_columns.add(original_column)
+
+    for key, value in extra.items():
+        if key not in included_extra_columns and key not in row:
+            row[key] = _excel_value(value)
+
+    row["_raw_data_id"] = raw.id
+    row["_source_filename"] = file_record.filename
+    return row
+
+
+def _build_fallback_row(raw: RawDataRecord, file_record: UploadFileRecord) -> dict:
+    row = {label: _excel_value(getattr(raw, field, None)) for field, label in FALLBACK_EXPORT_COLUMNS}
+    extra = raw.extra_data if isinstance(raw.extra_data, dict) else {}
+    for key, value in extra.items():
+        if key not in row:
+            row[key] = _excel_value(value)
+    row["_raw_data_id"] = raw.id
+    row["_source_filename"] = file_record.filename
+    return row
 
 
 def _field_value(row: RawDataRecord, field: str) -> str:
@@ -280,6 +378,25 @@ def get_batch_stats(batch_id: int, db: Session = Depends(get_db)):
         .all()
     )
 
+    platform_rows = (
+        db.query(
+            DispatchItem.category_code,
+            RawDataRecord.platform,
+            func.count(DispatchItem.id).label("count"),
+        )
+        .outerjoin(RawDataRecord, DispatchItem.raw_data_id == RawDataRecord.id)
+        .filter(DispatchItem.batch_id == batch_id)
+        .group_by(DispatchItem.category_code, RawDataRecord.platform)
+        .order_by(DispatchItem.category_code, RawDataRecord.platform)
+        .all()
+    )
+    platforms_by_category: dict[str, list[dict]] = {}
+    for row in platform_rows:
+        platforms_by_category.setdefault(row.category_code, []).append({
+            "platform": row.platform,
+            "count": row.count,
+        })
+
     rule_stats_subq = (
         db.query(
             DispatchItem.matched_rule_id.label("rule_id"),
@@ -325,6 +442,7 @@ def get_batch_stats(batch_id: int, db: Session = Depends(get_db)):
                 "category_code": row.category_code,
                 "category_name": row.category_name,
                 "count": row.count,
+                "platforms": platforms_by_category.get(row.category_code, []),
             }
             for row in category_rows
         ],
@@ -345,6 +463,74 @@ def get_batch_stats(batch_id: int, db: Session = Depends(get_db)):
             for row in rule_rows
         ],
     }
+
+
+@router.get("/batches/{batch_id}/export")
+def export_batch_raw_data(
+    batch_id: int,
+    category_code: str = Query(..., min_length=1),
+    platform: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    batch = db.query(DispatchBatch).filter(DispatchBatch.id == batch_id).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="批次不存在")
+    if batch.status != "done":
+        raise HTTPException(status_code=400, detail="批次尚未完成，不能导出")
+
+    query = (
+        db.query(DispatchItem, RawDataRecord, UploadFileRecord, ColumnTemplate)
+        .join(RawDataRecord, DispatchItem.raw_data_id == RawDataRecord.id)
+        .join(UploadFileRecord, RawDataRecord.file_id == UploadFileRecord.id)
+        .outerjoin(ColumnTemplate, UploadFileRecord.template_id == ColumnTemplate.id)
+        .filter(
+            DispatchItem.batch_id == batch_id,
+            DispatchItem.category_code == category_code,
+            DispatchItem.raw_data_id.isnot(None),
+        )
+    )
+    if platform:
+        query = query.filter(RawDataRecord.platform == platform)
+
+    rows = query.order_by(UploadFileRecord.template_id, RawDataRecord.id).all()
+    if not rows:
+        raise HTTPException(status_code=404, detail="没有可导出的分发数据")
+
+    grouped_rows: dict[tuple[int | None, str], dict] = {}
+    for _, raw, file_record, template in rows:
+        template_id = template.id if template else None
+        template_name = template.name if template else "无模板"
+        key = (template_id, template_name)
+        if key not in grouped_rows:
+            grouped_rows[key] = {"template": template, "rows": []}
+        if template:
+            grouped_rows[key]["rows"].append(_build_export_row(raw, file_record, template))
+        else:
+            grouped_rows[key]["rows"].append(_build_fallback_row(raw, file_record))
+
+    buf = io.BytesIO()
+    used_sheet_names: set[str] = set()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        for (template_id, template_name), group in grouped_rows.items():
+            sheet_base = template_name if template_id is None else f"{template_name}_{template_id}"
+            sheet_name = _unique_sheet_name(sheet_base, used_sheet_names)
+            data = group["rows"]
+            columns = list(data[0].keys()) if data else []
+            for trace_column in TRACE_COLUMNS:
+                if trace_column in columns:
+                    columns.remove(trace_column)
+                    columns.append(trace_column)
+            pd.DataFrame(data, columns=columns).to_excel(writer, index=False, sheet_name=sheet_name)
+    buf.seek(0)
+
+    category_part = re.sub(r"[^\w\-一-鿿]+", "_", category_code).strip("_") or "category"
+    platform_part = re.sub(r"[^\w\-一-鿿]+", "_", platform or "all").strip("_") or "all"
+    filename = f"已分发原始数据_批次{batch_id}_{category_part}_{platform_part}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
 
 
 @router.get("/rules", response_model=list[DispatchRuleOut])

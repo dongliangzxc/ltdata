@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.models.database import get_db, SessionLocal
 from app.models.schemas import CleanJobRecord, ExportJob, ExportJobOut
 from app.services.exporter import export_match_job
+from app.services.export_guards import reserve_async_export_capacity
 
 router = APIRouter(prefix="/api/export", tags=["export"])
 
@@ -69,14 +70,15 @@ def trigger_export(payload: dict, db: Session = Depends(get_db)):
     if not job_record:
         raise HTTPException(status_code=404, detail="清洗任务不存在")
 
-    export_job = ExportJob(
-        clean_job_id=clean_job_id,
-        filename_prefix=filename_prefix,
-        status="pending",
-    )
-    db.add(export_job)
-    db.commit()
-    db.refresh(export_job)
+    with reserve_async_export_capacity(db):
+        export_job = ExportJob(
+            clean_job_id=clean_job_id,
+            filename_prefix=filename_prefix,
+            status="pending",
+        )
+        db.add(export_job)
+        db.commit()
+        db.refresh(export_job)
 
     t = threading.Thread(
         target=_run_export_thread,

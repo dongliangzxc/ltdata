@@ -71,24 +71,20 @@ async def _noop_lifespan(application):
 
 
 def _patch_app(db, monkeypatch):
-    """Apply test-time patches: DB overrides, auth bypass, lifespan stub."""
-    from app.main import app
+    """Apply test-time patches with a lightweight app that avoids real MySQL auth/lifespan."""
+    from fastapi import FastAPI
+    from app.api import upload, workbench_api
     from app.models.database import get_db
     from app.models.analytics_db import get_analytics_db
 
     def override_db():
         yield db
 
+    app = FastAPI(lifespan=_noop_lifespan)
+    app.include_router(workbench_api.router)
+    app.include_router(upload.router)
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_analytics_db] = override_db
-
-    # Bypass JWT auth middleware
-    monkeypatch.setattr("app.core.security.verify_token", lambda token: "test_user")
-    monkeypatch.setattr("app.main.verify_token", lambda token: "test_user")
-
-    # Stub out lifespan so TestClient doesn't connect to MySQL
-    monkeypatch.setattr(app.router, "lifespan_context", _noop_lifespan)
-
     return app
 
 
@@ -100,7 +96,6 @@ def test_wb_export_returns_job_id(db, monkeypatch):
         lambda job_id, params: None,
     )
     started = []
-    original_thread = threading.Thread
 
     class FakeThread:
         def __init__(self, target=None, args=(), daemon=None, **kwargs):
@@ -127,6 +122,26 @@ def test_wb_export_returns_job_id(db, monkeypatch):
     assert "job_id" in body
     assert body["status"] == "pending"
     assert started
+
+
+def test_wb_export_rejects_when_exports_are_busy(db, monkeypatch):
+    db.add_all([
+        WorkbenchExportJob(status="running", progress=10),
+        WorkbenchExportJob(status="pending", progress=0),
+    ])
+    db.commit()
+
+    app = _patch_app(db, monkeypatch)
+    client = TestClient(app, raise_server_exceptions=True)
+    resp = client.post(
+        "/api/workbench/export",
+        json={},
+        headers={"Authorization": "Bearer test_token"},
+    )
+    app.dependency_overrides.clear()
+
+    assert resp.status_code == 429
+    assert resp.json()["detail"] == "当前导出任务较多，请稍后再试"
 
 
 def test_wb_export_job_not_found(db, monkeypatch):

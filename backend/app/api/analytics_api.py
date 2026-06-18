@@ -12,6 +12,7 @@ from app.models.analytics_db import get_analytics_db
 from app.models.database import get_db
 from app.models.schemas import WorkbenchExportJob
 from app.services.analytics_service import (
+    build_analytics_query,
     content_disposition,
     get_analytics_detail_rows,
     get_analytics_filters,
@@ -20,6 +21,11 @@ from app.services.analytics_service import (
     mark_export_job_error,
     write_detail_export_file,
     write_summary_export_file,
+)
+from app.services.export_guards import (
+    MAX_SYNC_EXPORT_ROWS,
+    ensure_export_row_limit,
+    reserve_async_export_capacity,
 )
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
@@ -92,10 +98,17 @@ def export_summary(
     analytics_db: Session = Depends(get_analytics_db),
 ):
     """Export current summary rows to Excel."""
-    job = WorkbenchExportJob(status="running", progress=10)
-    luotu_db.add(job)
-    luotu_db.commit()
-    luotu_db.refresh(job)
+    source_total = build_analytics_query(
+        analytics_db,
+        **_filter_kwargs(year, month, brand, category, platform, model_keyword, item_keyword),
+    ).count()
+    ensure_export_row_limit(source_total, max_rows=MAX_SYNC_EXPORT_ROWS, label="看板汇总导出")
+
+    with reserve_async_export_capacity(luotu_db):
+        job = WorkbenchExportJob(status="running", progress=10)
+        luotu_db.add(job)
+        luotu_db.commit()
+        luotu_db.refresh(job)
 
     try:
         data = get_analytics_summary(
@@ -131,10 +144,17 @@ def export_detail(
     analytics_db: Session = Depends(get_analytics_db),
 ):
     """Export current detail rows to Excel."""
-    job = WorkbenchExportJob(status="running", progress=10)
-    luotu_db.add(job)
-    luotu_db.commit()
-    luotu_db.refresh(job)
+    source_total = build_analytics_query(
+        analytics_db,
+        **_filter_kwargs(year, month, brand, category, platform, model_keyword, item_keyword),
+    ).count()
+    ensure_export_row_limit(source_total, max_rows=MAX_SYNC_EXPORT_ROWS, label="看板明细导出")
+
+    with reserve_async_export_capacity(luotu_db):
+        job = WorkbenchExportJob(status="running", progress=10)
+        luotu_db.add(job)
+        luotu_db.commit()
+        luotu_db.refresh(job)
 
     try:
         rows = get_analytics_detail_rows(

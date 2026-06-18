@@ -188,3 +188,16 @@ def test_export_respects_multiple_months(client_and_db):
     import pandas as _pd
     df = _pd.read_excel(_io.BytesIO(response.content))
     assert df["宝贝名称"].tolist() == ["April", "June"]
+
+
+def test_export_rejects_when_row_limit_exceeded(client_and_db, monkeypatch):
+    client, db = client_and_db
+    monkeypatch.setattr("app.api.rawdata.MAX_SYNC_EXPORT_ROWS", 1)
+    db.add(RawDataRecord(file_id=1, platform="jd", item_name="One"))
+    db.add(RawDataRecord(file_id=1, platform="jd", item_name="Two"))
+    db.commit()
+
+    response = client.get("/api/rawdata/export")
+
+    assert response.status_code == 400
+    assert "原始数据导出数据量过大" in response.json()["detail"]

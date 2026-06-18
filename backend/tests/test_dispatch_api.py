@@ -793,6 +793,20 @@ def test_create_dispatch_export_job_requires_category_or_platform(client_and_db)
     assert response.json()["detail"] == "请选择品类或平台后再导出"
 
 
+def test_create_dispatch_export_job_rejects_when_exports_are_busy(client_and_db):
+    client, db = client_and_db
+    db.add_all([
+        WorkbenchExportJob(status="running", progress=10),
+        WorkbenchExportJob(status="pending", progress=0),
+    ])
+    db.commit()
+
+    response = client.post("/api/dispatch/export", json={"category_code": "headphone"})
+
+    assert response.status_code == 429
+    assert response.json()["detail"] == "当前导出任务较多，请稍后再试"
+
+
 def test_dispatch_export_job_uses_latest_done_batch_per_file(client_and_db):
     client, db = client_and_db
     template = ColumnTemplate(name="下载模板", module="sales", mapping={"商品ID": "item_id"}, ignore_columns=[])
@@ -829,6 +843,40 @@ def test_dispatch_export_job_uses_latest_done_batch_per_file(client_and_db):
     assert response.status_code == 200
     rows = _sheet_rows(_read_workbook(response).active)
     assert [row[0] for row in rows[1:]] == ["latest-row", "other-row"]
+
+
+def test_dispatch_export_job_reads_and_writes_in_pages(client_and_db, monkeypatch):
+    client, db = client_and_db
+    monkeypatch.setattr(dispatch_api, "DISPATCH_PAGE_SIZE", 1)
+    template = ColumnTemplate(name="分页模板", module="sales", mapping={"商品ID": "item_id"}, ignore_columns=[])
+    db.add(template)
+    db.flush()
+    file_record = UploadFileRecord(filename="paged.xlsx", platform="JD", row_count=2, status="done", template_id=template.id)
+    db.add(file_record)
+    db.flush()
+    raw_one = RawDataRecord(file_id=file_record.id, platform="jd", item_id="row-1")
+    raw_two = RawDataRecord(file_id=file_record.id, platform="jd", item_id="row-2")
+    db.add_all([raw_one, raw_two])
+    db.flush()
+    batch = DispatchBatch(file_id=file_record.id, status="done", total_rows=2, dispatched_rows=2, unmatched_rows=0)
+    db.add(batch)
+    db.flush()
+    db.add_all([
+        DispatchItem(batch_id=batch.id, raw_data_id=raw_one.id, category_code="headphone"),
+        DispatchItem(batch_id=batch.id, raw_data_id=raw_two.id, category_code="headphone"),
+    ])
+    job = WorkbenchExportJob(status="pending", progress=0)
+    db.add(job)
+    db.commit()
+
+    dispatch_api._run_dispatch_export_thread(job.id, {"category_code": "headphone", "platform": None})
+
+    db.refresh(job)
+    assert job.status == "done"
+    response = client.get(f"/api/dispatch/export/download/{job.file_token}")
+    assert response.status_code == 200
+    rows = _sheet_rows(_read_workbook(response).active)
+    assert [row[0] for row in rows[1:]] == ["row-1", "row-2"]
 
 
 def test_dispatch_export_job_filters_by_platform(client_and_db):

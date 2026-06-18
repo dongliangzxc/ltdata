@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, distinct, asc, desc
 from app.models.database import get_db
 from app.models.schemas import RawDataRecord, RawDataOut, PaginatedResponse
+from app.services.export_guards import MAX_SYNC_EXPORT_ROWS, ensure_export_row_limit
 
 router = APIRouter(prefix="/api/rawdata", tags=["rawdata"])
 
@@ -84,7 +85,7 @@ def export_raw_data(
     db: Session = Depends(get_db),
 ):
     """导出原始数据为 Excel，支持与列表相同的过滤参数。"""
-    rows = build_query(
+    query = build_query(
         db,
         file_id,
         platform,
@@ -95,7 +96,10 @@ def export_raw_data(
         price_min,
         price_max,
         months,
-    ).order_by(RawDataRecord.id).all()
+    )
+    total = query.count()
+    ensure_export_row_limit(total, max_rows=MAX_SYNC_EXPORT_ROWS, label="原始数据导出")
+    rows = query.order_by(RawDataRecord.id).all()
     data = [
         {label: getattr(r, field, None) for field, label in EXPORT_COLUMNS}
         for r in rows

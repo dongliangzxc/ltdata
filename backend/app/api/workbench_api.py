@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
 
-import pandas as pd
+from openpyxl import Workbook
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -21,6 +21,7 @@ from app.models.analytics_db import get_analytics_db, AnalyticsSession, Publishe
 from app.models.database import get_db, SessionLocal
 from app.models.schemas import MatchResult, ModelAlias, RawDataRecord, WorkbenchExportJob
 from app.utils.time_utils import format_beijing_datetime
+from app.services.export_guards import reserve_async_export_capacity
 
 router = APIRouter(prefix="/api/workbench", tags=["workbench"])
 
@@ -149,8 +150,8 @@ def _run_wb_export_thread(job_id: int, params: dict):
         db.commit()
         _wb_progress[job_id] = 5
 
-        # 1. 查询 PublishedItems（5→20%）
-        q = _build_query(adb, params)
+        # 1. 查询 PublishedItems（5→10%）
+        q = _build_query(adb, params).order_by(PublishedItem.id.desc())
 
         total = q.count()
         if total == 0:
@@ -159,72 +160,90 @@ def _run_wb_export_thread(job_id: int, params: dict):
             job.finished_at = datetime.utcnow()
             db.commit()
             return
+        _wb_progress[job_id] = 10
+        job.progress = 10
+        db.commit()
 
-        rows = q.order_by(PublishedItem.id.desc()).all()
-        _wb_progress[job_id] = 20
+        page_size = 5000
+        spec_batch_size = 500
+        all_attr_names: set[str] = set()
+        for offset in range(0, total, page_size):
+            page_rows = q.offset(offset).limit(page_size).all()
+            item_ids = [r.id for r in page_rows]
+            for i in range(0, len(item_ids), spec_batch_size):
+                batch = item_ids[i: i + spec_batch_size]
+                if not batch:
+                    continue
+                names = (
+                    adb.query(distinct(PublishedItemSpec.spec_name))
+                    .filter(PublishedItemSpec.published_item_id.in_(batch))
+                    .all()
+                )
+                all_attr_names.update(name for (name,) in names if name)
+            _wb_progress[job_id] = 10 + int(25 * min(offset + page_size, total) / max(total, 1))
 
-        # 2. 构建基础 records（20→40%）
-        records = [
-            {
-                "_id":     r.id,
-                "月份":    r.month,
-                "平台":    r.platform,
-                "宝贝名称": r.item_name,
-                "品牌代码": r.brand_code,
-                "品牌名称": r.brand_name,
-                "型号代码": r.model_code,
-                "型号名称": r.model_name,
-                "店铺":    r.shop_name,
-                "参考价格": float(r.ref_price) if r.ref_price is not None else None,
-                "销量":    r.sales_qty,
-                "计算价格":   float(r.calc_price) if r.calc_price is not None else None,
-                "修正销量":   r.corrected_sales_qty,
-                "修正销售额": float(r.corrected_sales_amount) if r.corrected_sales_amount is not None else None,
-                "一级类目": r.category_lv1,
-                "二级类目": r.category_lv2,
-                "三级类目": r.category_lv3,
-                "宝贝链接": r.item_url,
-            }
-            for r in rows
+        attr_columns = [f"attr_{name}" for name in sorted(all_attr_names)]
+        base_columns = [
+            "月份", "平台", "宝贝名称", "品牌代码", "品牌名称", "型号代码", "型号名称", "店铺",
+            "参考价格", "销量", "计算价格", "修正销量", "修正销售额", "一级类目", "二级类目", "三级类目", "宝贝链接",
         ]
-        _wb_progress[job_id] = 40
+        _wb_progress[job_id] = 35
 
-        # 3. 分批查询 specs，每批 500 个 id（40→65%）
-        item_ids = [rec["_id"] for rec in records]
-        spec_rows = []
-        batch_size = 500
-        for i in range(0, len(item_ids), batch_size):
-            batch = item_ids[i: i + batch_size]
-            spec_rows.extend(
-                adb.query(PublishedItemSpec)
-                .filter(PublishedItemSpec.published_item_id.in_(batch))
-                .all()
-            )
-            _wb_progress[job_id] = 40 + int(25 * min(i + batch_size, len(item_ids)) / max(len(item_ids), 1))
-
-        spec_index: dict = {}
-        for s in spec_rows:
-            spec_index.setdefault(s.published_item_id, {})[s.spec_name] = s.spec_value or ""
-        _wb_progress[job_id] = 65
-
-        # 4. 构建 DataFrame 并追加属性列（65→80%）
-        df = pd.DataFrame(records)
-        all_attr_names = sorted({name for attrs in spec_index.values() for name in attrs})
-        for attr_name in all_attr_names:
-            df[f"attr_{attr_name}"] = [
-                spec_index.get(rec["_id"], {}).get(attr_name, "")
-                for rec in records
-            ]
-        df.drop(columns=["_id"], inplace=True)
-        _wb_progress[job_id] = 80
-
-        # 5. 写 Excel（80→95%）
+        # 2. 分页写 Excel（35→95%）
         _EXPORT_DIR.mkdir(parents=True, exist_ok=True)
         token = uuid.uuid4().hex
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"分析数据_{ts}_{total}条.xlsx"
         filepath = _EXPORT_DIR / f"{token}_{filename}"
-        df.to_excel(str(filepath), index=False)
+        workbook = Workbook(write_only=True)
+        worksheet = workbook.create_sheet(title="分析数据")
+        worksheet.append(base_columns + attr_columns)
+
+        for offset in range(0, total, page_size):
+            page_rows = q.offset(offset).limit(page_size).all()
+            item_ids = [r.id for r in page_rows]
+            spec_index: dict[int, dict[str, str]] = {}
+            for i in range(0, len(item_ids), spec_batch_size):
+                batch = item_ids[i: i + spec_batch_size]
+                if not batch:
+                    continue
+                spec_rows = (
+                    adb.query(PublishedItemSpec)
+                    .filter(PublishedItemSpec.published_item_id.in_(batch))
+                    .all()
+                )
+                for s in spec_rows:
+                    spec_index.setdefault(s.published_item_id, {})[s.spec_name] = s.spec_value or ""
+
+            for r in page_rows:
+                base_values = [
+                    r.month,
+                    r.platform,
+                    r.item_name,
+                    r.brand_code,
+                    r.brand_name,
+                    r.model_code,
+                    r.model_name,
+                    r.shop_name,
+                    float(r.ref_price) if r.ref_price is not None else None,
+                    r.sales_qty,
+                    float(r.calc_price) if r.calc_price is not None else None,
+                    r.corrected_sales_qty,
+                    float(r.corrected_sales_amount) if r.corrected_sales_amount is not None else None,
+                    r.category_lv1,
+                    r.category_lv2,
+                    r.category_lv3,
+                    r.item_url,
+                ]
+                attrs = spec_index.get(r.id, {})
+                worksheet.append(base_values + [attrs.get(name, "") for name in sorted(all_attr_names)])
+
+            progress = 35 + int(60 * min(offset + page_size, total) / max(total, 1))
+            _wb_progress[job_id] = progress
+            job.progress = progress
+            db.commit()
+
+        workbook.save(str(filepath))
         _wb_progress[job_id] = 95
 
         # 6. 写 done（95→100%）
@@ -360,10 +379,11 @@ def export_data(payload: WorkbenchExportParams, db: Session = Depends(get_db)):
     }
     params = {k: v for k, v in params.items() if v not in (None, "", [])}
 
-    job = WorkbenchExportJob(status="pending")
-    db.add(job)
-    db.commit()
-    db.refresh(job)
+    with reserve_async_export_capacity(db):
+        job = WorkbenchExportJob(status="pending")
+        db.add(job)
+        db.commit()
+        db.refresh(job)
 
     t = threading.Thread(
         target=_run_wb_export_thread,

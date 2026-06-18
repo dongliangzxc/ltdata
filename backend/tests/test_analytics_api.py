@@ -318,6 +318,32 @@ def test_get_export_detail_respects_query_filters_and_creates_done_job(client_an
     assert job.finished_at is not None
 
 
+def test_export_summary_rejects_when_row_limit_exceeded(client_and_dbs, monkeypatch):
+    client, _, analytics_db, _ = client_and_dbs
+    _seed_published(analytics_db)
+    monkeypatch.setattr("app.api.analytics_api.MAX_SYNC_EXPORT_ROWS", 1)
+
+    response = client.get("/api/analytics/export/summary?year=2026&month=4")
+
+    assert response.status_code == 400
+    assert "看板汇总导出数据量过大" in response.json()["detail"]
+
+
+def test_export_detail_rejects_when_exports_are_busy(client_and_dbs):
+    client, luotu_db, analytics_db, _ = client_and_dbs
+    _seed_published(analytics_db)
+    luotu_db.add_all([
+        WorkbenchExportJob(status="running", progress=10),
+        WorkbenchExportJob(status="pending", progress=0),
+    ])
+    luotu_db.commit()
+
+    response = client.get("/api/analytics/export/detail?year=2026&month=4")
+
+    assert response.status_code == 429
+    assert response.json()["detail"] == "当前导出任务较多，请稍后再试"
+
+
 def test_export_summary_creates_downloadable_excel(client_and_dbs):
     client, _, analytics_db, _ = client_and_dbs
     _seed_published(analytics_db)

@@ -20,6 +20,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 import pandas as pd
+from openpyxl import Workbook
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -29,6 +30,11 @@ from app.models.schemas import (
     Category, DispatchRule, DispatchBatch, DispatchItem,
     DispatchRuleIn, DispatchRuleOut, DispatchBatchOut,
     RawDataRecord, UploadFileRecord, ColumnTemplate, WorkbenchExportJob,
+)
+from app.services.export_guards import (
+    MAX_SYNC_EXPORT_ROWS,
+    ensure_export_row_limit,
+    reserve_async_export_capacity,
 )
 
 router = APIRouter(prefix="/api/dispatch", tags=["dispatch"])
@@ -178,6 +184,62 @@ def _build_dispatch_export_response(rows, filename: str):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
     )
+
+
+def _collect_dispatch_export_columns(query, total: int, page_size: int) -> dict[tuple[int | None, str], dict]:
+    grouped_columns: dict[tuple[int | None, str], dict] = {}
+    for offset in range(0, total, page_size):
+        rows = query.limit(page_size).offset(offset).all()
+        for _, raw, file_record, template in rows:
+            template_id = template.id if template else None
+            template_name = template.name if template else "无模板"
+            key = (template_id, template_name)
+            if key not in grouped_columns:
+                grouped_columns[key] = {"template": template, "columns": []}
+            row = _build_export_row(raw, file_record, template) if template else _build_fallback_row(raw, file_record)
+            columns = grouped_columns[key]["columns"]
+            for column in row.keys():
+                if column not in columns:
+                    columns.append(column)
+    for group in grouped_columns.values():
+        columns = group["columns"]
+        for trace_column in TRACE_COLUMNS:
+            if trace_column in columns:
+                columns.remove(trace_column)
+                columns.append(trace_column)
+    return grouped_columns
+
+
+def _write_dispatch_export_query(query, total: int, output, progress_callback=None, page_size: int = 5000):
+    if total == 0:
+        raise ValueError("没有可导出的分发数据")
+
+    grouped_columns = _collect_dispatch_export_columns(query, total, page_size)
+    used_sheet_names: set[str] = set()
+    workbook = Workbook(write_only=True)
+    for (template_id, template_name), group in grouped_columns.items():
+        sheet_base = template_name if template_id is None else f"{template_name}_{template_id}"
+        sheet_name = _unique_sheet_name(sheet_base, used_sheet_names)
+        worksheet = workbook.create_sheet(title=sheet_name)
+        columns = group["columns"]
+        worksheet.append(columns)
+        group["worksheet"] = worksheet
+
+    processed = 0
+    for offset in range(0, total, page_size):
+        rows = query.limit(page_size).offset(offset).all()
+        for _, raw, file_record, template in rows:
+            template_id = template.id if template else None
+            template_name = template.name if template else "无模板"
+            key = (template_id, template_name)
+            row = _build_export_row(raw, file_record, template) if template else _build_fallback_row(raw, file_record)
+            group = grouped_columns[key]
+            group["worksheet"].append([row.get(column) for column in group["columns"]])
+            processed += 1
+        if progress_callback:
+            progress_callback(processed, total)
+
+    workbook.save(output)
 
 
 def _safe_filename_part(value: str | None, fallback: str) -> str:
@@ -584,6 +646,8 @@ def export_batch_raw_data(
     )
     if platform:
         query = query.filter(RawDataRecord.platform == platform)
+    total = query.count()
+    ensure_export_row_limit(total, max_rows=MAX_SYNC_EXPORT_ROWS, label="分发批次导出")
 
     rows = query.order_by(UploadFileRecord.template_id, RawDataRecord.id).all()
     filename = (
@@ -607,7 +671,7 @@ def _run_dispatch_export_thread(job_id: int, params: dict):
 
         category_code = params.get("category_code")
         platform = params.get("platform")
-        query = _latest_dispatch_export_query(db, category_code, platform)
+        query = _latest_dispatch_export_query(db, category_code, platform).order_by(UploadFileRecord.template_id, RawDataRecord.id)
         total = query.count()
         if total == 0:
             job.status = "error"
@@ -615,20 +679,22 @@ def _run_dispatch_export_thread(job_id: int, params: dict):
             job.finished_at = datetime.utcnow()
             db.commit()
             return
-        _dispatch_export_progress[job_id] = 20
-        job.progress = 20
-        db.commit()
-
-        rows = query.order_by(UploadFileRecord.template_id, RawDataRecord.id).all()
-        _dispatch_export_progress[job_id] = 70
-        job.progress = 70
+        _dispatch_export_progress[job_id] = 10
+        job.progress = 10
         db.commit()
 
         DISPATCH_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
         token = uuid.uuid4().hex
         filename = _dispatch_export_filename(category_code, platform)
         filepath = DISPATCH_EXPORT_DIR / f"{token}_{filename}"
-        _write_dispatch_export(rows, str(filepath))
+
+        def update_progress(processed: int, total_rows: int):
+            progress = 10 + int(85 * processed / max(total_rows, 1))
+            _dispatch_export_progress[job_id] = progress
+            job.progress = progress
+            db.commit()
+
+        _write_dispatch_export_query(query, total, str(filepath), progress_callback=update_progress, page_size=DISPATCH_PAGE_SIZE)
 
         job.status = "done"
         job.progress = 100
@@ -659,10 +725,11 @@ def create_dispatch_export_job(payload: DispatchExportParams, db: Session = Depe
     if not category_code and not platform:
         raise HTTPException(status_code=400, detail="请选择品类或平台后再导出")
 
-    job = WorkbenchExportJob(status="pending", progress=0)
-    db.add(job)
-    db.commit()
-    db.refresh(job)
+    with reserve_async_export_capacity(db):
+        job = WorkbenchExportJob(status="pending", progress=0)
+        db.add(job)
+        db.commit()
+        db.refresh(job)
 
     thread = threading.Thread(
         target=_run_dispatch_export_thread,

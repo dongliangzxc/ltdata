@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.models.database import get_db
@@ -21,8 +23,19 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == body.username, User.is_active == 1).first()
     if not user or not verify_password(body.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="用户名或密码错误")
+    user.last_login_at = datetime.utcnow()
+    db.commit()
+    db.refresh(user)
     token = create_access_token(user.username)
-    return {"code": 0, "data": {"access_token": token, "token_type": "bearer", "username": user.username}}
+    return {
+        "code": 0,
+        "data": {
+            "access_token": token,
+            "token_type": "bearer",
+            "username": user.username,
+            "user": UserOut.model_validate(user),
+        },
+    }
 
 
 @router.get("/me", response_model=dict)
@@ -35,6 +48,6 @@ def get_me(
     if not username:
         raise HTTPException(status_code=401, detail="未登录")
     user = db.query(User).filter(User.username == username).first()
-    if not user:
-        raise HTTPException(status_code=401, detail="用户不存在")
+    if not user or user.is_active != 1:
+        raise HTTPException(status_code=401, detail="用户不存在或已停用")
     return {"code": 0, "data": UserOut.model_validate(user)}

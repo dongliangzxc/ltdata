@@ -2,7 +2,9 @@ import { useState } from 'react'
 import { Form, Input, Button, Card, Typography, message } from 'antd'
 import { UserOutlined, LockOutlined } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
-import api from '../../services/api'
+import api, { type UserProfile } from '../../services/api'
+import { useAuth } from '../../auth/AuthContext'
+import { canAccessPath, getDefaultPath } from '../../auth/permissions'
 
 const { Title } = Typography
 
@@ -10,16 +12,16 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
   const location = useLocation()
-  const from = (location.state as { from?: string })?.from ?? '/upload'
+  const { loginWithResponse } = useAuth()
+  const from = (location.state as { from?: string })?.from
 
   const handleLogin = async (values: { username: string; password: string }) => {
     setLoading(true)
     try {
-      const res = await api.post('/auth/login', values)
-      const { access_token, username } = res.data.data
-      localStorage.setItem('token', access_token)
-      localStorage.setItem('username', username)
-      navigate(from, { replace: true })
+      const res = await api.post<{ data: { access_token: string; username: string; user: UserProfile } }>('/auth/login', values)
+      const { access_token, username, user } = res.data.data
+      loginWithResponse(access_token, username, user)
+      navigate(from && canAccessPath(user, from) ? from : getDefaultPath(user), { replace: true })
     } catch {
       message.error('用户名或密码错误')
     } finally {

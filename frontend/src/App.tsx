@@ -1,6 +1,9 @@
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom'
 import AppLayout from './components/Layout'
 import PrivateRoute from './components/PrivateRoute'
+import PermissionRoute from './components/PermissionRoute'
+import { AuthProvider, useAuth } from './auth/AuthContext'
+import { getDefaultPath } from './auth/permissions'
 import LoginPage from './pages/Login'
 import UploadPage from './pages/Upload'
 import DataListPage from './pages/DataList'
@@ -18,37 +21,50 @@ import HistoricalPage from './pages/Historical'
 import CategoriesPage from './pages/Categories'
 import DispatchPage from './pages/Dispatch'
 import BrandsPage from './pages/Brands'
+import UsersPage from './pages/Users'
+
+function DefaultRedirect() {
+  const { user } = useAuth()
+  return <Navigate to={getDefaultPath(user)} replace />
+}
+
+function ProtectedPage({ children }: { children: React.ReactNode }) {
+  return <PermissionRoute>{children}</PermissionRoute>
+}
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <Routes>
+    <AuthProvider>
+      <BrowserRouter>
+        <Routes>
         {/* 登录页，不需要布局 */}
         <Route path="/login" element={<LoginPage />} />
 
         {/* 受保护的业务路由，统一 AppLayout */}
         <Route element={<PrivateRoute />}>
           <Route element={<AppLayout><Outlet /></AppLayout>}>
-            <Route path="/" element={<Navigate to="/upload" replace />} />
-            <Route path="/upload" element={<UploadPage />} />
-            <Route path="/rawdata" element={<DataListPage />} />
-            <Route path="/clean" element={<CleanPage />} />
-            <Route path="/rules" element={<RulesPage />} />
-            <Route path="/match" element={<MatchPage />} />
-            <Route path="/dashboard" element={<DashboardPage />} />
-            <Route path="/export" element={<ExportPage />} />
-            <Route path="/metadata" element={<MetadataPage />} />
-            <Route path="/models" element={<ModelsPage />} />
-            <Route path="/workbench" element={<WorkbenchPage />} />
-            <Route path="/manual" element={<ManualPage />} />
-            <Route path="/url-mappings" element={<UrlMappingsPage />} />
-            <Route path="/categories" element={<CategoriesPage />} />
-            <Route path="/historical" element={<HistoricalPage />} />
-            <Route path="/dispatch" element={<DispatchPage />} />
-            <Route path="/brands" element={<BrandsPage />} />
+            <Route path="/" element={<DefaultRedirect />} />
+            <Route path="/upload" element={<ProtectedPage><UploadPage /></ProtectedPage>} />
+            <Route path="/rawdata" element={<ProtectedPage><DataListPage /></ProtectedPage>} />
+            <Route path="/clean" element={<ProtectedPage><CleanPage /></ProtectedPage>} />
+            <Route path="/rules" element={<ProtectedPage><RulesPage /></ProtectedPage>} />
+            <Route path="/match" element={<ProtectedPage><MatchPage /></ProtectedPage>} />
+            <Route path="/dashboard" element={<ProtectedPage><DashboardPage /></ProtectedPage>} />
+            <Route path="/export" element={<ProtectedPage><ExportPage /></ProtectedPage>} />
+            <Route path="/metadata" element={<ProtectedPage><MetadataPage /></ProtectedPage>} />
+            <Route path="/models" element={<ProtectedPage><ModelsPage /></ProtectedPage>} />
+            <Route path="/workbench" element={<ProtectedPage><WorkbenchPage /></ProtectedPage>} />
+            <Route path="/manual" element={<ProtectedPage><ManualPage /></ProtectedPage>} />
+            <Route path="/url-mappings" element={<ProtectedPage><UrlMappingsPage /></ProtectedPage>} />
+            <Route path="/categories" element={<ProtectedPage><CategoriesPage /></ProtectedPage>} />
+            <Route path="/historical" element={<ProtectedPage><HistoricalPage /></ProtectedPage>} />
+            <Route path="/dispatch" element={<ProtectedPage><DispatchPage /></ProtectedPage>} />
+            <Route path="/brands" element={<ProtectedPage><BrandsPage /></ProtectedPage>} />
+            <Route path="/users" element={<ProtectedPage><UsersPage /></ProtectedPage>} />
           </Route>
         </Route>
-      </Routes>
-    </BrowserRouter>
+        </Routes>
+      </BrowserRouter>
+    </AuthProvider>
   )
 }

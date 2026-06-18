@@ -291,8 +291,15 @@ CREATE TABLE IF NOT EXISTS users (
     id              INT AUTO_INCREMENT PRIMARY KEY,
     username        VARCHAR(100) NOT NULL UNIQUE COMMENT '用户名',
     hashed_password VARCHAR(200) NOT NULL        COMMENT 'bcrypt 哈希密码',
+    name            VARCHAR(100)                 COMMENT '姓名',
+    phone           VARCHAR(50)                  COMMENT '联系方式',
+    email           VARCHAR(100)                 COMMENT '邮箱',
     is_active       TINYINT(1)   NOT NULL DEFAULT 1 COMMENT '是否启用',
-    created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
+    is_admin        TINYINT(1)   NOT NULL DEFAULT 0 COMMENT '是否管理员',
+    permissions     JSON                         COMMENT '目录级权限 key 数组',
+    created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    last_login_at   DATETIME     DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='登录用户';
 
 -- 异步导出任务记录

@@ -1002,15 +1002,38 @@ class User(Base):
     id              = Column(Integer, primary_key=True, index=True)
     username        = Column(String(100), nullable=False, unique=True)
     hashed_password = Column(String(200), nullable=False)
-    is_active       = Column(SmallInteger, default=1)
+    name            = Column(String(100), nullable=True)
+    phone           = Column(String(50), nullable=True)
+    email           = Column(String(100), nullable=True)
+    is_active       = Column(SmallInteger, nullable=False, default=1)
+    is_admin        = Column(SmallInteger, nullable=False, default=0)
+    permissions     = Column(JSON, nullable=True)
     created_at      = Column(DateTime, default=datetime.utcnow)
+    updated_at      = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_login_at   = Column(DateTime, nullable=True)
 
 
 class UserOut(BaseModel):
-    id:         int
-    username:   str
-    is_active:  int
-    created_at: datetime
+    id:            int
+    username:      str
+    name:          Optional[str] = None
+    phone:         Optional[str] = None
+    email:         Optional[str] = None
+    is_active:     int
+    is_admin:      int = 0
+    permissions:   list[str] = []
+    created_at:    datetime
+    updated_at:    Optional[datetime] = None
+    last_login_at: Optional[datetime] = None
+
+    @field_validator("permissions", mode="before")
+    @classmethod
+    def normalize_permissions(cls, value):
+        return value or []
+
+    @field_serializer("created_at", "updated_at", "last_login_at")
+    def serialize_datetime(self, value: datetime | None):
+        return format_beijing_datetime(value)
 
     model_config = {"from_attributes": True}
 

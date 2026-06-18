@@ -3,12 +3,13 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.core.config import settings
+from app.core.permissions import is_admin_only_path, required_permission_for_path, user_has_permission
 from app.core.security import verify_token, hash_password
 from app.models.database import Base, engine, SessionLocal
 from app.models.analytics_db import AnalyticsBase, analytics_engine
 from app.models.schemas import User
 from app.api import upload, rawdata, clean, export, metadata, models_api, match_api, publish_api, auth, workbench_api, analytics_api, url_mapping_api
-from app.api import rules_api, historical_api, categories_api, correction_rules_api
+from app.api import rules_api, historical_api, categories_api, correction_rules_api, users_api
 from app.api.dispatch_api import router as dispatch_router
 from app.api.upload_templates_api import router as upload_templates_router
 from app.api.brands_api import router as brands_router
@@ -27,7 +28,7 @@ async def lifespan(app: FastAPI):
     db = SessionLocal()
     try:
         if db.query(User).count() == 0:
-            db.add(User(username="admin", hashed_password=hash_password("luotu123")))
+            db.add(User(username="admin", hashed_password=hash_password("luotu123"), name="管理员", is_admin=1, permissions=[]))
             db.commit()
     finally:
         db.close()
@@ -51,8 +52,22 @@ async def auth_middleware(request: Request, call_next):
     if path in _SKIP_AUTH or path.startswith(_SKIP_AUTH_PREFIXES):
         return await call_next(request)
     token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
-    if not token or not verify_token(token):
+    username = verify_token(token) if token else None
+    if not username:
         return JSONResponse(status_code=401, content={"code": 401, "message": "未登录或登录已过期"})
+
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.username == username).first()
+        if not user or user.is_active != 1:
+            return JSONResponse(status_code=401, content={"code": 401, "message": "用户不存在或已停用"})
+        if is_admin_only_path(path) and user.is_admin != 1:
+            return JSONResponse(status_code=403, content={"code": 403, "message": "无权限访问该功能"})
+        permission_key = required_permission_for_path(path)
+        if permission_key and not user_has_permission(user, permission_key):
+            return JSONResponse(status_code=403, content={"code": 403, "message": "无权限访问该功能"})
+    finally:
+        db.close()
     return await call_next(request)
 
 
@@ -80,6 +95,7 @@ app.include_router(rules_api.router)
 app.include_router(historical_api.router)
 app.include_router(categories_api.router)
 app.include_router(correction_rules_api.router)
+app.include_router(users_api.router)
 app.include_router(dispatch_router)
 app.include_router(upload_templates_router)
 app.include_router(brands_router)

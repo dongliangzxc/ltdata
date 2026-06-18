@@ -21,6 +21,7 @@ api.interceptors.response.use(
     if (err.response?.status === 401) {
       localStorage.removeItem('token')
       localStorage.removeItem('username')
+      localStorage.removeItem('auth_user')
       window.location.href = '/login'
       return Promise.reject(err)
     }
@@ -31,6 +32,57 @@ api.interceptors.response.use(
 )
 
 export default api
+
+export type PermissionKey = 'data_management' | 'processing_workbench' | 'product_management'
+
+export interface UserProfile {
+  id: number
+  username: string
+  name: string | null
+  phone: string | null
+  email: string | null
+  is_active: number
+  is_admin: number
+  permissions: PermissionKey[]
+  created_at: string
+  updated_at?: string | null
+  last_login_at?: string | null
+}
+
+export type ManagedUser = UserProfile
+
+export interface CreateUserPayload {
+  username: string
+  password: string
+  name?: string | null
+  phone?: string | null
+  email?: string | null
+  is_active?: number
+  is_admin?: number
+  permissions?: PermissionKey[]
+}
+
+export interface UpdateUserPayload {
+  name?: string | null
+  phone?: string | null
+  email?: string | null
+  is_active?: number
+  is_admin?: number
+  permissions?: PermissionKey[]
+}
+
+interface ApiResponse<T> {
+  code: number
+  data: T
+}
+
+export const getMe = () => api.get<ApiResponse<UserProfile>>('/auth/me').then(r => r.data.data)
+export const listUsers = (params?: { keyword?: string; is_active?: number; permission?: PermissionKey }) =>
+  api.get<ApiResponse<ManagedUser[]>>('/users', { params }).then(r => r.data.data)
+export const createUser = (payload: CreateUserPayload) => api.post<ApiResponse<ManagedUser>>('/users', payload).then(r => r.data.data)
+export const updateUser = (id: number, payload: UpdateUserPayload) => api.patch<ApiResponse<ManagedUser>>(`/users/${id}`, payload).then(r => r.data.data)
+export const resetUserPassword = (id: number, password: string) =>
+  api.post<ApiResponse<{ id: number }>>(`/users/${id}/reset-password`, { password }).then(r => r.data.data)
 
 // ─── Upload ────────────────────────────────────────────────
 export const uploadFile = (formData: FormData) =>

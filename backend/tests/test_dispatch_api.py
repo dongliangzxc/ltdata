@@ -1,4 +1,6 @@
 import io
+import tempfile
+from pathlib import Path
 
 import openpyxl
 import pytest
@@ -11,7 +13,7 @@ from sqlalchemy.pool import StaticPool
 from app.api import dispatch_api
 from app.api.dispatch_api import router
 from app.models.database import Base, get_db
-from app.models.schemas import Category, ColumnTemplate, DispatchBatch, DispatchItem, DispatchRule, RawDataRecord, UploadFileRecord
+from app.models.schemas import Category, ColumnTemplate, DispatchBatch, DispatchItem, DispatchRule, RawDataRecord, UploadFileRecord, WorkbenchExportJob
 
 
 @pytest.fixture
@@ -32,6 +34,8 @@ def client_and_db(monkeypatch):
 
     app.dependency_overrides[get_db] = override_db
     monkeypatch.setattr(dispatch_api, "DISPATCH_PAGE_SIZE", 2)
+    monkeypatch.setattr(dispatch_api, "DISPATCH_EXPORT_DIR", Path(tempfile.mkdtemp()))
+    monkeypatch.setattr(dispatch_api, "SessionLocal", Session)
     try:
         yield TestClient(app), db
     finally:
@@ -780,7 +784,16 @@ def test_export_batch_raw_data_splits_multiple_templates_into_sheets(client_and_
     assert headers == ["京东ID", "天猫ID"]
 
 
-def test_export_dispatched_raw_data_uses_latest_done_batch_per_file(client_and_db):
+def test_create_dispatch_export_job_requires_category_or_platform(client_and_db):
+    client, _ = client_and_db
+
+    response = client.post("/api/dispatch/export", json={})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "请选择品类或平台后再导出"
+
+
+def test_dispatch_export_job_uses_latest_done_batch_per_file(client_and_db):
     client, db = client_and_db
     template = ColumnTemplate(name="下载模板", module="sales", mapping={"商品ID": "item_id"}, ignore_columns=[])
     db.add(template)
@@ -804,16 +817,21 @@ def test_export_dispatched_raw_data_uses_latest_done_batch_per_file(client_and_d
         DispatchItem(batch_id=latest_batch.id, raw_data_id=latest_raw.id, category_code="headphone"),
         DispatchItem(batch_id=other_batch.id, raw_data_id=other_raw.id, category_code="headphone"),
     ])
+    job = WorkbenchExportJob(status="pending", progress=0)
+    db.add(job)
     db.commit()
 
-    response = client.get("/api/dispatch/export", params={"category_code": "headphone"})
+    dispatch_api._run_dispatch_export_thread(job.id, {"category_code": "headphone", "platform": None})
 
+    db.refresh(job)
+    assert job.status == "done"
+    response = client.get(f"/api/dispatch/export/download/{job.file_token}")
     assert response.status_code == 200
     rows = _sheet_rows(_read_workbook(response).active)
     assert [row[0] for row in rows[1:]] == ["latest-row", "other-row"]
 
 
-def test_export_dispatched_raw_data_filters_by_platform(client_and_db):
+def test_dispatch_export_job_filters_by_platform(client_and_db):
     client, db = client_and_db
     template = ColumnTemplate(name="平台模板", module="sales", mapping={"商品ID": "item_id", "平台": "platform"}, ignore_columns=[])
     db.add(template)
@@ -832,10 +850,15 @@ def test_export_dispatched_raw_data_filters_by_platform(client_and_db):
         DispatchItem(batch_id=batch.id, raw_data_id=jd_raw.id, category_code="headphone"),
         DispatchItem(batch_id=batch.id, raw_data_id=tmall_raw.id, category_code="headphone"),
     ])
+    job = WorkbenchExportJob(status="pending", progress=0)
+    db.add(job)
     db.commit()
 
-    response = client.get("/api/dispatch/export", params={"category_code": "headphone", "platform": "jd"})
+    dispatch_api._run_dispatch_export_thread(job.id, {"category_code": "headphone", "platform": "jd"})
 
+    db.refresh(job)
+    assert job.status == "done"
+    response = client.get(f"/api/dispatch/export/download/{job.file_token}")
     assert response.status_code == 200
     rows = _sheet_rows(_read_workbook(response).active)
     assert [row[0] for row in rows[1:]] == ["jd-row"]

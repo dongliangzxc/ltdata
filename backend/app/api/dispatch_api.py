@@ -11,24 +11,36 @@ DELETE /rules/{id}  — 删除规则
 from datetime import datetime
 from decimal import Decimal
 import io
+from pathlib import Path
 import re
+import threading
 from typing import Optional
 from urllib.parse import quote
+import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 import pandas as pd
+from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
-from app.models.database import get_db
+from app.core.config import settings
+from app.models.database import get_db, SessionLocal
 from app.models.schemas import (
     Category, DispatchRule, DispatchBatch, DispatchItem,
     DispatchRuleIn, DispatchRuleOut, DispatchBatchOut,
-    RawDataRecord, UploadFileRecord, ColumnTemplate,
+    RawDataRecord, UploadFileRecord, ColumnTemplate, WorkbenchExportJob,
 )
 
 router = APIRouter(prefix="/api/dispatch", tags=["dispatch"])
 
 DISPATCH_PAGE_SIZE = 2000
+DISPATCH_EXPORT_DIR = Path(settings.EXPORT_DIR)
+_dispatch_export_progress: dict[int, int] = {}
+
+
+class DispatchExportParams(BaseModel):
+    category_code: Optional[str] = None
+    platform: Optional[str] = None
 
 FALLBACK_EXPORT_COLUMNS = [
     ("platform", "平台"),
@@ -124,9 +136,9 @@ def _build_fallback_row(raw: RawDataRecord, file_record: UploadFileRecord) -> di
     return row
 
 
-def _build_dispatch_export_response(rows, filename: str):
+def _write_dispatch_export(rows, output):
     if not rows:
-        raise HTTPException(status_code=404, detail="没有可导出的分发数据")
+        raise ValueError("没有可导出的分发数据")
 
     grouped_rows: dict[tuple[int | None, str], dict] = {}
     for _, raw, file_record, template in rows:
@@ -140,9 +152,8 @@ def _build_dispatch_export_response(rows, filename: str):
         else:
             grouped_rows[key]["rows"].append(_build_fallback_row(raw, file_record))
 
-    buf = io.BytesIO()
     used_sheet_names: set[str] = set()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
         for (template_id, template_name), group in grouped_rows.items():
             sheet_base = template_name if template_id is None else f"{template_name}_{template_id}"
             sheet_name = _unique_sheet_name(sheet_base, used_sheet_names)
@@ -153,6 +164,14 @@ def _build_dispatch_export_response(rows, filename: str):
                     columns.remove(trace_column)
                     columns.append(trace_column)
             pd.DataFrame(data, columns=columns).to_excel(writer, index=False, sheet_name=sheet_name)
+
+
+def _build_dispatch_export_response(rows, filename: str):
+    buf = io.BytesIO()
+    try:
+        _write_dispatch_export(rows, buf)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     buf.seek(0)
     return StreamingResponse(
         buf,
@@ -163,6 +182,39 @@ def _build_dispatch_export_response(rows, filename: str):
 
 def _safe_filename_part(value: str | None, fallback: str) -> str:
     return re.sub(r"[^\w\-一-鿿]+", "_", value or fallback).strip("_") or fallback
+
+
+def _dispatch_export_filename(category_code: str | None, platform: str | None) -> str:
+    return (
+        "分发结果_"
+        f"{_safe_filename_part(category_code, '全部品类')}_"
+        f"{_safe_filename_part(platform, '全部平台')}.xlsx"
+    )
+
+
+def _latest_dispatch_export_query(db: Session, category_code: str | None, platform: str | None):
+    latest_batches = (
+        db.query(
+            DispatchBatch.file_id.label("file_id"),
+            func.max(DispatchBatch.id).label("batch_id"),
+        )
+        .filter(DispatchBatch.status == "done", DispatchBatch.file_id.isnot(None))
+        .group_by(DispatchBatch.file_id)
+        .subquery()
+    )
+    query = (
+        db.query(DispatchItem, RawDataRecord, UploadFileRecord, ColumnTemplate)
+        .join(latest_batches, DispatchItem.batch_id == latest_batches.c.batch_id)
+        .join(RawDataRecord, DispatchItem.raw_data_id == RawDataRecord.id)
+        .join(UploadFileRecord, RawDataRecord.file_id == UploadFileRecord.id)
+        .outerjoin(ColumnTemplate, UploadFileRecord.template_id == ColumnTemplate.id)
+        .filter(DispatchItem.raw_data_id.isnot(None))
+    )
+    if category_code:
+        query = query.filter(DispatchItem.category_code == category_code)
+    if platform:
+        query = query.filter(RawDataRecord.platform == platform)
+    return query
 
 
 def _field_value(row: RawDataRecord, field: str) -> str:
@@ -542,41 +594,118 @@ def export_batch_raw_data(
     return _build_dispatch_export_response(rows, filename)
 
 
-@router.get("/export")
-def export_dispatched_raw_data(
-    category_code: Optional[str] = Query(None),
-    platform: Optional[str] = Query(None),
-    db: Session = Depends(get_db),
-):
-    latest_batches = (
-        db.query(
-            DispatchBatch.file_id.label("file_id"),
-            func.max(DispatchBatch.id).label("batch_id"),
-        )
-        .filter(DispatchBatch.status == "done", DispatchBatch.file_id.isnot(None))
-        .group_by(DispatchBatch.file_id)
-        .subquery()
-    )
-    query = (
-        db.query(DispatchItem, RawDataRecord, UploadFileRecord, ColumnTemplate)
-        .join(latest_batches, DispatchItem.batch_id == latest_batches.c.batch_id)
-        .join(RawDataRecord, DispatchItem.raw_data_id == RawDataRecord.id)
-        .join(UploadFileRecord, RawDataRecord.file_id == UploadFileRecord.id)
-        .outerjoin(ColumnTemplate, UploadFileRecord.template_id == ColumnTemplate.id)
-        .filter(DispatchItem.raw_data_id.isnot(None))
-    )
-    if category_code:
-        query = query.filter(DispatchItem.category_code == category_code)
-    if platform:
-        query = query.filter(RawDataRecord.platform == platform)
+def _run_dispatch_export_thread(job_id: int, params: dict):
+    db = SessionLocal()
+    try:
+        job = db.query(WorkbenchExportJob).filter(WorkbenchExportJob.id == job_id).first()
+        if not job:
+            return
+        job.status = "running"
+        job.progress = 5
+        db.commit()
+        _dispatch_export_progress[job_id] = 5
 
-    rows = query.order_by(UploadFileRecord.template_id, RawDataRecord.id).all()
-    filename = (
-        "分发结果_"
-        f"{_safe_filename_part(category_code, '全部品类')}_"
-        f"{_safe_filename_part(platform, '全部平台')}.xlsx"
+        category_code = params.get("category_code")
+        platform = params.get("platform")
+        query = _latest_dispatch_export_query(db, category_code, platform)
+        total = query.count()
+        if total == 0:
+            job.status = "error"
+            job.error_msg = "没有可导出的分发数据"
+            job.finished_at = datetime.utcnow()
+            db.commit()
+            return
+        _dispatch_export_progress[job_id] = 20
+        job.progress = 20
+        db.commit()
+
+        rows = query.order_by(UploadFileRecord.template_id, RawDataRecord.id).all()
+        _dispatch_export_progress[job_id] = 70
+        job.progress = 70
+        db.commit()
+
+        DISPATCH_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+        token = uuid.uuid4().hex
+        filename = _dispatch_export_filename(category_code, platform)
+        filepath = DISPATCH_EXPORT_DIR / f"{token}_{filename}"
+        _write_dispatch_export(rows, str(filepath))
+
+        job.status = "done"
+        job.progress = 100
+        job.file_token = token
+        job.filename = filename
+        job.finished_at = datetime.utcnow()
+        db.commit()
+        _dispatch_export_progress[job_id] = 100
+    except Exception as exc:
+        try:
+            job = db.query(WorkbenchExportJob).filter(WorkbenchExportJob.id == job_id).first()
+            if job:
+                job.status = "error"
+                job.error_msg = str(exc)
+                job.finished_at = datetime.utcnow()
+                db.commit()
+        except Exception:
+            pass
+    finally:
+        _dispatch_export_progress.pop(job_id, None)
+        db.close()
+
+
+@router.post("/export", status_code=202)
+def create_dispatch_export_job(payload: DispatchExportParams, db: Session = Depends(get_db)):
+    category_code = payload.category_code.strip() if payload.category_code else None
+    platform = payload.platform.strip() if payload.platform else None
+    if not category_code and not platform:
+        raise HTTPException(status_code=400, detail="请选择品类或平台后再导出")
+
+    job = WorkbenchExportJob(status="pending", progress=0)
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    thread = threading.Thread(
+        target=_run_dispatch_export_thread,
+        args=(job.id, {"category_code": category_code, "platform": platform}),
+        daemon=True,
     )
-    return _build_dispatch_export_response(rows, filename)
+    thread.start()
+    return {"job_id": job.id, "status": "pending"}
+
+
+@router.get("/export/jobs/{job_id}")
+def get_dispatch_export_job(job_id: int, db: Session = Depends(get_db)):
+    job = db.query(WorkbenchExportJob).filter(WorkbenchExportJob.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="导出任务不存在")
+    progress = _dispatch_export_progress.get(job_id, job.progress)
+    download_url = (
+        f"/api/dispatch/export/download/{job.file_token}"
+        if job.status == "done" and job.file_token
+        else None
+    )
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "progress": progress,
+        "download_url": download_url,
+        "error_msg": job.error_msg,
+    }
+
+
+@router.get("/export/download/{token}")
+def download_dispatch_export(token: str, db: Session = Depends(get_db)):
+    job = db.query(WorkbenchExportJob).filter(WorkbenchExportJob.file_token == token).first()
+    if not job or not job.filename:
+        raise HTTPException(status_code=404, detail="文件不存在或已过期")
+    file_path = DISPATCH_EXPORT_DIR / f"{token}_{job.filename}"
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="文件已被清理，请重新导出")
+    return FileResponse(
+        path=str(file_path),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(job.filename)}"},
+    )
 
 
 @router.get("/rules", response_model=list[DispatchRuleOut])

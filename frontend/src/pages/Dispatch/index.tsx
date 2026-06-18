@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Tabs, Table, Button, Tag, Space, Modal, Form, Select,
   Input, InputNumber, Switch, message, Descriptions, Typography,
@@ -11,11 +11,13 @@ import { useRequest } from 'ahooks'
 import {
   listUploadFiles, listDispatchBatches, runDispatch,
   getDispatchBatchStats, listDispatchUnmatched, listDispatchRules,
-  createDispatchRule, updateDispatchRule, deleteDispatchRule, exportDispatchedRawData,
+  createDispatchRule, updateDispatchRule, deleteDispatchRule,
+  createDispatchExportJob, getDispatchExportJob,
   type DispatchBatchStatsResponse, type DispatchCategoryStat, type DispatchRuleStat,
   type DispatchUnmatchedRow
 } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
+import ProgressModal from '../../components/ProgressModal'
 
 const { Text } = Typography
 
@@ -66,13 +68,6 @@ const formatPlatform = (platform: string | null) => (
 const formatDataPlatform = (platform: string | null) => (
   platform ? (PLATFORM_OPTIONS.find(o => o.value === platform)?.label ?? platform) : '未知平台'
 )
-
-const getFilenameFromDisposition = (disposition?: string) => {
-  const utf8Match = disposition?.match(/filename\*=UTF-8''([^;]+)/)
-  if (utf8Match?.[1]) return decodeURIComponent(utf8Match[1])
-  const fallbackMatch = disposition?.match(/filename="?([^";]+)"?/)
-  return fallbackMatch?.[1] ?? null
-}
 
 const splitItemNameKeywords = (keyword: string | null) => (
   keyword?.split(/[,，、\n\r]+/).map(part => part.trim()).filter(Boolean) ?? []
@@ -453,24 +448,68 @@ function DispatchExportTab() {
   const [categoryCode, setCategoryCode] = useState<string | undefined>()
   const [platform, setPlatform] = useState<string | undefined>()
   const [exporting, setExporting] = useState(false)
+  const [exportProgress, setExportProgress] = useState(0)
+  const [exportError, setExportError] = useState('')
+  const [progressVisible, setProgressVisible] = useState(false)
+  const exportPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const { options: categoryOptions } = useCategoryOptions()
 
+  const stopExportPoll = () => {
+    if (exportPollRef.current) {
+      clearInterval(exportPollRef.current)
+      exportPollRef.current = null
+    }
+  }
+
+  useEffect(() => () => stopExportPoll(), [])
+
   const handleExport = async () => {
+    if (exportPollRef.current) return
+    if (!categoryCode && !platform) {
+      message.warning('请至少选择品类或平台后再下载')
+      return
+    }
     setExporting(true)
+    setExportProgress(0)
+    setExportError('')
+    setProgressVisible(true)
     try {
-      const res = await exportDispatchedRawData({ category_code: categoryCode, platform })
-      const disposition = res.headers['content-disposition'] as string | undefined
-      const filename = getFilenameFromDisposition(disposition) ?? `dispatch_result_${categoryCode ?? 'all'}_${platform ?? 'all'}.xlsx`
-      const url = URL.createObjectURL(new Blob([res.data]))
-      const link = document.createElement('a')
-      link.href = url
-      link.download = filename
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      URL.revokeObjectURL(url)
-      message.success('下载已开始')
-    } finally {
+      const res = await createDispatchExportJob({ category_code: categoryCode, platform })
+      const { job_id } = res.data as { job_id: number }
+      let pollFailCount = 0
+      exportPollRef.current = setInterval(async () => {
+        try {
+          const jobRes = await getDispatchExportJob(job_id)
+          const { status, progress, download_url, error_msg } = jobRes.data
+          pollFailCount = 0
+          setExportProgress(progress ?? 0)
+          if (status === 'done' && download_url) {
+            stopExportPoll()
+            setExportProgress(100)
+            setTimeout(() => {
+              setProgressVisible(false)
+              setExporting(false)
+              const link = document.createElement('a')
+              link.href = download_url
+              link.click()
+              message.success('下载已开始')
+            }, 500)
+          } else if (status === 'error') {
+            stopExportPoll()
+            setExportError(error_msg || '导出失败，请重试')
+            setExporting(false)
+          }
+        } catch {
+          pollFailCount += 1
+          if (pollFailCount >= 10) {
+            stopExportPoll()
+            setExportError('网络异常，请刷新后重试')
+            setExporting(false)
+          }
+        }
+      }, 1000)
+    } catch (error: any) {
+      setExportError(error?.response?.data?.detail || '创建导出任务失败')
       setExporting(false)
     }
   }
@@ -488,7 +527,7 @@ function DispatchExportTab() {
           allowClear
           showSearch
           optionFilterProp="label"
-          placeholder="选择品类（可选）"
+          placeholder="选择品类"
           style={{ width: 220 }}
           options={categoryOptions}
           value={categoryCode}
@@ -498,19 +537,27 @@ function DispatchExportTab() {
           allowClear
           showSearch
           optionFilterProp="label"
-          placeholder="选择平台（可选）"
+          placeholder="选择平台"
           style={{ width: 160 }}
           options={PLATFORM_OPTIONS}
           value={platform}
           onChange={value => setPlatform(value || undefined)}
         />
         <Button type="primary" icon={<DownloadOutlined />} loading={exporting} onClick={handleExport}>
-          下载分发结果
+          创建导出任务
         </Button>
       </Space>
       <Text type="secondary" style={{ display: 'block', marginTop: 12 }}>
-        不选择品类或平台时表示导出全部；如导出范围内包含多个上传模板，会按模板分 Sheet。
+        至少选择品类或平台后再导出；如导出范围内包含多个上传模板，会按模板分 Sheet。
       </Text>
+      <ProgressModal
+        visible={progressVisible}
+        title="分发结果导出中"
+        progress={exportProgress}
+        errorMsg={exportError}
+        stageLabel={exportError ? '导出失败' : '正在生成 Excel 文件'}
+        onClose={exportError ? () => setProgressVisible(false) : undefined}
+      />
     </>
   )
 }

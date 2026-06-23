@@ -351,9 +351,9 @@ def test_get_batch_stats_returns_category_names_and_rule_counts(client_and_db):
     db.add(file_record)
     db.flush()
     raw_rows = [
-        RawDataRecord(file_id=file_record.id, platform="jd", item_id="item-1"),
-        RawDataRecord(file_id=file_record.id, platform="tmall", item_id="item-2"),
-        RawDataRecord(file_id=file_record.id, platform="jd", item_id="item-3"),
+        RawDataRecord(file_id=file_record.id, platform="jd", item_id="item-1", category_lv1="蓝牙耳机", item_name="普通商品"),
+        RawDataRecord(file_id=file_record.id, platform="tmall", item_id="item-2", category_lv1="头戴耳机", item_name="普通商品"),
+        RawDataRecord(file_id=file_record.id, platform="jd", item_id="item-3", category_lv1="其他", item_name="无线音箱"),
     ]
     db.add_all(raw_rows)
     db.flush()
@@ -431,6 +431,7 @@ def test_get_batch_stats_returns_category_names_and_rule_counts(client_and_db):
             "priority": 1,
             "is_active": 1,
             "count": 2,
+            "assigned_count": 2,
         },
         {
             "rule_id": rule_two.id,
@@ -444,8 +445,80 @@ def test_get_batch_stats_returns_category_names_and_rule_counts(client_and_db):
             "priority": 2,
             "is_active": 1,
             "count": 1,
+            "assigned_count": 1,
         },
     ]
+
+
+def test_get_batch_stats_rule_count_uses_actual_matches_not_only_assigned_rows(client_and_db):
+    client, db = client_and_db
+    db.add(Category(code="projector", name="投影仪", sort_order=1))
+    file_record = UploadFileRecord(filename="actual-rule-count.xlsx", platform="DY", row_count=31, status="done")
+    db.add(file_record)
+    db.flush()
+    high_priority_rule = DispatchRule(
+        category_code="projector",
+        platform="dy",
+        field="item_name",
+        match_type="contains",
+        value="激光",
+        item_name_keyword="电视",
+        priority=5,
+        is_active=1,
+    )
+    low_priority_rule = DispatchRule(
+        category_code="projector",
+        platform="dy",
+        field="category_lv3",
+        match_type="equals",
+        value="激光电视",
+        item_name_keyword=None,
+        priority=10,
+        is_active=1,
+    )
+    db.add_all([high_priority_rule, low_priority_rule])
+    db.flush()
+    raw_rows = []
+    for idx in range(31):
+        raw_rows.append(RawDataRecord(
+            file_id=file_record.id,
+            platform="dy",
+            category_lv3="激光电视",
+            item_name="激光电视" if idx < 28 else "普通商品",
+        ))
+    db.add_all(raw_rows)
+    db.flush()
+    batch = DispatchBatch(file_id=file_record.id, status="done", total_rows=31, dispatched_rows=31, unmatched_rows=0)
+    db.add(batch)
+    db.flush()
+    db.add_all([
+        *[
+            DispatchItem(
+                batch_id=batch.id,
+                raw_data_id=raw_rows[idx].id,
+                category_code="projector",
+                matched_rule_id=high_priority_rule.id,
+            )
+            for idx in range(28)
+        ],
+        *[
+            DispatchItem(
+                batch_id=batch.id,
+                raw_data_id=raw_rows[idx].id,
+                category_code="projector",
+                matched_rule_id=low_priority_rule.id,
+            )
+            for idx in range(28, 31)
+        ],
+    ])
+    db.commit()
+
+    response = client.get(f"/api/dispatch/batches/{batch.id}/stats")
+
+    assert response.status_code == 200
+    rules = {row["rule_id"]: row for row in response.json()["rules"]}
+    assert rules[low_priority_rule.id]["count"] == 31
+    assert rules[low_priority_rule.id]["assigned_count"] == 3
 
 
 def test_get_batch_stats_returns_404_for_missing_batch(client_and_db):
@@ -497,6 +570,7 @@ def test_get_batch_stats_preserves_deleted_rule_counts(client_and_db):
             "priority": None,
             "is_active": None,
             "count": 1,
+            "assigned_count": 1,
         },
     ]
 
@@ -541,6 +615,7 @@ def test_get_batch_stats_groups_deleted_rule_counts_by_rule_id(client_and_db):
             "priority": None,
             "is_active": None,
             "count": 2,
+            "assigned_count": 2,
         },
     ]
 

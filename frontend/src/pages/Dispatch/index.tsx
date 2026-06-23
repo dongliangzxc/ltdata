@@ -338,7 +338,8 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
                       },
                       { title: '平台', width: 90, dataIndex: 'platform', render: (v: string | null) => formatPlatform(v) },
                       { title: '优先级', width: 90, dataIndex: 'priority', render: (v: number | null) => v ?? '-' },
-                      { title: '命中数量', width: 100, dataIndex: 'count' },
+                      { title: '规则命中', width: 100, dataIndex: 'count' },
+                      { title: '分发归因', width: 100, dataIndex: 'assigned_count', render: (v: number | undefined) => v ?? '-' },
                       {
                         title: '操作', width: 80,
                         render: (_: unknown, row) => canEditRuleStat(row)

@@ -331,6 +331,7 @@ export interface DispatchRuleStat {
   priority: number | null
   is_active: number | null
   count: number
+  assigned_count?: number
 }
 
 export interface DispatchBatchStatsResponse {

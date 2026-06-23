@@ -329,6 +329,42 @@ def _rule_matches(row: RawDataRecord, rule: DispatchRule) -> bool:
     return True
 
 
+def _count_rule_matches_for_batch(db: Session, batch: DispatchBatch, rule_ids: list[int]) -> dict[int, int]:
+    if not batch.file_id or not rule_ids:
+        return {}
+    rules = db.query(DispatchRule).filter(DispatchRule.id.in_(rule_ids)).all()
+    if not rules:
+        return {}
+
+    counts = {rule.id: 0 for rule in rules}
+    last_id = 0
+    while True:
+        rows = (
+            db.query(
+                RawDataRecord.id,
+                RawDataRecord.category_lv0,
+                RawDataRecord.category_lv1,
+                RawDataRecord.category_lv2,
+                RawDataRecord.category_lv3,
+                RawDataRecord.category_lv4,
+                RawDataRecord.category_lv5,
+                RawDataRecord.item_name,
+            )
+            .filter(RawDataRecord.file_id == batch.file_id, RawDataRecord.id > last_id)
+            .order_by(RawDataRecord.id)
+            .limit(DISPATCH_PAGE_SIZE)
+            .all()
+        )
+        if not rows:
+            break
+        for row in rows:
+            for rule in rules:
+                if _rule_matches(row, rule):
+                    counts[rule.id] += 1
+        last_id = rows[-1].id
+    return counts
+
+
 @router.post("/run", response_model=DispatchBatchOut)
 def run_dispatch(payload: dict, db: Session = Depends(get_db)):
     """对指定 file_id 执行分发，返回新建的 batch"""
@@ -578,13 +614,18 @@ def get_batch_stats(batch_id: int, db: Session = Depends(get_db)):
             DispatchRule.platform,
             DispatchRule.priority,
             DispatchRule.is_active,
-            rule_stats_subq.c.count,
+            rule_stats_subq.c.count.label("assigned_count"),
         )
         .select_from(rule_stats_subq)
         .outerjoin(DispatchRule, rule_stats_subq.c.rule_id == DispatchRule.id)
         .outerjoin(Category, rule_category_code == Category.code)
         .order_by(rule_stats_subq.c.count.desc(), DispatchRule.priority, rule_stats_subq.c.rule_id)
         .all()
+    )
+    actual_rule_counts = _count_rule_matches_for_batch(
+        db,
+        batch,
+        [row.rule_id for row in rule_rows if row.field and row.match_type and row.value],
     )
 
     return {
@@ -613,7 +654,8 @@ def get_batch_stats(batch_id: int, db: Session = Depends(get_db)):
                 "platform": row.platform,
                 "priority": row.priority,
                 "is_active": row.is_active,
-                "count": row.count,
+                "count": actual_rule_counts.get(row.rule_id, row.assigned_count),
+                "assigned_count": row.assigned_count,
             }
             for row in rule_rows
         ],

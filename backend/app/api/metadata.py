@@ -38,13 +38,23 @@ def _clean_val(v):
     return v
 
 
+def _category_code_candidates(value: str) -> list[str]:
+    text = value.strip()
+    candidates = [text]
+    for separator in ("·", "-", "_", " "):
+        prefix = text.split(separator, 1)[0].strip()
+        if prefix and prefix not in candidates:
+            candidates.append(prefix)
+    return candidates
+
+
 def _match_category_code(db: Session, sheet_name: str) -> str:
-    normalized_sheet_name = sheet_name.strip()
+    candidates = _category_code_candidates(sheet_name)
     category = (
         db.query(Category)
         .filter(
-            (func.lower(Category.code) == normalized_sheet_name.lower())
-            | (Category.name == normalized_sheet_name)
+            func.lower(Category.code).in_([candidate.lower() for candidate in candidates])
+            | (Category.name == candidates[0])
         )
         .first()
     )

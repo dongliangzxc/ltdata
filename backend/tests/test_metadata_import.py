@@ -115,6 +115,21 @@ def test_preview_metadata_matches_sheet_name_to_category_code_case_insensitively
         Base.metadata.drop_all(engine)
 
 
+def test_preview_metadata_matches_sheet_name_with_category_suffix():
+    client, session, engine = _client()
+    try:
+        resp = client.post(
+            "/api/metadata/preview",
+            files={"file": ("metadata.xlsx", _excel_with_sheet("vrar·XR和智能眼镜"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["preview"][0]["category_code"] == "vrar"
+    finally:
+        session.close()
+        Base.metadata.drop_all(engine)
+
+
 def test_preview_metadata_rejects_unknown_sheet_category():
     client, session, engine = _client()
     try:

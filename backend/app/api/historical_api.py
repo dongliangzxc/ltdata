@@ -150,7 +150,25 @@ def _parse_year(value) -> Optional[int]:
 
 
 def _parse_month(value) -> Optional[int]:
-    return _clean_int(value)
+    text = _clean_value(value)
+    if text is None:
+        return None
+    month = _clean_int(text)
+    if month is not None:
+        if 1 <= month <= 12:
+            return month
+        if text.isdigit() and len(text) == 6:
+            month_part = month % 100
+            return month_part if 1 <= month_part <= 12 else month
+        return month
+
+    normalized = text.replace("年", ".").replace("月", "").replace("-", ".").replace("/", ".")
+    if "." not in normalized:
+        return None
+    year_text, month_text = normalized.split(".", 1)
+    if len(year_text.strip()) != 4:
+        return None
+    return _clean_int(month_text)
 
 
 def _parse_time_dimension(value) -> tuple[Optional[int], Optional[int]]:

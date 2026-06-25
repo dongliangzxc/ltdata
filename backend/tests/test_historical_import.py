@@ -116,6 +116,26 @@ def test_import_chinese_history_excel_persists_confirmed_detail_fields(db):
     assert row.raw_payload["标题"] == "DJI Mini 4 Pro 航拍无人机"
 
 
+def test_import_accepts_year_month_values_in_month_column(db):
+    client = _client(db)
+    content = _history_excel([
+        {"年": 2026, "月": "2026.03", "商场": "TMALL", "标题": "小数月份", "网址": "https://detail.tmall.com/item.htm?id=301"},
+        {"年": 2026, "月": "202603", "商场": "JD", "标题": "年月数字", "网址": "https://item.jd.com/302.html"},
+    ])
+
+    resp = client.post(
+        "/api/historical/import",
+        files={"file": ("history.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["success"] == 2
+    assert resp.json()["errors"] == []
+    rows = db.query(HistoricalMapping).order_by(HistoricalMapping.item_id).all()
+    assert [row.month_num for row in rows] == [3, 3]
+    assert [row.month for row in rows] == ["2026-03", "2026-03"]
+
+
 def test_import_preloads_model_resolution_without_per_row_model_queries(db):
     _seed_model(db, model_code="DJI-MINI-4", model_name="Mini 4 Pro", brand_code="DJI")
     _seed_model(db, model_code="QH-215", model_name="QHTF 21.5", brand_code="ROCK")
@@ -363,7 +383,7 @@ def test_list_history_returns_beijing_time_strings(db):
 
 def test_import_requires_platform_title_year_and_month(db):
     client = _client(db)
-    content = _history_excel([{"商场": "", "渠道": "", "标题": "", "型号": "", "年": "", "月": ""}])
+    content = _history_excel([{"商场": " ", "渠道": " ", "标题": " ", "型号": " ", "年": " ", "月": " "}])
 
     resp = client.post(
         "/api/historical/import",

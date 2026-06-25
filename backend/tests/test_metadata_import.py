@@ -28,6 +28,22 @@ def _excel_with_sheet(sheet_name: str) -> bytes:
     return buffer.getvalue()
 
 
+def _excel_with_category_code(category_code: str) -> bytes:
+    buffer = io.BytesIO()
+    df = pd.DataFrame([
+        {
+            "品类码": category_code,
+            "属性字段名称": "形态",
+            "字段类型": "文本型",
+            "字段内容实例": "一体机/分体机",
+            "字段说明": "单选",
+        }
+    ])
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name="元数据", index=False)
+    return buffer.getvalue()
+
+
 def _client():
     engine = create_engine(
         "sqlite:///:memory:",
@@ -38,6 +54,7 @@ def _client():
     Session = sessionmaker(bind=engine)
     session = Session()
     session.add(Category(code="sports_camera", name="运动相机"))
+    session.add(Category(code="vrar", name="智能眼镜"))
     session.commit()
 
     app = FastAPI()
@@ -83,6 +100,21 @@ def test_preview_metadata_matches_sheet_name_to_category_name():
         Base.metadata.drop_all(engine)
 
 
+def test_preview_metadata_matches_sheet_name_to_category_code_case_insensitively():
+    client, session, engine = _client()
+    try:
+        resp = client.post(
+            "/api/metadata/preview",
+            files={"file": ("metadata.xlsx", _excel_with_sheet("VRAR"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["preview"][0]["category_code"] == "vrar"
+    finally:
+        session.close()
+        Base.metadata.drop_all(engine)
+
+
 def test_preview_metadata_rejects_unknown_sheet_category():
     client, session, engine = _client()
     try:
@@ -93,6 +125,21 @@ def test_preview_metadata_rejects_unknown_sheet_category():
 
         assert resp.status_code == 422
         assert "找不到匹配品类" in resp.json()["detail"]
+    finally:
+        session.close()
+        Base.metadata.drop_all(engine)
+
+
+def test_preview_metadata_canonicalizes_category_code_case():
+    client, session, engine = _client()
+    try:
+        resp = client.post(
+            "/api/metadata/preview",
+            files={"file": ("metadata.xlsx", _excel_with_category_code("VRAR"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["preview"][0]["category_code"] == "vrar"
     finally:
         session.close()
         Base.metadata.drop_all(engine)

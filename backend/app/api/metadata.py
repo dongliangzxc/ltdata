@@ -39,9 +39,13 @@ def _clean_val(v):
 
 
 def _match_category_code(db: Session, sheet_name: str) -> str:
+    normalized_sheet_name = sheet_name.strip()
     category = (
         db.query(Category)
-        .filter((Category.code == sheet_name) | (Category.name == sheet_name))
+        .filter(
+            (func.lower(Category.code) == normalized_sheet_name.lower())
+            | (Category.name == normalized_sheet_name)
+        )
         .first()
     )
     if not category:
@@ -67,6 +71,24 @@ def _read_metadata_excel(content: bytes, db: Session | None = None) -> pd.DataFr
     return df
 
 
+def _canonicalize_category_codes(df: pd.DataFrame, db: Session | None) -> pd.DataFrame:
+    if db is None or "category_code" not in df.columns:
+        return df
+
+    def normalize(value):
+        value = _clean_val(value)
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text or text == "不需要填写":
+            return None
+        return _match_category_code(db, text)
+
+    df = df.copy()
+    df["category_code"] = df["category_code"].map(normalize).ffill().fillna("")
+    return df
+
+
 def _normalize_metadata_columns(df: pd.DataFrame) -> pd.DataFrame:
     col_map = {
         "品类码": "category_code", "规格名称": "spec_name",
@@ -81,7 +103,7 @@ def _normalize_metadata_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 def _parse_metadata_file(content: bytes, db: Session | None = None) -> dict:
     """解析 Excel，返回预览数据，不操作数据库"""
-    df = _normalize_metadata_columns(_read_metadata_excel(content, db))
+    df = _canonicalize_category_codes(_normalize_metadata_columns(_read_metadata_excel(content, db)), db)
 
     for col in ["spec_name", "spec_type"]:
         if col not in df.columns:
@@ -149,7 +171,7 @@ async def import_metadata(file: UploadFile = File(...), db: Session = Depends(ge
         raise HTTPException(status_code=400, detail="只支持 .xlsx / .xls 格式文件")
 
     content = await file.read()
-    df = _normalize_metadata_columns(_read_metadata_excel(content, db))
+    df = _canonicalize_category_codes(_normalize_metadata_columns(_read_metadata_excel(content, db)), db)
 
     for col in ["spec_name", "spec_type"]:
         if col not in df.columns:

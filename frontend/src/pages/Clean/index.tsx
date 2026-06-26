@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import type { Key } from 'react'
 import {
   Card, Button, Table, Tag, Modal, Row, Col,
   Space, Statistic, Select, message
@@ -166,6 +167,7 @@ const getQueueAction = (row: CleanMonthlyPoolItem) => {
 const monthlyQueueColumns = (
   onUpsert: (row: CleanMonthlyPoolItem) => void,
   upsertingRowKey: string | null,
+  operationDisabled: boolean,
 ): ColumnsType<CleanMonthlyPoolItem> => [
   {
     title: '品类', dataIndex: 'category_name', width: 140,
@@ -201,7 +203,7 @@ const monthlyQueueColumns = (
         <Button
           type="primary"
           size="small"
-          disabled={action.disabled || (!!upsertingRowKey && !isCurrentRowUpserting)}
+          disabled={action.disabled || operationDisabled || (!!upsertingRowKey && !isCurrentRowUpserting)}
           loading={isCurrentRowUpserting}
           onClick={() => onUpsert(row)}
         >
@@ -246,6 +248,8 @@ export default function CleanPage() {
   const [previewJobId, setPreviewJobId] = useState<number | null>(null)
   const [previewPage, setPreviewPage] = useState(1)
   const [upsertingRowKey, setUpsertingRowKey] = useState<string | null>(null)
+  const [selectedMonthlyRowKeys, setSelectedMonthlyRowKeys] = useState<Key[]>([])
+  const [batchUpserting, setBatchUpserting] = useState(false)
 
   const requestParams = useMemo(() => cleanParams(filters), [filters])
 
@@ -262,6 +266,11 @@ export default function CleanPage() {
 
   const jobs = jobsData ?? []
   const monthlyPool = monthlyPoolData ?? []
+  const selectedMonthlyRowKeySet = useMemo(() => new Set(selectedMonthlyRowKeys), [selectedMonthlyRowKeys])
+  const selectedActionableRows = useMemo(
+    () => monthlyPool.filter(row => selectedMonthlyRowKeySet.has(getMonthlyQueueRowKey(row)) && !getQueueAction(row).disabled && row.platform),
+    [monthlyPool, selectedMonthlyRowKeySet]
+  )
   const monthOptions = useMemo(() => collectMonths(monthlyPool, jobsData ?? []), [monthlyPool, jobsData])
   const summary = useMemo(() => {
     const activeProcessingStatuses = new Set(['cleaning', 'matching', 'processing'])
@@ -295,6 +304,60 @@ export default function CleanPage() {
     },
     { manual: true }
   )
+
+  const handleBatchUpsertMonthlyTasks = async () => {
+    if (batchUpserting) return
+
+    const rows = selectedActionableRows
+    if (rows.length === 0) {
+      message.warning('请选择可创建或可追加的队列项')
+      return
+    }
+
+    setBatchUpserting(true)
+    let successCount = 0
+    let failedCount = 0
+
+    try {
+      for (const row of rows) {
+        try {
+          await upsertMonthlyCleanTask({
+            category_code: row.category_code,
+            platform: row.platform!,
+            month: row.month,
+            rules: { dedup: true },
+          })
+          successCount += 1
+        } catch {
+          failedCount += 1
+        }
+      }
+
+      if (failedCount === 0) {
+        message.success(`已创建/追加 ${successCount} 个清洗任务`)
+      } else if (successCount > 0) {
+        message.warning(`已创建/追加 ${successCount} 个清洗任务，${failedCount} 个失败`)
+      } else {
+        message.error('批量创建/追加失败')
+      }
+
+      setSelectedMonthlyRowKeys([])
+      refreshMonthlyPool()
+      refreshJobs()
+    } finally {
+      setBatchUpserting(false)
+    }
+  }
+
+  const monthlyRowSelection = {
+    selectedRowKeys: selectedMonthlyRowKeys,
+    onChange: (keys: Key[]) => {
+      setSelectedMonthlyRowKeys(keys)
+    },
+    getCheckboxProps: (row: CleanMonthlyPoolItem) => ({
+      disabled: getQueueAction(row).disabled || !!upsertingRowKey || batchUpserting,
+    }),
+  }
 
   const { data: previewData, loading: previewLoading } = useRequest(
     async () => {
@@ -344,10 +407,24 @@ export default function CleanPage() {
             />
           </Col>
         </Row>
+        <Row justify="space-between" align="middle" style={{ marginBottom: 16 }}>
+          <Col>已选择 {selectedActionableRows.length} 项</Col>
+          <Col>
+            <Button
+              type="primary"
+              disabled={selectedActionableRows.length === 0 || !!upsertingRowKey || batchUpserting}
+              loading={batchUpserting}
+              onClick={handleBatchUpsertMonthlyTasks}
+            >
+              批量创建/追加任务
+            </Button>
+          </Col>
+        </Row>
         <Table
           dataSource={monthlyPool}
-          columns={monthlyQueueColumns(handleUpsertMonthlyTask, upsertingRowKey)}
+          columns={monthlyQueueColumns(handleUpsertMonthlyTask, upsertingRowKey, batchUpserting)}
           rowKey={getMonthlyQueueRowKey}
+          rowSelection={monthlyRowSelection}
           size="small"
           loading={monthlyPoolLoading}
           scroll={{ x: 900 }}

@@ -464,12 +464,13 @@ export default function MatchPage() {
     if (!selectedJobId) { message.warning('请先选择清洗任务'); return }
     Modal.confirm({
       title: '应用规则并重新处理当前任务？',
-      content: '将使用最新干预规则重新处理当前任务。已沉淀 URL 映射的人工确认结果会自动复用，系统也会按原始行恢复本任务内已确认结果。被新规则过滤的数据将进入干扰项存档，不会发布。',
+      content: '将使用最新干预规则重新处理当前任务。已沉淀 URL 映射的人工确认结果会自动复用，系统也会按原始行恢复本任务内已确认和已排除的人工审核结果。被新规则过滤的数据将进入干扰项存档，不会发布。',
       onOk: async () => {
         setRerunningRules(true)
         try {
           const res = await rerunCleanTaskWithCurrentRules(selectedJobId)
-          message.success(`重新处理完成：清洗后 ${res.data.row_out} 条，过滤 ${res.data.filtered_count} 条，恢复确认 ${res.data.restored_confirmed_count} 条`)
+          const restoredReviewCount = res.data.restored_review_count ?? res.data.restored_confirmed_count
+          message.success(`重新处理完成：清洗后 ${res.data.row_out} 条，过滤 ${res.data.filtered_count} 条，恢复人工审核 ${restoredReviewCount} 条`)
           refreshCurrentJobState()
         } finally {
           setRerunningRules(false)

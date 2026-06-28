@@ -1018,6 +1018,74 @@ def test_rerun_with_current_rules_filters_rows_and_restores_manual_confirm(db):
     assert db.query(ItemUrlMapping).filter_by(platform="jd", item_id="keep-1").one().model_id == model.id
 
 
+def test_rerun_with_current_rules_restores_manual_excluded_row(db):
+    client = _make_client(db)
+    category = Category(code="camera", name="摄像机")
+    upload = UploadFileRecord(filename="rerun-excluded.xlsx", platform="jd", status="done")
+    db.add_all([category, upload])
+    db.flush()
+    job = CleanJobRecord(
+        file_ids=[upload.id],
+        rules={"dedup": True},
+        status="reviewing",
+        row_in=1,
+        row_out=1,
+        category_code="camera",
+        dispatch_category_code="camera",
+    )
+    db.add(job)
+    db.flush()
+    raw = RawDataRecord(
+        file_id=upload.id,
+        platform="jd",
+        item_id="excluded-1",
+        item_url="https://item.jd.com/excluded-1.html",
+        item_name="需要人工排除的摄像机",
+        brand_raw="UNKNOWN",
+    )
+    db.add(raw)
+    db.flush()
+    reviewed_at = datetime(2026, 6, 1, 2, 3, 4)
+    db.add_all([
+        CleanJobItemRecord(clean_job_id=job.id, raw_data_id=raw.id, category_code="camera"),
+        CleanedDataRecord(
+            clean_job_id=job.id,
+            raw_data_id=raw.id,
+            platform="jd",
+            item_id="excluded-1",
+            item_url="https://item.jd.com/excluded-1.html",
+            item_name="需要人工排除的摄像机",
+            brand_raw="UNKNOWN",
+        ),
+        MatchResult(
+            clean_job_id=job.id,
+            raw_data_id=raw.id,
+            match_status="excluded",
+            matched_by="manual",
+            match_source="manual",
+            reviewed_at=reviewed_at,
+            review_note="不属于本品类",
+        ),
+    ])
+    db.commit()
+
+    response = client.post(f"/api/clean/tasks/{job.id}/rerun-with-current-rules")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["restored_confirmed_count"] == 0
+    assert body["restored_review_count"] == 1
+    assert body["pending_count"] == 0
+    restored = db.query(MatchResult).filter_by(clean_job_id=job.id, raw_data_id=raw.id).one()
+    assert restored.match_status == "excluded"
+    assert restored.model_id is None
+    assert restored.matched_by == "manual"
+    assert restored.match_source == "manual"
+    assert restored.review_note == "不属于本品类"
+    assert restored.reviewed_at == reviewed_at
+    assert db.query(ItemUrlMapping).filter_by(platform="jd", item_id="excluded-1").first() is None
+
+
 def test_rerun_with_current_rules_restores_manual_metadata_over_same_url_match(db):
     client = _make_client(db)
     category = Category(code="projector", name="投影仪")

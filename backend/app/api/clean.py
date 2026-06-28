@@ -192,25 +192,28 @@ def _run_clean_and_match_for_job(db: Session, job: CleanJobRecord, commit: bool 
     _maybe_commit_and_refresh(db, job, commit)
 
 
-def _manual_confirmation_snapshot(db: Session, clean_job_id: int) -> dict[int, dict]:
+def _manual_review_snapshot(db: Session, clean_job_id: int) -> dict[int, dict]:
     rows = (
         db.query(MatchResult)
         .filter(
             MatchResult.clean_job_id == clean_job_id,
-            MatchResult.match_status == "confirmed",
-            MatchResult.model_id.isnot(None),
+            MatchResult.raw_data_id.isnot(None),
             MatchResult.matched_by == "manual",
+            MatchResult.match_status.in_(["confirmed", "excluded"]),
         )
         .all()
     )
-    return {
-        row.raw_data_id: {
+    snapshot = {}
+    for row in rows:
+        if row.match_status == "confirmed" and row.model_id is None:
+            continue
+        snapshot[row.raw_data_id] = {
+            "match_status": row.match_status,
             "model_id": row.model_id,
             "reviewed_at": row.reviewed_at,
             "review_note": row.review_note,
         }
-        for row in rows
-    }
+    return snapshot
 
 
 def _upsert_url_mapping_from_match(db: Session, raw: RawDataRecord, model: ModelRecord) -> bool:
@@ -236,9 +239,9 @@ def _upsert_url_mapping_from_match(db: Session, raw: RawDataRecord, model: Model
     return True
 
 
-def _restore_manual_confirmations(db: Session, clean_job_id: int, snapshot: dict[int, dict]) -> tuple[int, list[int]]:
+def _restore_manual_reviews(db: Session, clean_job_id: int, snapshot: dict[int, dict]) -> tuple[int, int, list[int]]:
     if not snapshot:
-        return 0, []
+        return 0, 0, []
     rows = (
         db.query(MatchResult, RawDataRecord)
         .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
@@ -248,25 +251,36 @@ def _restore_manual_confirmations(db: Session, clean_job_id: int, snapshot: dict
         )
         .all()
     )
-    model_ids = {saved["model_id"] for saved in snapshot.values()}
-    models = {model.id: model for model in db.query(ModelRecord).filter(ModelRecord.id.in_(model_ids)).all()}
-    restored_ids: list[int] = []
+    model_ids = {saved["model_id"] for saved in snapshot.values() if saved["match_status"] == "confirmed" and saved.get("model_id")}
+    models = {model.id: model for model in db.query(ModelRecord).filter(ModelRecord.id.in_(model_ids)).all()} if model_ids else {}
+    restored_confirmed_count = 0
+    restored_review_count = 0
+    restored_confirmed_ids: list[int] = []
     now = datetime.utcnow()
     for mr, raw in rows:
         saved = snapshot[mr.raw_data_id]
-        model = models.get(saved["model_id"])
-        if not model:
+        if saved["match_status"] == "confirmed":
+            model = models.get(saved["model_id"])
+            if not model:
+                continue
+            mr.model_id = saved["model_id"]
+            mr.match_status = "confirmed"
+            mr.dispute_reason = None
+            _upsert_url_mapping_from_match(db, raw, model)
+            restored_confirmed_count += 1
+            restored_confirmed_ids.append(mr.id)
+        elif saved["match_status"] == "excluded":
+            mr.model_id = None
+            mr.match_status = "excluded"
+            mr.dispute_reason = None
+        else:
             continue
-        mr.model_id = saved["model_id"]
-        mr.match_status = "confirmed"
         mr.matched_by = "manual"
         mr.match_source = "manual"
-        mr.dispute_reason = None
         mr.review_note = saved.get("review_note")
         mr.reviewed_at = saved.get("reviewed_at") or now
-        _upsert_url_mapping_from_match(db, raw, model)
-        restored_ids.append(mr.id)
-    return len(restored_ids), restored_ids
+        restored_review_count += 1
+    return restored_confirmed_count, restored_review_count, restored_confirmed_ids
 
 
 def _finalize_rerun_metadata(db: Session, clean_job_id: int, restored_ids: list[int]) -> None:
@@ -437,7 +451,7 @@ def rerun_clean_task_with_current_rules(job_id: int, db: Session = Depends(get_d
     if db.query(PublishJob.id).filter(PublishJob.clean_job_id == job_id).first():
         raise HTTPException(status_code=400, detail="已发布任务不支持重新处理")
 
-    snapshot = _manual_confirmation_snapshot(db, job_id)
+    snapshot = _manual_review_snapshot(db, job_id)
     try:
         job.status = "cleaning"
         db.flush()
@@ -455,7 +469,7 @@ def rerun_clean_task_with_current_rules(job_id: int, db: Session = Depends(get_d
         job.status = "matching"
         db.flush()
         run_match(db, job.id, commit=False)
-        restored_count, restored_ids = _restore_manual_confirmations(db, job.id, snapshot)
+        restored_confirmed_count, restored_review_count, restored_ids = _restore_manual_reviews(db, job.id, snapshot)
         _finalize_rerun_metadata(db, job.id, restored_ids)
         job.status = "reviewing"
         db.flush()
@@ -476,7 +490,8 @@ def rerun_clean_task_with_current_rules(job_id: int, db: Session = Depends(get_d
         "row_out": job.row_out or 0,
         "filtered_count": filtered_count,
         "matched_count": counts.get("matched", 0) + counts.get("url_matched", 0) + counts.get("confirmed", 0),
-        "restored_confirmed_count": restored_count,
+        "restored_confirmed_count": restored_confirmed_count,
+        "restored_review_count": restored_review_count,
         "pending_count": counts.get("pending", 0) + counts.get("text_only", 0) + counts.get("disputed", 0),
     }
 

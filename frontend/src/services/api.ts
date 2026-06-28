@@ -217,6 +217,7 @@ export type RerunCleanTaskResult = {
   filtered_count: number
   matched_count: number
   restored_confirmed_count: number
+  restored_review_count?: number
   pending_count: number
 }
 

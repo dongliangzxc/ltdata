@@ -160,7 +160,7 @@ SELECT
     'active'
 FROM models m
 WHERE m.brand_code IS NOT NULL
-  AND TRIM(m.brand_code) NOT IN ('', '-', '--')
+  AND REPLACE(TRIM(m.brand_code), '-', '') <> ''
 GROUP BY TRIM(m.brand_code);
 
 -- 历史确认结果库（线下已确认工作台结果导入）

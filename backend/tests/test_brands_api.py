@@ -64,6 +64,23 @@ def test_brand_backfills_use_trimmed_brand_code():
     assert "GROUP BY TRIM(m.brand_code)" in init_sql
 
 
+def test_brand_backfills_exclude_all_hyphen_placeholder_codes():
+    """Migration and init SQL backfills must skip any all-hyphen brand_code, e.g. '---'."""
+    migration_sql = Path(
+        __file__,
+        "..",
+        "..",
+        "alembic",
+        "versions",
+        "p29a1b2c3d4e5_create_brands_table.py",
+    ).resolve().read_text()
+    init_sql = Path(__file__, "..", "..", "..", "sql", "init.sql").resolve().read_text()
+    placeholder_guard = "REPLACE(TRIM(m.brand_code), '-', '') <> ''"
+
+    assert migration_sql.count(placeholder_guard) == 2
+    assert placeholder_guard in init_sql
+
+
 def test_mysql_migration_updated_at_matches_init_sql():
     """Alembic-created MySQL brands table must include ON UPDATE CURRENT_TIMESTAMP."""
     migration_sql = Path(

@@ -56,7 +56,7 @@ def upgrade() -> None:
                 CURRENT_TIMESTAMP
             FROM models m
             WHERE m.brand_code IS NOT NULL
-              AND TRIM(m.brand_code) NOT IN ('', '-', '--')
+              AND REPLACE(TRIM(m.brand_code), '-', '') <> ''
             GROUP BY TRIM(m.brand_code)
         """))
     else:
@@ -70,7 +70,7 @@ def upgrade() -> None:
                 CURRENT_TIMESTAMP
             FROM models m
             WHERE m.brand_code IS NOT NULL
-              AND TRIM(m.brand_code) NOT IN ('', '-', '--')
+              AND REPLACE(TRIM(m.brand_code), '-', '') <> ''
             GROUP BY TRIM(m.brand_code)
             ON CONFLICT (brand_code) DO NOTHING
         """))

@@ -1,4 +1,7 @@
 """Tests for status and operator fields on models table."""
+import io
+
+import openpyxl
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -106,6 +109,83 @@ def test_create_model_rejects_missing_brand(client_and_session):
 
     assert r.status_code == 400
     assert r.json()["detail"] == "请先创建品牌或选择已有品牌"
+
+
+def test_create_model_rejects_all_hyphen_placeholder_brand_even_if_seeded(client_and_session):
+    client, Session = client_and_session
+    with Session() as db:
+        db.add(BrandRecord(brand_code="---", brand_name="占位"))
+        db.commit()
+
+    r = client.post("/api/models", json={"brand_code": "---", "model_code": "M1"})
+
+    assert r.status_code == 400
+    assert r.json()["detail"] == "请先创建品牌或选择已有品牌"
+
+
+def _model_workbook_bytes(brand_code: str, model_code: str) -> bytes:
+    workbook = openpyxl.Workbook()
+    model_sheet = workbook.active
+    model_sheet.title = "型号"
+    model_sheet.append(["品牌码", "型号码", "品类", "品牌名称", "型号名称"])
+    model_sheet.append([brand_code, model_code, None, "占位", "占位型号"])
+    spec_sheet = workbook.create_sheet("型号规格")
+    spec_sheet.append(["品牌码", "型号码", "规格名称", "规格值"])
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+def test_import_models_skips_all_hyphen_placeholder_brand(client_and_session):
+    client, Session = client_and_session
+
+    r = client.post(
+        "/api/models/import",
+        files={
+            "file": (
+                "models.xlsx",
+                _model_workbook_bytes("---", "M1"),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+
+    assert r.status_code == 200
+    assert r.json()["imported_models"] == 0
+    with Session() as db:
+        assert db.query(BrandRecord).filter_by(brand_code="---").first() is None
+
+
+def test_models_confirm_skips_all_hyphen_placeholder_brand(client_and_session, monkeypatch, tmp_path):
+    client, Session = client_and_session
+    upload_dir = tmp_path / "uploads"
+    tmp_dir = upload_dir / "tmp"
+    tmp_dir.mkdir(parents=True)
+    temp_file = tmp_dir / "placeholder.xlsx"
+    temp_file.write_bytes(_model_workbook_bytes("---", "M1"))
+
+    import app.api.models_api as models_mod
+    monkeypatch.setattr(models_mod, "UPLOAD_DIR", str(upload_dir))
+
+    r = client.post(
+        "/api/models/confirm",
+        json={
+            "temp_file_id": "placeholder.xlsx",
+            "mapping": {
+                "品牌码": "brand_code",
+                "型号码": "model_code",
+                "品牌名称": "brand_name",
+                "型号名称": "model_name",
+            },
+            "ignore_columns": [],
+            "category_code": "soundbar",
+        },
+    )
+
+    assert r.status_code == 200
+    assert r.json()["models_inserted"] == 0
+    with Session() as db:
+        assert db.query(BrandRecord).filter_by(brand_code="---").first() is None
 
 
 def test_create_model_snapshots_brand_name_from_brand(client_and_session):

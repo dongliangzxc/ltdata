@@ -152,9 +152,9 @@ def models_confirm(
     for i, row in enumerate(df.itertuples(index=False), start=2):
         row_dict = row._asdict()
 
-        brand_code = str(row_dict.get("brand_code") or "").strip()
-        model_code = str(row_dict.get("model_code") or "").strip()
-        if not brand_code or not model_code:
+        brand_code = _normalize_code(row_dict.get("brand_code"))
+        model_code = _normalize_code(row_dict.get("model_code"))
+        if _is_placeholder_code(brand_code) or not model_code:
             errors.append(f"Row {i}: missing brand_code or model_code")
             continue
 
@@ -530,12 +530,14 @@ async def import_models(file: UploadFile = File(...), db: Session = Depends(get_
     for _, row in df_model.iterrows():
         bc = _clean_val(row.get("brand_code"))
         mc = _clean_val(row.get("model_code"))
-        if not bc or not mc:
+        brand_code = _normalize_code(str(bc) if bc is not None else None)
+        model_code = _normalize_code(str(mc) if mc is not None else None)
+        if _is_placeholder_code(brand_code) or not model_code:
             continue
 
         vals = {
-            "brand_code":    str(bc),
-            "model_code":    str(mc),
+            "brand_code":    brand_code,
+            "model_code":    model_code,
             "category_code": str(_clean_val(row.get("category_code")) or "") or None,
             "brand_name":    str(_clean_val(row.get("brand_name"))    or bc),
             "model_name":    str(_clean_val(row.get("model_name"))    or mc),
@@ -724,7 +726,7 @@ def create_model(payload: ModelIn, db: Session = Depends(get_db)):
     model_code = _normalize_code(payload.model_code)
 
     brand = db.query(BrandRecord).filter(BrandRecord.brand_code == brand_code).first()
-    if not brand:
+    if _is_placeholder_code(brand_code) or not brand:
         raise HTTPException(status_code=400, detail="请先创建品牌或选择已有品牌")
 
     existing = db.query(ModelRecord).filter(

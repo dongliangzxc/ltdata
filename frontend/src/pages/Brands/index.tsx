@@ -9,6 +9,7 @@ import {
   listBrands, listBrandAliasesByCode, createBrandAliasForCode, deleteBrandAliasById,
   type BrandItem, type BrandAliasItem,
 } from '../../services/api'
+import CreateBrandModal from '../../components/CreateBrandModal'
 
 function AliasPanel({ brandCode, onAliasChange }: { brandCode: string; onAliasChange: () => void }) {
   const [addOpen, setAddOpen] = useState(false)
@@ -100,6 +101,8 @@ function AliasPanel({ brandCode, onAliasChange }: { brandCode: string; onAliasCh
 }
 
 export default function BrandsPage() {
+  const [createOpen, setCreateOpen] = useState(false)
+
   const { data: brands, loading, refresh } = useRequest(
     () => listBrands().then(r => r.data),
   )
@@ -121,7 +124,14 @@ export default function BrandsPage() {
   ]
 
   return (
-    <Card title="品牌管理">
+    <Card
+      title="品牌管理"
+      extra={(
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+          新建品牌
+        </Button>
+      )}
+    >
       <Table
         dataSource={brands ?? []}
         rowKey="brand_code"
@@ -132,6 +142,14 @@ export default function BrandsPage() {
           expandedRowRender: (record: BrandItem) => (
             <AliasPanel brandCode={record.brand_code} onAliasChange={refresh} />
           ),
+        }}
+      />
+      <CreateBrandModal
+        open={createOpen}
+        onCancel={() => setCreateOpen(false)}
+        onCreated={() => {
+          setCreateOpen(false)
+          refresh()
         }}
       />
     </Card>

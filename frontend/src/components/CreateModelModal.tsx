@@ -20,6 +20,7 @@ const { Text } = Typography
 type CreateModelFormValues = {
   brand_code: string
   model_code: string
+  category_code?: string | null
   model_name?: string | null
   status?: string
   launch_year?: number | null
@@ -31,12 +32,18 @@ type CreateModelFormValues = {
   spec_values?: Record<string, string | undefined>
 }
 
+type CategoryOption = {
+  value: string
+  label: string
+}
+
 type CreateModelModalProps = {
   open: boolean
   onCancel: () => void
   onCreated?: (model: ModelItem) => void
   defaultCategoryCode?: string | null
   defaultCategoryName?: string | null
+  categoryOptions?: CategoryOption[]
   metadataSpecs?: MatchMetadataSpec[]
   brandSuggestion?: string | null
 }
@@ -52,6 +59,7 @@ export default function CreateModelModal({
   onCreated,
   defaultCategoryCode,
   defaultCategoryName,
+  categoryOptions = [],
   metadataSpecs = [],
   brandSuggestion,
 }: CreateModelModalProps) {
@@ -101,12 +109,13 @@ export default function CreateModelModal({
         .map(([specName, specValue]) => ({ spec_name: specName, spec_value: trimOrNull(specValue) }))
         .filter(spec => spec.spec_value)
 
+      const selectedCategoryCode = defaultCategoryCode || values.category_code || null
       const payload: CreateModelPayload = {
         brand_code: values.brand_code,
         brand_name: selectedBrand?.brand_name ?? null,
         model_code: values.model_code.trim(),
         model_name: trimOrNull(values.model_name),
-        category_code: defaultCategoryCode || null,
+        category_code: selectedCategoryCode,
         status: values.status || 'active',
         launch_year: values.launch_year ?? null,
         launch_month: values.launch_month ?? null,
@@ -189,9 +198,21 @@ export default function CreateModelModal({
           </Row>
           <Row gutter={12}>
             <Col span={12}>
-              <Form.Item label="品类">
-                <Input value={defaultCategoryName || defaultCategoryCode || '未识别品类'} disabled />
-              </Form.Item>
+              {defaultCategoryCode ? (
+                <Form.Item label="品类">
+                  <Input value={defaultCategoryName || defaultCategoryCode} disabled />
+                </Form.Item>
+              ) : (
+                <Form.Item label="品类" name="category_code">
+                  <Select
+                    allowClear
+                    showSearch
+                    placeholder="请选择品类"
+                    options={categoryOptions}
+                    filterOption={(input, option) => String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
+                  />
+                </Form.Item>
+              )}
             </Col>
             <Col span={12}>
               <Form.Item label="状态" name="status" initialValue="active">

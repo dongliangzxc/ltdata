@@ -71,7 +71,14 @@ export default function UrlMappingsPage() {
   const { data: modelsData } = useRequest(
     () => listModels({ page: 1, page_size: 500 }).then(r => r.data)
   )
-  const modelOptions: ModelOption[] = modelsData?.items ?? []
+  const modelOptions: ModelOption[] = (modelsData?.items ?? []).map(m => ({
+    id: m.id,
+    brand_code: m.brand_code,
+    model_code: m.model_code,
+    brand_name: m.brand_name ?? null,
+    model_name: m.model_name ?? null,
+    category_code: m.category_code ?? null,
+  }))
 
   const { data, loading, refresh } = useRequest(
     () => listUrlMappings({

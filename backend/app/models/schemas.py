@@ -422,6 +422,17 @@ class MetadataSpecOut(BaseModel):
 
 # ─────────────────────────── 型号主信息 ───────────────────────────
 
+class BrandRecord(Base):
+    __tablename__ = "brands"
+
+    id          = Column(Integer, primary_key=True, index=True)
+    brand_code  = Column(String(100), nullable=False, unique=True, index=True)
+    brand_name  = Column(String(200), nullable=True)
+    status      = Column(String(20), nullable=False, default="active")
+    created_at  = Column(DateTime, default=datetime.utcnow)
+    updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class ModelRecord(Base):
     __tablename__ = "models"
     __table_args__ = (
@@ -489,6 +500,20 @@ class ModelSpecOut(BaseModel):
 class ModelAliasOut(BaseModel):
     id:         int
     alias_code: str
+
+    model_config = {"from_attributes": True}
+
+
+class BrandIn(BaseModel):
+    brand_code: str
+    brand_name: Optional[str] = None
+
+
+class BrandOut(BaseModel):
+    brand_code: str
+    brand_name: Optional[str] = None
+    model_count: int = 0
+    alias_count: int = 0
 
     model_config = {"from_attributes": True}
 

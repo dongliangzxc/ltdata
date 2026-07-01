@@ -1,12 +1,15 @@
 """Tests for brands aggregation and alias management API."""
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
 from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from app.models.database import Base, get_db
-from app.models.schemas import ModelRecord, BrandAlias
+from app.models.schemas import ModelRecord, BrandAlias, BrandRecord
 
 
 @pytest.fixture(scope="function")
@@ -29,33 +32,155 @@ def client_and_db():
     db.close()
 
 
+def test_brand_record_can_be_created(client_and_db):
+    from app.models.schemas import BrandRecord
+
+    _client, db = client_and_db
+    brand = BrandRecord(brand_code="SONY", brand_name="索尼")
+    db.add(brand)
+    db.commit()
+
+    saved = db.query(BrandRecord).filter_by(brand_code="SONY").one()
+    assert saved.brand_code == "SONY"
+    assert saved.brand_name == "索尼"
+    assert saved.status == "active"
+
+
+def test_brand_backfills_use_trimmed_brand_code():
+    """Migration and init SQL backfills collapse whitespace-only brand_code variants."""
+    migration_sql = Path(
+        __file__,
+        "..",
+        "..",
+        "alembic",
+        "versions",
+        "p29a1b2c3d4e5_create_brands_table.py",
+    ).resolve().read_text()
+    init_sql = Path(__file__, "..", "..", "..", "sql", "init.sql").resolve().read_text()
+
+    assert "TRIM(m.brand_code) AS brand_code" in migration_sql
+    assert "GROUP BY TRIM(m.brand_code)" in migration_sql
+    assert "TRIM(m.brand_code) AS brand_code" in init_sql
+    assert "GROUP BY TRIM(m.brand_code)" in init_sql
+
+
+def test_mysql_migration_updated_at_matches_init_sql():
+    """Alembic-created MySQL brands table must include ON UPDATE CURRENT_TIMESTAMP."""
+    migration_sql = Path(
+        __file__,
+        "..",
+        "..",
+        "alembic",
+        "versions",
+        "p29a1b2c3d4e5_create_brands_table.py",
+    ).resolve().read_text()
+
+    assert "ON UPDATE CURRENT_TIMESTAMP" in migration_sql
+
+
 def test_list_brands_returns_model_count(client_and_db):
-    """GET /brands returns each brand with correct model_count."""
+    """GET /brands returns brands from brands table with correct model_count."""
     client, db = client_and_db
+    db.add(BrandRecord(brand_code="SONY", brand_name="索尼"))
+    db.add(BrandRecord(brand_code="JBL", brand_name="JBL"))
+    db.add(BrandRecord(brand_code="EMPTY", brand_name="空品牌"))
     db.add(ModelRecord(brand_code="SONY", model_code="WH1000XM5", brand_name="索尼"))
     db.add(ModelRecord(brand_code="SONY", model_code="WF1000XM5", brand_name="索尼"))
     db.add(ModelRecord(brand_code="JBL",  model_code="FLIP6",     brand_name="JBL"))
     db.commit()
+
     r = client.get("/api/brands")
+
     assert r.status_code == 200
     brands = r.json()
     sony = next(b for b in brands if b["brand_code"] == "SONY")
-    jbl  = next(b for b in brands if b["brand_code"] == "JBL")
+    jbl = next(b for b in brands if b["brand_code"] == "JBL")
+    empty = next(b for b in brands if b["brand_code"] == "EMPTY")
     assert sony["model_count"] == 2
     assert jbl["model_count"] == 1
+    assert empty["model_count"] == 0
+
+
+def test_list_brands_counts_models_with_trimmed_brand_code(client_and_db):
+    """GET /brands counts legacy model brand_code values under trimmed brand master codes."""
+    client, db = client_and_db
+    db.add(BrandRecord(brand_code="SONY", brand_name="索尼"))
+    db.add(ModelRecord(brand_code=" SONY ", model_code="WH1000XM5", brand_name="索尼"))
+    db.commit()
+
+    r = client.get("/api/brands")
+
+    assert r.status_code == 200
+    brands = r.json()
+    sony = next(b for b in brands if b["brand_code"] == "SONY")
+    assert sony["model_count"] == 1
 
 
 def test_list_brands_returns_alias_count(client_and_db):
     """GET /brands includes alias_count for each brand."""
     client, db = client_and_db
-    db.add(ModelRecord(brand_code="SONY", model_code="WH1000XM5", brand_name="索尼"))
+    db.add(BrandRecord(brand_code="SONY", brand_name="索尼"))
     db.add(BrandAlias(alias_name="Sony", brand_code="SONY"))
     db.add(BrandAlias(alias_name="sony", brand_code="SONY"))
     db.commit()
+
     r = client.get("/api/brands")
+
+    assert r.status_code == 200
     brands = r.json()
     sony = next(b for b in brands if b["brand_code"] == "SONY")
     assert sony["alias_count"] == 2
+
+
+def test_create_brand(client_and_db):
+    client, db = client_and_db
+
+    r = client.post("/api/brands", json={"brand_code": " DJI ", "brand_name": " 大疆 "})
+
+    assert r.status_code == 201
+    body = r.json()
+    assert body["brand_code"] == "DJI"
+    assert body["brand_name"] == "大疆"
+    assert body["model_count"] == 0
+    assert body["alias_count"] == 0
+    saved = db.query(BrandRecord).filter_by(brand_code="DJI").one()
+    assert saved.brand_name == "大疆"
+
+
+def test_create_brand_rejects_duplicate_code(client_and_db):
+    client, db = client_and_db
+    db.add(BrandRecord(brand_code="SONY", brand_name="索尼"))
+    db.commit()
+
+    r = client.post("/api/brands", json={"brand_code": "SONY", "brand_name": "Sony"})
+
+    assert r.status_code == 409
+    assert r.json()["detail"] == "品牌已存在，可直接选择"
+
+
+def test_create_brand_rejects_duplicate_code_from_integrity_error(client_and_db, monkeypatch):
+    """POST /brands handles duplicate races that surface only at commit time."""
+    client, db = client_and_db
+
+    def raise_integrity_error():
+        raise IntegrityError("INSERT INTO brands", {}, Exception("duplicate"))
+
+    monkeypatch.setattr(db, "commit", raise_integrity_error)
+
+    r = client.post("/api/brands", json={"brand_code": "SONY", "brand_name": "Sony"})
+
+    assert r.status_code == 409
+    assert r.json()["detail"] == "品牌已存在，可直接选择"
+
+
+@pytest.mark.parametrize("brand_code", ["", " ", "-", "--", "---"])
+def test_create_brand_rejects_placeholder_codes(client_and_db, brand_code):
+    client, _db = client_and_db
+
+    r = client.post("/api/brands", json={"brand_code": brand_code, "brand_name": "占位"})
+
+    assert r.status_code == 400
+    assert r.json()["detail"] == "品牌码不能为空或占位符"
 
 
 def test_list_brand_aliases(client_and_db):

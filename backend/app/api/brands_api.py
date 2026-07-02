@@ -1,22 +1,15 @@
 # backend/app/api/brands_api.py
 """品牌管理 API — /api/brands"""
-from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.database import get_db
-from app.models.schemas import ModelRecord, BrandAlias
+from app.models.schemas import BrandRecord, ModelRecord, BrandAlias, BrandIn, BrandOut
 
 router = APIRouter(prefix="/api/brands", tags=["brands"])
-
-
-class BrandOut(BaseModel):
-    brand_code:  str
-    brand_name:  Optional[str] = None
-    model_count: int
-    alias_count: int
 
 
 class BrandAliasOut(BaseModel):
@@ -32,18 +25,28 @@ class BrandAliasCreate(BaseModel):
     alias_name: str
 
 
+def _clean_brand_code(value: str | None) -> str:
+    return (value or "").strip()
+
+
+def _clean_optional_text(value: str | None) -> str | None:
+    cleaned = (value or "").strip()
+    return cleaned or None
+
+
+def _is_placeholder_brand_code(value: str) -> bool:
+    return not value or set(value) == {"-"}
+
+
 @router.get("", response_model=list[BrandOut])
 def list_brands(db: Session = Depends(get_db)):
-    """返回所有品牌（来自 models 表），聚合型号数和别名数。"""
-    brand_rows = (
-        db.query(
-            ModelRecord.brand_code,
-            func.max(ModelRecord.brand_name).label("brand_name"),
-            func.count(ModelRecord.id).label("model_count"),
-        )
+    """返回品牌主数据列表，附带型号数和别名数。"""
+    brands = db.query(BrandRecord).order_by(BrandRecord.brand_code).all()
+    normalized_brand_code = func.trim(ModelRecord.brand_code)
+    model_counts: dict[str, int] = dict(
+        db.query(normalized_brand_code, func.count(ModelRecord.id))
         .filter(ModelRecord.brand_code.isnot(None))
-        .group_by(ModelRecord.brand_code)
-        .order_by(ModelRecord.brand_code)
+        .group_by(normalized_brand_code)
         .all()
     )
     alias_counts: dict[str, int] = dict(
@@ -53,13 +56,42 @@ def list_brands(db: Session = Depends(get_db)):
     )
     return [
         BrandOut(
-            brand_code=r.brand_code,
-            brand_name=r.brand_name,
-            model_count=r.model_count,
-            alias_count=alias_counts.get(r.brand_code, 0),
+            brand_code=brand.brand_code,
+            brand_name=brand.brand_name,
+            model_count=model_counts.get(brand.brand_code, 0),
+            alias_count=alias_counts.get(brand.brand_code, 0),
         )
-        for r in brand_rows
+        for brand in brands
     ]
+
+
+@router.post("", response_model=BrandOut, status_code=201)
+def create_brand(payload: BrandIn, db: Session = Depends(get_db)):
+    brand_code = _clean_brand_code(payload.brand_code)
+    if _is_placeholder_brand_code(brand_code):
+        raise HTTPException(status_code=400, detail="品牌码不能为空或占位符")
+
+    if db.query(BrandRecord).filter(BrandRecord.brand_code == brand_code).first():
+        raise HTTPException(status_code=409, detail="品牌已存在，可直接选择")
+
+    brand = BrandRecord(
+        brand_code=brand_code,
+        brand_name=_clean_optional_text(payload.brand_name),
+        status="active",
+    )
+    db.add(brand)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="品牌已存在，可直接选择")
+    db.refresh(brand)
+    return BrandOut(
+        brand_code=brand.brand_code,
+        brand_name=brand.brand_name,
+        model_count=0,
+        alias_count=0,
+    )
 
 
 @router.get("/{brand_code}/aliases", response_model=list[BrandAliasOut])

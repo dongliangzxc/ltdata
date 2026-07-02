@@ -426,15 +426,58 @@ export const deleteMetadata = (id: number) => api.delete(`/metadata/${id}`)
 export const downloadMetadataTemplate = () =>
   api.get('/metadata/template', { responseType: 'blob' })
 
+export type ModelSpecPayload = {
+  spec_name: string
+  spec_value?: string | null
+}
+
+export type ModelItem = {
+  id: number
+  brand_code: string
+  model_code: string
+  category_code?: string | null
+  category_name?: string | null
+  brand_name?: string | null
+  model_name?: string | null
+  launch_year?: number | null
+  launch_month?: number | null
+  launch_week?: number | null
+  launch_price?: number | null
+  url?: string | null
+  status: string
+  operator?: string | null
+  specs: ModelSpecPayload[]
+  aliases: { id: number; alias_code: string }[]
+  created_at?: string
+  updated_at?: string
+}
+
+export type CreateModelPayload = {
+  brand_code: string
+  model_code: string
+  category_code?: string | null
+  brand_name?: string | null
+  model_name?: string | null
+  launch_year?: number | null
+  launch_month?: number | null
+  launch_week?: number | null
+  launch_price?: number | null
+  url?: string | null
+  status?: string
+  operator?: string | null
+  specs?: ModelSpecPayload[]
+}
+
 // ─── Models ────────────────────────────────────────────────
 export const importModels = (formData: FormData) =>
   api.post('/models/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
 export const previewModels = (formData: FormData) =>
   api.post('/models/preview', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
-export const listModels = (params: Record<string, unknown>) => api.get('/models', { params })
-export const getModelDetail = (id: number) => api.get(`/models/${id}`)
-export const createModel = (data: unknown) => api.post('/models', data)
-export const updateModel = (id: number, data: unknown) => api.put(`/models/${id}`, data)
+export const listModels = (params: Record<string, unknown>) =>
+  api.get<PaginatedResponse<ModelItem>>('/models', { params })
+export const getModelDetail = (id: number) => api.get<ModelItem>(`/models/${id}`)
+export const createModel = (data: CreateModelPayload) => api.post<ModelItem>('/models', data)
+export const updateModel = (id: number, data: CreateModelPayload) => api.put<ModelItem>(`/models/${id}`, data)
 export const deleteModel = (id: number) => api.delete(`/models/${id}`)
 export const downloadModelTemplate = () =>
   api.get('/models/template', { responseType: 'blob' })
@@ -963,6 +1006,11 @@ export interface MatchReviewDetail extends MatchResultOut {
 export type ReviewedMatchResultOut = MatchResultOut
 
 // ─── Brands ───────────────────────────────────────────────────────────────────
+export type CreateBrandPayload = {
+  brand_code: string
+  brand_name?: string | null
+}
+
 export type BrandItem = {
   brand_code: string
   brand_name: string | null
@@ -979,6 +1027,9 @@ export type BrandAliasItem = {
 
 export const listBrands = () =>
   api.get<BrandItem[]>('/brands')
+
+export const createBrand = (payload: CreateBrandPayload) =>
+  api.post<BrandItem>('/brands', payload)
 
 export const listBrandAliasesByCode = (brandCode: string) =>
   api.get<BrandAliasItem[]>(`/brands/${brandCode}/aliases`)

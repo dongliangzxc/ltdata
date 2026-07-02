@@ -5,7 +5,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from app.models.database import Base, get_db
-from app.models.schemas import Category
+from app.models.schemas import BrandRecord, Category
 from fastapi import FastAPI
 from app.api.models_api import router
 
@@ -27,9 +27,13 @@ def client():
 
     app.dependency_overrides[get_db] = override_db
     c = TestClient(app)
-    # 预置品类
+    # 预置品类和品牌
     s = Session()
     s.add(Category(code="soundbar", name="回音壁"))
+    s.add_all([
+        BrandRecord(brand_code="SONY", brand_name="索尼"),
+        BrandRecord(brand_code="JBL", brand_name="JBL"),
+    ])
     s.commit()
     s.close()
     return c

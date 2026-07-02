@@ -44,24 +44,26 @@ def test_model_alias_orm_exists(db):
     assert result[0].alias_code == "HTA7000"
 
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from app.main import app
+from app.api.models_api import router
 from app.models.database import get_db
-from app.core.security import create_access_token
-
-_AUTH_HEADERS = {"Authorization": f"Bearer {create_access_token('test')}"}
 
 
-def _override_db(session):
+def _make_client(session):
+    app = FastAPI()
+    app.include_router(router)
+
     def _get():
         yield session
-    return _get
+
+    app.dependency_overrides[get_db] = _get
+    return TestClient(app)
 
 
 def test_add_and_list_aliases(db):
     """POST /api/models/{id}/aliases 新增别名，GET 返回列表。"""
-    app.dependency_overrides[get_db] = _override_db(db)
-    client = TestClient(app, headers=_AUTH_HEADERS)
+    client = _make_client(db)
 
     m = ModelRecord(brand_code="SONY", model_code="HT-X9000F",
                     brand_name="索尼")
@@ -80,13 +82,10 @@ def test_add_and_list_aliases(db):
     assert len(items) == 1
     assert items[0]["alias_code"] == "HTX9000F"
 
-    app.dependency_overrides.clear()
-
 
 def test_delete_alias(db):
     """DELETE /api/models/{id}/aliases/{alias_id} 删除别名。"""
-    app.dependency_overrides[get_db] = _override_db(db)
-    client = TestClient(app, headers=_AUTH_HEADERS)
+    client = _make_client(db)
 
     m = ModelRecord(brand_code="SONY", model_code="HT-S400",
                     brand_name="索尼")
@@ -101,8 +100,6 @@ def test_delete_alias(db):
 
     remaining = db.query(ModelAlias).filter(ModelAlias.model_id == m.id).all()
     assert len(remaining) == 0
-
-    app.dependency_overrides.clear()
 
 
 import io
@@ -128,8 +125,7 @@ def _make_excel_with_alias() -> bytes:
 
 def test_import_aliases_from_excel(db):
     """Excel「别名」sheet 中的别名在导入后写入 model_aliases 表。"""
-    app.dependency_overrides[get_db] = _override_db(db)
-    client = TestClient(app, headers=_AUTH_HEADERS)
+    client = _make_client(db)
 
     content = _make_excel_with_alias()
     res = client.post(
@@ -148,5 +144,3 @@ def test_import_aliases_from_excel(db):
     alias_codes = {a.alias_code for a in aliases}
     assert "HTA3000" in alias_codes
     assert "HT A3000" in alias_codes
-
-    app.dependency_overrides.clear()

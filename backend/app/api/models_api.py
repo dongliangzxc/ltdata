@@ -17,7 +17,7 @@ from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy import func
 from app.models.database import get_db
 from app.models.schemas import (
-    ModelRecord, ModelSpec, ModelAlias,
+    BrandRecord, ModelRecord, ModelSpec, ModelAlias,
     ModelIn, ModelOut, ModelSpecOut, ModelAliasOut,
     PaginatedResponse, Category,
 )
@@ -152,9 +152,9 @@ def models_confirm(
     for i, row in enumerate(df.itertuples(index=False), start=2):
         row_dict = row._asdict()
 
-        brand_code = str(row_dict.get("brand_code") or "").strip()
-        model_code = str(row_dict.get("model_code") or "").strip()
-        if not brand_code or not model_code:
+        brand_code = _normalize_code(row_dict.get("brand_code"))
+        model_code = _normalize_code(row_dict.get("model_code"))
+        if _is_placeholder_code(brand_code) or not model_code:
             errors.append(f"Row {i}: missing brand_code or model_code")
             continue
 
@@ -162,15 +162,16 @@ def models_confirm(
         cat_val = str(row_dict.get("category_code") or "").strip()
         category_code = cat_val if cat_val else payload.category_code
 
+        optional_fields = {
+            k: str(row_dict.get(k) or "").strip() or None
+            for k in ["brand_name", "model_name", "url"]
+        }
         existing = (
             db.query(ModelRecord)
             .filter(ModelRecord.brand_code == brand_code, ModelRecord.model_code == model_code)
             .first()
         )
-        optional_fields = {
-            k: str(row_dict.get(k) or "").strip() or None
-            for k in ["brand_name", "model_name", "url"]
-        }
+        _ensure_import_brand(db, brand_code, optional_fields.get("brand_name"))
         int_fields = {}
         for k in ["launch_year", "launch_month", "launch_week"]:
             v = row_dict.get(k)
@@ -281,6 +282,36 @@ def models_confirm(
         "aliases_inserted": 0,
         "errors": errors,
     }
+
+
+def _normalize_code(value: str | None) -> str:
+    return (value or "").strip()
+
+
+def _normalize_optional_text(value: str | None) -> str | None:
+    cleaned = (value or "").strip()
+    return cleaned or None
+
+
+def _is_placeholder_code(value: str) -> bool:
+    return not value or set(value) == {"-"}
+
+
+def _ensure_import_brand(db: Session, brand_code: str, brand_name: str | None = None) -> None:
+    """Keep batch import compatible by creating missing brand master rows."""
+    normalized_code = _normalize_code(brand_code)
+    if _is_placeholder_code(normalized_code):
+        return
+    existing = db.query(BrandRecord).filter(BrandRecord.brand_code == normalized_code).first()
+    if existing:
+        if not existing.brand_name and brand_name:
+            existing.brand_name = _normalize_optional_text(brand_name)
+        return
+    db.add(BrandRecord(
+        brand_code=normalized_code,
+        brand_name=_normalize_optional_text(brand_name),
+        status="active",
+    ))
 
 
 def _clean_val(v):
@@ -457,7 +488,7 @@ async def import_models(file: UploadFile = File(...), db: Session = Depends(get_
         priority = {"品牌码": "brand_code", "型号码": "model_code"}
         fallback = {"品牌":   "brand_code", "型号":   "model_code"}
         other    = {
-            "品类": "category_code",
+            "品类": "category_code", "品牌名称": "brand_name", "型号名称": "model_name",
             "上市年": "launch_year", "上市月": "launch_month", "上市周": "launch_week",
             "上市价格": "launch_price", "网址": "url",
             "规格名称": "spec_name", "规格值": "spec_value",
@@ -499,12 +530,14 @@ async def import_models(file: UploadFile = File(...), db: Session = Depends(get_
     for _, row in df_model.iterrows():
         bc = _clean_val(row.get("brand_code"))
         mc = _clean_val(row.get("model_code"))
-        if not bc or not mc:
+        brand_code = _normalize_code(str(bc) if bc is not None else None)
+        model_code = _normalize_code(str(mc) if mc is not None else None)
+        if _is_placeholder_code(brand_code) or not model_code:
             continue
 
         vals = {
-            "brand_code":    str(bc),
-            "model_code":    str(mc),
+            "brand_code":    brand_code,
+            "model_code":    model_code,
             "category_code": str(_clean_val(row.get("category_code")) or "") or None,
             "brand_name":    str(_clean_val(row.get("brand_name"))    or bc),
             "model_name":    str(_clean_val(row.get("model_name"))    or mc),
@@ -514,6 +547,8 @@ async def import_models(file: UploadFile = File(...), db: Session = Depends(get_
             "launch_price":  _to_float(_clean_val(row.get("launch_price"))),
             "url":           str(_clean_val(row.get("url")) or "") or None,
         }
+
+        _ensure_import_brand(db, vals["brand_code"], vals["brand_name"])
 
         if dialect_name == "mysql":
             stmt = mysql_insert(ModelRecord).values(**vals)
@@ -687,19 +722,26 @@ def get_model(model_id: int, db: Session = Depends(get_db)):
 
 @router.post("", response_model=ModelOut)
 def create_model(payload: ModelIn, db: Session = Depends(get_db)):
+    brand_code = _normalize_code(payload.brand_code)
+    model_code = _normalize_code(payload.model_code)
+
+    brand = db.query(BrandRecord).filter(BrandRecord.brand_code == brand_code).first()
+    if _is_placeholder_code(brand_code) or not brand:
+        raise HTTPException(status_code=400, detail="请先创建品牌或选择已有品牌")
+
     existing = db.query(ModelRecord).filter(
-        ModelRecord.brand_code == payload.brand_code,
-        ModelRecord.model_code == payload.model_code,
+        ModelRecord.brand_code == brand_code,
+        ModelRecord.model_code == model_code,
     ).first()
     if existing:
         raise HTTPException(status_code=409, detail="该品牌+型号已存在")
 
     obj = ModelRecord(
-        brand_code=payload.brand_code,
-        model_code=payload.model_code,
+        brand_code=brand_code,
+        model_code=model_code,
         category_code=payload.category_code,
-        brand_name=payload.brand_name,
-        model_name=payload.model_name,
+        brand_name=_normalize_optional_text(payload.brand_name) or brand.brand_name,
+        model_name=_normalize_optional_text(payload.model_name),
         launch_year=payload.launch_year,
         launch_month=payload.launch_month,
         launch_week=payload.launch_week,

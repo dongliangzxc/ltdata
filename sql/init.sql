@@ -121,6 +121,18 @@ CREATE TABLE IF NOT EXISTS metadata_specs (
     UNIQUE KEY uq_category_spec (category_code, spec_name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='元数据规格配置';
 
+-- 品牌主数据
+CREATE TABLE IF NOT EXISTS brands (
+    id          INT AUTO_INCREMENT PRIMARY KEY,
+    brand_code  VARCHAR(100) NOT NULL COMMENT '品牌码',
+    brand_name  VARCHAR(200)          COMMENT '品牌名称',
+    status      VARCHAR(20) NOT NULL DEFAULT 'active' COMMENT '状态',
+    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_brands_brand_code (brand_code),
+    KEY ix_brands_brand_code (brand_code)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='品牌主数据';
+
 -- 型号主信息（对应 Excel 模版"型号" sheet）
 -- 唯一键：brand_code + model_code（品类码已移除）
 CREATE TABLE IF NOT EXISTS models (
@@ -139,6 +151,17 @@ CREATE TABLE IF NOT EXISTS models (
     updated_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uq_model (brand_code, model_code)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='型号主信息';
+
+-- 从型号主信息回填品牌主数据
+INSERT IGNORE INTO brands (brand_code, brand_name, status)
+SELECT
+    TRIM(m.brand_code) AS brand_code,
+    MAX(NULLIF(TRIM(m.brand_name), '')) AS brand_name,
+    'active'
+FROM models m
+WHERE m.brand_code IS NOT NULL
+  AND REPLACE(TRIM(m.brand_code), '-', '') <> ''
+GROUP BY TRIM(m.brand_code);
 
 -- 历史确认结果库（线下已确认工作台结果导入）
 CREATE TABLE IF NOT EXISTS historical_mappings (

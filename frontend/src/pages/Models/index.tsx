@@ -13,7 +13,9 @@ import {
   listModelAliases, addModelAlias, deleteModelAlias,
   listCategories, downloadModelTemplate,
 } from '../../services/api'
+import type { ModelItem as ApiModelItem } from '../../services/api'
 import ImportMappingModal from '../../components/ImportMappingModal'
+import CreateModelModal from '../../components/CreateModelModal'
 
 const { Text } = Typography
 
@@ -28,31 +30,14 @@ type ModelAlias = {
   alias_code: string
 }
 
-type ModelItem = {
-  id: number
-  brand_code: string
-  model_code: string
-  category_code?: string | null
-  category_name?: string | null
-  brand_name?: string | null
-  model_name?: string | null
-  launch_year?: number | null
-  launch_month?: number | null
-  launch_week?: number | null
-  launch_price?: number | null
-  url?: string | null
-  status: string
-  operator?: string | null
-  updated_at?: string | null
-  specs: ModelSpec[]
-  aliases: ModelAlias[]
-}
+type ModelItem = ApiModelItem
 
 export default function ModelsPage() {
   const [search, setSearch] = useState<Record<string, string | undefined>>({})
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [modalOpen, setModalOpen] = useState(false)
+  const [createModalOpen, setCreateModalOpen] = useState(false)
   const [editingItem, setEditingItem] = useState<ModelItem | null>(null)
   const [importOpen, setImportOpen] = useState(false)
   const [expandedSpecs, setExpandedSpecs] = useState<Record<number, ModelSpec[]>>({})
@@ -94,12 +79,7 @@ export default function ModelsPage() {
   )
 
   const openCreate = () => {
-    setEditingItem(null)
-    form.resetFields()
-    form.setFieldsValue({ specs: [] })
-    setAliases([])
-    setAliasInput('')
-    setModalOpen(true)
+    setCreateModalOpen(true)
   }
 
   const openEdit = async (item: ModelItem) => {
@@ -343,8 +323,18 @@ export default function ModelsPage() {
         onClose={() => setImportOpen(false)}
       />
 
+      <CreateModelModal
+        open={createModalOpen}
+        categoryOptions={categoryOptions}
+        onCancel={() => setCreateModalOpen(false)}
+        onCreated={() => {
+          setCreateModalOpen(false)
+          refresh()
+        }}
+      />
+
       <Modal
-        title={editingItem ? '编辑型号' : '新增型号'}
+        title="编辑型号"
         open={modalOpen}
         onOk={handleSubmit}
         onCancel={() => setModalOpen(false)}

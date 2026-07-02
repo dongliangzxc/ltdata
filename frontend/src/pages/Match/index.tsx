@@ -4,7 +4,7 @@ import {
   message, Row, Col, Statistic, Tooltip, Progress, Alert, Popconfirm, InputNumber, Tabs,
   List, Descriptions, Empty, Modal,
 } from 'antd'
-import { AimOutlined, CheckOutlined, StopOutlined, CloudUploadOutlined, LoadingOutlined, LinkOutlined, DownloadOutlined } from '@ant-design/icons'
+import { AimOutlined, CheckOutlined, StopOutlined, CloudUploadOutlined, LoadingOutlined, LinkOutlined, DownloadOutlined, PlusOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import { useSearchParams } from 'react-router-dom'
 import {
@@ -16,12 +16,13 @@ import {
   getCleanMonthlyPool, rerunCleanTaskWithCurrentRules,
   listFilteredItems, recoverFilteredItem,
 } from '../../services/api'
-import type { CleanJobItem, MatchCandidateOut, ReviewedMatchResultOut, PriceFlag, MatchReviewDetail, FilteredItemOut } from '../../services/api'
+import type { CleanJobItem, MatchCandidateOut, ReviewedMatchResultOut, PriceFlag, MatchReviewDetail, FilteredItemOut, ModelItem } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 import ProgressModal from '../../components/ProgressModal'
 import AttributeInsightCard from './components/AttributeInsightCard'
 import SameTitleBatchActions from './components/SameTitleBatchActions'
 import InterventionRuleModal from './components/InterventionRuleModal'
+import CreateModelModal from '../../components/CreateModelModal'
 
 const { Text } = Typography
 
@@ -204,6 +205,7 @@ export default function MatchPage() {
   const { data: jobsData, refresh: refreshJobs } = useRequest(() => listCleanJobs().then(r => r.data))
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
   const [modelSearchLoading, setModelSearchLoading] = useState(false)
+  const [createModelOpen, setCreateModelOpen] = useState(false)
   const { options: categoryOptions } = useCategoryOptions()
   const preciseMatchedCount = summary?.precise_matched ?? summary?.url_matched ?? 0
   const otherAutoMatchedCount = summary ? Math.max(summary.matched - Math.max(preciseMatchedCount - (summary.url_matched ?? 0), 0), 0) : 0
@@ -214,10 +216,34 @@ export default function MatchPage() {
     setModelSearchLoading(true)
     try {
       const res = await listModels({ keyword, page: 1, page_size: 50 }).then(r => r.data)
-      setModelOptions(res.items ?? [])
+      setModelOptions((res.items ?? []).map(model => ({
+        id: model.id,
+        brand_code: model.brand_code,
+        model_code: model.model_code,
+        brand_name: model.brand_name ?? null,
+        model_name: model.model_name ?? null,
+      })))
     } finally {
       setModelSearchLoading(false)
     }
+  }
+
+  const handleCreatedModel = (model: ModelItem) => {
+    if (!reviewDetail) return
+    const option: ModelOption = {
+      id: model.id,
+      brand_code: model.brand_code,
+      model_code: model.model_code,
+      brand_name: model.brand_name ?? null,
+      model_name: model.model_name ?? null,
+    }
+    setModelOptions(prev => {
+      const exists = prev.some(item => item.id === model.id)
+      return exists ? prev : [option, ...prev]
+    })
+    setSelectedModels(prev => ({ ...prev, [reviewDetail.id]: model.id }))
+    setCreateModelOpen(false)
+    message.success('型号已创建并选中')
   }
 
   const { data: pendingData, loading: pendingLoading, refresh: refreshPending } = useRequest(
@@ -1287,6 +1313,14 @@ export default function MatchPage() {
                         filterOption={false}
                         onSearch={handleModelSearch}
                         loading={modelSearchLoading}
+                        notFoundContent={(
+                          <Space direction="vertical" style={{ width: '100%', padding: 8 }}>
+                            <Text type="secondary">未找到型号</Text>
+                            <Button type="link" icon={<PlusOutlined />} onClick={() => setCreateModelOpen(true)}>
+                              新建型号
+                            </Button>
+                          </Space>
+                        )}
                         options={modelOptions.map(m => ({
                           value: m.id,
                           label: `[${m.brand_code}] ${m.model_code}${m.model_name ? ' ' + m.model_name : ''}`,
@@ -1294,6 +1328,9 @@ export default function MatchPage() {
                         value={selectedModels[reviewDetail.id]}
                         onChange={v => setSelectedModels(prev => ({ ...prev, [reviewDetail.id]: v }))}
                       />
+                      <Button icon={<PlusOutlined />} onClick={() => setCreateModelOpen(true)}>
+                        新建型号
+                      </Button>
                       <Input.TextArea
                         rows={3}
                         placeholder="排除或暂存争议时填写原因"
@@ -1433,6 +1470,16 @@ export default function MatchPage() {
         detail={reviewDetail}
         onClose={() => setInterventionModalOpen(false)}
         onRulesChanged={() => {}}
+      />
+
+      <CreateModelModal
+        open={createModelOpen}
+        onCancel={() => setCreateModelOpen(false)}
+        onCreated={handleCreatedModel}
+        defaultCategoryCode={reviewDetail?.category_code ?? null}
+        defaultCategoryName={reviewDetail?.category_name ?? null}
+        metadataSpecs={reviewDetail?.metadata_specs ?? []}
+        brandSuggestion={reviewDetail?.brand_raw ?? null}
       />
 
       <ProgressModal

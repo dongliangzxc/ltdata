@@ -1249,24 +1249,6 @@ export default function MatchPage() {
                   <Empty description="请选择左侧复核商品" />
                 ) : (
                   <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                    <Descriptions size="small" column={2} bordered>
-                      <Descriptions.Item label="商品名称" span={2}>{reviewDetail.item_name || '-'}</Descriptions.Item>
-                      <Descriptions.Item label="原品牌">{reviewDetail.brand_raw || '-'}</Descriptions.Item>
-                      <Descriptions.Item label="店铺">{reviewDetail.shop_name || '-'}</Descriptions.Item>
-                      <Descriptions.Item label="价格">{reviewDetail.price != null ? `¥${reviewDetail.price}` : '-'}</Descriptions.Item>
-                      <Descriptions.Item label="销量">{formatNumber(reviewDetail.sales_qty)}</Descriptions.Item>
-                      <Descriptions.Item label="当前状态">{renderMatchStatus(reviewDetail.match_status)}</Descriptions.Item>
-                      <Descriptions.Item label="系统来源">{renderMatchSource(reviewDetail.match_source)}</Descriptions.Item>
-                      <Descriptions.Item label="当前型号">
-                        {hasDisplayModel(reviewDetail.brand_code, reviewDetail.model_code)
-                          ? <Text code>[{reviewDetail.brand_code}] {reviewDetail.model_code}</Text>
-                          : '-'}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="URL线索" span={2}>
-                        {reviewDetail.url_mapping ? <Tag color="blue">URL映射库已有记录</Tag> : <Text type="secondary">暂无URL映射记录</Text>}
-                      </Descriptions.Item>
-                    </Descriptions>
-
                     <Card size="small" title="候选型号" bodyStyle={{ padding: 8 }}>
                       {(reviewDetail.candidates ?? []).length === 0 ? <Text type="secondary">暂无候选型号</Text> : (
                         <List
@@ -1360,6 +1342,24 @@ export default function MatchPage() {
                         >暂存争议</Button>
                       </Space>
                     </Space>
+
+                    <Descriptions size="small" column={2} bordered>
+                      <Descriptions.Item label="商品名称" span={2}>{reviewDetail.item_name || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="原品牌">{reviewDetail.brand_raw || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="店铺">{reviewDetail.shop_name || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="价格">{reviewDetail.price != null ? `¥${reviewDetail.price}` : '-'}</Descriptions.Item>
+                      <Descriptions.Item label="销量">{formatNumber(reviewDetail.sales_qty)}</Descriptions.Item>
+                      <Descriptions.Item label="当前状态">{renderMatchStatus(reviewDetail.match_status)}</Descriptions.Item>
+                      <Descriptions.Item label="系统来源">{renderMatchSource(reviewDetail.match_source)}</Descriptions.Item>
+                      <Descriptions.Item label="当前型号">
+                        {hasDisplayModel(reviewDetail.brand_code, reviewDetail.model_code)
+                          ? <Text code>[{reviewDetail.brand_code}] {reviewDetail.model_code}</Text>
+                          : '-'}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="URL线索" span={2}>
+                        {reviewDetail.url_mapping ? <Tag color="blue">URL映射库已有记录</Tag> : <Text type="secondary">暂无URL映射记录</Text>}
+                      </Descriptions.Item>
+                    </Descriptions>
                   </Space>
                 )}
               </Card>

@@ -1249,36 +1249,6 @@ export default function MatchPage() {
                   <Empty description="请选择左侧复核商品" />
                 ) : (
                   <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                    <Card size="small" title="候选型号" bodyStyle={{ padding: 8 }}>
-                      {(reviewDetail.candidates ?? []).length === 0 ? <Text type="secondary">暂无候选型号</Text> : (
-                        <List
-                          size="small"
-                          dataSource={reviewDetail.candidates}
-                          renderItem={(candidate: MatchCandidateOut) => (
-                            <List.Item
-                              actions={[
-                                <Button
-                                  size="small"
-                                  type={candidate.rank === 1 ? 'primary' : 'default'}
-                                  loading={confirmingIds.has(reviewDetail.id)}
-                                  onClick={() => handleSelectCandidate(reviewDetail.id, candidate.model_id)}
-                                >选用</Button>,
-                              ]}
-                            >
-                              <Space>
-                                <Tag color={candidate.rank === 1 ? 'blue' : 'default'}>#{candidate.rank}</Tag>
-                                <Text code>[{candidate.brand_code ?? '-'}] {candidate.model_code ?? '-'}</Text>
-                                {renderMatchSource(candidate.match_source)}
-                                <Text type="secondary">分数 {candidate.score}</Text>
-                              </Space>
-                            </List.Item>
-                          )}
-                        />
-                      )}
-                    </Card>
-
-                    <AttributeInsightCard detail={reviewDetail} />
-
                     <SameTitleBatchActions
                       detail={reviewDetail}
                       selectedModelId={selectedModels[reviewDetail.id]}
@@ -1342,6 +1312,36 @@ export default function MatchPage() {
                         >暂存争议</Button>
                       </Space>
                     </Space>
+
+                    <Card size="small" title="候选型号" bodyStyle={{ padding: 8 }}>
+                      {(reviewDetail.candidates ?? []).length === 0 ? <Text type="secondary">暂无候选型号</Text> : (
+                        <List
+                          size="small"
+                          dataSource={reviewDetail.candidates}
+                          renderItem={(candidate: MatchCandidateOut) => (
+                            <List.Item
+                              actions={[
+                                <Button
+                                  size="small"
+                                  type={candidate.rank === 1 ? 'primary' : 'default'}
+                                  loading={confirmingIds.has(reviewDetail.id)}
+                                  onClick={() => handleSelectCandidate(reviewDetail.id, candidate.model_id)}
+                                >选用</Button>,
+                              ]}
+                            >
+                              <Space>
+                                <Tag color={candidate.rank === 1 ? 'blue' : 'default'}>#{candidate.rank}</Tag>
+                                <Text code>[{candidate.brand_code ?? '-'}] {candidate.model_code ?? '-'}</Text>
+                                {renderMatchSource(candidate.match_source)}
+                                <Text type="secondary">分数 {candidate.score}</Text>
+                              </Space>
+                            </List.Item>
+                          )}
+                        />
+                      )}
+                    </Card>
+
+                    <AttributeInsightCard detail={reviewDetail} />
 
                     <Descriptions size="small" column={2} bordered>
                       <Descriptions.Item label="商品名称" span={2}>{reviewDetail.item_name || '-'}</Descriptions.Item>

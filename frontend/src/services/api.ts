@@ -379,10 +379,11 @@ export const getDispatchBatchStats = (batchId: number) =>
 export const listDispatchUnmatched = (batchId: number, params?: { page?: number; page_size?: number; keyword?: string }) =>
   api.get<DispatchUnmatchedResponse>(`/dispatch/batches/${batchId}/unmatched`, { params })
 
-export const createDispatchExportJob = (params: { category_code?: string; platform?: string | null }) =>
+export const createDispatchExportJob = (params: { category_code?: string; platform?: string | null; month?: number }) =>
   api.post('/dispatch/export', {
     ...(params.category_code ? { category_code: params.category_code } : {}),
     ...(params.platform ? { platform: params.platform } : {}),
+    ...(params.month ? { month: params.month } : {}),
   })
 
 export const getDispatchExportJob = (jobId: number) =>

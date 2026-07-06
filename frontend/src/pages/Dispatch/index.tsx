@@ -448,6 +448,7 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
 function DispatchExportTab() {
   const [categoryCode, setCategoryCode] = useState<string | undefined>()
   const [platform, setPlatform] = useState<string | undefined>()
+  const [month, setMonth] = useState<number | undefined>()
   const [exporting, setExporting] = useState(false)
   const [exportProgress, setExportProgress] = useState(0)
   const [exportError, setExportError] = useState('')
@@ -466,8 +467,8 @@ function DispatchExportTab() {
 
   const handleExport = async () => {
     if (exportPollRef.current) return
-    if (!categoryCode && !platform) {
-      message.warning('请至少选择品类或平台后再下载')
+    if (!categoryCode && !platform && !month) {
+      message.warning('请至少选择品类、平台或月份后再下载')
       return
     }
     setExporting(true)
@@ -475,7 +476,7 @@ function DispatchExportTab() {
     setExportError('')
     setProgressVisible(true)
     try {
-      const res = await createDispatchExportJob({ category_code: categoryCode, platform })
+      const res = await createDispatchExportJob({ category_code: categoryCode, platform, month: month })
       const { job_id } = res.data as { job_id: number }
       let pollFailCount = 0
       exportPollRef.current = setInterval(async () => {
@@ -544,12 +545,20 @@ function DispatchExportTab() {
           value={platform}
           onChange={value => setPlatform(value || undefined)}
         />
+        <InputNumber
+          min={100001}
+          max={999912}
+          placeholder="选择月份"
+          style={{ width: 160 }}
+          value={month}
+          onChange={value => setMonth(value == null ? undefined : Number(value))}
+        />
         <Button type="primary" icon={<DownloadOutlined />} loading={exporting} onClick={handleExport}>
           创建导出任务
         </Button>
       </Space>
       <Text type="secondary" style={{ display: 'block', marginTop: 12 }}>
-        至少选择品类或平台后再导出；如导出范围内包含多个上传模板，会按模板分 Sheet。
+        至少选择品类、平台或月份后再导出；月份按原始数据月份 YYYYMM 筛选；如导出范围内包含多个上传模板，会按模板分 Sheet。
       </Text>
       <ProgressModal
         visible={progressVisible}

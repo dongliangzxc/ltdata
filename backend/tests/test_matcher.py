@@ -9,6 +9,7 @@ matcher.py 单元测试
 from app.models.schemas import (
     UploadFileRecord, RawDataRecord, CleanJobRecord, CleanedDataRecord,
     ModelRecord, ModelAlias, MatchResult, MatchRule, ItemUrlMapping,
+    MatchResultCandidate,
 )
 from app.services.matcher import run_match
 
@@ -120,6 +121,45 @@ def test_model_code_in_item_name_should_match(db):
     assert result.match_status == "matched"
     assert result.match_source == "s1"
     assert result.model_id is not None
+
+
+def test_candidates_are_limited_to_clean_job_category(db):
+    """候选型号只应来自当前清洗任务品类，避免跨品类同码误候选。"""
+    in_category = _seed(
+        db,
+        brand_code="HKMW",
+        model_code="SJCAM",
+        brand_name="HKMW",
+        category_name="action_cameras",
+    )
+    other_category = _seed(
+        db,
+        brand_code="HKMW",
+        model_code="LOCK-X1",
+        brand_name="HKMW",
+        model_name="SJCAM",
+        category_name="smart_locks",
+    )
+
+    item_name = "HKMW索尼机（SOYN）同款SJCAM速影运动相机"
+    clean_job_id = _seed_clean_row(db, brand_raw="HKMW", item_name=item_name)
+    job = db.query(CleanJobRecord).filter(CleanJobRecord.id == clean_job_id).first()
+    job.category_code = "action_cameras"
+    db.commit()
+
+    run_match(db, clean_job_id)
+
+    result = db.query(MatchResult).filter(MatchResult.clean_job_id == clean_job_id).first()
+    assert result.model_id == in_category.id
+
+    candidate_model_ids = {
+        candidate.model_id
+        for candidate in db.query(MatchResultCandidate)
+        .filter(MatchResultCandidate.match_result_id == result.id)
+        .all()
+    }
+    assert in_category.id in candidate_model_ids
+    assert other_category.id not in candidate_model_ids
 
 
 def test_s4_fires_when_no_brand_identified(db):

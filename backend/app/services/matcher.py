@@ -49,7 +49,7 @@ brand_identified 标记：S1/S2/S3 任意阶段识别到品牌即置 1，即使�
 import logging
 
 from sqlalchemy.orm import Session
-from app.models.schemas import CleanedDataRecord, ModelRecord, ModelAlias, MatchResult, MatchResultAttr, MatchResultCandidate, ItemUrlMapping, MatchRule, HistoricalMapping
+from app.models.schemas import CleanedDataRecord, ModelRecord, ModelAlias, MatchResult, MatchResultAttr, MatchResultCandidate, ItemUrlMapping, MatchRule, HistoricalMapping, CleanJobRecord
 from app.utils.url_utils import extract_item_id
 from app.services.attribute_matcher import run_attribute_matching
 from app.services.price_auditor import audit_price
@@ -163,10 +163,18 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
         synchronize_session=False
     )
 
+    clean_job = db.query(CleanJobRecord).filter(CleanJobRecord.id == clean_job_id).first()
+    job_category_code = None
+    if clean_job:
+        job_category_code = clean_job.category_code or clean_job.dispatch_category_code
+
     # ── S0: 预加载 URL 映射表 ─────────────────────────────────────
     url_map: dict[tuple[str, str], int] = {}        # model_id 已知的条目
     url_brand_map: dict[tuple[str, str], str] = {}  # 品牌已知但 model_id=NULL 的条目
-    model_rows = db.query(ModelRecord).all()
+    model_query = db.query(ModelRecord)
+    if job_category_code:
+        model_query = model_query.filter(ModelRecord.category_code == job_category_code)
+    model_rows = model_query.all()
     valid_model_ids = {m.id for m in model_rows if _is_valid_model(m)}
 
     for um in db.query(ItemUrlMapping).all():

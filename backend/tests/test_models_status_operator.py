@@ -4,13 +4,13 @@ import io
 import openpyxl
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from app.models.database import Base, get_db
 from fastapi import FastAPI
 from app.api.models_api import router
-from app.models.schemas import BrandRecord
+from app.models.schemas import BrandRecord, HistoricalMapping, ItemUrlMapping, ModelRecord
 
 
 @pytest.fixture
@@ -20,6 +20,11 @@ def client_and_session():
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
+
+    @event.listens_for(engine, "connect")
+    def set_pragma(conn, _):
+        conn.execute("PRAGMA foreign_keys=ON")
+
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
 
@@ -34,7 +39,7 @@ def client_and_session():
             s.close()
 
     app.dependency_overrides[get_db] = override_db
-    return TestClient(app), Session
+    return TestClient(app, raise_server_exceptions=False), Session
 
 
 @pytest.fixture
@@ -200,3 +205,47 @@ def test_create_model_snapshots_brand_name_from_brand(client_and_session):
     data = r.json()
     assert data["brand_code"] == "DJI"
     assert data["brand_name"] == "大疆"
+
+
+def test_delete_model_preserves_mappings_and_clears_model_reference(client_and_session):
+    client, Session = client_and_session
+    with Session() as db:
+        db.add(BrandRecord(brand_code="SONY", brand_name="索尼"))
+        db.commit()
+
+    create_r = client.post("/api/models", json={"brand_code": "SONY", "model_code": "XM5"})
+    model_id = create_r.json()["id"]
+
+    with Session() as db:
+        db.add_all([
+            HistoricalMapping(
+                platform="jd",
+                item_id="10001",
+                item_url="https://example.com/item/10001",
+                item_name="索尼耳机",
+                item_name_norm="索尼耳机",
+                year=2026,
+                month_num=6,
+                month="2026-06",
+                model_id=model_id,
+                match_key_type="item_id",
+                raw_payload={},
+            ),
+            ItemUrlMapping(
+                platform="jd",
+                item_id="10001",
+                item_url="https://example.com/item/10001",
+                model_id=model_id,
+            ),
+        ])
+        db.commit()
+
+    r = client.delete(f"/api/models/{model_id}")
+
+    assert r.status_code == 200
+    with Session() as db:
+        assert db.query(ModelRecord).filter_by(id=model_id).first() is None
+        historical = db.query(HistoricalMapping).filter_by(item_id="10001").one()
+        url_mapping = db.query(ItemUrlMapping).filter_by(item_id="10001").one()
+        assert historical.model_id is None
+        assert url_mapping.model_id is None

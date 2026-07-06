@@ -17,7 +17,12 @@ from app.api.brands_api import router as brands_router
 
 # 不需要鉴权的路径（精确匹配或前缀匹配）
 _SKIP_AUTH = {"/api/auth/login", "/health"}
-_SKIP_AUTH_PREFIXES = ("/api/export/download/", "/api/workbench/download/", "/api/analytics/download/")
+_SKIP_AUTH_PREFIXES = (
+    "/api/export/download/",
+    "/api/workbench/download/",
+    "/api/analytics/download/",
+    "/api/dispatch/export/download/",
+)
 
 
 @asynccontextmanager

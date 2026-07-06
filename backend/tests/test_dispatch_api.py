@@ -891,6 +891,44 @@ def test_create_dispatch_export_job_rejects_when_exports_are_busy(client_and_db)
     assert response.json()["detail"] == "当前导出任务较多，请稍后再试"
 
 
+def test_list_dispatch_export_jobs_includes_filters_and_download_url(client_and_db):
+    client, db = client_and_db
+    older_job = WorkbenchExportJob(
+        status="running",
+        progress=35,
+        category_code="camera",
+        platform="jd",
+        month=202605,
+    )
+    done_job = WorkbenchExportJob(
+        status="done",
+        progress=100,
+        category_code="headphone",
+        platform="tmall",
+        month=202606,
+        file_token="download-token",
+        filename="分发结果_耳机_天猫_202606.xlsx",
+    )
+    db.add_all([older_job, done_job])
+    db.commit()
+
+    response = client.get("/api/dispatch/export/jobs")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 2
+    assert [item["job_id"] for item in payload["items"]] == [done_job.id, older_job.id]
+    latest = payload["items"][0]
+    assert latest["status"] == "done"
+    assert latest["progress"] == 100
+    assert latest["category_code"] == "headphone"
+    assert latest["platform"] == "tmall"
+    assert latest["month"] == 202606
+    assert latest["filename"] == "分发结果_耳机_天猫_202606.xlsx"
+    assert latest["download_url"] == "/api/dispatch/export/download/download-token"
+    assert latest["created_at"]
+
+
 def test_dispatch_export_job_uses_latest_done_batch_per_file(client_and_db):
     client, db = client_and_db
     template = ColumnTemplate(name="下载模板", module="sales", mapping={"商品ID": "item_id"}, ignore_columns=[])

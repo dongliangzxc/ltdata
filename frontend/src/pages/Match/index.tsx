@@ -215,7 +215,12 @@ export default function MatchPage() {
     if (!keyword.trim()) return
     setModelSearchLoading(true)
     try {
-      const res = await listModels({ keyword, page: 1, page_size: 50 }).then(r => r.data)
+      const res = await listModels({
+        keyword,
+        page: 1,
+        page_size: 50,
+        category_code: reviewDetail?.category_code || undefined,
+      }).then(r => r.data)
       setModelOptions((res.items ?? []).map(model => ({
         id: model.id,
         brand_code: model.brand_code,

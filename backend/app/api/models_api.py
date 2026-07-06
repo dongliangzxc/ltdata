@@ -18,6 +18,7 @@ from sqlalchemy import func
 from app.models.database import get_db
 from app.models.schemas import (
     BrandRecord, ModelRecord, ModelSpec, ModelAlias,
+    HistoricalMapping, ItemUrlMapping, MatchRule,
     ModelIn, ModelOut, ModelSpecOut, ModelAliasOut,
     PaginatedResponse, Category,
 )
@@ -800,6 +801,17 @@ def delete_model(model_id: int, db: Session = Depends(get_db)):
     obj = db.query(ModelRecord).filter(ModelRecord.id == model_id).first()
     if not obj:
         raise HTTPException(status_code=404, detail="型号不存在")
+    if db.query(MatchRule).filter(MatchRule.model_id == model_id).first():
+        raise HTTPException(status_code=409, detail="该型号仍被匹配规则引用，请先删除或调整规则")
+
+    db.query(HistoricalMapping).filter(HistoricalMapping.model_id == model_id).update(
+        {HistoricalMapping.model_id: None},
+        synchronize_session=False,
+    )
+    db.query(ItemUrlMapping).filter(ItemUrlMapping.model_id == model_id).update(
+        {ItemUrlMapping.model_id: None},
+        synchronize_session=False,
+    )
     db.delete(obj)
     db.commit()
     return {"message": "已删除"}

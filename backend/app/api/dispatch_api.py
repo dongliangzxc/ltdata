@@ -776,7 +776,13 @@ def create_dispatch_export_job(payload: DispatchExportParams, db: Session = Depe
         raise HTTPException(status_code=400, detail="请选择品类、平台或月份后再导出")
 
     with reserve_async_export_capacity(db):
-        job = WorkbenchExportJob(status="pending", progress=0)
+        job = WorkbenchExportJob(
+            status="pending",
+            progress=0,
+            category_code=category_code,
+            platform=platform,
+            month=month,
+        )
         db.add(job)
         db.commit()
         db.refresh(job)
@@ -790,12 +796,8 @@ def create_dispatch_export_job(payload: DispatchExportParams, db: Session = Depe
     return {"job_id": job.id, "status": "pending"}
 
 
-@router.get("/export/jobs/{job_id}")
-def get_dispatch_export_job(job_id: int, db: Session = Depends(get_db)):
-    job = db.query(WorkbenchExportJob).filter(WorkbenchExportJob.id == job_id).first()
-    if not job:
-        raise HTTPException(status_code=404, detail="导出任务不存在")
-    progress = _dispatch_export_progress.get(job_id, job.progress)
+def _dispatch_export_job_out(job: WorkbenchExportJob) -> dict:
+    progress = _dispatch_export_progress.get(job.id, job.progress)
     download_url = (
         f"/api/dispatch/export/download/{job.file_token}"
         if job.status == "done" and job.file_token
@@ -805,9 +807,40 @@ def get_dispatch_export_job(job_id: int, db: Session = Depends(get_db)):
         "job_id": job.id,
         "status": job.status,
         "progress": progress,
+        "category_code": job.category_code,
+        "platform": job.platform,
+        "month": job.month,
+        "filename": job.filename,
         "download_url": download_url,
         "error_msg": job.error_msg,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "finished_at": job.finished_at.isoformat() if job.finished_at else None,
     }
+
+
+@router.get("/export/jobs")
+def list_dispatch_export_jobs(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    query = db.query(WorkbenchExportJob)
+    total = query.count()
+    jobs = (
+        query.order_by(WorkbenchExportJob.created_at.desc(), WorkbenchExportJob.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return {"total": total, "items": [_dispatch_export_job_out(job) for job in jobs]}
+
+
+@router.get("/export/jobs/{job_id}")
+def get_dispatch_export_job(job_id: int, db: Session = Depends(get_db)):
+    job = db.query(WorkbenchExportJob).filter(WorkbenchExportJob.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="导出任务不存在")
+    return _dispatch_export_job_out(job)
 
 
 @router.get("/export/download/{token}")

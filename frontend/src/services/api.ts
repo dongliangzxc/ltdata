@@ -379,6 +379,25 @@ export const getDispatchBatchStats = (batchId: number) =>
 export const listDispatchUnmatched = (batchId: number, params?: { page?: number; page_size?: number; keyword?: string }) =>
   api.get<DispatchUnmatchedResponse>(`/dispatch/batches/${batchId}/unmatched`, { params })
 
+export interface DispatchExportJob {
+  job_id: number
+  status: 'pending' | 'running' | 'done' | 'error'
+  progress: number
+  category_code: string | null
+  platform: string | null
+  month: number | null
+  filename: string | null
+  download_url: string | null
+  error_msg: string | null
+  created_at: string | null
+  finished_at: string | null
+}
+
+export interface DispatchExportJobsResponse {
+  total: number
+  items: DispatchExportJob[]
+}
+
 export const createDispatchExportJob = (params: { category_code?: string; platform?: string | null; month?: number }) =>
   api.post('/dispatch/export', {
     ...(params.category_code ? { category_code: params.category_code } : {}),
@@ -386,8 +405,11 @@ export const createDispatchExportJob = (params: { category_code?: string; platfo
     ...(params.month ? { month: params.month } : {}),
   })
 
+export const listDispatchExportJobs = (params?: { page?: number; page_size?: number }) =>
+  api.get<DispatchExportJobsResponse>('/dispatch/export/jobs', { params })
+
 export const getDispatchExportJob = (jobId: number) =>
-  api.get(`/dispatch/export/jobs/${jobId}`)
+  api.get<DispatchExportJob>(`/dispatch/export/jobs/${jobId}`)
 
 export const listDispatchRules = (params?: Record<string, unknown>) =>
   api.get('/dispatch/rules', { params })

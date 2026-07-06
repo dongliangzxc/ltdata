@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   Tabs, Table, Button, Tag, Space, Modal, Form, Select,
   Input, InputNumber, Switch, message, Descriptions, Typography,
-  Alert, Drawer, DatePicker
+  Alert, Drawer, DatePicker, Progress
 } from 'antd'
 import {
   PlayCircleOutlined, PlusOutlined, EditOutlined, DeleteOutlined, DownloadOutlined
@@ -13,12 +13,11 @@ import {
   listUploadFiles, listDispatchBatches, runDispatch,
   getDispatchBatchStats, listDispatchUnmatched, listDispatchRules,
   createDispatchRule, updateDispatchRule, deleteDispatchRule,
-  createDispatchExportJob, getDispatchExportJob,
+  createDispatchExportJob, listDispatchExportJobs,
   type DispatchBatchStatsResponse, type DispatchCategoryStat, type DispatchRuleStat,
-  type DispatchUnmatchedRow
+  type DispatchExportJob, type DispatchUnmatchedRow
 } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
-import ProgressModal from '../../components/ProgressModal'
 
 const { Text } = Typography
 
@@ -451,71 +450,91 @@ function DispatchExportTab() {
   const [platform, setPlatform] = useState<string | undefined>()
   const [month, setMonth] = useState<number | undefined>()
   const [exporting, setExporting] = useState(false)
-  const [exportProgress, setExportProgress] = useState(0)
-  const [exportError, setExportError] = useState('')
-  const [progressVisible, setProgressVisible] = useState(false)
-  const exportPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const { options: categoryOptions } = useCategoryOptions()
-
-  const stopExportPoll = () => {
-    if (exportPollRef.current) {
-      clearInterval(exportPollRef.current)
-      exportPollRef.current = null
-    }
-  }
-
-  useEffect(() => () => stopExportPoll(), [])
+  const { data: exportJobsData, loading: exportJobsLoading, refresh: refreshExportJobs } = useRequest(
+    () => listDispatchExportJobs({ page: 1, page_size: 50 }),
+    { pollingInterval: 2000 }
+  )
+  const exportJobs = exportJobsData?.data.items ?? []
 
   const handleExport = async () => {
-    if (exportPollRef.current) return
     if (!categoryCode && !platform && !month) {
-      message.warning('请至少选择品类、平台或月份后再下载')
+      message.warning('请至少选择品类、平台或月份后再创建导出任务')
       return
     }
     setExporting(true)
-    setExportProgress(0)
-    setExportError('')
-    setProgressVisible(true)
     try {
-      const res = await createDispatchExportJob({ category_code: categoryCode, platform, month: month })
-      const { job_id } = res.data as { job_id: number }
-      let pollFailCount = 0
-      exportPollRef.current = setInterval(async () => {
-        try {
-          const jobRes = await getDispatchExportJob(job_id)
-          const { status, progress, download_url, error_msg } = jobRes.data
-          pollFailCount = 0
-          setExportProgress(progress ?? 0)
-          if (status === 'done' && download_url) {
-            stopExportPoll()
-            setExportProgress(100)
-            setTimeout(() => {
-              setProgressVisible(false)
-              setExporting(false)
-              const link = document.createElement('a')
-              link.href = download_url
-              link.click()
-              message.success('下载已开始')
-            }, 500)
-          } else if (status === 'error') {
-            stopExportPoll()
-            setExportError(error_msg || '导出失败，请重试')
-            setExporting(false)
-          }
-        } catch {
-          pollFailCount += 1
-          if (pollFailCount >= 10) {
-            stopExportPoll()
-            setExportError('网络异常，请刷新后重试')
-            setExporting(false)
-          }
-        }
-      }, 1000)
-    } catch (error: any) {
-      setExportError(error?.response?.data?.detail || '创建导出任务失败')
+      await createDispatchExportJob({ category_code: categoryCode, platform, month })
+      message.success('导出任务已创建，可在列表查看进度')
+      refreshExportJobs()
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || '创建导出任务失败')
+    } finally {
       setExporting(false)
     }
   }
+
+  const statusMeta: Record<DispatchExportJob['status'], { label: string; color: string }> = {
+    pending: { label: '等待中', color: 'default' },
+    running: { label: '导出中', color: 'processing' },
+    done: { label: '已完成', color: 'success' },
+    error: { label: '失败', color: 'error' },
+  }
+
+  const exportJobColumns = [
+    { title: '任务ID', dataIndex: 'job_id', width: 90 },
+    {
+      title: '月份', dataIndex: 'month', width: 110,
+      render: (value: number | null) => value ? `${String(value).slice(0, 4)}-${String(value).slice(4)}` : <Text type="secondary">不限</Text>
+    },
+    {
+      title: '品类', dataIndex: 'category_code', width: 150,
+      render: (value: string | null) => value ? (categoryOptions.find(option => option.value === value)?.label ?? value) : <Text type="secondary">不限</Text>
+    },
+    {
+      title: '平台', dataIndex: 'platform', width: 100,
+      render: (value: string | null) => value ? <Tag color="blue">{formatPlatform(value)}</Tag> : <Text type="secondary">不限</Text>
+    },
+    {
+      title: '状态', dataIndex: 'status', width: 100,
+      render: (value: DispatchExportJob['status']) => {
+        const meta = statusMeta[value] ?? { label: value, color: 'default' }
+        return <Tag color={meta.color}>{meta.label}</Tag>
+      }
+    },
+    {
+      title: '进度', dataIndex: 'progress', width: 180,
+      render: (value: number, row: DispatchExportJob) => (
+        <Progress percent={value ?? 0} size="small" status={row.status === 'error' ? 'exception' : row.status === 'done' ? 'success' : 'active'} />
+      )
+    },
+    {
+      title: '创建时间', dataIndex: 'created_at', width: 170,
+      render: (value: string | null) => value ? dayjs(value).format('YYYY-MM-DD HH:mm:ss') : '-'
+    },
+    {
+      title: '完成时间', dataIndex: 'finished_at', width: 170,
+      render: (value: string | null) => value ? dayjs(value).format('YYYY-MM-DD HH:mm:ss') : '-'
+    },
+    {
+      title: '文件名', dataIndex: 'filename', ellipsis: true,
+      render: (value: string | null) => value || <Text type="secondary">生成中</Text>
+    },
+    {
+      title: '操作', key: 'action', width: 150, fixed: 'right' as const,
+      render: (_: unknown, row: DispatchExportJob) => (
+        <Space>
+          <Button size="small" onClick={refreshExportJobs}>刷新</Button>
+          {row.status === 'done' && row.download_url && (
+            <Button size="small" type="link" icon={<DownloadOutlined />} href={row.download_url}>下载</Button>
+          )}
+          {row.status === 'error' && row.error_msg && (
+            <Button size="small" type="link" danger onClick={() => Modal.error({ title: '导出失败', content: row.error_msg })}>原因</Button>
+          )}
+        </Space>
+      )
+    },
+  ]
 
   return (
     <>
@@ -541,35 +560,47 @@ function DispatchExportTab() {
           optionFilterProp="label"
           placeholder="选择品类"
           style={{ width: 220 }}
-          options={categoryOptions}
           value={categoryCode}
-          onChange={value => setCategoryCode(value || undefined)}
+          onChange={setCategoryCode}
+          options={categoryOptions}
         />
         <Select
           allowClear
-          showSearch
-          optionFilterProp="label"
           placeholder="选择平台"
           style={{ width: 160 }}
-          options={PLATFORM_OPTIONS}
           value={platform}
-          onChange={value => setPlatform(value || undefined)}
+          onChange={setPlatform}
+          options={PLATFORM_OPTIONS}
         />
-        <Button type="primary" icon={<DownloadOutlined />} loading={exporting} onClick={handleExport}>
+        <Button
+          type="primary"
+          icon={<DownloadOutlined />}
+          loading={exporting}
+          onClick={handleExport}
+        >
           创建导出任务
         </Button>
       </Space>
       <Text type="secondary" style={{ display: 'block', marginTop: 12 }}>
         至少选择品类、平台或月份后再导出；月份按原始数据月份 YYYYMM 筛选；如导出范围内包含多个上传模板，会按模板分 Sheet。
       </Text>
-      <ProgressModal
-        visible={progressVisible}
-        title="分发结果导出中"
-        progress={exportProgress}
-        errorMsg={exportError}
-        stageLabel={exportError ? '导出失败' : '正在生成 Excel 文件'}
-        onClose={exportError ? () => setProgressVisible(false) : undefined}
-      />
+      <div style={{ marginTop: 24 }}>
+        <Space style={{ width: '100%', justifyContent: 'space-between', marginBottom: 12 }}>
+          <Text strong>导出任务列表</Text>
+          <Button onClick={refreshExportJobs} loading={exportJobsLoading}>刷新列表</Button>
+        </Space>
+        <Table
+          rowKey="job_id"
+          size="small"
+          bordered
+          loading={exportJobsLoading}
+          columns={exportJobColumns}
+          dataSource={exportJobs}
+          pagination={false}
+          scroll={{ x: 1320 }}
+          locale={{ emptyText: '暂无导出任务' }}
+        />
+      </div>
     </>
   )
 }

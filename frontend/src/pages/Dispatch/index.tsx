@@ -474,8 +474,8 @@ function DispatchExportTab() {
       await createDispatchExportJob({ category_code: categoryCode, platform, months })
       message.success('导出任务已创建，可在列表查看进度')
       refreshExportJobs()
-    } catch (e: any) {
-      message.error(e?.response?.data?.detail || '创建导出任务失败')
+    } catch {
+      // API interceptor already shows the backend error message.
     } finally {
       setExporting(false)
     }

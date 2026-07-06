@@ -774,6 +774,9 @@ def create_dispatch_export_job(payload: DispatchExportParams, db: Session = Depe
         raise HTTPException(status_code=400, detail="月份格式应为 YYYYMM")
     if not category_code and not platform and not month:
         raise HTTPException(status_code=400, detail="请选择品类、平台或月份后再导出")
+    has_export_data = _latest_dispatch_export_query(db, category_code, platform, month).limit(1).first()
+    if not has_export_data:
+        raise HTTPException(status_code=400, detail="当前筛选条件无可导出数据，请调整月份、品类或平台")
 
     with reserve_async_export_capacity(db):
         job = WorkbenchExportJob(

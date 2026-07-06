@@ -877,8 +877,28 @@ def test_create_dispatch_export_job_rejects_invalid_month(client_and_db):
     assert response.json()["detail"] == "月份格式应为 YYYYMM"
 
 
+def test_create_dispatch_export_job_rejects_empty_result_before_creating_job(client_and_db):
+    client, db = client_and_db
+
+    response = client.post("/api/dispatch/export", json={"category_code": "camera", "platform": "jd", "month": 202601})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "当前筛选条件无可导出数据，请调整月份、品类或平台"
+    assert db.query(WorkbenchExportJob).count() == 0
+
+
 def test_create_dispatch_export_job_rejects_when_exports_are_busy(client_and_db):
     client, db = client_and_db
+    file_record = UploadFileRecord(filename="busy.xlsx", platform="JD", row_count=1, status="done")
+    db.add(file_record)
+    db.flush()
+    raw = RawDataRecord(file_id=file_record.id, platform="jd", item_id="busy-row")
+    db.add(raw)
+    db.flush()
+    batch = DispatchBatch(file_id=file_record.id, status="done", total_rows=1, dispatched_rows=1, unmatched_rows=0)
+    db.add(batch)
+    db.flush()
+    db.add(DispatchItem(batch_id=batch.id, raw_data_id=raw.id, category_code="headphone"))
     db.add_all([
         WorkbenchExportJob(status="running", progress=10),
         WorkbenchExportJob(status="pending", progress=0),

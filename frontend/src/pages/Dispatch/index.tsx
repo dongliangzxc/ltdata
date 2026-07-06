@@ -449,6 +449,7 @@ function DispatchExportTab() {
   const [categoryCode, setCategoryCode] = useState<string | undefined>()
   const [platform, setPlatform] = useState<string | undefined>()
   const [month, setMonth] = useState<number | undefined>()
+  const [monthPickerValue, setMonthPickerValue] = useState(() => dayjs())
   const [exporting, setExporting] = useState(false)
   const { options: categoryOptions } = useCategoryOptions()
   const { data: exportJobsData, loading: exportJobsLoading, refresh: refreshExportJobs } = useRequest(
@@ -551,8 +552,13 @@ function DispatchExportTab() {
           placeholder="选择月份"
           style={{ width: 160 }}
           value={month ? dayjs(String(month), 'YYYYMM') : null}
+          pickerValue={monthPickerValue}
           format="YYYY-MM"
-          onChange={value => setMonth(value ? Number(value.format('YYYYMM')) : undefined)}
+          onPanelChange={value => setMonthPickerValue(value)}
+          onChange={value => {
+            setMonth(value ? Number(value.format('YYYYMM')) : undefined)
+            if (value) setMonthPickerValue(value)
+          }}
         />
         <Select
           allowClear

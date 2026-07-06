@@ -525,6 +525,14 @@ function DispatchExportTab() {
         message="按品类和平台下载当前分发结果池。系统会按每个上传文件的最新已完成分发批次取数，多个文件命中的数据会串联导出。"
       />
       <Space wrap>
+        <InputNumber
+          min={100001}
+          max={999912}
+          placeholder="选择月份"
+          style={{ width: 160 }}
+          value={month}
+          onChange={value => setMonth(value == null ? undefined : Number(value))}
+        />
         <Select
           allowClear
           showSearch
@@ -544,14 +552,6 @@ function DispatchExportTab() {
           options={PLATFORM_OPTIONS}
           value={platform}
           onChange={value => setPlatform(value || undefined)}
-        />
-        <InputNumber
-          min={100001}
-          max={999912}
-          placeholder="选择月份"
-          style={{ width: 160 }}
-          value={month}
-          onChange={value => setMonth(value == null ? undefined : Number(value))}
         />
         <Button type="primary" icon={<DownloadOutlined />} loading={exporting} onClick={handleExport}>
           创建导出任务

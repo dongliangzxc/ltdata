@@ -1,5 +1,5 @@
 import { Button, Form, Input, InputNumber, List, message, Modal, Popconfirm, Select, Space, Tabs, Tag, Typography } from 'antd'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useRequest } from 'ahooks'
 import {
   createInterventionRule,
@@ -31,6 +31,7 @@ type FormValues = {
 }
 
 const splitValues = (value?: string) => (value || '').split(/[\n,，、]+/).map(item => item.trim()).filter(Boolean)
+const joinValues = (value?: string[]) => (value ?? []).join('\n')
 
 const getFirstToken = (value?: string | null) => (
   (value || '')
@@ -52,6 +53,8 @@ const buildConditions = (values: FormValues) => {
 
 export default function InterventionRuleModal({ open, categoryCode, detail, onClose, onRulesChanged }: Props) {
   const [form] = Form.useForm<FormValues>()
+  const [activeTab, setActiveTab] = useState('list')
+  const [editingRule, setEditingRule] = useState<InterventionRuleItem | null>(null)
   const normalizedCategoryCode = categoryCode || undefined
 
   const { data, loading, refresh } = useRequest(
@@ -65,6 +68,8 @@ export default function InterventionRuleModal({ open, categoryCode, detail, onCl
   useEffect(() => {
     if (!open) return
     const firstToken = getFirstToken(detail?.item_name)
+    setActiveTab('list')
+    setEditingRule(null)
     form.resetFields()
     form.setFieldsValue({
       name: firstToken ? `过滤：${firstToken}` : '过滤：',
@@ -81,6 +86,35 @@ export default function InterventionRuleModal({ open, categoryCode, detail, onCl
     onRulesChanged()
   }
 
+  const resetCreateForm = () => {
+    setEditingRule(null)
+    form.setFieldsValue({
+      name: '过滤：',
+      action: 'filter',
+      priority: 100,
+      item_name_contains_any: undefined,
+      brand_in: undefined,
+      item_name_not_contains_any: undefined,
+    })
+  }
+
+  const handleEditRule = (rule: InterventionRuleItem) => {
+    setEditingRule(rule)
+    form.setFieldsValue({
+      name: rule.name,
+      action: rule.action,
+      priority: rule.priority,
+      item_name_contains_any: joinValues(rule.conditions.item_name_contains_any),
+      brand_in: joinValues(rule.conditions.brand_in),
+      item_name_not_contains_any: joinValues(rule.conditions.item_name_not_contains_any),
+    })
+    setActiveTab('create')
+  }
+
+  const handleCancelEdit = () => {
+    resetCreateForm()
+  }
+
   const handleToggleActive = async (rule: InterventionRuleItem) => {
     await updateInterventionRule(rule.id, { is_active: rule.is_active ? 0 : 1 })
     message.success(rule.is_active ? '已禁用规则' : '已启用规则')
@@ -93,9 +127,9 @@ export default function InterventionRuleModal({ open, categoryCode, detail, onCl
     notifyRulesChanged()
   }
 
-  const handleCreate = async () => {
+  const handleSubmit = async () => {
     if (!normalizedCategoryCode) {
-      message.warning('当前任务缺少品类，无法新增干预规则')
+      message.warning('当前任务缺少品类，无法保存干预规则')
       return
     }
     const values = await form.validateFields()
@@ -104,28 +138,36 @@ export default function InterventionRuleModal({ open, categoryCode, detail, onCl
       message.warning('至少填写一个干预条件')
       return
     }
-    await createInterventionRule({
-      name: values.name,
-      category_code: normalizedCategoryCode,
-      action: values.action,
-      priority: values.priority,
-      conditions,
-    })
-    message.success('规则已新增')
-    form.setFieldsValue({
-      name: '过滤：',
-      action: 'filter',
-      priority: 100,
-      item_name_contains_any: undefined,
-      brand_in: undefined,
-      item_name_not_contains_any: undefined,
-    })
+
+    if (editingRule) {
+      await updateInterventionRule(editingRule.id, {
+        name: values.name,
+        action: values.action,
+        priority: values.priority,
+        conditions,
+      })
+      message.success('规则已更新')
+    } else {
+      await createInterventionRule({
+        name: values.name,
+        category_code: normalizedCategoryCode,
+        action: values.action,
+        priority: values.priority,
+        conditions,
+      })
+      message.success('规则已新增')
+    }
+    resetCreateForm()
     notifyRulesChanged()
+    setActiveTab('list')
   }
 
   const renderRule = (rule: InterventionRuleItem) => (
     <List.Item
       actions={[
+        <Button key="edit" size="small" onClick={() => handleEditRule(rule)}>
+          修改
+        </Button>,
         <Button key="toggle" size="small" onClick={() => handleToggleActive(rule)}>
           {rule.is_active ? '禁用' : '启用'}
         </Button>,
@@ -161,6 +203,8 @@ export default function InterventionRuleModal({ open, categoryCode, detail, onCl
         <Text type="secondary">当前任务缺少品类，无法加载或新增干预规则。</Text>
       ) : (
         <Tabs
+          activeKey={activeTab}
+          onChange={setActiveTab}
           items={[
             {
               key: 'list',
@@ -179,7 +223,7 @@ export default function InterventionRuleModal({ open, categoryCode, detail, onCl
               key: 'create',
               label: '快速新增',
               children: (
-                <Form form={form} layout="vertical" onFinish={handleCreate}>
+                <Form form={form} layout="vertical" onFinish={handleSubmit}>
                   <Form.Item label="规则名称" name="name" rules={[{ required: true, message: '请输入规则名称' }]}>
                     <Input placeholder="例如：过滤：赠品" />
                   </Form.Item>
@@ -207,8 +251,12 @@ export default function InterventionRuleModal({ open, categoryCode, detail, onCl
                     <Input.TextArea placeholder="每行或用逗号分隔多个排除关键词" style={textAreaStyle} />
                   </Form.Item>
                   <Space>
-                    <Button type="primary" htmlType="submit">新增规则</Button>
-                    <Button onClick={() => form.resetFields()}>重置</Button>
+                    <Button type="primary" htmlType="submit">{editingRule ? '保存修改' : '新增规则'}</Button>
+                    {editingRule ? (
+                      <Button onClick={handleCancelEdit}>取消编辑</Button>
+                    ) : (
+                      <Button onClick={() => form.resetFields()}>重置</Button>
+                    )}
                   </Space>
                 </Form>
               ),

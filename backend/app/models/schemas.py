@@ -995,6 +995,7 @@ class WorkbenchExportJob(Base):
     category_code = Column(String(50), nullable=True)
     platform      = Column(String(50), nullable=True)
     month         = Column(Integer, nullable=True)
+    params        = Column(JSON, nullable=True)
     file_token    = Column(String(64), nullable=True)
     filename      = Column(String(500), nullable=True)
     error_msg     = Column(Text, nullable=True)

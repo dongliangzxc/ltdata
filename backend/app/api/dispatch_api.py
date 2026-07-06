@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 import pandas as pd
 from openpyxl import Workbook
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 from app.core.config import settings
@@ -48,6 +48,34 @@ class DispatchExportParams(BaseModel):
     category_code: Optional[str] = None
     platform: Optional[str] = None
     month: Optional[int] = None
+    months: list[int] = Field(default_factory=list)
+
+
+def _is_valid_export_month(month: int) -> bool:
+    return 100001 <= month <= 999912 and 1 <= month % 100 <= 12
+
+
+def _normalize_export_months(month: int | None, months: list[int] | None) -> list[int]:
+    values: list[int] = []
+    if months:
+        values.extend(int(value) for value in months)
+    elif month is not None:
+        values.append(int(month))
+
+    normalized = sorted(set(values))
+    if any(not _is_valid_export_month(value) for value in normalized):
+        raise HTTPException(status_code=400, detail="月份格式应为 YYYYMM")
+    return normalized
+
+
+def _export_month_display(months: list[int] | None) -> str:
+    values = months or []
+    if not values:
+        return "全部月份"
+    if len(values) <= 3:
+        return "、".join(str(value) for value in values)
+    return f"{values[0]}等{len(values)}个月份"
+
 
 FALLBACK_EXPORT_COLUMNS = [
     ("platform", "平台"),
@@ -247,16 +275,16 @@ def _safe_filename_part(value: str | None, fallback: str) -> str:
     return re.sub(r"[^\w\-一-鿿]+", "_", value or fallback).strip("_") or fallback
 
 
-def _dispatch_export_filename(category_code: str | None, platform: str | None, month: int | None) -> str:
+def _dispatch_export_filename(category_code: str | None, platform: str | None, months: list[int] | None) -> str:
     return (
         "分发结果_"
         f"{_safe_filename_part(category_code, '全部品类')}_"
         f"{_safe_filename_part(platform, '全部平台')}_"
-        f"{month or '全部月份'}.xlsx"
+        f"{_safe_filename_part(_export_month_display(months), '全部月份')}.xlsx"
     )
 
 
-def _latest_dispatch_export_query(db: Session, category_code: str | None, platform: str | None, month: int | None = None):
+def _latest_dispatch_export_query(db: Session, category_code: str | None, platform: str | None, months: list[int] | None = None):
     latest_batches = (
         db.query(
             DispatchBatch.file_id.label("file_id"),
@@ -278,8 +306,8 @@ def _latest_dispatch_export_query(db: Session, category_code: str | None, platfo
         query = query.filter(DispatchItem.category_code == category_code)
     if platform:
         query = query.filter(RawDataRecord.platform == platform)
-    if month:
-        query = query.filter(RawDataRecord.month == month)
+    if months:
+        query = query.filter(RawDataRecord.month.in_(months))
     return query
 
 
@@ -717,8 +745,12 @@ def _run_dispatch_export_thread(job_id: int, params: dict):
 
         category_code = params.get("category_code")
         platform = params.get("platform")
-        month = params.get("month")
-        query = _latest_dispatch_export_query(db, category_code, platform, month).order_by(UploadFileRecord.template_id, RawDataRecord.id)
+        months = _normalize_export_months(params.get("month"), params.get("months") or [])
+        query = _latest_dispatch_export_query(db, category_code, platform, months).order_by(
+            UploadFileRecord.template_id,
+            RawDataRecord.month,
+            RawDataRecord.id,
+        )
         total = query.count()
         if total == 0:
             job.status = "error"
@@ -732,7 +764,7 @@ def _run_dispatch_export_thread(job_id: int, params: dict):
 
         DISPATCH_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
         token = uuid.uuid4().hex
-        filename = _dispatch_export_filename(category_code, platform, month)
+        filename = _dispatch_export_filename(category_code, platform, months)
         filepath = DISPATCH_EXPORT_DIR / f"{token}_{filename}"
 
         def update_progress(processed: int, total_rows: int):
@@ -769,12 +801,11 @@ def _run_dispatch_export_thread(job_id: int, params: dict):
 def create_dispatch_export_job(payload: DispatchExportParams, db: Session = Depends(get_db)):
     category_code = payload.category_code.strip() if payload.category_code else None
     platform = payload.platform.strip() if payload.platform else None
-    month = payload.month
-    if month is not None and (month < 100001 or month > 999912 or month % 100 < 1 or month % 100 > 12):
-        raise HTTPException(status_code=400, detail="月份格式应为 YYYYMM")
-    if not category_code and not platform and not month:
+    months = _normalize_export_months(payload.month, payload.months)
+    primary_month = months[0] if months else None
+    if not category_code and not platform and not months:
         raise HTTPException(status_code=400, detail="请选择品类、平台或月份后再导出")
-    has_export_data = _latest_dispatch_export_query(db, category_code, platform, month).limit(1).first()
+    has_export_data = _latest_dispatch_export_query(db, category_code, platform, months).limit(1).first()
     if not has_export_data:
         raise HTTPException(status_code=400, detail="当前筛选条件无可导出数据，请调整月份、品类或平台")
 
@@ -784,7 +815,8 @@ def create_dispatch_export_job(payload: DispatchExportParams, db: Session = Depe
             progress=0,
             category_code=category_code,
             platform=platform,
-            month=month,
+            month=primary_month,
+            params={"month": primary_month, "months": months},
         )
         db.add(job)
         db.commit()
@@ -792,7 +824,7 @@ def create_dispatch_export_job(payload: DispatchExportParams, db: Session = Depe
 
     thread = threading.Thread(
         target=_run_dispatch_export_thread,
-        args=(job.id, {"category_code": category_code, "platform": platform, "month": month}),
+        args=(job.id, {"category_code": category_code, "platform": platform, "month": primary_month, "months": months}),
         daemon=True,
     )
     thread.start()
@@ -806,6 +838,8 @@ def _dispatch_export_job_out(job: WorkbenchExportJob) -> dict:
         if job.status == "done" and job.file_token
         else None
     )
+    params = job.params or {}
+    months = _normalize_export_months(job.month, params.get("months") or [])
     return {
         "job_id": job.id,
         "status": job.status,
@@ -813,6 +847,7 @@ def _dispatch_export_job_out(job: WorkbenchExportJob) -> dict:
         "category_code": job.category_code,
         "platform": job.platform,
         "month": job.month,
+        "months": months,
         "filename": job.filename,
         "download_url": download_url,
         "error_msg": job.error_msg,

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import {
   Tabs, Table, Button, Tag, Space, Modal, Form, Select,
   Input, InputNumber, Switch, message, Descriptions, Typography,
-  Alert, Drawer, DatePicker, Progress
+  Alert, Drawer, Progress
 } from 'antd'
 import {
   PlayCircleOutlined, PlusOutlined, EditOutlined, DeleteOutlined, DownloadOutlined
@@ -64,6 +64,13 @@ const formatRuleDescription = (rule: DispatchRuleStat) => {
 const formatPlatform = (platform: string | null) => (
   platform ? (PLATFORM_OPTIONS.find(o => o.value === platform)?.label ?? platform) : '不限'
 )
+
+const formatMonth = (value: number) => `${String(value).slice(0, 4)}-${String(value).slice(4)}`
+
+const formatMonths = (values?: number[] | null, fallback?: number | null) => {
+  const months = values && values.length > 0 ? values : fallback ? [fallback] : []
+  return months.map(formatMonth).join(', ')
+}
 
 const formatDataPlatform = (platform: string | null) => (
   platform ? (PLATFORM_OPTIONS.find(o => o.value === platform)?.label ?? platform) : '未知平台'
@@ -448,8 +455,7 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
 function DispatchExportTab() {
   const [categoryCode, setCategoryCode] = useState<string | undefined>()
   const [platform, setPlatform] = useState<string | undefined>()
-  const [month, setMonth] = useState<number | undefined>()
-  const [monthPickerValue, setMonthPickerValue] = useState(() => dayjs())
+  const [months, setMonths] = useState<number[]>([])
   const [exporting, setExporting] = useState(false)
   const { options: categoryOptions } = useCategoryOptions()
   const { data: exportJobsData, loading: exportJobsLoading, refresh: refreshExportJobs } = useRequest(
@@ -459,13 +465,13 @@ function DispatchExportTab() {
   const exportJobs = exportJobsData?.data.items ?? []
 
   const handleExport = async () => {
-    if (!categoryCode && !platform && !month) {
+    if (!categoryCode && !platform && months.length === 0) {
       message.warning('请至少选择品类、平台或月份后再创建导出任务')
       return
     }
     setExporting(true)
     try {
-      await createDispatchExportJob({ category_code: categoryCode, platform, month })
+      await createDispatchExportJob({ category_code: categoryCode, platform, months })
       message.success('导出任务已创建，可在列表查看进度')
       refreshExportJobs()
     } catch (e: any) {
@@ -485,8 +491,11 @@ function DispatchExportTab() {
   const exportJobColumns = [
     { title: '任务ID', dataIndex: 'job_id', width: 90 },
     {
-      title: '月份', dataIndex: 'month', width: 110,
-      render: (value: number | null) => value ? `${String(value).slice(0, 4)}-${String(value).slice(4)}` : <Text type="secondary">不限</Text>
+      title: '月份', dataIndex: 'months', width: 180,
+      render: (values: number[] | null, row: DispatchExportJob) => {
+        const text = formatMonths(values, row.month)
+        return text || <Text type="secondary">不限</Text>
+      }
     },
     {
       title: '品类', dataIndex: 'category_code', width: 150,
@@ -546,19 +555,20 @@ function DispatchExportTab() {
         message="按品类和平台下载当前分发结果池。系统会按每个上传文件的最新已完成分发批次取数，多个文件命中的数据会串联导出。"
       />
       <Space wrap>
-        <DatePicker
-          picker="month"
+        <Select
+          mode="multiple"
           allowClear
+          showSearch
           placeholder="选择月份"
-          style={{ width: 160 }}
-          value={month ? dayjs(String(month), 'YYYYMM') : null}
-          pickerValue={monthPickerValue}
-          format="YYYY-MM"
-          onPanelChange={value => setMonthPickerValue(value)}
-          onChange={value => {
-            setMonth(value ? Number(value.format('YYYYMM')) : undefined)
-            if (value) setMonthPickerValue(value)
-          }}
+          style={{ width: 220 }}
+          value={months}
+          optionFilterProp="label"
+          maxTagCount="responsive"
+          options={Array.from({ length: 36 }, (_, index) => {
+            const value = Number(dayjs().subtract(index, 'month').format('YYYYMM'))
+            return { value, label: formatMonth(value) }
+          })}
+          onChange={(values) => setMonths([...values].sort((a, b) => a - b))}
         />
         <Select
           allowClear

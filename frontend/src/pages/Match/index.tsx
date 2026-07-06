@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import {
   Card, Select, Button, Table, Tag, Space, Typography, Input,
   message, Row, Col, Statistic, Tooltip, Progress, Alert, Popconfirm, InputNumber, Tabs,
-  List, Descriptions, Empty, Modal,
+  List, Descriptions, Empty, Modal, Image,
 } from 'antd'
 import { AimOutlined, CheckOutlined, StopOutlined, CloudUploadOutlined, LoadingOutlined, LinkOutlined, DownloadOutlined, PlusOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
@@ -1203,9 +1203,30 @@ export default function MatchPage() {
                   ) : null)
                   : (reviewDetail ? (
                     <Space>
+                      <Button
+                        size="small"
+                        danger
+                        icon={<StopOutlined />}
+                        loading={confirmingIds.has(reviewDetail.id)}
+                        onClick={() => Modal.confirm({
+                          title: '确认排除此商品？',
+                          content: '排除后不会发布到分析库，也不会写入URL映射库。',
+                          onOk: () => handleExclude(reviewDetail.id),
+                        })}
+                      >排除</Button>
                       {renderMatchStatus(reviewDetail.match_status)}
                       <Button size="small" onClick={() => refreshReviewWorkbench(reviewDetail.id)}>继续下一条</Button>
                       {reviewDetail.item_url ? <a href={reviewDetail.item_url} target="_blank" rel="noreferrer"><LinkOutlined /> 打开商品</a> : null}
+                      {reviewDetail.item_image ? (
+                        <Image
+                          src={reviewDetail.item_image}
+                          alt="商品图片"
+                          width={28}
+                          height={28}
+                          style={{ objectFit: 'cover', borderRadius: 4 }}
+                          preview={{ mask: false }}
+                        />
+                      ) : null}
                     </Space>
                   ) : null)}
               >

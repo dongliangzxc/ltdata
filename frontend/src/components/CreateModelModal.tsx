@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Alert, Button, Col, Collapse, Divider, Form, Input, InputNumber,
+  Alert, Button, Col, Divider, Form, Input, InputNumber,
   Modal, Row, Select, Typography, message,
 } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
@@ -73,6 +73,15 @@ export default function CreateModelModal({
   const selectedBrand = useMemo(
     () => brands.find(brand => brand.brand_code === selectedBrandCode),
     [brands, selectedBrandCode]
+  )
+
+  const requiredSpecs = useMemo(
+    () => metadataSpecs.filter(spec => spec.required),
+    [metadataSpecs]
+  )
+  const optionalSpecs = useMemo(
+    () => metadataSpecs.filter(spec => !spec.required),
+    [metadataSpecs]
   )
 
   const loadBrands = async () => {
@@ -220,6 +229,52 @@ export default function CreateModelModal({
               </Form.Item>
             </Col>
           </Row>
+
+          <Divider orientation="left" plain style={{ fontSize: 13, color: '#666' }}>规格属性</Divider>
+          {metadataSpecs.length === 0 ? (
+            <Text type="secondary">选择品类后可填写规格属性；当前没有可用字段定义。</Text>
+          ) : (
+            <>
+              <Text type="secondary" style={{ fontSize: 12 }}>必填</Text>
+              {requiredSpecs.length === 0 ? (
+                <div style={{ marginTop: 4, marginBottom: 12 }}>
+                  <Text type="secondary">当前品类无必填规格属性。</Text>
+                </div>
+              ) : (
+                <Row gutter={12} style={{ marginTop: 4 }}>
+                  {requiredSpecs.map(spec => (
+                    <Col span={12} key={spec.id}>
+                      <Form.Item
+                        label={spec.spec_name}
+                        name={['spec_values', spec.spec_name]}
+                        rules={[{ required: true, message: `请填写${spec.spec_name}` }]}
+                      >
+                        <Input placeholder={`请填写${spec.spec_name}`} />
+                      </Form.Item>
+                    </Col>
+                  ))}
+                </Row>
+              )}
+              <Text type="secondary" style={{ fontSize: 12 }}>选填</Text>
+              {optionalSpecs.length === 0 ? (
+                <div style={{ marginTop: 4, marginBottom: 12 }}>
+                  <Text type="secondary">当前品类无选填规格属性。</Text>
+                </div>
+              ) : (
+                <Row gutter={12} style={{ marginTop: 4 }}>
+                  {optionalSpecs.map(spec => (
+                    <Col span={12} key={spec.id}>
+                      <Form.Item label={spec.spec_name} name={['spec_values', spec.spec_name]}>
+                        <Input placeholder="不填写也可创建" />
+                      </Form.Item>
+                    </Col>
+                  ))}
+                </Row>
+              )}
+            </>
+          )}
+
+          <Divider orientation="left" plain style={{ fontSize: 13, color: '#666' }}>上市信息</Divider>
           <Row gutter={12}>
             <Col span={6}><Form.Item label="上市年" name="launch_year"><InputNumber style={{ width: '100%' }} min={2000} max={2099} /></Form.Item></Col>
             <Col span={6}><Form.Item label="上市月" name="launch_month"><InputNumber style={{ width: '100%' }} min={1} max={12} /></Form.Item></Col>
@@ -228,27 +283,6 @@ export default function CreateModelModal({
           </Row>
           <Form.Item label="网址" name="url"><Input placeholder="https://..." /></Form.Item>
           <Form.Item label="操作人" name="operator"><Input placeholder="如 alice" /></Form.Item>
-
-          <Collapse
-            size="small"
-            items={[{
-              key: 'specs',
-              label: '规格属性（选填）',
-              children: metadataSpecs.length > 0 ? (
-                <Row gutter={12}>
-                  {metadataSpecs.map(spec => (
-                    <Col span={12} key={spec.id}>
-                      <Form.Item label={spec.spec_name} name={['spec_values', spec.spec_name]}>
-                        <Input placeholder="不填写也可创建" />
-                      </Form.Item>
-                    </Col>
-                  ))}
-                </Row>
-              ) : (
-                <Text type="secondary">选择品类后可填写规格属性；当前没有可用字段定义。</Text>
-              ),
-            }]}
-          />
         </Form>
       </Modal>
 

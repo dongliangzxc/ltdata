@@ -386,6 +386,7 @@ export interface DispatchExportJob {
   category_code: string | null
   platform: string | null
   month: number | null
+  months: number[]
   filename: string | null
   download_url: string | null
   error_msg: string | null
@@ -398,11 +399,12 @@ export interface DispatchExportJobsResponse {
   items: DispatchExportJob[]
 }
 
-export const createDispatchExportJob = (params: { category_code?: string; platform?: string | null; month?: number }) =>
+export const createDispatchExportJob = (params: { category_code?: string; platform?: string | null; month?: number; months?: number[] }) =>
   api.post('/dispatch/export', {
     ...(params.category_code ? { category_code: params.category_code } : {}),
     ...(params.platform ? { platform: params.platform } : {}),
-    ...(params.month ? { month: params.month } : {}),
+    ...(params.months && params.months.length > 0 ? { months: params.months } : {}),
+    ...(params.month && (!params.months || params.months.length === 0) ? { month: params.month } : {}),
   })
 
 export const listDispatchExportJobs = (params?: { page?: number; page_size?: number }) =>

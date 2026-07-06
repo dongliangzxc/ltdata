@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from 'react'
 import {
   Tabs, Table, Button, Tag, Space, Modal, Form, Select,
   Input, InputNumber, Switch, message, Descriptions, Typography,
-  Alert, Drawer
+  Alert, Drawer, DatePicker
 } from 'antd'
 import {
   PlayCircleOutlined, PlusOutlined, EditOutlined, DeleteOutlined, DownloadOutlined
 } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
+import dayjs from 'dayjs'
 import {
   listUploadFiles, listDispatchBatches, runDispatch,
   getDispatchBatchStats, listDispatchUnmatched, listDispatchRules,
@@ -525,13 +526,14 @@ function DispatchExportTab() {
         message="按品类和平台下载当前分发结果池。系统会按每个上传文件的最新已完成分发批次取数，多个文件命中的数据会串联导出。"
       />
       <Space wrap>
-        <InputNumber
-          min={100001}
-          max={999912}
+        <DatePicker
+          picker="month"
+          allowClear
           placeholder="选择月份"
           style={{ width: 160 }}
-          value={month}
-          onChange={value => setMonth(value == null ? undefined : Number(value))}
+          value={month ? dayjs(String(month), 'YYYYMM') : null}
+          format="YYYY-MM"
+          onChange={value => setMonth(value ? Number(value.format('YYYYMM')) : undefined)}
         />
         <Select
           allowClear

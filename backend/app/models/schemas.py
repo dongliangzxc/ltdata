@@ -428,6 +428,8 @@ class BrandRecord(Base):
     id          = Column(Integer, primary_key=True, index=True)
     brand_code  = Column(String(100), nullable=False, unique=True, index=True)
     brand_name  = Column(String(200), nullable=True)
+    # 首次创建品牌时录入的原始上传名，仅在品牌首次落库时写入；后续无论 brand_name 如何修改都保持不变。
+    original_brand_name = Column(String(200), nullable=True)
     status      = Column(String(20), nullable=False, default="active")
     created_at  = Column(DateTime, default=datetime.utcnow)
     updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -512,6 +514,8 @@ class BrandIn(BaseModel):
 class BrandOut(BaseModel):
     brand_code: str
     brand_name: Optional[str] = None
+    original_brand_name: Optional[str] = None
+    category_codes: list[str] = []
     model_count: int = 0
     alias_count: int = 0
 

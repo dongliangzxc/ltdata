@@ -40,7 +40,7 @@ def _is_placeholder_brand_code(value: str) -> bool:
 
 @router.get("", response_model=list[BrandOut])
 def list_brands(db: Session = Depends(get_db)):
-    """返回品牌主数据列表，附带型号数和别名数。"""
+    """返回品牌主数据列表，附带型号数、别名数、覆盖品类。"""
     brands = db.query(BrandRecord).order_by(BrandRecord.brand_code).all()
     normalized_brand_code = func.trim(ModelRecord.brand_code)
     model_counts: dict[str, int] = dict(
@@ -54,10 +54,29 @@ def list_brands(db: Session = Depends(get_db)):
         .group_by(BrandAlias.brand_code)
         .all()
     )
+    # 一个品牌下型号跨品类时，全部按品类码升序列出。
+    category_rows = (
+        db.query(normalized_brand_code, ModelRecord.category_code)
+        .filter(
+            ModelRecord.brand_code.isnot(None),
+            ModelRecord.category_code.isnot(None),
+            ModelRecord.category_code != "",
+        )
+        .distinct()
+        .all()
+    )
+    category_map: dict[str, list[str]] = {}
+    for brand_code, category_code in category_rows:
+        category_map.setdefault(brand_code, []).append(category_code)
+    for codes in category_map.values():
+        codes.sort()
+
     return [
         BrandOut(
             brand_code=brand.brand_code,
             brand_name=brand.brand_name,
+            original_brand_name=brand.original_brand_name,
+            category_codes=category_map.get(brand.brand_code, []),
             model_count=model_counts.get(brand.brand_code, 0),
             alias_count=alias_counts.get(brand.brand_code, 0),
         )
@@ -74,9 +93,12 @@ def create_brand(payload: BrandIn, db: Session = Depends(get_db)):
     if db.query(BrandRecord).filter(BrandRecord.brand_code == brand_code).first():
         raise HTTPException(status_code=409, detail="品牌已存在，可直接选择")
 
+    brand_name = _clean_optional_text(payload.brand_name)
     brand = BrandRecord(
         brand_code=brand_code,
-        brand_name=_clean_optional_text(payload.brand_name),
+        brand_name=brand_name,
+        # 首次创建时锁定为原始上传名，后续修改 brand_name 不会覆盖它。
+        original_brand_name=brand_name,
         status="active",
     )
     db.add(brand)
@@ -89,6 +111,8 @@ def create_brand(payload: BrandIn, db: Session = Depends(get_db)):
     return BrandOut(
         brand_code=brand.brand_code,
         brand_name=brand.brand_name,
+        original_brand_name=brand.original_brand_name,
+        category_codes=[],
         model_count=0,
         alias_count=0,
     )

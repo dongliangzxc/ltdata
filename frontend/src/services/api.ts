@@ -1039,6 +1039,8 @@ export type CreateBrandPayload = {
 export type BrandItem = {
   brand_code: string
   brand_name: string | null
+  original_brand_name: string | null
+  category_codes: string[]
   model_count: number
   alias_count: number
 }

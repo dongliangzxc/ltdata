@@ -303,14 +303,19 @@ def _ensure_import_brand(db: Session, brand_code: str, brand_name: str | None = 
     normalized_code = _normalize_code(brand_code)
     if _is_placeholder_code(normalized_code):
         return
+    normalized_name = _normalize_optional_text(brand_name)
     existing = db.query(BrandRecord).filter(BrandRecord.brand_code == normalized_code).first()
     if existing:
-        if not existing.brand_name and brand_name:
-            existing.brand_name = _normalize_optional_text(brand_name)
+        if not existing.brand_name and normalized_name:
+            existing.brand_name = normalized_name
+        # 补齐历史存量：只在首次仍为空时回填一次，之后不再变动
+        if not existing.original_brand_name and normalized_name:
+            existing.original_brand_name = normalized_name
         return
     db.add(BrandRecord(
         brand_code=normalized_code,
-        brand_name=_normalize_optional_text(brand_name),
+        brand_name=normalized_name,
+        original_brand_name=normalized_name,
         status="active",
     ))
 

@@ -158,10 +158,34 @@ def test_create_brand(client_and_db):
     body = r.json()
     assert body["brand_code"] == "DJI"
     assert body["brand_name"] == "大疆"
+    # 首次创建时把 brand_name 锁定为 original_brand_name
+    assert body["original_brand_name"] == "大疆"
+    assert body["category_codes"] == []
     assert body["model_count"] == 0
     assert body["alias_count"] == 0
     saved = db.query(BrandRecord).filter_by(brand_code="DJI").one()
     assert saved.brand_name == "大疆"
+    assert saved.original_brand_name == "大疆"
+
+
+def test_list_brands_returns_original_name_and_categories(client_and_db):
+    """GET /brands 返回原始品牌名与型号覆盖的品类码列表。"""
+    client, db = client_and_db
+    db.add(BrandRecord(brand_code="SONY", brand_name="索尼(修改后)", original_brand_name="索尼"))
+    db.add(ModelRecord(brand_code="SONY", model_code="WH1000XM5", category_code="EARPHONE"))
+    db.add(ModelRecord(brand_code="SONY", model_code="A7M4",      category_code="CAMERA"))
+    # 同品类下的两个型号应去重
+    db.add(ModelRecord(brand_code="SONY", model_code="WF1000XM5", category_code="EARPHONE"))
+    db.commit()
+
+    r = client.get("/api/brands")
+
+    assert r.status_code == 200
+    sony = next(b for b in r.json() if b["brand_code"] == "SONY")
+    assert sony["brand_name"] == "索尼(修改后)"
+    assert sony["original_brand_name"] == "索尼"
+    # 品类码按升序返回
+    assert sony["category_codes"] == ["CAMERA", "EARPHONE"]
 
 
 def test_create_brand_rejects_duplicate_code(client_and_db):

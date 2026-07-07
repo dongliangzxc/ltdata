@@ -1,5 +1,5 @@
 // frontend/src/pages/Brands/index.tsx
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   Card, Table, Button, Space, Popconfirm, message, Tag, Form, Modal, Input,
 } from 'antd'
@@ -10,6 +10,7 @@ import {
   type BrandItem, type BrandAliasItem,
 } from '../../services/api'
 import CreateBrandModal from '../../components/CreateBrandModal'
+import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 
 function AliasPanel({ brandCode, onAliasChange }: { brandCode: string; onAliasChange: () => void }) {
   const [addOpen, setAddOpen] = useState(false)
@@ -106,6 +107,15 @@ export default function BrandsPage() {
   const { data: brands, loading, refresh } = useRequest(
     () => listBrands().then(r => r.data),
   )
+  const { options: categoryOptions } = useCategoryOptions()
+  const categoryLabelMap = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const c of categoryOptions) m.set(c.value, c.label)
+    return m
+  }, [categoryOptions])
+
+  const renderOptionalText = (v: string | null | undefined) =>
+    v && v.trim() ? v : <span style={{ color: '#ccc' }}>—</span>
 
   const columns = [
     {
@@ -115,9 +125,30 @@ export default function BrandsPage() {
       render: (v: string) => <Tag color="blue">{v}</Tag>,
     },
     {
-      title: '品牌名称',
+      title: '上传时品牌名称',
+      dataIndex: 'original_brand_name',
+      width: 160,
+      render: (v: string | null) => renderOptionalText(v),
+    },
+    {
+      title: '修改后名称',
       dataIndex: 'brand_name',
-      render: (v: string | null) => v ?? <span style={{ color: '#ccc' }}>—</span>,
+      width: 160,
+      render: (v: string | null) => renderOptionalText(v),
+    },
+    {
+      title: '品类',
+      dataIndex: 'category_codes',
+      render: (codes: string[] | undefined) => {
+        if (!codes || codes.length === 0) return <span style={{ color: '#ccc' }}>—</span>
+        return (
+          <Space size={[4, 4]} wrap>
+            {codes.map(code => (
+              <Tag key={code}>{categoryLabelMap.get(code) ?? code}</Tag>
+            ))}
+          </Space>
+        )
+      },
     },
     { title: '型号数', dataIndex: 'model_count', width: 90 },
     { title: '写法别名数', dataIndex: 'alias_count', width: 110 },

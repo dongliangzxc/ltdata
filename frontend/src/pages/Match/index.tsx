@@ -4,12 +4,12 @@ import {
   message, Row, Col, Statistic, Tooltip, Progress, Alert, Popconfirm, InputNumber, Tabs,
   List, Descriptions, Empty, Modal, Image,
 } from 'antd'
-import { AimOutlined, CheckOutlined, StopOutlined, CloudUploadOutlined, LoadingOutlined, LinkOutlined, DownloadOutlined, PlusOutlined } from '@ant-design/icons'
+import { AimOutlined, StopOutlined, CloudUploadOutlined, LoadingOutlined, LinkOutlined, DownloadOutlined, PlusOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import { useSearchParams } from 'react-router-dom'
 import {
   listCleanJobs, runMatch, getMatchProgress, getMatchSummary, listPendingMatches,
-  confirmMatch, listModels, runPublish, listPublishJobs,
+  confirmMatch, runPublish, listPublishJobs,
   listReviewedMatches, updateMatchCoefficient, getMatchReviewDetail,
   enableMatch, avgPriceDisable, listDisabled,
   triggerExport, getExportJob, getDownloadUrl,
@@ -133,14 +133,6 @@ type DisabledItem = {
   disable_reason: string | null
 }
 
-type ModelOption = {
-  id: number
-  brand_code: string
-  model_code: string
-  brand_name: string | null
-  model_name: string | null
-}
-
 type PublishJob = {
   id: number
   clean_job_id: number
@@ -203,49 +195,14 @@ export default function MatchPage() {
   const [interventionModalOpen, setInterventionModalOpen] = useState(false)
   const [rerunningRules, setRerunningRules] = useState(false)
   const { data: jobsData, refresh: refreshJobs } = useRequest(() => listCleanJobs().then(r => r.data))
-  const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
-  const [modelSearchLoading, setModelSearchLoading] = useState(false)
   const [createModelOpen, setCreateModelOpen] = useState(false)
   const { options: categoryOptions } = useCategoryOptions()
   const preciseMatchedCount = summary?.precise_matched ?? summary?.url_matched ?? 0
   const otherAutoMatchedCount = summary ? Math.max(summary.matched - Math.max(preciseMatchedCount - (summary.url_matched ?? 0), 0), 0) : 0
   const readyCount = summary ? (summary?.url_matched ?? 0) + summary.matched + summary.confirmed : 0
 
-  const handleModelSearch = async (keyword: string) => {
-    if (!keyword.trim()) return
-    setModelSearchLoading(true)
-    try {
-      const res = await listModels({
-        keyword,
-        page: 1,
-        page_size: 50,
-        category_code: reviewDetail?.category_code || undefined,
-      }).then(r => r.data)
-      setModelOptions((res.items ?? []).map(model => ({
-        id: model.id,
-        brand_code: model.brand_code,
-        model_code: model.model_code,
-        brand_name: model.brand_name ?? null,
-        model_name: model.model_name ?? null,
-      })))
-    } finally {
-      setModelSearchLoading(false)
-    }
-  }
-
   const handleCreatedModel = (model: ModelItem) => {
     if (!reviewDetail) return
-    const option: ModelOption = {
-      id: model.id,
-      brand_code: model.brand_code,
-      model_code: model.model_code,
-      brand_name: model.brand_name ?? null,
-      model_name: model.model_name ?? null,
-    }
-    setModelOptions(prev => {
-      const exists = prev.some(item => item.id === model.id)
-      return exists ? prev : [option, ...prev]
-    })
     setSelectedModels(prev => ({ ...prev, [reviewDetail.id]: model.id }))
     setCreateModelOpen(false)
     message.success('型号已创建并选中')
@@ -510,39 +467,12 @@ export default function MatchPage() {
     })
   }
 
-  const handleConfirm = async (matchId: number) => {
-    const fallbackModelId = reviewDetail?.id === matchId ? reviewDetail.model_id : undefined
-    const modelId = selectedModels[matchId] ?? fallbackModelId
-    if (!modelId) { message.warning('请先选择型号'); return }
-    setConfirmingIds(prev => new Set(prev).add(matchId))
-    try {
-      await confirmMatch(matchId, { model_id: modelId })
-      message.success('已确认，右侧已刷新确认结果')
-      await refreshReviewDetailInPlace(matchId)
-    } finally {
-      setConfirmingIds(prev => { const s = new Set(prev); s.delete(matchId); return s })
-    }
-  }
-
   const handleExclude = async (matchId: number) => {
     const reason = reviewReason.trim()
     setConfirmingIds(prev => new Set(prev).add(matchId))
     try {
       await confirmMatch(matchId, { excluded: true, reason: reason || undefined })
       message.success('已排除')
-      refreshReviewWorkbench(matchId)
-    } finally {
-      setConfirmingIds(prev => { const s = new Set(prev); s.delete(matchId); return s })
-    }
-  }
-
-  const handleDispute = async (matchId: number) => {
-    const reason = reviewReason.trim()
-    if (!reason) { message.warning('请填写争议原因'); return }
-    setConfirmingIds(prev => new Set(prev).add(matchId))
-    try {
-      await confirmMatch(matchId, { disputed: true, reason })
-      message.success('已暂存争议')
       refreshReviewWorkbench(matchId)
     } finally {
       setConfirmingIds(prev => { const s = new Set(prev); s.delete(matchId); return s })
@@ -1275,69 +1205,24 @@ export default function MatchPage() {
                   <Empty description="请选择左侧复核商品" />
                 ) : (
                   <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                    <SameTitleBatchActions
-                      detail={reviewDetail}
-                      selectedModelId={selectedModels[reviewDetail.id]}
-                      reason={reviewReason.trim() || undefined}
-                      onDone={() => refreshReviewWorkbench(reviewDetail.id)}
-                    />
-
-                    <Space direction="vertical" style={{ width: '100%' }}>
-                      <Select
-                        showSearch
-                        placeholder="选择其他型号确认"
-                        style={{ width: '100%' }}
-                        allowClear
-                        filterOption={false}
-                        onSearch={handleModelSearch}
-                        loading={modelSearchLoading}
-                        notFoundContent={(
-                          <Space direction="vertical" style={{ width: '100%', padding: 8 }}>
-                            <Text type="secondary">未找到型号</Text>
-                            <Button type="link" icon={<PlusOutlined />} onClick={() => setCreateModelOpen(true)}>
-                              新建型号
-                            </Button>
-                          </Space>
-                        )}
-                        options={modelOptions.map(m => ({
-                          value: m.id,
-                          label: `[${m.brand_code}] ${m.model_code}${m.model_name ? ' ' + m.model_name : ''}`,
-                        }))}
-                        value={selectedModels[reviewDetail.id]}
-                        onChange={v => setSelectedModels(prev => ({ ...prev, [reviewDetail.id]: v }))}
-                      />
-                      <Button icon={<PlusOutlined />} onClick={() => setCreateModelOpen(true)}>
-                        新建型号
-                      </Button>
-                      <Input.TextArea
-                        rows={3}
-                        placeholder="排除或暂存争议时填写原因"
-                        value={reviewReason}
-                        onChange={e => setReviewReason(e.target.value)}
-                      />
-                      <Space wrap>
-                        <Button
-                          type="primary"
-                          icon={<CheckOutlined />}
-                          loading={confirmingIds.has(reviewDetail.id)}
-                          onClick={() => handleConfirm(reviewDetail.id)}
-                        >确认型号</Button>
-                        <Button
-                          danger
-                          icon={<StopOutlined />}
-                          loading={confirmingIds.has(reviewDetail.id)}
-                          onClick={() => Modal.confirm({
-                            title: '确认排除此商品？',
-                            content: '排除后不会发布到分析库，也不会写入URL映射库。',
-                            onOk: () => handleExclude(reviewDetail.id),
-                          })}
-                        >排除</Button>
-                        <Button
-                          loading={confirmingIds.has(reviewDetail.id)}
-                          onClick={() => handleDispute(reviewDetail.id)}
-                        >暂存争议</Button>
-                      </Space>
-                    </Space>
+                    <Descriptions size="small" column={2} bordered>
+                      <Descriptions.Item label="商品名称" span={2}>{reviewDetail.item_name || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="原品牌">{reviewDetail.brand_raw || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="店铺">{reviewDetail.shop_name || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="入库品牌">{reviewDetail.brand_code || reviewDetail.brand_raw || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="当前型号">
+                        <Space wrap>
+                          {hasDisplayModel(reviewDetail.brand_code, reviewDetail.model_code)
+                            ? <Text code>[{reviewDetail.brand_code}] {reviewDetail.model_code}</Text>
+                            : <Text type="secondary">-</Text>}
+                          <Button size="small" icon={<PlusOutlined />} onClick={() => setCreateModelOpen(true)}>
+                            新建型号
+                          </Button>
+                        </Space>
+                      </Descriptions.Item>
+                      <Descriptions.Item label="价格">{reviewDetail.price != null ? `¥${reviewDetail.price}` : '-'}</Descriptions.Item>
+                      <Descriptions.Item label="销量">{formatNumber(reviewDetail.sales_qty)}</Descriptions.Item>
+                    </Descriptions>
 
                     <Card size="small" title="候选型号" bodyStyle={{ padding: 8 }}>
                       {(reviewDetail.candidates ?? []).length === 0 ? <Text type="secondary">暂无候选型号</Text> : (
@@ -1367,25 +1252,14 @@ export default function MatchPage() {
                       )}
                     </Card>
 
-                    <AttributeInsightCard detail={reviewDetail} />
+                    <SameTitleBatchActions
+                      detail={reviewDetail}
+                      selectedModelId={selectedModels[reviewDetail.id]}
+                      reason={reviewReason.trim() || undefined}
+                      onDone={() => refreshReviewWorkbench(reviewDetail.id)}
+                    />
 
-                    <Descriptions size="small" column={2} bordered>
-                      <Descriptions.Item label="商品名称" span={2}>{reviewDetail.item_name || '-'}</Descriptions.Item>
-                      <Descriptions.Item label="原品牌">{reviewDetail.brand_raw || '-'}</Descriptions.Item>
-                      <Descriptions.Item label="店铺">{reviewDetail.shop_name || '-'}</Descriptions.Item>
-                      <Descriptions.Item label="价格">{reviewDetail.price != null ? `¥${reviewDetail.price}` : '-'}</Descriptions.Item>
-                      <Descriptions.Item label="销量">{formatNumber(reviewDetail.sales_qty)}</Descriptions.Item>
-                      <Descriptions.Item label="当前状态">{renderMatchStatus(reviewDetail.match_status)}</Descriptions.Item>
-                      <Descriptions.Item label="系统来源">{renderMatchSource(reviewDetail.match_source)}</Descriptions.Item>
-                      <Descriptions.Item label="当前型号">
-                        {hasDisplayModel(reviewDetail.brand_code, reviewDetail.model_code)
-                          ? <Text code>[{reviewDetail.brand_code}] {reviewDetail.model_code}</Text>
-                          : '-'}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="URL线索" span={2}>
-                        {reviewDetail.url_mapping ? <Tag color="blue">URL映射库已有记录</Tag> : <Text type="secondary">暂无URL映射记录</Text>}
-                      </Descriptions.Item>
-                    </Descriptions>
+                    <AttributeInsightCard detail={reviewDetail} />
                   </Space>
                 )}
               </Card>

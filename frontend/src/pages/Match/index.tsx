@@ -9,7 +9,7 @@ import { useRequest } from 'ahooks'
 import { useSearchParams } from 'react-router-dom'
 import {
   listCleanJobs, runMatch, getMatchProgress, getMatchSummary, listPendingMatches,
-  confirmMatch, runPublish, listPublishJobs,
+  confirmMatch, listModels, runPublish, listPublishJobs,
   listReviewedMatches, updateMatchCoefficient, getMatchReviewDetail,
   enableMatch, avgPriceDisable, listDisabled,
   triggerExport, getExportJob, getDownloadUrl,
@@ -133,6 +133,14 @@ type DisabledItem = {
   disable_reason: string | null
 }
 
+type ModelOption = {
+  id: number
+  brand_code: string
+  model_code: string
+  brand_name: string | null
+  model_name: string | null
+}
+
 type PublishJob = {
   id: number
   clean_job_id: number
@@ -195,14 +203,49 @@ export default function MatchPage() {
   const [interventionModalOpen, setInterventionModalOpen] = useState(false)
   const [rerunningRules, setRerunningRules] = useState(false)
   const { data: jobsData, refresh: refreshJobs } = useRequest(() => listCleanJobs().then(r => r.data))
+  const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
+  const [modelSearchLoading, setModelSearchLoading] = useState(false)
   const [createModelOpen, setCreateModelOpen] = useState(false)
   const { options: categoryOptions } = useCategoryOptions()
   const preciseMatchedCount = summary?.precise_matched ?? summary?.url_matched ?? 0
   const otherAutoMatchedCount = summary ? Math.max(summary.matched - Math.max(preciseMatchedCount - (summary.url_matched ?? 0), 0), 0) : 0
   const readyCount = summary ? (summary?.url_matched ?? 0) + summary.matched + summary.confirmed : 0
 
+  const handleModelSearch = async (keyword: string) => {
+    if (!keyword.trim()) return
+    setModelSearchLoading(true)
+    try {
+      const res = await listModels({
+        keyword,
+        page: 1,
+        page_size: 50,
+        category_code: reviewDetail?.category_code || undefined,
+      }).then(r => r.data)
+      setModelOptions((res.items ?? []).map(model => ({
+        id: model.id,
+        brand_code: model.brand_code,
+        model_code: model.model_code,
+        brand_name: model.brand_name ?? null,
+        model_name: model.model_name ?? null,
+      })))
+    } finally {
+      setModelSearchLoading(false)
+    }
+  }
+
   const handleCreatedModel = (model: ModelItem) => {
     if (!reviewDetail) return
+    const option: ModelOption = {
+      id: model.id,
+      brand_code: model.brand_code,
+      model_code: model.model_code,
+      brand_name: model.brand_name ?? null,
+      model_name: model.model_name ?? null,
+    }
+    setModelOptions(prev => {
+      const exists = prev.some(item => item.id === model.id)
+      return exists ? prev : [option, ...prev]
+    })
     setSelectedModels(prev => ({ ...prev, [reviewDetail.id]: model.id }))
     setCreateModelOpen(false)
     message.success('型号已创建并选中')
@@ -482,6 +525,13 @@ export default function MatchPage() {
   const handleSelectCandidate = async (matchId: number, modelId: number) => {
     await confirmMatch(matchId, { model_id: modelId })
     message.success('已选用候选型号，右侧已刷新确认结果')
+    await refreshReviewDetailInPlace(matchId)
+  }
+
+  const handleSelectOtherModel = async (matchId: number, modelId: number) => {
+    setSelectedModels(prev => ({ ...prev, [matchId]: modelId }))
+    await confirmMatch(matchId, { model_id: modelId })
+    message.success('已选择其他型号，右侧已刷新确认结果')
     await refreshReviewDetailInPlace(matchId)
   }
 
@@ -1215,6 +1265,31 @@ export default function MatchPage() {
                           {hasDisplayModel(reviewDetail.brand_code, reviewDetail.model_code)
                             ? <Text code>[{reviewDetail.brand_code}] {reviewDetail.model_code}</Text>
                             : <Text type="secondary">-</Text>}
+                          <Select
+                            showSearch
+                            placeholder="搜索/选择其他型号确认"
+                            style={{ minWidth: 220 }}
+                            allowClear
+                            filterOption={false}
+                            onSearch={handleModelSearch}
+                            loading={modelSearchLoading}
+                            options={modelOptions.map(m => ({
+                              value: m.id,
+                              label: `[${m.brand_code}] ${m.model_code}${m.model_name ? ' ' + m.model_name : ''}`,
+                            }))}
+                            value={selectedModels[reviewDetail.id]}
+                            onChange={v => {
+                              if (v) {
+                                handleSelectOtherModel(reviewDetail.id, v)
+                              } else {
+                                setSelectedModels(prev => {
+                                  const next = { ...prev }
+                                  delete next[reviewDetail.id]
+                                  return next
+                                })
+                              }
+                            }}
+                          />
                           <Button size="small" icon={<PlusOutlined />} onClick={() => setCreateModelOpen(true)}>
                             新建型号
                           </Button>

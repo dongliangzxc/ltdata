@@ -133,6 +133,22 @@ def test_list_brands_counts_models_with_trimmed_brand_code(client_and_db):
     assert sony["model_count"] == 1
 
 
+def test_list_brands_falls_back_original_name_from_models(client_and_db):
+    """GET /brands fills uploaded brand name from model metadata when brand metadata is blank."""
+    client, db = client_and_db
+    db.add(BrandRecord(brand_code="DJI", brand_name=None, original_brand_name=None))
+    db.add(ModelRecord(brand_code=" DJI ", model_code="OSMO-POCKET-3", brand_name="大疆"))
+    db.commit()
+
+    r = client.get("/api/brands")
+
+    assert r.status_code == 200
+    brands = r.json()
+    dji = next(b for b in brands if b["brand_code"] == "DJI")
+    assert dji["original_brand_name"] == "大疆"
+    assert dji["brand_name"] == "大疆"
+
+
 def test_list_brands_returns_alias_count(client_and_db):
     """GET /brands includes alias_count for each brand."""
     client, db = client_and_db

@@ -34,6 +34,14 @@ def _clean_optional_text(value: str | None) -> str | None:
     return cleaned or None
 
 
+def _first_text(*values: str | None) -> str | None:
+    for value in values:
+        cleaned = _clean_optional_text(value)
+        if cleaned:
+            return cleaned
+    return None
+
+
 def _is_placeholder_brand_code(value: str) -> bool:
     return not value or set(value) == {"-"}
 
@@ -52,6 +60,16 @@ def list_brands(db: Session = Depends(get_db)):
     alias_counts: dict[str, int] = dict(
         db.query(BrandAlias.brand_code, func.count(BrandAlias.id))
         .group_by(BrandAlias.brand_code)
+        .all()
+    )
+    model_brand_names: dict[str, str] = dict(
+        db.query(normalized_brand_code, func.min(func.trim(ModelRecord.brand_name)))
+        .filter(
+            ModelRecord.brand_code.isnot(None),
+            ModelRecord.brand_name.isnot(None),
+            func.trim(ModelRecord.brand_name) != "",
+        )
+        .group_by(normalized_brand_code)
         .all()
     )
     # 一个品牌下型号跨品类时，全部按品类码升序列出。
@@ -74,8 +92,8 @@ def list_brands(db: Session = Depends(get_db)):
     return [
         BrandOut(
             brand_code=brand.brand_code,
-            brand_name=brand.brand_name,
-            original_brand_name=brand.original_brand_name,
+            brand_name=_first_text(brand.brand_name, model_brand_names.get(brand.brand_code)),
+            original_brand_name=_first_text(brand.original_brand_name, brand.brand_name, model_brand_names.get(brand.brand_code)),
             category_codes=category_map.get(brand.brand_code, []),
             model_count=model_counts.get(brand.brand_code, 0),
             alias_count=alias_counts.get(brand.brand_code, 0),

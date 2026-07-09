@@ -101,17 +101,25 @@ def _matches_price_condition(ref_price: object, condition: dict) -> bool:
     return False
 
 
-def _matches_intervention_rule(record: RawDataRecord, rule: InterventionRule) -> bool:
+def _matches_intervention_rule(
+    record: RawDataRecord,
+    rule: InterventionRule,
+    brand_alias_map: dict[str, str] | None = None,
+) -> bool:
     """所有已配置条件均需满足，且至少一个已识别条件匹配。"""
     conditions = rule.conditions or {}
-    brand_raw = (record.brand_raw or "").casefold()
+    brand_raw = (record.brand_raw or "").strip()
     item_name = (record.item_name or "").casefold()
     has_recognized_condition = False
 
     brand_values = conditions.get("brand_in")
     if brand_values:
         has_recognized_condition = True
-        if brand_raw not in {str(value).casefold() for value in brand_values}:
+        brand_candidates = {brand_raw.casefold()} if brand_raw else set()
+        normalized_brand = (brand_alias_map or {}).get(brand_raw.upper()) if brand_raw else None
+        if normalized_brand:
+            brand_candidates.add(normalized_brand.casefold())
+        if not brand_candidates.intersection({str(value).casefold() for value in brand_values}):
             return False
 
     contains_values = conditions.get("item_name_contains_any")
@@ -138,9 +146,10 @@ def _matches_intervention_rule(record: RawDataRecord, rule: InterventionRule) ->
 def _first_matching_intervention_rule(
     record: RawDataRecord,
     intervention_rules: list[InterventionRule],
+    brand_alias_map: dict[str, str] | None = None,
 ) -> InterventionRule | None:
     for rule in intervention_rules:
-        if _matches_intervention_rule(record, rule):
+        if _matches_intervention_rule(record, rule, brand_alias_map):
             return rule
     return None
 
@@ -187,7 +196,7 @@ def run_clean(
 
     for r in records:
         # ── Step 1: 清洗干预规则 ─────────────────────────────────
-        matched_rule = _first_matching_intervention_rule(r, intervention_rules)
+        matched_rule = _first_matching_intervention_rule(r, intervention_rules, brand_alias_map)
         if matched_rule is not None:
             if matched_rule.action == "filter":
                 filtered.append(FilteredItem(

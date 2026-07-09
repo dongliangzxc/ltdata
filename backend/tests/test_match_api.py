@@ -7,7 +7,7 @@ from app.models.database import get_db
 from app.models.schemas import (
     ModelRecord, UploadFileRecord, RawDataRecord,
     CleanJobRecord, MatchResult, ItemUrlMapping, CleanedDataRecord,
-    HistoricalMapping, MatchResultAttr, MetadataSpec, ModelSpec, Category,
+    HistoricalMapping, MatchResultAttr, MetadataSpec, ModelSpec, Category, AttrRule,
 )
 from app.api.match_api import confirm_match, router as match_router
 
@@ -123,6 +123,133 @@ def test_confirm_matched_backfills_null_url_mapping(db):
 
     mapping = db.query(ItemUrlMapping).filter_by(platform="jd", item_id="88888").first()
     assert mapping.model_id == model.id
+
+
+def test_confirm_match_overwrites_existing_url_mapping_and_marks_manual(db):
+    old_model = ModelRecord(brand_code="DJI", model_code="OSMO-OLD", category_code="camera")
+    new_model = ModelRecord(brand_code="DJI", model_code="OSMO-NEW", category_code="camera")
+    db.add_all([old_model, new_model])
+    db.flush()
+
+    upload = UploadFileRecord(filename="reselect.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+
+    clean_job = CleanJobRecord(file_ids=[upload.id], status="done")
+    db.add(clean_job)
+    db.flush()
+
+    raw = RawDataRecord(
+        file_id=upload.id,
+        platform="jd",
+        item_id="reselect-1001",
+        item_url="https://item.jd.com/reselect-1001.html",
+        item_name="大疆运动相机",
+        brand_raw="大疆",
+        price=1999,
+    )
+    db.add(raw)
+    db.flush()
+
+    db.add(ItemUrlMapping(
+        platform="jd",
+        item_id="reselect-1001",
+        item_url="https://item.jd.com/reselect-1001.html",
+        model_id=old_model.id,
+        brand_code=old_model.brand_code,
+        price=1888,
+        source="s0",
+    ))
+    db.flush()
+
+    match = MatchResult(
+        clean_job_id=clean_job.id,
+        raw_data_id=raw.id,
+        model_id=old_model.id,
+        match_status="matched",
+        matched_by="auto",
+        match_source="s1",
+    )
+    db.add(match)
+    db.commit()
+
+    response = confirm_match(match.id, {"model_id": new_model.id}, db=db)
+
+    assert response.model_id == new_model.id
+    assert response.match_status == "confirmed"
+    assert response.matched_by == "manual"
+    assert response.match_source == "manual"
+
+    mapping = db.query(ItemUrlMapping).filter_by(platform="jd", item_id="reselect-1001").first()
+    assert mapping is not None
+    assert mapping.model_id == new_model.id
+    assert mapping.brand_code == new_model.brand_code
+    assert mapping.item_url == raw.item_url
+    assert mapping.price == raw.price
+    assert mapping.source == "match_confirm"
+
+
+def test_confirm_match_model_correction_clears_obsolete_attrs_before_rerun(db, monkeypatch):
+    old_model = ModelRecord(brand_code="Sony", model_code="OLD-TV", category_code="old-tv")
+    new_model = ModelRecord(brand_code="Sony", model_code="NEW-TV", category_code="new-tv")
+    db.add_all([old_model, new_model])
+    db.flush()
+
+    new_rule = AttrRule(
+        keyword="OLED",
+        match_type="contains",
+        attr_name="屏幕类型",
+        attr_value="OLED",
+        category_code="new-tv",
+    )
+    db.add(new_rule)
+    db.flush()
+
+    upload = UploadFileRecord(filename="attr-correction.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+
+    clean_job = CleanJobRecord(file_ids=[upload.id], status="done")
+    db.add(clean_job)
+    db.flush()
+
+    raw = RawDataRecord(
+        file_id=upload.id,
+        platform="jd",
+        item_id="attr-correction-1001",
+        item_url="https://item.jd.com/attr-correction-1001.html",
+        item_name="Sony OLED 电视",
+        brand_raw="Sony",
+    )
+    db.add(raw)
+    db.flush()
+
+    match = MatchResult(
+        clean_job_id=clean_job.id,
+        raw_data_id=raw.id,
+        model_id=old_model.id,
+        match_status="matched",
+        matched_by="auto",
+        match_source="s1",
+    )
+    db.add(match)
+    db.flush()
+    db.add(MatchResultAttr(match_result_id=match.id, attr_name="旧品类属性", attr_value="旧值"))
+    db.commit()
+
+    monkeypatch.setattr("app.api.match_api.audit_price", lambda *_args, **_kwargs: None)
+
+    response = confirm_match(match.id, {"model_id": new_model.id}, db=db)
+
+    assert response.model_id == new_model.id
+    assert response.match_status == "confirmed"
+    assert response.matched_by == "manual"
+    assert response.match_source == "manual"
+
+    attrs = db.query(MatchResultAttr).filter_by(match_result_id=match.id).order_by(MatchResultAttr.id).all()
+    assert [(attr.attr_name, attr.attr_value, attr.rule_id) for attr in attrs] == [
+        ("屏幕类型", "OLED", new_rule.id),
+    ]
 
 
 def test_confirm_historical_pending_does_not_query_historical_mappings(db, monkeypatch):

@@ -1,4 +1,4 @@
-import { Button, Form, Input, InputNumber, List, message, Modal, Popconfirm, Select, Space, Tabs, Tag, Typography } from 'antd'
+import { Button, Form, Input, InputNumber, List, message, Modal, Popconfirm, Select, Space, Switch, Tabs, Tag, Typography } from 'antd'
 import { useEffect, useState } from 'react'
 import { useRequest } from 'ahooks'
 import {
@@ -28,7 +28,12 @@ type FormValues = {
   item_name_contains_any?: string
   brand_in?: string
   item_name_not_contains_any?: string
+  enable_reference_price?: boolean
+  reference_price_op?: 'gt' | 'gte' | 'lt' | 'lte'
+  reference_price_value?: number
 }
+
+type RuleConditions = NonNullable<InterventionRuleItem['conditions']>
 
 const splitValues = (value?: string) => (value || '').split(/[\n,，、]+/).map(item => item.trim()).filter(Boolean)
 const joinValues = (value?: string[]) => (value ?? []).join('\n')
@@ -41,14 +46,36 @@ const getFirstToken = (value?: string | null) => (
 )
 
 const buildConditions = (values: FormValues) => {
-  const conditions: Record<string, string[]> = {}
+  const conditions: RuleConditions = {}
   const nameContains = splitValues(values.item_name_contains_any)
   const brandIn = splitValues(values.brand_in)
   const nameNotContains = splitValues(values.item_name_not_contains_any)
   if (nameContains.length) conditions.item_name_contains_any = nameContains
   if (brandIn.length) conditions.brand_in = brandIn
   if (nameNotContains.length) conditions.item_name_not_contains_any = nameNotContains
+  if (values.enable_reference_price && values.reference_price_op && values.reference_price_value !== undefined) {
+    conditions.reference_price = {
+      op: values.reference_price_op,
+      value: values.reference_price_value,
+    }
+  }
   return conditions
+}
+
+const referencePriceToFormValues = (conditions: RuleConditions): Pick<FormValues, 'enable_reference_price' | 'reference_price_op' | 'reference_price_value'> => {
+  const referencePrice = conditions.reference_price
+  if (!referencePrice || referencePrice.op === 'between') {
+    return {
+      enable_reference_price: false,
+      reference_price_op: 'lte',
+      reference_price_value: undefined,
+    }
+  }
+  return {
+    enable_reference_price: true,
+    reference_price_op: referencePrice.op,
+    reference_price_value: referencePrice.value,
+  }
 }
 
 export default function InterventionRuleModal({ open, categoryCode, detail, onClose, onRulesChanged }: Props) {
@@ -78,6 +105,9 @@ export default function InterventionRuleModal({ open, categoryCode, detail, onCl
       item_name_contains_any: firstToken,
       brand_in: detail?.brand_raw || undefined,
       item_name_not_contains_any: undefined,
+      enable_reference_price: false,
+      reference_price_op: 'lte',
+      reference_price_value: undefined,
     })
   }, [detail, form, open])
 
@@ -95,11 +125,15 @@ export default function InterventionRuleModal({ open, categoryCode, detail, onCl
       item_name_contains_any: undefined,
       brand_in: undefined,
       item_name_not_contains_any: undefined,
+      enable_reference_price: false,
+      reference_price_op: 'lte',
+      reference_price_value: undefined,
     })
   }
 
   const handleEditRule = (rule: InterventionRuleItem) => {
     setEditingRule(rule)
+    const referencePriceValues = referencePriceToFormValues(rule.conditions)
     form.setFieldsValue({
       name: rule.name,
       action: rule.action,
@@ -107,6 +141,7 @@ export default function InterventionRuleModal({ open, categoryCode, detail, onCl
       item_name_contains_any: joinValues(rule.conditions.item_name_contains_any),
       brand_in: joinValues(rule.conditions.brand_in),
       item_name_not_contains_any: joinValues(rule.conditions.item_name_not_contains_any),
+      ...referencePriceValues,
     })
     setActiveTab('create')
   }
@@ -249,6 +284,31 @@ export default function InterventionRuleModal({ open, categoryCode, detail, onCl
                   </Form.Item>
                   <Form.Item label="商品名称不包含任一" name="item_name_not_contains_any">
                     <Input.TextArea placeholder="每行或用逗号分隔多个排除关键词" style={textAreaStyle} />
+                  </Form.Item>
+                  <Form.Item label="启用参考价格条件" name="enable_reference_price" valuePropName="checked">
+                    <Switch />
+                  </Form.Item>
+                  <Form.Item noStyle shouldUpdate={(prev, next) => prev.enable_reference_price !== next.enable_reference_price}>
+                    {({ getFieldValue }) => (
+                      getFieldValue('enable_reference_price') ? (
+                        <Space align="start" size={16} wrap>
+                          <Form.Item label="价格关系" name="reference_price_op" rules={[{ required: true, message: '请选择价格关系' }]}>
+                            <Select
+                              style={{ width: 140 }}
+                              options={[
+                                { value: 'lte', label: '小于等于' },
+                                { value: 'lt', label: '小于' },
+                                { value: 'gte', label: '大于等于' },
+                                { value: 'gt', label: '大于' },
+                              ]}
+                            />
+                          </Form.Item>
+                          <Form.Item label="价格" name="reference_price_value" rules={[{ required: true, message: '请输入价格' }]}>
+                            <InputNumber min={0} precision={2} style={{ width: 140 }} />
+                          </Form.Item>
+                        </Space>
+                      ) : null
+                    )}
                   </Form.Item>
                   <Space>
                     <Button type="primary" htmlType="submit">{editingRule ? '保存修改' : '新增规则'}</Button>

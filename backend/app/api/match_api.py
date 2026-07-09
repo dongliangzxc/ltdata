@@ -680,38 +680,20 @@ def confirm_match(match_id: int, payload: dict, db: Session = Depends(get_db)):
         m = db.query(ModelRecord).filter(ModelRecord.id == model_id).first()
         if not m:
             raise HTTPException(status_code=404, detail="型号不存在")
-        prev_status = mr.match_status
         mr.model_id = model_id
         mr.match_status = "confirmed"
         mr.matched_by = "manual"
+        mr.match_source = "manual"
         mr.dispute_reason = None
         mr.review_note = None
         mr.reviewed_at = datetime.utcnow()
 
-        # 确认时更新 URL 映射：
-        #   · 已存在且 model_id=NULL → 回写（适用于从耳机数据库 URL-only 导入的条目）
-        #   · 不存在且 prev_status==text_only → 新建（保留原有行为）
         if mr.raw_data_id:
             rd_for_url = db.query(RawDataRecord).filter(RawDataRecord.id == mr.raw_data_id).first()
-            if rd_for_url and rd_for_url.item_url and rd_for_url.platform and rd_for_url.item_id:
-                existing_mapping = db.query(ItemUrlMapping).filter_by(
-                    platform=rd_for_url.platform, item_id=rd_for_url.item_id
-                ).first()
-                if existing_mapping and existing_mapping.model_id is None:
-                    existing_mapping.model_id = model_id
-                    existing_mapping.item_url = rd_for_url.item_url
-                    existing_mapping.brand_code = m.brand_code  # m is the ModelRecord queried above
-                    existing_mapping.source = 'match_confirm'
-                elif not existing_mapping and prev_status == "text_only":
-                    db.add(ItemUrlMapping(
-                        platform=rd_for_url.platform,
-                        item_id=rd_for_url.item_id,
-                        item_url=rd_for_url.item_url,
-                        model_id=model_id,
-                        brand_code=m.brand_code,
-                        price=rd_for_url.price,
-                        source='match_confirm',
-                    ))
+            if rd_for_url:
+                _upsert_url_mapping_for_raw(db, rd_for_url, m, source="match_confirm")
+
+        db.query(MatchResultAttr).filter(MatchResultAttr.match_result_id == mr.id).delete()
     else:
         raise HTTPException(status_code=400, detail="需提供 model_id、excluded=true 或 disputed=true")
 

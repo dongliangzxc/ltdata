@@ -53,7 +53,7 @@ def test_create_and_list_intervention_rule(db):
 
     listed = client.get("/api/rules/intervention-rules", params={"category_code": "projector"}).json()
     assert [row["id"] for row in listed] == [created["id"]]
-    assert listed[0]["summary"] == "品牌 in [海信] 且 商品名称不包含 [激光电视] 且 参考价格 < 500"
+    assert listed[0]["summary"] == "入库品牌 in [海信] 且 商品名称不包含 [激光电视] 且 参考价格 < 500"
 
 
 def test_intervention_rule_requires_category_and_valid_action(db):

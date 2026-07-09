@@ -124,7 +124,7 @@ def _validate_intervention_rule_payload(body: InterventionRuleIn | InterventionR
 def _intervention_condition_summary(conditions: dict) -> str:
     parts = []
     if conditions.get("brand_in"):
-        parts.append(f"品牌 in [{', '.join(conditions['brand_in'])}]")
+        parts.append(f"入库品牌 in [{', '.join(conditions['brand_in'])}]")
     if conditions.get("item_name_contains_any"):
         parts.append(f"商品名称包含 [{', '.join(conditions['item_name_contains_any'])}]")
     if conditions.get("item_name_not_contains_any"):

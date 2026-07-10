@@ -185,6 +185,20 @@ type MatchProgress = {
 
 type ReviewTabKey = 'text_only' | 'pending' | 'unidentified_brand' | 'disputed' | 'matched' | 'confirmed' | 'excluded' | 'filtered'
 
+type SearchBy = 'item_name' | 'brand_raw' | 'brand_code'
+
+const searchByLabelMap: Record<SearchBy, string> = {
+  item_name: '商品名称',
+  brand_raw: '原品牌',
+  brand_code: '入库品牌',
+}
+
+const searchByPlaceholderMap: Record<SearchBy, string> = {
+  item_name: '搜索宝贝名称',
+  brand_raw: '搜索原品牌',
+  brand_code: '搜索入库品牌',
+}
+
 export default function MatchPage() {
   const [searchParams] = useSearchParams()
   const [selectedJobId, setSelectedJobId] = useState<number | null>(
@@ -201,6 +215,7 @@ export default function MatchPage() {
   const exportPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [summary, setSummary] = useState<MatchSummary | null>(null)
   const [keyword, setKeyword] = useState('')
+  const [searchBy, setSearchBy] = useState<SearchBy>('item_name')
   const [categoryName, setCategoryName] = useState<string | undefined>()
   const [sortBy, setSortBy] = useState<string>('default')
   const [page, setPage] = useState(1)
@@ -276,6 +291,7 @@ export default function MatchPage() {
   const { data: pendingData, loading: pendingLoading, refresh: refreshPending } = useRequest(
     () => listPendingMatches(selectedJobId!, {
       keyword: keyword || undefined,
+      search_by: searchBy,
       page,
       page_size: 20,
       status: activeTab === 'unidentified_brand' ? 'pending' : activeTab,
@@ -285,7 +301,7 @@ export default function MatchPage() {
     }).then(r => r.data),
     {
       ready: selectedJobId != null && summary != null && summary.total > 0 && activeTab !== 'filtered',
-      refreshDeps: [selectedJobId, keyword, page, activeTab, categoryName, sortBy],
+      refreshDeps: [selectedJobId, keyword, searchBy, page, activeTab, categoryName, sortBy],
     }
   )
 
@@ -293,12 +309,13 @@ export default function MatchPage() {
     () => listFilteredItems({
       clean_job_id: selectedJobId!,
       keyword: keyword || undefined,
+      search_by: searchBy === 'brand_code' ? 'item_name' : searchBy,
       page,
       page_size: 20,
     }).then(r => r.data),
     {
       ready: selectedJobId != null && activeTab === 'filtered',
-      refreshDeps: [selectedJobId, keyword, page, activeTab],
+      refreshDeps: [selectedJobId, keyword, searchBy, page, activeTab],
     }
   )
 
@@ -1152,10 +1169,25 @@ export default function MatchPage() {
                   { value: 'sales_qty_asc', label: '销量从低到高' },
                 ]}
               />
+              <Select
+                value={searchBy}
+                onChange={next => {
+                  setSearchBy(next)
+                  setKeyword('')
+                  setPage(1)
+                }}
+                style={{ width: 130 }}
+                options={(activeTab === 'filtered'
+                  ? (['item_name', 'brand_raw'] as SearchBy[])
+                  : (['item_name', 'brand_raw', 'brand_code'] as SearchBy[])
+                ).map(value => ({ value, label: searchByLabelMap[value] }))}
+              />
               <Input.Search
-                placeholder="搜索宝贝名称"
+                placeholder={searchByPlaceholderMap[searchBy]}
                 allowClear
-                style={{ width: 220 }}
+                style={{ width: 180 }}
+                value={keyword}
+                onChange={e => setKeyword(e.target.value)}
                 onSearch={v => { setKeyword(v); setPage(1) }}
               />
             </Space>
@@ -1164,7 +1196,8 @@ export default function MatchPage() {
           <Tabs
             activeKey={activeTab}
             onChange={key => {
-              setActiveTab(key as ReviewTabKey)
+              const nextTab = key as ReviewTabKey
+              setActiveTab(nextTab)
               setPage(1)
               setKeyword('')
               setCategoryName(undefined)
@@ -1174,6 +1207,9 @@ export default function MatchPage() {
               setReviewDetail(null)
               setFilteredDetail(null)
               setReviewReason('')
+              if (nextTab === 'filtered' && searchBy === 'brand_code') {
+                setSearchBy('item_name')
+              }
             }}
             items={queueTabs.map(tab => ({
               key: tab.key,

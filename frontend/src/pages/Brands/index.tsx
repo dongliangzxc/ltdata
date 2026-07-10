@@ -3,10 +3,11 @@ import { useMemo, useState } from 'react'
 import {
   Card, Table, Button, Space, Popconfirm, message, Tag, Form, Modal, Input,
 } from 'antd'
-import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
+import { PlusOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import {
   listBrands, listBrandAliasesByCode, createBrandAliasForCode, deleteBrandAliasById,
+  updateBrand,
   type BrandItem, type BrandAliasItem,
 } from '../../services/api'
 import CreateBrandModal from '../../components/CreateBrandModal'
@@ -103,6 +104,11 @@ function AliasPanel({ brandCode, onAliasChange }: { brandCode: string; onAliasCh
 
 export default function BrandsPage() {
   const [createOpen, setCreateOpen] = useState(false)
+  const [searchText, setSearchText] = useState('')
+  const [editOpen, setEditOpen] = useState(false)
+  const [editingBrand, setEditingBrand] = useState<BrandItem | null>(null)
+  const [editSaving, setEditSaving] = useState(false)
+  const [editForm] = Form.useForm<{ brand_name: string }>()
 
   const { data: brands, loading, refresh } = useRequest(
     () => listBrands().then(r => r.data),
@@ -116,6 +122,42 @@ export default function BrandsPage() {
 
   const renderOptionalText = (v: string | null | undefined) =>
     v && v.trim() ? v : <span style={{ color: '#ccc' }}>—</span>
+
+  const filteredBrands = useMemo(() => {
+    const keyword = searchText.trim().toLowerCase()
+    if (!keyword) return brands || []
+    return (brands || []).filter((brand) => {
+      const fields = [brand.brand_code, brand.original_brand_name, brand.brand_name]
+      return fields.some(value => (value || '').toLowerCase().includes(keyword))
+    })
+  }, [brands, searchText])
+
+  const openEdit = (brand: BrandItem) => {
+    setEditingBrand(brand)
+    editForm.setFieldsValue({ brand_name: brand.brand_name || '' })
+    setEditOpen(true)
+  }
+
+  const closeEdit = () => {
+    setEditOpen(false)
+    setEditingBrand(null)
+    editForm.resetFields()
+  }
+
+  const handleEditSave = async () => {
+    if (!editingBrand) return
+    const values = await editForm.validateFields()
+    const trimmedName = values.brand_name?.trim() || ''
+    setEditSaving(true)
+    try {
+      await updateBrand(editingBrand.brand_code, { brand_name: trimmedName || null })
+      message.success('品牌名称已更新')
+      closeEdit()
+      refresh()
+    } finally {
+      setEditSaving(false)
+    }
+  }
 
   const columns = [
     {
@@ -152,11 +194,32 @@ export default function BrandsPage() {
     },
     { title: '型号数', dataIndex: 'model_count', width: 90 },
     { title: '写法别名数', dataIndex: 'alias_count', width: 110 },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 120,
+      render: (_: unknown, record: BrandItem) => (
+        <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>
+          编辑
+        </Button>
+      ),
+    },
   ]
 
   return (
     <Card
-      title="品牌管理"
+      title={(
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <span>品牌管理</span>
+          <Input.Search
+            allowClear
+            placeholder="搜索品牌码 / 上传时品牌名称 / 修改后名称"
+            value={searchText}
+            onChange={e => setSearchText(e.target.value)}
+            style={{ maxWidth: 420 }}
+          />
+        </Space>
+      )}
       extra={(
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
           新建品牌
@@ -164,7 +227,7 @@ export default function BrandsPage() {
       )}
     >
       <Table
-        dataSource={brands ?? []}
+        dataSource={filteredBrands}
         rowKey="brand_code"
         columns={columns}
         loading={loading}
@@ -183,6 +246,24 @@ export default function BrandsPage() {
           refresh()
         }}
       />
+      <Modal
+        title="修改品牌名称"
+        open={editOpen}
+        onOk={handleEditSave}
+        confirmLoading={editSaving}
+        onCancel={closeEdit}
+        okText="保存"
+        cancelText="取消"
+      >
+        <Form form={editForm} layout="vertical">
+          <Form.Item label="品牌码">
+            <Input value={editingBrand?.brand_code || ''} disabled />
+          </Form.Item>
+          <Form.Item name="brand_name" label="修改后名称">
+            <Input placeholder="留空则恢复默认显示" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </Card>
   )
 }

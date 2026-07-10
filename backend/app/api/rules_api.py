@@ -435,6 +435,7 @@ def delete_match_rule(rule_id: int, db: Session = Depends(get_db)):
 def list_filtered_items(
     clean_job_id: Optional[int] = Query(None),
     keyword: Optional[str] = Query(None),
+    search_by: str = Query("item_name"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -446,12 +447,17 @@ def list_filtered_items(
     )
     if clean_job_id:
         q = q.filter(FilteredItem.clean_job_id == clean_job_id)
+
+    allowed_search_fields = {"item_name", "brand_raw"}
+    if search_by not in allowed_search_fields:
+        search_by = "item_name"
+
     if keyword:
-        q = q.filter(
-            (FilteredItem.matched_keyword.ilike(f"%{keyword}%")) |
-            (FilteredItem.intervention_rule_name.ilike(f"%{keyword}%")) |
-            (FilteredItem.matched_reason.ilike(f"%{keyword}%"))
-        )
+        pattern = f"%{keyword}%"
+        if search_by == "brand_raw":
+            q = q.filter(RawDataRecord.brand_raw.ilike(pattern))
+        else:  # item_name
+            q = q.filter(RawDataRecord.item_name.ilike(pattern))
 
     total = q.count()
     rows = q.order_by(FilteredItem.id.desc()).offset((page - 1) * page_size).limit(page_size).all()

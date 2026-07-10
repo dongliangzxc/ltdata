@@ -261,3 +261,135 @@ def test_filtered_items_include_intervention_rule_reason(db):
     assert first_item["intervention_rule_id"] == rule.id
     assert first_item["intervention_rule_name"] == "配件过滤"
     assert first_item["matched_reason"] == "命中规则「配件过滤」：商品名称包含 [配件]"
+
+
+def _seed_filtered_row(db, *, clean_job_id, upload_id, item_name, brand_raw, rule):
+    raw = RawDataRecord(
+        file_id=upload_id,
+        platform="JD",
+        month=202605,
+        item_id=f"sku-{item_name}",
+        item_name=item_name,
+        brand_raw=brand_raw,
+        shop_name="店铺",
+    )
+    db.add(raw)
+    db.flush()
+    fi = FilteredItem(
+        raw_data_id=raw.id,
+        clean_job_id=clean_job_id,
+        matched_keyword="配件",
+        intervention_rule_id=rule.id,
+        intervention_rule_name=rule.name,
+        matched_reason=f"命中规则「{rule.name}」",
+    )
+    db.add(fi)
+    db.flush()
+    return fi
+
+
+def test_filtered_items_search_by_brand_raw(db):
+    client = _make_client(db)
+    db.add(Category(code="projector", name="投影"))
+    rule = InterventionRule(
+        name="配件过滤",
+        category_code="projector",
+        action="filter",
+        priority=10,
+        conditions={"item_name_contains_any": ["配件"]},
+    )
+    upload_file = UploadFileRecord(filename="test.xlsx", platform="JD", row_count=2)
+    db.add_all([rule, upload_file])
+    db.flush()
+    clean_job = CleanJobRecord(file_ids=[upload_file.id], rules={}, status="done", row_in=2, row_out=0, row_filtered=2)
+    db.add(clean_job)
+    db.flush()
+
+    hit = _seed_filtered_row(
+        db, clean_job_id=clean_job.id, upload_id=upload_file.id,
+        item_name="投影仪配件A", brand_raw="大疆DJI", rule=rule,
+    )
+    _seed_filtered_row(
+        db, clean_job_id=clean_job.id, upload_id=upload_file.id,
+        item_name="投影仪配件B", brand_raw="SONY", rule=rule,
+    )
+    db.commit()
+
+    resp = client.get(
+        "/api/rules/filtered-items",
+        params={"clean_job_id": clean_job.id, "search_by": "brand_raw", "keyword": "大疆"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["id"] == hit.id
+
+
+def test_filtered_items_search_by_item_name(db):
+    client = _make_client(db)
+    db.add(Category(code="projector", name="投影"))
+    rule = InterventionRule(
+        name="配件过滤",
+        category_code="projector",
+        action="filter",
+        priority=10,
+        conditions={"item_name_contains_any": ["配件"]},
+    )
+    upload_file = UploadFileRecord(filename="t.xlsx", platform="JD", row_count=2)
+    db.add_all([rule, upload_file])
+    db.flush()
+    clean_job = CleanJobRecord(file_ids=[upload_file.id], rules={}, status="done", row_in=2, row_out=0, row_filtered=2)
+    db.add(clean_job)
+    db.flush()
+
+    hit = _seed_filtered_row(
+        db, clean_job_id=clean_job.id, upload_id=upload_file.id,
+        item_name="Mavic 3 配件", brand_raw="DJI", rule=rule,
+    )
+    _seed_filtered_row(
+        db, clean_job_id=clean_job.id, upload_id=upload_file.id,
+        item_name="Osmo 配件", brand_raw="DJI", rule=rule,
+    )
+    db.commit()
+
+    resp = client.get(
+        "/api/rules/filtered-items",
+        params={"clean_job_id": clean_job.id, "search_by": "item_name", "keyword": "Mavic"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["id"] == hit.id
+
+
+def test_filtered_items_keyword_no_longer_matches_matched_keyword_or_rule_name(db):
+    """本次改造后，keyword 只按 search_by 指定的字段搜；不再对 matched_keyword / intervention_rule_name / matched_reason 做 OR 匹配。"""
+    client = _make_client(db)
+    db.add(Category(code="projector", name="投影"))
+    rule = InterventionRule(
+        name="配件过滤",
+        category_code="projector",
+        action="filter",
+        priority=10,
+        conditions={"item_name_contains_any": ["配件"]},
+    )
+    upload_file = UploadFileRecord(filename="t.xlsx", platform="JD", row_count=1)
+    db.add_all([rule, upload_file])
+    db.flush()
+    clean_job = CleanJobRecord(file_ids=[upload_file.id], rules={}, status="done", row_in=1, row_out=0, row_filtered=1)
+    db.add(clean_job)
+    db.flush()
+
+    _seed_filtered_row(
+        db, clean_job_id=clean_job.id, upload_id=upload_file.id,
+        item_name="Mavic 3", brand_raw="DJI", rule=rule,
+    )  # matched_keyword="配件"，intervention_rule_name="配件过滤"，matched_reason 含"配件过滤"
+    db.commit()
+
+    # 默认按 item_name 搜"配件过滤"，item_name 里没有该子串，应返回 0 条
+    resp = client.get(
+        "/api/rules/filtered-items",
+        params={"clean_job_id": clean_job.id, "keyword": "配件过滤"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 0

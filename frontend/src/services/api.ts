@@ -1036,6 +1036,10 @@ export type CreateBrandPayload = {
   brand_name?: string | null
 }
 
+export type UpdateBrandPayload = {
+  brand_name?: string | null
+}
+
 export type BrandItem = {
   brand_code: string
   brand_name: string | null
@@ -1057,6 +1061,9 @@ export const listBrands = () =>
 
 export const createBrand = (payload: CreateBrandPayload) =>
   api.post<BrandItem>('/brands', payload)
+
+export const updateBrand = (brandCode: string, payload: UpdateBrandPayload) =>
+  api.patch<BrandItem>(`/brands/${encodeURIComponent(brandCode)}`, payload)
 
 export const listBrandAliasesByCode = (brandCode: string) =>
   api.get<BrandAliasItem[]>(`/brands/${brandCode}/aliases`)

@@ -25,6 +25,10 @@ class BrandAliasCreate(BaseModel):
     alias_name: str
 
 
+class BrandUpdate(BaseModel):
+    brand_name: str | None
+
+
 def _clean_brand_code(value: str | None) -> str:
     return (value or "").strip()
 
@@ -46,10 +50,7 @@ def _is_placeholder_brand_code(value: str) -> bool:
     return not value or set(value) == {"-"}
 
 
-@router.get("", response_model=list[BrandOut])
-def list_brands(db: Session = Depends(get_db)):
-    """返回品牌主数据列表，附带型号数、别名数、覆盖品类。"""
-    brands = db.query(BrandRecord).order_by(BrandRecord.brand_code).all()
+def _build_brand_outs(db: Session, brands: list[BrandRecord]) -> list[BrandOut]:
     normalized_brand_code = func.trim(ModelRecord.brand_code)
     model_counts: dict[str, int] = dict(
         db.query(normalized_brand_code, func.count(ModelRecord.id))
@@ -62,44 +63,42 @@ def list_brands(db: Session = Depends(get_db)):
         .group_by(BrandAlias.brand_code)
         .all()
     )
-    model_brand_names: dict[str, str] = dict(
-        db.query(normalized_brand_code, func.min(func.trim(ModelRecord.brand_name)))
-        .filter(
-            ModelRecord.brand_code.isnot(None),
-            ModelRecord.brand_name.isnot(None),
-            func.trim(ModelRecord.brand_name) != "",
-        )
-        .group_by(normalized_brand_code)
+    model_brand_names: dict[str, str] = {}
+    category_map: dict[str, set[str]] = {}
+    for brand_code, brand_name, category_code in (
+        db.query(normalized_brand_code, ModelRecord.brand_name, ModelRecord.category_code)
+        .filter(ModelRecord.brand_code.isnot(None))
         .all()
-    )
-    # 一个品牌下型号跨品类时，全部按品类码升序列出。
-    category_rows = (
-        db.query(normalized_brand_code, ModelRecord.category_code)
-        .filter(
-            ModelRecord.brand_code.isnot(None),
-            ModelRecord.category_code.isnot(None),
-            ModelRecord.category_code != "",
-        )
-        .distinct()
-        .all()
-    )
-    category_map: dict[str, list[str]] = {}
-    for brand_code, category_code in category_rows:
-        category_map.setdefault(brand_code, []).append(category_code)
-    for codes in category_map.values():
-        codes.sort()
+    ):
+        if not brand_code:
+            continue
+        if brand_name and brand_code not in model_brand_names:
+            model_brand_names[brand_code] = brand_name
+        if category_code:
+            category_map.setdefault(brand_code, set()).add(category_code)
+    category_codes_by_brand = {
+        brand_code: sorted(codes)
+        for brand_code, codes in category_map.items()
+    }
 
     return [
         BrandOut(
             brand_code=brand.brand_code,
             brand_name=_first_text(brand.brand_name, model_brand_names.get(brand.brand_code)),
             original_brand_name=_first_text(brand.original_brand_name, brand.brand_name, model_brand_names.get(brand.brand_code)),
-            category_codes=category_map.get(brand.brand_code, []),
+            category_codes=category_codes_by_brand.get(brand.brand_code, []),
             model_count=model_counts.get(brand.brand_code, 0),
             alias_count=alias_counts.get(brand.brand_code, 0),
         )
         for brand in brands
     ]
+
+
+@router.get("", response_model=list[BrandOut])
+def list_brands(db: Session = Depends(get_db)):
+    """返回品牌主数据列表，附带型号数、别名数、覆盖品类。"""
+    brands = db.query(BrandRecord).order_by(BrandRecord.brand_code).all()
+    return _build_brand_outs(db, brands)
 
 
 @router.post("", response_model=BrandOut, status_code=201)
@@ -134,6 +133,19 @@ def create_brand(payload: BrandIn, db: Session = Depends(get_db)):
         model_count=0,
         alias_count=0,
     )
+
+
+@router.patch("/{brand_code}", response_model=BrandOut)
+def update_brand(brand_code: str, payload: BrandUpdate, db: Session = Depends(get_db)):
+    brand = db.query(BrandRecord).filter(BrandRecord.brand_code == brand_code).first()
+    if not brand:
+        raise HTTPException(status_code=404, detail="品牌不存在")
+
+    cleaned_name = payload.brand_name.strip() if payload.brand_name is not None else None
+    brand.brand_name = cleaned_name or None
+    db.commit()
+    db.refresh(brand)
+    return _build_brand_outs(db, [brand])[0]
 
 
 @router.get("/{brand_code}/aliases", response_model=list[BrandAliasOut])

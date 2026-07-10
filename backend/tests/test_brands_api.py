@@ -273,3 +273,49 @@ def test_delete_brand_alias(client_and_db):
     r = client.delete(f"/api/brands/SONY/aliases/{alias.id}")
     assert r.status_code == 204
     assert db.query(BrandAlias).filter(BrandAlias.id == alias.id).first() is None
+
+
+def test_update_brand_name_changes_only_edited_name(client_and_db):
+    client, db = client_and_db
+    brand = BrandRecord(
+        brand_code="SONY",
+        brand_name="索尼旧名",
+        original_brand_name="Sony Upload",
+    )
+    db.add(brand)
+    db.add(ModelRecord(brand_code="SONY", model_code="A1", brand_name="索尼型号", category_code="camera"))
+    db.add(BrandAlias(alias_name="Sony", brand_code="SONY"))
+    db.commit()
+
+    resp = client.patch("/api/brands/SONY", json={"brand_name": " 索尼新名 "})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["brand_code"] == "SONY"
+    assert body["brand_name"] == "索尼新名"
+    assert body["original_brand_name"] == "Sony Upload"
+    assert body["model_count"] == 1
+    assert body["alias_count"] == 1
+    assert db.query(BrandRecord).filter_by(brand_code="SONY").one().brand_name == "索尼新名"
+    assert db.query(BrandRecord).filter_by(brand_code="SONY").one().original_brand_name == "Sony Upload"
+
+
+def test_update_brand_name_stores_blank_as_none(client_and_db):
+    client, db = client_and_db
+    db.add(BrandRecord(brand_code="BOSE", brand_name="Bose", original_brand_name="Bose Upload"))
+    db.commit()
+
+    resp = client.patch("/api/brands/BOSE", json={"brand_name": "   "})
+
+    assert resp.status_code == 200
+    assert resp.json()["brand_name"] is None
+    assert db.query(BrandRecord).filter_by(brand_code="BOSE").one().brand_name is None
+
+
+def test_update_brand_name_returns_404_for_missing_brand(client_and_db):
+    client, _db = client_and_db
+
+    resp = client.patch("/api/brands/MISSING", json={"brand_name": "Missing"})
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "品牌不存在"

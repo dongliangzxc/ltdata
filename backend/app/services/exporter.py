@@ -2,6 +2,9 @@
 导出服务：基于型号匹配结果，按品类分 Sheet 导出。
 - 已匹配/已确认的条目 → 按 category_name 分 Sheet，含动态规格列
 - 待确认条目 → 单独"待确认" Sheet，无规格列
+- URL 映射待确认（text_only）→ 按品类分 Sheet，命名"{品类}-待审核"
+- 争议复核 / 已排除 → 分别一个总 Sheet，基础列
+- 干扰项过滤 → 单独 Sheet，基础列 + 命中关键词/规则/原因；仅导出未恢复项
 - 规格列按品类过滤：每个 Sheet 只显示本品类（category_code）的规格列
 - 约定：models.category_name 与 metadata_specs.category_code 使用相同的品类码（如 SOUNDBAR）
 - 规格值从 model_specs 查询
@@ -15,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.models.schemas import (
     MatchResult, RawDataRecord, ModelRecord,
     ModelSpec, MetadataSpec,
-    Category,
+    Category, FilteredItem,
 )
 from app.core.config import settings
 
@@ -137,11 +140,48 @@ def export_match_job(
         )
         .order_by(MatchResult.id)
     )
+    # 争议复核 / 已排除：可能未绑定 model_id，使用外连接
+    disputed_query = (
+        db.query(MatchResult, RawDataRecord, ModelRecord)
+        .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
+        .outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
+        .filter(
+            MatchResult.clean_job_id == clean_job_id,
+            MatchResult.match_status == "disputed",
+            MatchResult.is_disabled == 0,
+        )
+        .order_by(MatchResult.id)
+    )
+    excluded_query = (
+        db.query(MatchResult, RawDataRecord, ModelRecord)
+        .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
+        .outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
+        .filter(
+            MatchResult.clean_job_id == clean_job_id,
+            MatchResult.match_status == "excluded",
+            MatchResult.is_disabled == 0,
+        )
+        .order_by(MatchResult.id)
+    )
+    # 干扰项过滤：来自独立表 filtered_items，仅导出未恢复条目
+    filtered_query = (
+        db.query(FilteredItem, RawDataRecord)
+        .join(RawDataRecord, FilteredItem.raw_data_id == RawDataRecord.id)
+        .filter(
+            FilteredItem.clean_job_id == clean_job_id,
+            FilteredItem.is_recovered == 0,
+        )
+        .order_by(FilteredItem.id)
+    )
 
     matched_total = matched_query.count()
     pending_total = pending_query.count()
     text_only_total = text_only_query.count()
-    if matched_total == 0 and pending_total == 0 and text_only_total == 0:
+    disputed_total = disputed_query.count()
+    excluded_total = excluded_query.count()
+    filtered_total = filtered_query.count()
+    if (matched_total == 0 and pending_total == 0 and text_only_total == 0
+            and disputed_total == 0 and excluded_total == 0 and filtered_total == 0):
         return []
 
     export_dir = Path(settings.EXPORT_DIR)
@@ -198,6 +238,34 @@ def export_match_job(
             cat = cat_map.get(cat_code, cat_code) or "未知品类"
             worksheet = get_text_only_sheet(cat)
             worksheet.append([row.get(field) for field in BASE_FIELD_NAMES])
+
+    def _write_simple_match_sheet(title: str, total: int, query):
+        """争议复核 / 已排除等单表 Sheet：基础列 + 可选品牌/型号（model_id 可能为空）。"""
+        if total == 0:
+            return
+        sheet = workbook.create_sheet(title=_sheet_name(title, used_sheet_names))
+        sheet.append(BASE_CN_NAMES)
+        for offset in range(0, total, PAGE_SIZE):
+            rows = query.offset(offset).limit(PAGE_SIZE).all()
+            for _, rd, model in rows:
+                row = _base_row(rd, model)
+                sheet.append([row.get(field) for field in BASE_FIELD_NAMES])
+
+    _write_simple_match_sheet("争议复核", disputed_total, disputed_query)
+    _write_simple_match_sheet("已排除", excluded_total, excluded_query)
+
+    if filtered_total > 0:
+        FILTERED_EXTRA_COLS = ["命中关键词", "命中规则", "命中原因"]
+        filtered_sheet = workbook.create_sheet(title=_sheet_name("干扰项过滤", used_sheet_names))
+        filtered_sheet.append(BASE_CN_NAMES + FILTERED_EXTRA_COLS)
+        for offset in range(0, filtered_total, PAGE_SIZE):
+            filtered_rows = filtered_query.offset(offset).limit(PAGE_SIZE).all()
+            for fi, rd in filtered_rows:
+                row = _base_row(rd)
+                filtered_sheet.append(
+                    [row.get(field) for field in BASE_FIELD_NAMES]
+                    + [fi.matched_keyword or "", fi.intervention_rule_name or "", fi.matched_reason or ""]
+                )
 
     workbook.save(str(file_path))
 

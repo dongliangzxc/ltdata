@@ -955,7 +955,7 @@ def test_pending_search_by_brand_raw_filters_on_raw_brand(db, match_client):
     db.flush()
     dji_mr = _seed_pending_for_search(
         db, clean_job_id=clean_job.id, upload_id=upload.id,
-        model_id=model_dji.id, item_name="大疆无人机 Mavic 3", brand_raw="大疆DJI",
+        model_id=model_dji.id, item_name="Mavic 3 无人机", brand_raw="大疆DJI",
     )
     _seed_pending_for_search(
         db, clean_job_id=clean_job.id, upload_id=upload.id,

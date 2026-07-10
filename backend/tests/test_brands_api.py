@@ -319,3 +319,33 @@ def test_update_brand_name_returns_404_for_missing_brand(client_and_db):
 
     assert resp.status_code == 404
     assert resp.json()["detail"] == "品牌不存在"
+
+
+def test_update_brand_name_clear_returns_none_even_with_model_metadata(client_and_db):
+    """清空品牌名后，PATCH 响应与数据库 brand_name 都应为 None，不回退到型号品牌名。"""
+    client, db = client_and_db
+    db.add(BrandRecord(brand_code="DJI", brand_name="旧名", original_brand_name="DJI Upload"))
+    db.add(ModelRecord(brand_code="DJI", model_code="OSMO-POCKET-3", brand_name="大疆"))
+    db.commit()
+
+    resp = client.patch("/api/brands/DJI", json={"brand_name": "   "})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["brand_name"] is None
+    # original_brand_name 仍然保留（首次上传值）
+    assert body["original_brand_name"] == "DJI Upload"
+    assert db.query(BrandRecord).filter_by(brand_code="DJI").one().brand_name is None
+
+
+def test_update_brand_name_accepts_missing_field_and_clears(client_and_db):
+    """BrandUpdate.brand_name 默认为 None，缺省字段时按清空处理。"""
+    client, db = client_and_db
+    db.add(BrandRecord(brand_code="JBL", brand_name="JBL 旧名", original_brand_name="JBL Upload"))
+    db.commit()
+
+    resp = client.patch("/api/brands/JBL", json={})
+
+    assert resp.status_code == 200
+    assert resp.json()["brand_name"] is None
+    assert db.query(BrandRecord).filter_by(brand_code="JBL").one().brand_name is None

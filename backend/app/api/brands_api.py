@@ -26,7 +26,7 @@ class BrandAliasCreate(BaseModel):
 
 
 class BrandUpdate(BaseModel):
-    brand_name: str | None
+    brand_name: str | None = None
 
 
 def _clean_brand_code(value: str | None) -> str:
@@ -145,7 +145,11 @@ def update_brand(brand_code: str, payload: BrandUpdate, db: Session = Depends(ge
     brand.brand_name = cleaned_name or None
     db.commit()
     db.refresh(brand)
-    return _build_brand_outs(db, [brand])[0]
+    # 编辑响应必须精确反映 brands.brand_name（清空后为 None），
+    # 不复用列表 API 的“回退到型号品牌名”行为。
+    out = _build_brand_outs(db, [brand])[0]
+    out.brand_name = brand.brand_name
+    return out
 
 
 @router.get("/{brand_code}/aliases", response_model=list[BrandAliasOut])

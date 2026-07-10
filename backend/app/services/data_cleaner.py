@@ -137,7 +137,8 @@ def _matches_intervention_rule(
     price_condition = conditions.get("reference_price")
     if price_condition:
         has_recognized_condition = True
-        if not _matches_price_condition(record.ref_price, price_condition):
+        price_for_rule = record.ref_price if record.ref_price is not None else record.price
+        if not _matches_price_condition(price_for_rule, price_condition):
             return False
 
     return has_recognized_condition

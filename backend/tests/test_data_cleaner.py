@@ -612,3 +612,34 @@ def test_intervention_rule_brand_matches_standardized_alias_before_cleaning(db):
     filtered = db.query(FilteredItem).one()
     assert filtered.raw_data_id == raw.id
     assert filtered.intervention_rule_name == "运动相机低价过滤"
+
+
+def test_intervention_price_rule_falls_back_to_display_price_when_reference_price_missing(db):
+    """Price intervention rules should use the visible price when reference price is missing."""
+    upload = _make_file(db)
+    raw = _make_raw(
+        db,
+        upload.id,
+        "大疆 DJI Osmo Action 1.5 米延长杆套件 Osmo Nano/Osmo Action 6/5 Pro/4/3 配件",
+        brand_raw="大疆（DJI）",
+    )
+    raw.ref_price = None
+    raw.price = 229
+    job = _make_job(db, upload.id)
+    db.add(InterventionRule(
+        name="运动相机低价过滤",
+        category_code="action_cameras",
+        action="filter",
+        priority=1,
+        conditions={"brand_in": ["大疆（DJI）"], "reference_price": {"op": "lte", "value": 700}},
+        is_active=1,
+    ))
+    db.commit()
+
+    out = run_clean(db, job.id, [upload.id], {}, dispatch_category_code="action_cameras")
+
+    assert out == 0
+    assert db.query(CleanedDataRecord).count() == 0
+    filtered = db.query(FilteredItem).one()
+    assert filtered.raw_data_id == raw.id
+    assert filtered.intervention_rule_name == "运动相机低价过滤"

@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -28,6 +28,7 @@ def analytics_db(monkeypatch):
     monkeypatch.setattr("app.services.price_auditor.AnalyticsSession", Session)
 
     session = Session()
+    session._test_engine = engine
     try:
         yield session
     finally:
@@ -35,7 +36,7 @@ def analytics_db(monkeypatch):
         AnalyticsBase.metadata.drop_all(bind=engine)
 
 
-def _seed_match_result(db, *, price=Decimal("110.00"), month=202607, status="matched"):
+def _seed_match_result(db, *, price=Decimal("110.00"), month=202607, status="matched", model_id=None):
     upload = UploadFileRecord(
         filename="price-audit.xlsx",
         platform="jd",
@@ -67,20 +68,22 @@ def _seed_match_result(db, *, price=Decimal("110.00"), month=202607, status="mat
     db.add(clean_job)
     db.flush()
 
-    model = ModelRecord(
-        brand_code="TST",
-        model_code="AUDIT-100",
-        brand_name="Test Brand",
-        model_name="Audit Model",
-        category_code="test",
-    )
-    db.add(model)
-    db.flush()
+    if model_id is None:
+        model = ModelRecord(
+            brand_code="TST",
+            model_code="AUDIT-100",
+            brand_name="Test Brand",
+            model_name="Audit Model",
+            category_code="test",
+        )
+        db.add(model)
+        db.flush()
+        model_id = model.id
 
     match_result = MatchResult(
         clean_job_id=clean_job.id,
         raw_data_id=raw.id,
-        model_id=model.id,
+        model_id=model_id,
         match_status=status,
     )
     db.add(match_result)
@@ -152,6 +155,54 @@ def test_audit_price_marks_no_history_when_analytics_history_missing(db, analyti
     assert result == {"audited": 1}
     assert match_result.price_flag == "no_history"
     assert match_result.price_ref is None
+
+
+def test_audit_price_batches_history_average_queries(db, analytics_db):
+    from app.services.price_auditor import audit_price
+
+    model = ModelRecord(
+        brand_code="TST-BATCH",
+        model_code="AUDIT-100",
+        brand_name="Test Brand",
+        model_name="Audit Model",
+        category_code="test",
+    )
+    db.add(model)
+    db.flush()
+    match_result_ids = [
+        _seed_match_result(db, price=Decimal("110.00"), month=202607, model_id=model.id)
+        for _ in range(3)
+    ]
+    _seed_history(analytics_db, price=Decimal("100.00"))
+
+    select_count = 0
+
+    def count_selects(conn, cursor, statement, parameters, context, executemany):
+        nonlocal select_count
+        if statement.lstrip().upper().startswith("SELECT"):
+            select_count += 1
+
+    event.listen(analytics_db._test_engine, "before_cursor_execute", count_selects)
+    try:
+        result = audit_price(db, match_result_ids, commit=False)
+    finally:
+        event.remove(analytics_db._test_engine, "before_cursor_execute", count_selects)
+
+    assert result == {"audited": 3}
+    assert select_count == 1
+    for match_result_id in match_result_ids:
+        match_result = db.get(MatchResult, match_result_id)
+        assert match_result.price_flag == "ok"
+        assert match_result.price_ref == Decimal("100.00")
+
+
+def test_published_items_has_model_month_index_for_price_audit():
+    indexed_columns = {
+        tuple(column.name for column in index.columns)
+        for index in PublishedItem.__table__.indexes
+    }
+
+    assert ("model_code", "month") in indexed_columns
 
 
 def test_audit_price_marks_no_history_when_current_price_missing(db, analytics_db):

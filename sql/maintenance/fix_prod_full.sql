@@ -264,6 +264,10 @@ IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='luot
     ALTER TABLE `luotu_analytics`.`published_items` ADD COLUMN corrected_sales_amount DECIMAL(14,2) NULL;
 END IF;
 
+IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA='luotu_analytics' AND TABLE_NAME='published_items' AND INDEX_NAME='ix_published_items_model_code_month') THEN
+    ALTER TABLE `luotu_analytics`.`published_items` ADD INDEX ix_published_items_model_code_month (model_code, month);
+END IF;
+
 END$$
 DELIMITER ;
 

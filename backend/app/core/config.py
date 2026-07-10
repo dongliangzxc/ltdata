@@ -5,6 +5,10 @@ from pathlib import Path
 class Settings(BaseSettings):
     DATABASE_URL: str = "mysql+pymysql://luotu:luotu123@localhost:3306/luotu"
     ANALYTICS_DATABASE_URL: str = "mysql+pymysql://luotu:luotu123@localhost:3306/luotu_analytics"
+    DATABASE_POOL_SIZE: int = 20
+    DATABASE_MAX_OVERFLOW: int = 30
+    DATABASE_POOL_TIMEOUT: int = 60
+    DATABASE_POOL_RECYCLE: int = 1800
     SECRET_KEY: str = "luotu-change-me-in-production"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 小时
     UPLOAD_DIR: str = "./uploads"

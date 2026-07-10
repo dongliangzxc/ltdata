@@ -388,6 +388,7 @@ CREATE TABLE IF NOT EXISTS published_items (
     KEY idx_pub_month     (month),
     KEY idx_pub_brand     (brand_code),
     KEY idx_pub_model     (model_code),
+    KEY idx_pub_model_month (model_code, month),
     KEY idx_pub_category  (category_name),
     KEY idx_pub_job       (publish_job_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='已发布商品宽表';

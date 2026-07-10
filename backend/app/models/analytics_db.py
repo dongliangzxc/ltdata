@@ -1,10 +1,11 @@
-from sqlalchemy import create_engine, Column, Integer, String, Text, Numeric, DateTime, UniqueConstraint
+from sqlalchemy import create_engine, Column, Integer, String, Text, Numeric, DateTime, Index, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 from app.core.config import settings
+from app.models.database import build_engine_options
 
-analytics_engine = create_engine(settings.ANALYTICS_DATABASE_URL, pool_pre_ping=True, pool_recycle=3600)
+analytics_engine = create_engine(settings.ANALYTICS_DATABASE_URL, **build_engine_options(settings))
 AnalyticsSession = sessionmaker(autocommit=False, autoflush=False, bind=analytics_engine)
 AnalyticsBase = declarative_base()
 
@@ -23,6 +24,7 @@ class PublishedItem(AnalyticsBase):
     __tablename__ = "published_items"
     __table_args__ = (
         UniqueConstraint("platform", "item_id", "month", name="uq_published_item"),
+        Index("ix_published_items_model_code_month", "model_code", "month"),
     )
 
     id                = Column(Integer, primary_key=True, index=True)

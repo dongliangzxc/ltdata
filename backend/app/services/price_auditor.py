@@ -67,19 +67,58 @@ def audit_price(db: Session, match_result_ids: list[int], commit: bool = True) -
 
     analytics_db = AnalyticsSession()
     try:
+        audit_keys = {
+            (model.model_code, raw_data.month)
+            for _, raw_data, model in rows
+            if raw_data.price is not None and raw_data.month is not None and model.model_code
+        }
+        history_months_by_key = {
+            key: _previous_months(month)
+            for key in audit_keys
+            for _, month in [key]
+        }
+        model_codes = {model_code for model_code, _ in audit_keys}
+        history_months = {
+            month
+            for months in history_months_by_key.values()
+            for month in months
+        }
+        history_totals: dict[tuple[str, int], tuple[Decimal, int]] = {}
+        if model_codes and history_months:
+            history_rows = (
+                analytics_db.query(
+                    PublishedItem.model_code,
+                    PublishedItem.month,
+                    func.sum(PublishedItem.price),
+                    func.count(PublishedItem.price),
+                )
+                .filter(PublishedItem.model_code.in_(model_codes))
+                .filter(PublishedItem.month.in_(history_months))
+                .filter(PublishedItem.price.isnot(None))
+                .group_by(PublishedItem.model_code, PublishedItem.month)
+                .all()
+            )
+            history_totals = {
+                (model_code, month): (price_sum, price_count)
+                for model_code, month, price_sum, price_count in history_rows
+            }
+
         for match_result, raw_data, model in rows:
             if raw_data.price is None or raw_data.month is None or not model.model_code:
                 match_result.price_flag = "no_history"
                 match_result.price_ref = None
                 continue
 
-            avg_price = (
-                analytics_db.query(func.avg(PublishedItem.price))
-                .filter(PublishedItem.model_code == model.model_code)
-                .filter(PublishedItem.month.in_(_previous_months(raw_data.month)))
-                .filter(PublishedItem.price.isnot(None))
-                .scalar()
-            )
+            total_price = Decimal("0")
+            total_count = 0
+            for month in history_months_by_key[(model.model_code, raw_data.month)]:
+                month_total = history_totals.get((model.model_code, month))
+                if month_total is None:
+                    continue
+                price_sum, price_count = month_total
+                total_price += price_sum
+                total_count += price_count
+            avg_price = None if total_count == 0 else total_price / total_count
 
             flag = _flag_for_price(raw_data.price, avg_price)
             match_result.price_flag = flag

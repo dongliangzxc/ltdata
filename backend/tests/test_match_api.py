@@ -912,3 +912,163 @@ def test_same_title_confirm_runs_price_audit_without_committing(db, match_client
 
     assert response.status_code == 200
     assert audit_calls == [{"match_result_ids": [match_row.id], "commit": False}]
+
+
+def _seed_pending_for_search(db, *, clean_job_id, upload_id, model_id, item_name, brand_raw):
+    """辅助：构造一条 pending 状态的 MatchResult。"""
+    rd = RawDataRecord(
+        file_id=upload_id,
+        platform="jd",
+        item_id=f"sku-{item_name}",
+        item_url=f"https://item.jd.com/{item_name}.html",
+        item_name=item_name,
+        brand_raw=brand_raw,
+        sales_qty=10,
+    )
+    db.add(rd)
+    db.flush()
+    mr = MatchResult(
+        clean_job_id=clean_job_id,
+        raw_data_id=rd.id,
+        model_id=model_id,
+        match_status="pending",
+        matched_by="auto",
+        match_source="s1",
+    )
+    db.add(mr)
+    db.flush()
+    return mr
+
+
+def test_pending_search_by_brand_raw_filters_on_raw_brand(db, match_client):
+    from app.models.schemas import BrandRecord
+    model_dji = ModelRecord(brand_code="DJI", model_code="Osmo6", category_code="camera")
+    model_sony = ModelRecord(brand_code="Sony", model_code="WH-XM5", category_code="headphone")
+    db.add_all([model_dji, model_sony])
+    db.add(BrandRecord(brand_code="DJI", brand_name="大疆"))
+    db.add(BrandRecord(brand_code="Sony", brand_name="索尼"))
+    upload = UploadFileRecord(filename="search.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+    clean_job = CleanJobRecord(file_ids=[upload.id], status="done")
+    db.add(clean_job)
+    db.flush()
+    dji_mr = _seed_pending_for_search(
+        db, clean_job_id=clean_job.id, upload_id=upload.id,
+        model_id=model_dji.id, item_name="大疆无人机 Mavic 3", brand_raw="大疆DJI",
+    )
+    _seed_pending_for_search(
+        db, clean_job_id=clean_job.id, upload_id=upload.id,
+        model_id=model_sony.id, item_name="索尼耳机 WH-XM5", brand_raw="SONY 索尼",
+    )
+    db.commit()
+
+    resp = match_client.get(
+        f"/api/match/{clean_job.id}/pending",
+        params={"status": "pending", "search_by": "brand_raw", "keyword": "大疆"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["id"] == dji_mr.id
+
+
+def test_pending_search_by_item_name_default_preserves_previous_behavior(db, match_client):
+    from app.models.schemas import BrandRecord
+    model_dji = ModelRecord(brand_code="DJI", model_code="Osmo6", category_code="camera")
+    db.add(model_dji)
+    db.add(BrandRecord(brand_code="DJI", brand_name="大疆"))
+    upload = UploadFileRecord(filename="search-name.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+    clean_job = CleanJobRecord(file_ids=[upload.id], status="done")
+    db.add(clean_job)
+    db.flush()
+    hit = _seed_pending_for_search(
+        db, clean_job_id=clean_job.id, upload_id=upload.id,
+        model_id=model_dji.id, item_name="大疆无人机 Mavic 3", brand_raw="大疆",
+    )
+    _seed_pending_for_search(
+        db, clean_job_id=clean_job.id, upload_id=upload.id,
+        model_id=model_dji.id, item_name="配件套装", brand_raw="大疆",
+    )
+    db.commit()
+
+    resp = match_client.get(
+        f"/api/match/{clean_job.id}/pending",
+        params={"status": "pending", "keyword": "Mavic"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["id"] == hit.id
+
+
+def test_pending_search_by_brand_code_matches_code_or_brand_name(db, match_client):
+    from app.models.schemas import BrandRecord
+    model_dji = ModelRecord(brand_code="DJI", model_code="Osmo6", category_code="camera")
+    model_sony = ModelRecord(brand_code="Sony", model_code="WH-XM5", category_code="headphone")
+    db.add_all([model_dji, model_sony])
+    db.add(BrandRecord(brand_code="DJI", brand_name="大疆"))
+    db.add(BrandRecord(brand_code="Sony", brand_name="索尼"))
+    upload = UploadFileRecord(filename="search-brand.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+    clean_job = CleanJobRecord(file_ids=[upload.id], status="done")
+    db.add(clean_job)
+    db.flush()
+    dji_mr = _seed_pending_for_search(
+        db, clean_job_id=clean_job.id, upload_id=upload.id,
+        model_id=model_dji.id, item_name="Mavic 3", brand_raw="大疆",
+    )
+    _seed_pending_for_search(
+        db, clean_job_id=clean_job.id, upload_id=upload.id,
+        model_id=model_sony.id, item_name="WH-XM5", brand_raw="SONY",
+    )
+    db.commit()
+
+    # 搜英文编码 DJI 命中
+    resp_code = match_client.get(
+        f"/api/match/{clean_job.id}/pending",
+        params={"status": "pending", "search_by": "brand_code", "keyword": "DJI"},
+    )
+    assert resp_code.status_code == 200
+    assert resp_code.json()["total"] == 1
+    assert resp_code.json()["items"][0]["id"] == dji_mr.id
+
+    # 搜中文名 大疆 也命中同一条
+    resp_name = match_client.get(
+        f"/api/match/{clean_job.id}/pending",
+        params={"status": "pending", "search_by": "brand_code", "keyword": "大疆"},
+    )
+    assert resp_name.status_code == 200
+    assert resp_name.json()["total"] == 1
+    assert resp_name.json()["items"][0]["id"] == dji_mr.id
+
+
+def test_pending_search_by_invalid_value_falls_back_to_item_name(db, match_client):
+    model = ModelRecord(brand_code="DJI", model_code="Osmo6", category_code="camera")
+    db.add(model)
+    upload = UploadFileRecord(filename="search-fallback.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+    clean_job = CleanJobRecord(file_ids=[upload.id], status="done")
+    db.add(clean_job)
+    db.flush()
+    hit = _seed_pending_for_search(
+        db, clean_job_id=clean_job.id, upload_id=upload.id,
+        model_id=model.id, item_name="Mavic 无人机", brand_raw="大疆",
+    )
+    _seed_pending_for_search(
+        db, clean_job_id=clean_job.id, upload_id=upload.id,
+        model_id=model.id, item_name="配件套装", brand_raw="大疆",
+    )
+    db.commit()
+
+    resp = match_client.get(
+        f"/api/match/{clean_job.id}/pending",
+        params={"status": "pending", "search_by": "nonsense", "keyword": "Mavic"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 1
+    assert resp.json()["items"][0]["id"] == hit.id

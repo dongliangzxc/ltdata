@@ -15,7 +15,7 @@ from app.models.database import get_db, SessionLocal
 from sqlalchemy import func
 from app.models.schemas import (
     MatchResult, MatchResultOut, MatchSummary,
-    CleanJobRecord, RawDataRecord, ModelRecord,
+    CleanJobRecord, RawDataRecord, ModelRecord, BrandRecord,
     MatchResultAttr, MatchResultCandidate, MatchCandidateOut, ItemUrlMapping, Category,
     MetadataSpec, ModelSpec, CleanedDataRecord,
     DispatchItem,
@@ -280,6 +280,7 @@ def get_match_summary(clean_job_id: int, db: Session = Depends(get_db)):
 def list_pending(
     clean_job_id: int,
     keyword: Optional[str] = Query(None),
+    search_by: str = Query("item_name"),
     status: str = Query("pending"),
     brand_identified: Optional[int] = Query(None),
     category_name: Optional[str] = Query(None),
@@ -321,8 +322,25 @@ def list_pending(
     else:
         q = q.filter(MatchResult.match_status == status)
 
+    allowed_search_fields = {"item_name", "brand_raw", "brand_code"}
+    if search_by not in allowed_search_fields:
+        search_by = "item_name"
+
     if keyword:
-        q = q.filter(RawDataRecord.item_name.ilike(f"%{keyword}%"))
+        pattern = f"%{keyword}%"
+        if search_by == "brand_raw":
+            q = q.filter(RawDataRecord.brand_raw.ilike(pattern))
+        elif search_by == "brand_code":
+            q = (
+                q.outerjoin(BrandRecord, BrandRecord.brand_code == ModelRecord.brand_code)
+                 .filter(
+                     (ModelRecord.brand_code.ilike(pattern))
+                     | (BrandRecord.brand_name.ilike(pattern))
+                 )
+                 .group_by(BrandRecord.id)
+            )
+        else:  # item_name（默认）
+            q = q.filter(RawDataRecord.item_name.ilike(pattern))
     if brand_identified is not None:
         q = q.filter(MatchResult.brand_identified == brand_identified)
     if category_name:

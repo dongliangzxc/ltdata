@@ -215,6 +215,7 @@ export default function MatchPage() {
   const exportPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [summary, setSummary] = useState<MatchSummary | null>(null)
   const [keyword, setKeyword] = useState('')
+  const [inputValue, setInputValue] = useState('')
   const [searchBy, setSearchBy] = useState<SearchBy>('item_name')
   const [categoryName, setCategoryName] = useState<string | undefined>()
   const [sortBy, setSortBy] = useState<string>('default')
@@ -1174,6 +1175,7 @@ export default function MatchPage() {
                 onChange={next => {
                   setSearchBy(next)
                   setKeyword('')
+                  setInputValue('')
                   setPage(1)
                 }}
                 style={{ width: 130 }}
@@ -1186,9 +1188,9 @@ export default function MatchPage() {
                 placeholder={searchByPlaceholderMap[searchBy]}
                 allowClear
                 style={{ width: 180 }}
-                value={keyword}
-                onChange={e => setKeyword(e.target.value)}
-                onSearch={v => { setKeyword(v); setPage(1) }}
+                value={inputValue}
+                onChange={e => setInputValue(e.target.value)}
+                onSearch={v => { setInputValue(v); setKeyword(v); setPage(1) }}
               />
             </Space>
           }
@@ -1200,6 +1202,7 @@ export default function MatchPage() {
               setActiveTab(nextTab)
               setPage(1)
               setKeyword('')
+              setInputValue('')
               setCategoryName(undefined)
               setSortBy('default')
               setSelectedReviewId(null)

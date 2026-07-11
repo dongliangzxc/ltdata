@@ -122,6 +122,7 @@ type PendingItem = {
   review_note?: string | null
   reviewed_at?: string | null
   candidates?: MatchCandidateOut[]
+  brand_identified?: number
   sales_qty?: number | null
 }
 

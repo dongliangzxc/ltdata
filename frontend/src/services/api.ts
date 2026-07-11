@@ -543,6 +543,46 @@ export const confirmMatch = (
   match_id: number,
   data: { model_id?: number; excluded?: boolean; disputed?: boolean; reason?: string }
 ) => api.put(`/match/confirm/${match_id}`, data)
+
+export type BatchConfirmFilter = {
+  tab: 'text_only' | 'pending'
+  keyword?: string | null
+  search_by?: 'item_name' | 'brand_raw' | 'brand_code'
+  category_name?: string | null
+  sort_by?: 'default' | 'sales_qty_desc' | 'sales_qty_asc'
+}
+
+export type BatchConfirmPayload =
+  | { mode: 'ids'; ids: number[] }
+  | { mode: 'filter'; filter: BatchConfirmFilter }
+
+export type BatchConfirmFailure = {
+  id: number
+  item_name: string | null
+  reason: string
+}
+
+export type BatchConfirmResult = {
+  total: number
+  matched_total: number
+  truncated: boolean
+  success: number
+  failed: number
+  failures: BatchConfirmFailure[]
+}
+
+export type BatchConfirmPreview = {
+  total_valid: number
+  total_invalid: number
+  candidate_distribution: { brand_code: string; model_code: string; count: number }[]
+}
+
+export const batchConfirmMatch = (clean_job_id: number, payload: BatchConfirmPayload) =>
+  api.post<BatchConfirmResult>(`/match/${clean_job_id}/batch-confirm`, payload)
+
+export const previewBatchConfirmMatch = (clean_job_id: number, filter: BatchConfirmFilter) =>
+  api.get<BatchConfirmPreview>(`/match/${clean_job_id}/batch-confirm/preview`, { params: filter })
+
 export const revertMatch = (match_id: number) =>
   api.post<MatchResultOut>(`/match/items/${match_id}/revert`)
 export const getMatchReviewDetail = (match_id: number) =>

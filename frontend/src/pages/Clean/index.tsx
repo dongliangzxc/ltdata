@@ -5,7 +5,7 @@ import {
   Space, Statistic, Select, message
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { EyeOutlined, AimOutlined } from '@ant-design/icons'
+import { EyeOutlined, AimOutlined, CheckCircleFilled } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -132,8 +132,17 @@ const jobColumns = (onPreview: (id: number) => void, onEnter: (id: number) => vo
     render: formatNumber,
   },
   {
-    title: '状态', dataIndex: 'status', width: 100,
-    render: renderStatus,
+    title: '状态', dataIndex: 'status', width: 140,
+    render: (status: string, row) => (
+      <Space size={4}>
+        {renderStatus(status)}
+        {(row.pending_count ?? 0) === 0 ? (
+          <Tag icon={<CheckCircleFilled />} color="success" style={{ marginInlineEnd: 0 }}>
+            清洗完成
+          </Tag>
+        ) : null}
+      </Space>
+    ),
   },
   {
     title: '创建时间', dataIndex: 'created_at', width: 170,

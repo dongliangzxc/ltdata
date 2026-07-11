@@ -83,3 +83,17 @@ assert.notEqual(interventionRuleModalSource.indexOf("name=\"reference_price_op\"
 assert.notEqual(interventionRuleModalSource.indexOf("name=\"reference_price_value\""), -1, "intervention edit form should expose the price value field");
 assert.notEqual(interventionRuleModalSource.indexOf("conditions.reference_price"), -1, "intervention form should save reference price into rule conditions");
 assert.notEqual(interventionRuleModalSource.indexOf("referencePriceToFormValues(rule.conditions)"), -1, "intervention edit should hydrate reference price fields from the selected rule");
+
+// Task 7: 一键批量确认 —— 关键渲染 / 门控逻辑
+const batchTabGateMarker = "activeTab === 'text_only' || activeTab === 'pending'";
+const batchTabGateOccurrences = source.split(batchTabGateMarker).length - 1;
+assert.ok(
+  batchTabGateOccurrences >= 3,
+  `批量确认按钮应至少在 3 处（复选框列 / 批量操作条 / 跨页提示条）被 text_only|pending Tab 门控，实际 ${batchTabGateOccurrences} 处`,
+);
+
+assert.notEqual(source.indexOf('isCandidateValidForBatch'), -1, '应存在 isCandidateValidForBatch 校验以禁用无效候选复选框');
+assert.notEqual(source.indexOf('未识别品牌'), -1, '无效候选应携带未识别品牌相关提示文案');
+
+assert.notEqual(source.indexOf('batchConfirmMatch(selectedJobId'), -1, '批量确认接口应按 selectedJobId (clean_job_id) 路径调用');
+assert.notEqual(source.indexOf('previewBatchConfirmMatch(selectedJobId'), -1, '批量预览接口应按 selectedJobId (clean_job_id) 路径调用');

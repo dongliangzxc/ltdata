@@ -132,17 +132,14 @@ const jobColumns = (onPreview: (id: number) => void, onEnter: (id: number) => vo
     render: formatNumber,
   },
   {
-    title: '状态', dataIndex: 'status', width: 140,
-    render: (status: string, row) => (
-      <Space size={4}>
-        {renderStatus(status)}
-        {(row.pending_count ?? 0) === 0 ? (
-          <Tag icon={<CheckCircleFilled />} color="success" style={{ marginInlineEnd: 0 }}>
-            清洗完成
-          </Tag>
-        ) : null}
-      </Space>
-    ),
+    title: '状态', dataIndex: 'status', width: 110,
+    render: (status: string, row) => {
+      const cleanFinished = (status === 'done' || status === 'reviewing') && (row.pending_count ?? 0) === 0
+      if (cleanFinished) {
+        return <Tag icon={<CheckCircleFilled />} color="success">清洗完成</Tag>
+      }
+      return renderStatus(status)
+    },
   },
   {
     title: '创建时间', dataIndex: 'created_at', width: 170,

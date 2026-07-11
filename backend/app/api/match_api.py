@@ -325,6 +325,67 @@ def get_match_summary(clean_job_id: int, db: Session = Depends(get_db)):
     )
 
 
+def _build_review_queue_query(
+    db: Session,
+    clean_job_id: int,
+    tab: str,
+    keyword: Optional[str],
+    search_by: str,
+    category_name: Optional[str],
+    sort_by: str,
+):
+    """构造复核队列基础查询（与 list_pending 使用相同过滤）。返回未 count/paginate 的 Query。"""
+    if tab not in _BATCH_ALLOWED_STATUSES:
+        raise HTTPException(status_code=400, detail="tab 只能为 text_only 或 pending")
+
+    clean_job = db.query(CleanJobRecord).filter(CleanJobRecord.id == clean_job_id).first()
+    dispatch_batch_id = clean_job.dispatch_batch_id if clean_job else None
+    if dispatch_batch_id is not None:
+        di_join_cond = (
+            (DispatchItem.raw_data_id == MatchResult.raw_data_id) &
+            (DispatchItem.batch_id == dispatch_batch_id)
+        )
+    else:
+        di_join_cond = (DispatchItem.raw_data_id == None)  # noqa: E711
+
+    q = (
+        db.query(MatchResult, RawDataRecord, ModelRecord)
+        .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
+        .outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
+        .outerjoin(DispatchItem, di_join_cond)
+        .outerjoin(Category, DispatchItem.category_code == Category.code)
+        .filter(MatchResult.clean_job_id == clean_job_id, MatchResult.match_status == tab)
+    )
+
+    allowed_search_fields = {"item_name", "brand_raw", "brand_code"}
+    if search_by not in allowed_search_fields:
+        search_by = "item_name"
+    if keyword:
+        pattern = f"%{keyword}%"
+        if search_by == "brand_raw":
+            q = q.filter(RawDataRecord.brand_raw.ilike(pattern))
+        elif search_by == "brand_code":
+            q = (
+                q.outerjoin(BrandRecord, BrandRecord.brand_code == ModelRecord.brand_code)
+                 .filter(
+                     (ModelRecord.brand_code.ilike(pattern))
+                     | (BrandRecord.brand_name.ilike(pattern))
+                 )
+            )
+        else:
+            q = q.filter(RawDataRecord.item_name.ilike(pattern))
+    if category_name:
+        q = q.filter(Category.code == category_name)
+
+    if sort_by == "sales_qty_desc":
+        q = q.order_by(func.isnull(RawDataRecord.sales_qty).asc(), RawDataRecord.sales_qty.desc())
+    elif sort_by == "sales_qty_asc":
+        q = q.order_by(func.isnull(RawDataRecord.sales_qty).asc(), RawDataRecord.sales_qty.asc())
+    else:
+        q = q.order_by(MatchResult.id.asc())
+    return q
+
+
 @router.get("/{clean_job_id}/pending", response_model=PaginatedResponse)
 def list_pending(
     clean_job_id: int,
@@ -947,8 +1008,64 @@ def batch_confirm(clean_job_id: int, payload: dict, db: Session = Depends(get_db
             **result,
         }
     if mode == "filter":
-        raise HTTPException(status_code=400, detail="filter 模式暂未实现")  # Task 3 实现
+        f = payload.get("filter") or {}
+        q = _build_review_queue_query(
+            db, clean_job_id,
+            tab=f.get("tab") or "",
+            keyword=(f.get("keyword") or None),
+            search_by=f.get("search_by") or "item_name",
+            category_name=(f.get("category_name") or None),
+            sort_by=f.get("sort_by") or "default",
+        )
+        matched_total = q.count()
+        truncated = matched_total > _BATCH_FILTER_LIMIT
+        rows = q.limit(_BATCH_FILTER_LIMIT).all()
+        targets = [mr for mr, _rd, _model in rows]
+        result = _run_batch_confirm(db, clean_job_id, targets)
+        return {
+            "total": len(targets),
+            "matched_total": matched_total,
+            "truncated": truncated,
+            **result,
+        }
     raise HTTPException(status_code=400, detail="mode 必须为 ids 或 filter")
+
+
+@router.get("/{clean_job_id}/batch-confirm/preview")
+def batch_confirm_preview(
+    clean_job_id: int,
+    tab: str = Query(...),
+    keyword: Optional[str] = Query(None),
+    search_by: str = Query("item_name"),
+    category_name: Optional[str] = Query(None),
+    sort_by: str = Query("default"),
+    db: Session = Depends(get_db),
+):
+    q = _build_review_queue_query(
+        db, clean_job_id, tab=tab, keyword=keyword, search_by=search_by,
+        category_name=category_name, sort_by=sort_by,
+    )
+    rows = q.all()  # preview 不做上限（只统计），若 review 反馈慢再加
+
+    dist: Counter = Counter()
+    total_valid = 0
+    total_invalid = 0
+    for mr, _rd, _model in rows:
+        cand_model = _pick_top_candidate(db, mr)
+        if _candidate_is_valid(mr, cand_model):
+            total_valid += 1
+            dist[(cand_model.brand_code, cand_model.model_code)] += 1
+        else:
+            total_invalid += 1
+    top = dist.most_common(20)
+    return {
+        "total_valid": total_valid,
+        "total_invalid": total_invalid,
+        "candidate_distribution": [
+            {"brand_code": bc, "model_code": mc, "count": c}
+            for (bc, mc), c in top
+        ],
+    }
 
 
 # ── 单条撤销：回到操作前的原状态 ─────────────────────────────────────────

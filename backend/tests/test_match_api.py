@@ -1346,3 +1346,124 @@ def test_batch_confirm_rejects_over_limit_ids(match_client):
 def test_batch_confirm_rejects_unknown_mode(match_client):
     resp = match_client.post("/api/match/1/batch-confirm", json={"mode": "wat"})
     assert resp.status_code == 400
+
+
+# ── 批量确认接口（filter 模式 + preview）测试 ────────────────────────────
+
+def test_batch_confirm_filter_mode_processes_matching_rows(db, match_client):
+    from app.models.schemas import (
+        MatchResult, MatchResultCandidate, ModelRecord, RawDataRecord,
+        CleanJobRecord, UploadFileRecord,
+    )
+
+    upload = UploadFileRecord(filename="filter1.xlsx", status="done")
+    db.add(upload); db.flush()
+
+    db.add(CleanJobRecord(id=557, file_ids=[upload.id], status="done"))
+    model = ModelRecord(brand_code="速影", model_code="C200PRO")
+    db.add(model); db.flush()
+
+    for i in range(3):
+        rd = RawDataRecord(
+            file_id=upload.id, platform="jd", item_id=f"F{i}",
+            item_url=f"https://jd.com/F{i}",
+            item_name=f"SJCAM 200pro 变种{i}", brand_raw="速影",
+            price=1.0, sales_qty=1,
+        )
+        db.add(rd); db.flush()
+        mr = MatchResult(
+            clean_job_id=557, raw_data_id=rd.id, match_status="pending",
+            matched_by="auto", match_source="text", brand_identified=1,
+        )
+        db.add(mr); db.flush()
+        db.add(MatchResultCandidate(
+            match_result_id=mr.id, model_id=model.id, match_source="text",
+            score=100, rank=1,
+        ))
+    # 一条无关行不该被命中
+    rd_x = RawDataRecord(
+        file_id=upload.id, platform="jd", item_id="X",
+        item_url="https://jd.com/X", item_name="其他商品", brand_raw="别的",
+        price=1.0, sales_qty=1,
+    )
+    db.add(rd_x); db.flush()
+    db.add(MatchResult(
+        clean_job_id=557, raw_data_id=rd_x.id, match_status="pending",
+        matched_by="auto", match_source="text", brand_identified=1,
+    ))
+    db.commit()
+
+    resp = match_client.post(
+        f"/api/match/557/batch-confirm",
+        json={"mode": "filter", "filter": {
+            "tab": "pending", "keyword": "200pro", "search_by": "item_name",
+            "sort_by": "default",
+        }},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["matched_total"] == 3
+    assert body["total"] == 3
+    assert body["success"] == 3
+    assert body["failed"] == 0
+    assert body["truncated"] is False
+
+
+def test_batch_confirm_filter_mode_rejects_invalid_tab(match_client):
+    resp = match_client.post(
+        "/api/match/1/batch-confirm",
+        json={"mode": "filter", "filter": {"tab": "confirmed"}},
+    )
+    assert resp.status_code == 400
+
+
+def test_batch_confirm_preview_returns_candidate_distribution(db, match_client):
+    from app.models.schemas import (
+        MatchResult, MatchResultCandidate, ModelRecord, RawDataRecord,
+        CleanJobRecord, UploadFileRecord,
+    )
+
+    upload = UploadFileRecord(filename="preview1.xlsx", status="done")
+    db.add(upload); db.flush()
+
+    db.add(CleanJobRecord(id=558, file_ids=[upload.id], status="done"))
+    m_a = ModelRecord(brand_code="速影", model_code="C200PRO")
+    m_b = ModelRecord(brand_code="速影", model_code="C200")
+    m_dash = ModelRecord(brand_code="速影", model_code="-")
+    db.add_all([m_a, m_b, m_dash]); db.flush()
+
+    def _mk(idx: int, model: ModelRecord, brand_identified: int = 1):
+        rd = RawDataRecord(
+            file_id=upload.id, platform="jd", item_id=f"P{idx}",
+            item_url=f"https://jd.com/P{idx}",
+            item_name="200pro", brand_raw="速影", price=1.0, sales_qty=1,
+        )
+        db.add(rd); db.flush()
+        mr = MatchResult(
+            clean_job_id=558, raw_data_id=rd.id, match_status="pending",
+            matched_by="auto", match_source="text",
+            brand_identified=brand_identified,
+        )
+        db.add(mr); db.flush()
+        db.add(MatchResultCandidate(
+            match_result_id=mr.id, model_id=model.id, match_source="text",
+            score=100, rank=1,
+        ))
+
+    for i in range(3): _mk(i, m_a)
+    for i in range(3, 5): _mk(i, m_b)
+    _mk(9, m_dash)
+    _mk(10, m_a, brand_identified=0)
+    db.commit()
+
+    resp = match_client.get(
+        "/api/match/558/batch-confirm/preview",
+        params={"tab": "pending", "keyword": "200pro", "search_by": "item_name"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total_valid"] == 5
+    assert body["total_invalid"] == 2
+    dist = {(d["brand_code"], d["model_code"]): d["count"] for d in body["candidate_distribution"]}
+    assert dist[("速影", "C200PRO")] == 3
+    assert dist[("速影", "C200")] == 2

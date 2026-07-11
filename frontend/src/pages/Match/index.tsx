@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import {
   Card, Select, Button, Table, Tag, Space, Typography, Input,
   message, Row, Col, Statistic, Tooltip, Progress, Alert, Popconfirm, InputNumber, Tabs,
-  List, Descriptions, Empty, Modal, Image,
+  List, Descriptions, Empty, Modal, Image, Checkbox,
 } from 'antd'
 import { AimOutlined, StopOutlined, CloudUploadOutlined, LoadingOutlined, LinkOutlined, DownloadOutlined, PlusOutlined, UndoOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
@@ -15,6 +15,7 @@ import {
   triggerExport, getExportJob, getDownloadUrl,
   getCleanMonthlyPool, rerunCleanTaskWithCurrentRules,
   listFilteredItems, recoverFilteredItem,
+  batchConfirmMatch,
 } from '../../services/api'
 import type { CleanJobItem, MatchCandidateOut, ReviewedMatchResultOut, PriceFlag, MatchReviewDetail, FilteredItemOut, ModelItem } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
@@ -73,6 +74,20 @@ const renderMatchSource = (source?: string | null) => {
   const entry = matchSourceMeta(source)
   if (!source) return <Tag color="default">未知</Tag>
   return entry ? <Tag color={entry.color}>{entry.label}</Tag> : <Tag>{source}</Tag>
+}
+
+const INVALID_CANDIDATE_CODES = new Set(['', '-', '--'])
+
+const getTopCandidate = (item: PendingItem): MatchCandidateOut | undefined =>
+  item.candidates?.slice().sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0))[0]
+
+const isCandidateValidForBatch = (item: PendingItem): { ok: boolean; reason?: string } => {
+  if (item.brand_identified === 0) return { ok: false, reason: '未识别品牌，请先补充品牌写法' }
+  const top = getTopCandidate(item)
+  if (!top) return { ok: false, reason: '暂无候选型号' }
+  if (!top.brand_code || INVALID_CANDIDATE_CODES.has(top.brand_code)) return { ok: false, reason: '候选品牌码无效' }
+  if (!top.model_code || INVALID_CANDIDATE_CODES.has(top.model_code)) return { ok: false, reason: '候选型号码无效' }
+  return { ok: true }
 }
 
 const statusMeta: Record<string, { label: string; color: string }> = {
@@ -235,6 +250,9 @@ export default function MatchPage() {
   const [editedCoefficientIds, setEditedCoefficientIds] = useState<Set<number>>(new Set())
   const [savingCoefficientIds, setSavingCoefficientIds] = useState<Set<number>>(new Set())
   const [activeTab, setActiveTab] = useState<ReviewTabKey>('text_only')
+  const [selectedBatchIds, setSelectedBatchIds] = useState<Set<number>>(new Set())
+  const [batchConfirming, setBatchConfirming] = useState(false)
+  const resetBatchSelection = () => setSelectedBatchIds(new Set())
   const [selectedReviewId, setSelectedReviewId] = useState<number | null>(null)
   const [selectedFilteredId, setSelectedFilteredId] = useState<number | null>(null)
   const [reviewDetail, setReviewDetail] = useState<MatchReviewDetail | null>(null)
@@ -661,6 +679,40 @@ export default function MatchPage() {
     })
   }
 
+  const handleBatchConfirm = async () => {
+    if (!selectedJobId || selectedBatchIds.size === 0) return
+    const ids = Array.from(selectedBatchIds)
+    Modal.confirm({
+      title: `确认一键确认这 ${ids.length} 条商品？`,
+      content: '将按系统当前候选型号确认入库，并沉淀 URL 映射。',
+      okText: '确认',
+      cancelText: '取消',
+      onOk: async () => {
+        setBatchConfirming(true)
+        try {
+          const { data } = await batchConfirmMatch(selectedJobId, { mode: 'ids', ids })
+          if (data.failed === 0) {
+            message.success(`已确认 ${data.success} 条`)
+            resetBatchSelection()
+          } else {
+            message.warning(`成功 ${data.success} 条，失败 ${data.failed} 条`)
+            const successIds = new Set(ids)
+            data.failures.forEach(f => successIds.delete(f.id))
+            const nextSelected = new Set(selectedBatchIds)
+            successIds.forEach(id => nextSelected.delete(id))
+            setSelectedBatchIds(nextSelected)
+          }
+          refreshPending()
+          if (selectedJobId) getMatchSummary(selectedJobId).then(r => setSummary(r.data))
+        } catch (err: any) {
+          message.error(err?.response?.data?.detail || '批量确认失败')
+        } finally {
+          setBatchConfirming(false)
+        }
+      },
+    })
+  }
+
   const handleExclude = async (matchId: number) => {
     const reason = reviewReason.trim()
     setConfirmingIds(prev => new Set(prev).add(matchId))
@@ -956,7 +1008,7 @@ export default function MatchPage() {
               style={{ width: '100%' }}
               placeholder="选择任务"
               value={selectedJobId}
-              onChange={v => { setSelectedJobId(v); setSummary(null); setPage(1); setReviewedPage(1); setPublishJobs([]); setCoefficientDrafts({}); setEditedCoefficientIds(new Set()) }}
+              onChange={v => { setSelectedJobId(v); setSummary(null); setPage(1); setReviewedPage(1); setPublishJobs([]); setCoefficientDrafts({}); setEditedCoefficientIds(new Set()); resetBatchSelection() }}
               options={cleanJobs.map((j: CleanJobItem) => ({
                 value: j.id,
                 label: `${j.task_name || j.scope_desc || `任务#${j.id}`}｜${j.row_out}条｜${j.created_at?.slice(0, 10) || '-'}`,
@@ -1170,12 +1222,12 @@ export default function MatchPage() {
                 allowClear
                 style={{ width: 140 }}
                 options={categoryOptions}
-                onChange={v => { setCategoryName(v); setPage(1) }}
+                onChange={v => { setCategoryName(v); setPage(1); resetBatchSelection() }}
               />
               <Select
                 value={sortBy}
                 style={{ width: 130 }}
-                onChange={v => { setSortBy(v); setPage(1) }}
+                onChange={v => { setSortBy(v); setPage(1); resetBatchSelection() }}
                 options={[
                   { value: 'default', label: '默认排序' },
                   { value: 'sales_qty_desc', label: '销量从高到低' },
@@ -1189,6 +1241,7 @@ export default function MatchPage() {
                   setKeyword('')
                   setInputValue('')
                   setPage(1)
+                  resetBatchSelection()
                 }}
                 style={{ width: 130 }}
                 options={(activeTab === 'filtered'
@@ -1202,7 +1255,7 @@ export default function MatchPage() {
                 style={{ width: 180 }}
                 value={inputValue}
                 onChange={e => setInputValue(e.target.value)}
-                onSearch={v => { setInputValue(v); setKeyword(v); setPage(1) }}
+                onSearch={v => { setInputValue(v); setKeyword(v); setPage(1); resetBatchSelection() }}
               />
             </Space>
           }
@@ -1222,6 +1275,7 @@ export default function MatchPage() {
               setReviewDetail(null)
               setFilteredDetail(null)
               setReviewReason('')
+              resetBatchSelection()
               if (nextTab === 'filtered' && searchBy === 'brand_code') {
                 setSearchBy('item_name')
               }
@@ -1244,6 +1298,41 @@ export default function MatchPage() {
               children: null,
             }))}
           />
+          {(activeTab === 'text_only' || activeTab === 'pending') && (() => {
+            const items: PendingItem[] = pendingData?.items ?? []
+            const validIds = items.filter((item: PendingItem) => isCandidateValidForBatch(item).ok).map((item: PendingItem) => item.id)
+            const selectedOnPage = validIds.filter((id: number) => selectedBatchIds.has(id))
+            const allChecked = validIds.length > 0 && selectedOnPage.length === validIds.length
+            const someChecked = selectedOnPage.length > 0 && !allChecked
+            const toggleAll = (checked: boolean) => {
+              const next = new Set(selectedBatchIds)
+              if (checked) validIds.forEach((id: number) => next.add(id))
+              else validIds.forEach((id: number) => next.delete(id))
+              setSelectedBatchIds(next)
+            }
+            return (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px', background: '#fafafa', border: '1px solid #f0f0f0', marginBottom: 12 }}>
+                <Checkbox
+                  checked={allChecked}
+                  indeterminate={someChecked}
+                  disabled={validIds.length === 0}
+                  onChange={e => toggleAll(e.target.checked)}
+                >
+                  全选当前页（{validIds.length}）
+                </Checkbox>
+                <span style={{ color: '#8c8c8c', fontSize: 12 }}>已选 {selectedBatchIds.size} 条</span>
+                <div style={{ flex: 1 }} />
+                <Button
+                  type="primary"
+                  loading={batchConfirming}
+                  disabled={selectedBatchIds.size === 0}
+                  onClick={() => handleBatchConfirm()}
+                >
+                  一键确认（{selectedBatchIds.size}）
+                </Button>
+              </div>
+            )
+          })()}
           {activeTab === 'unidentified_brand' && (
             <Alert
               type="warning"
@@ -1322,41 +1411,62 @@ export default function MatchPage() {
                       current: page,
                       pageSize: 20,
                       total: pendingData?.total ?? 0,
-                      onChange: setPage,
+                      onChange: (p: number) => { setPage(p); resetBatchSelection() },
                       size: 'small',
                       showSizeChanger: false,
                     }}
-                    renderItem={(item: PendingItem) => (
-                      <List.Item
-                        onClick={() => setSelectedReviewId(item.id)}
-                        style={{
-                          cursor: 'pointer',
-                          padding: '10px 12px',
-                          background: selectedReviewId === item.id ? '#e6f4ff' : undefined,
-                        }}
-                      >
-                        <List.Item.Meta
-                          title={
-                            <Tooltip title={item.item_name}>
-                              <Text strong ellipsis style={{ maxWidth: 280 }}>{item.item_name || '-'}</Text>
+                    renderItem={(item: PendingItem) => {
+                      const showCheckbox = activeTab === 'text_only' || activeTab === 'pending'
+                      const candValidation = isCandidateValidForBatch(item)
+                      const checked = selectedBatchIds.has(item.id)
+                      return (
+                        <List.Item
+                          onClick={() => setSelectedReviewId(item.id)}
+                          style={{
+                            cursor: 'pointer',
+                            padding: '10px 12px',
+                            background: selectedReviewId === item.id ? '#e6f4ff' : undefined,
+                          }}
+                        >
+                          {showCheckbox && (
+                            <Tooltip title={candValidation.ok ? '' : candValidation.reason}>
+                              <Checkbox
+                                style={{ marginRight: 8, marginTop: 4, alignSelf: 'flex-start' }}
+                                disabled={!candValidation.ok}
+                                checked={checked}
+                                onClick={e => e.stopPropagation()}
+                                onChange={e => {
+                                  const next = new Set(selectedBatchIds)
+                                  if (e.target.checked) next.add(item.id)
+                                  else next.delete(item.id)
+                                  setSelectedBatchIds(next)
+                                }}
+                              />
                             </Tooltip>
-                          }
-                          description={
-                            <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                              <Space wrap size={4}>
-                                <Tag>{item.category_name || '未归类'}</Tag>
-                                <Tag color="blue">{item.brand_raw || '无原品牌'}</Tag>
-                                {renderMatchSource(item.match_source)}
-                                {item.item_url && <Tag icon={<LinkOutlined />} color="green">有链接</Tag>}
+                          )}
+                          <List.Item.Meta
+                            title={
+                              <Tooltip title={item.item_name}>
+                                <Text strong ellipsis style={{ maxWidth: 280 }}>{item.item_name || '-'}</Text>
+                              </Tooltip>
+                            }
+                            description={
+                              <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                                <Space wrap size={4}>
+                                  <Tag>{item.category_name || '未归类'}</Tag>
+                                  <Tag color="blue">{item.brand_raw || '无原品牌'}</Tag>
+                                  {renderMatchSource(item.match_source)}
+                                  {item.item_url && <Tag icon={<LinkOutlined />} color="green">有链接</Tag>}
+                                </Space>
+                                <Text type="secondary" style={{ fontSize: 12 }}>
+                                  销量 {formatNumber(item.sales_qty)}{item.dispute_reason ? ` · ${item.dispute_reason}` : ''}
+                                </Text>
                               </Space>
-                              <Text type="secondary" style={{ fontSize: 12 }}>
-                                销量 {formatNumber(item.sales_qty)}{item.dispute_reason ? ` · ${item.dispute_reason}` : ''}
-                              </Text>
-                            </Space>
-                          }
-                        />
-                      </List.Item>
-                    )}
+                            }
+                          />
+                        </List.Item>
+                      )
+                    }}
                   />
                 )}
               </Card>

@@ -1207,3 +1207,142 @@ def test_confirm_single_review_pending_transitions_and_upserts_url_mapping(db):
     assert mapping is not None
     assert mapping.model_id == model.id
     assert mapping.brand_code == "速影"
+
+
+# ── 批量确认接口（ids 模式）测试 ────────────────────────────────────────────
+
+def test_batch_confirm_ids_mode_confirms_valid_and_reports_invalid(db, match_client):
+    """ids 模式：混合有效+无效候选，逐条独立提交。"""
+    from app.models.schemas import (
+        MatchResult, MatchResultCandidate, ModelRecord, RawDataRecord,
+        CleanJobRecord, UploadFileRecord,
+    )
+
+    upload = UploadFileRecord(filename="batch1.xlsx", status="done")
+    db.add(upload); db.flush()
+
+    job = CleanJobRecord(id=555, file_ids=[upload.id], status="done")
+    db.add(job)
+
+    model = ModelRecord(brand_code="速影", model_code="C200PRO")
+    db.add(model); db.flush()
+
+    def _pending(idx: int, status: str = "pending"):
+        rd = RawDataRecord(
+            file_id=upload.id, platform="jd", item_id=f"9{idx}",
+            item_url=f"https://jd.com/9{idx}",
+            item_name=f"商品{idx}", brand_raw="速影", price=1.0, sales_qty=1,
+        )
+        db.add(rd); db.flush()
+        mr = MatchResult(
+            clean_job_id=555, raw_data_id=rd.id, match_status=status,
+            matched_by="auto", match_source="text", brand_identified=1,
+        )
+        db.add(mr); db.flush()
+        cand = MatchResultCandidate(
+            match_result_id=mr.id, model_id=model.id, match_source="text",
+            score=100, rank=1,
+        )
+        db.add(cand)
+        return mr
+
+    mr_ok = _pending(1, "pending")
+    mr_ok2 = _pending(2, "text_only")
+    mr_wrong_status = _pending(3, "confirmed")   # 状态已变更（不在允许集合）
+    db.commit()
+
+    resp = match_client.post(
+        f"/api/match/{555}/batch-confirm",
+        json={"mode": "ids", "ids": [mr_ok.id, mr_ok2.id, mr_wrong_status.id]},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total"] == 3
+    assert body["success"] == 2
+    assert body["failed"] == 1
+    assert body["truncated"] is False
+    assert body["failures"][0]["id"] == mr_wrong_status.id
+    assert body["failures"][0]["reason"] == "状态已变更"
+
+    db.expire_all()
+    assert db.query(MatchResult).get(mr_ok.id).match_status == "confirmed"
+    assert db.query(MatchResult).get(mr_ok2.id).match_status == "confirmed"
+    assert db.query(MatchResult).get(mr_wrong_status.id).match_status == "confirmed"  # 未变
+
+
+def test_batch_confirm_ids_mode_flags_invalid_candidate_and_url_mapping_conflict(db, match_client):
+    from app.models.schemas import (
+        MatchResult, MatchResultCandidate, ModelRecord, RawDataRecord,
+        ItemUrlMapping, CleanJobRecord, UploadFileRecord,
+    )
+
+    upload = UploadFileRecord(filename="batch2.xlsx", status="done")
+    db.add(upload); db.flush()
+
+    db.add(CleanJobRecord(id=556, file_ids=[upload.id], status="done"))
+
+    good_model = ModelRecord(brand_code="速影", model_code="C200PRO")
+    other_model = ModelRecord(brand_code="速影", model_code="C300")
+    dash_model = ModelRecord(brand_code="速影", model_code="-")  # 无效
+    db.add_all([good_model, other_model, dash_model]); db.flush()
+
+    def _row(idx: int, cand_model: ModelRecord, brand_identified: int = 1):
+        rd = RawDataRecord(
+            file_id=upload.id, platform="jd", item_id=f"C{idx}",
+            item_url=f"https://jd.com/C{idx}",
+            item_name=f"P{idx}", brand_raw="速影", price=1.0, sales_qty=1,
+        )
+        db.add(rd); db.flush()
+        mr = MatchResult(
+            clean_job_id=556, raw_data_id=rd.id, match_status="pending",
+            matched_by="auto", match_source="text",
+            brand_identified=brand_identified,
+        )
+        db.add(mr); db.flush()
+        db.add(MatchResultCandidate(
+            match_result_id=mr.id, model_id=cand_model.id,
+            match_source="text", score=100, rank=1,
+        ))
+        return mr, rd
+
+    mr_invalid, _ = _row(1, dash_model)
+    mr_unident, _ = _row(2, good_model, brand_identified=0)  # 未识别品牌
+    mr_conflict, rd_conflict = _row(3, good_model)
+    db.add(ItemUrlMapping(
+        platform="jd", item_id="C3", item_url=rd_conflict.item_url,
+        model_id=other_model.id, brand_code="速影", source="pre_existing",
+    ))
+    db.commit()
+
+    resp = match_client.post(
+        f"/api/match/{556}/batch-confirm",
+        json={"mode": "ids", "ids": [mr_invalid.id, mr_unident.id, mr_conflict.id]},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    failures_by_id = {f["id"]: f["reason"] for f in body["failures"]}
+    assert failures_by_id[mr_invalid.id] == "候选型号无效"
+    assert failures_by_id[mr_unident.id] == "候选型号无效"
+    assert "URL 映射冲突" in failures_by_id[mr_conflict.id]
+    assert body["success"] == 0
+    assert body["failed"] == 3
+
+
+def test_batch_confirm_rejects_empty_ids(match_client):
+    resp = match_client.post("/api/match/1/batch-confirm", json={"mode": "ids", "ids": []})
+    assert resp.status_code == 400
+    assert "ids 不能为空" in resp.text
+
+
+def test_batch_confirm_rejects_over_limit_ids(match_client):
+    resp = match_client.post(
+        "/api/match/1/batch-confirm",
+        json={"mode": "ids", "ids": list(range(1, 202))},
+    )
+    assert resp.status_code == 400
+    assert "200" in resp.text
+
+
+def test_batch_confirm_rejects_unknown_mode(match_client):
+    resp = match_client.post("/api/match/1/batch-confirm", json={"mode": "wat"})
+    assert resp.status_code == 400

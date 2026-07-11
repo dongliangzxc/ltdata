@@ -796,6 +796,161 @@ def confirm_match(match_id: int, payload: dict, db: Session = Depends(get_db)):
     )
 
 
+# ── 批量确认：一键接受系统候选 ──────────────────────────────────────────
+
+_BATCH_ALLOWED_STATUSES = {"text_only", "pending"}
+_BATCH_IDS_LIMIT = 200
+_BATCH_FILTER_LIMIT = 500
+_INVALID_MODEL_CODES = {None, "", "-", "--"}
+
+
+def _pick_top_candidate(db: Session, mr: MatchResult) -> Optional[ModelRecord]:
+    """取该 mr 的首个候选型号（rank 最小），无候选返回 None。"""
+    cand = (
+        db.query(MatchResultCandidate)
+        .filter(MatchResultCandidate.match_result_id == mr.id)
+        .order_by(MatchResultCandidate.rank.asc(), MatchResultCandidate.id.asc())
+        .first()
+    )
+    if not cand or not cand.model_id:
+        return None
+    return db.query(ModelRecord).filter(ModelRecord.id == cand.model_id).first()
+
+
+def _candidate_is_valid(mr: MatchResult, model: Optional[ModelRecord]) -> bool:
+    if not model:
+        return False
+    if getattr(mr, "brand_identified", 1) == 0:
+        return False
+    if model.brand_code in _INVALID_MODEL_CODES:
+        return False
+    if model.model_code in _INVALID_MODEL_CODES:
+        return False
+    return True
+
+
+def _existing_url_mapping_conflict(
+    db: Session, rd: RawDataRecord, model: ModelRecord
+) -> Optional[ModelRecord]:
+    """若同 platform+item_id 已有映射且指向不同型号，返回冲突的 ModelRecord。"""
+    if not rd or not rd.platform or not rd.item_id:
+        return None
+    existing = (
+        db.query(ItemUrlMapping)
+        .filter_by(platform=rd.platform, item_id=rd.item_id)
+        .first()
+    )
+    if not existing or existing.model_id == model.id:
+        return None
+    return db.query(ModelRecord).filter(ModelRecord.id == existing.model_id).first()
+
+
+def _run_batch_confirm(
+    db: Session, clean_job_id: int, targets: list[MatchResult]
+) -> dict:
+    """对给定 targets 逐条独立提交确认；返回统一响应结构。"""
+    success = 0
+    failures: list[dict] = []
+    ok_ids: list[int] = []
+
+    for mr in targets:
+        rd = db.query(RawDataRecord).filter(RawDataRecord.id == mr.raw_data_id).first()
+        item_name = rd.item_name if rd else None
+        try:
+            if mr.match_status not in _BATCH_ALLOWED_STATUSES:
+                failures.append({"id": mr.id, "item_name": item_name, "reason": "状态已变更"})
+                continue
+            model = _pick_top_candidate(db, mr)
+            if not _candidate_is_valid(mr, model):
+                failures.append({"id": mr.id, "item_name": item_name, "reason": "候选型号无效"})
+                continue
+            conflict = _existing_url_mapping_conflict(db, rd, model)
+            if conflict is not None:
+                failures.append({
+                    "id": mr.id, "item_name": item_name,
+                    "reason": f"URL 映射冲突：指向 [{conflict.brand_code or '-'}] {conflict.model_code or '-'}",
+                })
+                continue
+            # 条件更新保证并发安全
+            updated = (
+                db.query(MatchResult)
+                .filter(
+                    MatchResult.id == mr.id,
+                    MatchResult.match_status.in_(list(_BATCH_ALLOWED_STATUSES)),
+                )
+                .update({MatchResult.match_status: mr.match_status}, synchronize_session=False)
+            )
+            if updated == 0:
+                failures.append({"id": mr.id, "item_name": item_name, "reason": "状态已变更"})
+                db.rollback()
+                continue
+            _snapshot_prev_state(mr)
+            confirm_single_review(db, mr, model)
+            db.commit()
+            success += 1
+            ok_ids.append(mr.id)
+        except Exception:
+            logger.exception("batch confirm failed for mr_id=%s", mr.id)
+            db.rollback()
+            failures.append({"id": mr.id, "item_name": item_name, "reason": "系统错误"})
+
+    if ok_ids:
+        try:
+            from app.services.attribute_matcher import run_attribute_matching
+            run_attribute_matching(db, ok_ids)
+        except Exception:
+            logger.exception("post-batch attribute matching failed for ids=%s", ok_ids)
+            db.rollback()
+        try:
+            audit_price(db, ok_ids)
+        except Exception:
+            logger.exception("post-batch price audit failed for ids=%s", ok_ids)
+            db.rollback()
+
+    return {
+        "success": success,
+        "failed": len(failures),
+        "failures": failures,
+    }
+
+
+@router.post("/{clean_job_id}/batch-confirm")
+def batch_confirm(clean_job_id: int, payload: dict, db: Session = Depends(get_db)):
+    """一键批量确认。支持 ids 模式与 filter 模式。"""
+    mode = (payload or {}).get("mode")
+    if mode == "ids":
+        ids = payload.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            raise HTTPException(status_code=400, detail="ids 不能为空")
+        if len(ids) > _BATCH_IDS_LIMIT:
+            raise HTTPException(status_code=400, detail=f"单次最多确认 {_BATCH_IDS_LIMIT} 条")
+        targets = (
+            db.query(MatchResult)
+            .filter(
+                MatchResult.clean_job_id == clean_job_id,
+                MatchResult.id.in_(ids),
+            )
+            .all()
+        )
+        # 保持前端传入顺序（顺便标出请求里但库里查不到的 id）
+        by_id = {mr.id: mr for mr in targets}
+        ordered = [by_id[i] for i in ids if i in by_id]
+        missing = [i for i in ids if i not in by_id]
+        result = _run_batch_confirm(db, clean_job_id, ordered)
+        for i in missing:
+            result["failures"].append({"id": i, "item_name": None, "reason": "状态已变更"})
+            result["failed"] += 1
+        return {
+            "total": len(ids),
+            "matched_total": len(ids),
+            "truncated": False,
+            **result,
+        }
+    if mode == "filter":
+        raise HTTPException(status_code=400, detail="filter 模式暂未实现")  # Task 3 实现
+    raise HTTPException(status_code=400, detail="mode 必须为 ids 或 filter")
+
+
 # ── 单条撤销：回到操作前的原状态 ─────────────────────────────────────────
 
 @router.post("/items/{match_id}/revert", response_model=MatchResultOut)

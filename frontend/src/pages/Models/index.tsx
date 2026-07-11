@@ -173,16 +173,6 @@ export default function ModelsPage() {
     { title: '品牌', dataIndex: 'brand_name', width: 120, render: (v: string | null) => v || '-' },
     { title: '型号码', dataIndex: 'model_code', width: 130 },
     { title: '型号别名', dataIndex: 'model_name', ellipsis: true, render: (v: string | null) => v || '-' },
-    { title: '上市年份', dataIndex: 'launch_year', width: 90, render: (v: number | null) => v ?? '-' },
-    { title: '上市月份', dataIndex: 'launch_month', width: 90, render: (v: number | null) => v ?? '-' },
-    {
-      title: '上市价', dataIndex: 'launch_price', width: 100,
-      render: (v: number | null) => v != null ? `¥${Number(v).toLocaleString()}` : '-'
-    },
-    {
-      title: '网址', dataIndex: 'url', width: 70,
-      render: (v: string | null) => v ? <a href={v} target="_blank" rel="noreferrer">查看</a> : '-'
-    },
     {
       title: '修改时间', dataIndex: 'updated_at', width: 140,
       render: (v: string | null) => v || '-'
@@ -273,7 +263,7 @@ export default function ModelsPage() {
         rowKey="id"
         size="small"
         loading={loading}
-        scroll={{ x: 1250 }}
+        scroll={{ x: 'max-content' }}
         expandable={{
           onExpand: handleExpand,
           expandedRowRender: (record: ModelItem) => {

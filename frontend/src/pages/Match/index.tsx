@@ -1258,7 +1258,16 @@ export default function MatchPage() {
           )}
           <Row gutter={16} align="top">
             <Col span={9}>
-              <Card size="small" title={`${currentQueueTitle}队列`} bodyStyle={{ padding: 0 }}>
+              <Card
+                size="small"
+                title={`${currentQueueTitle}队列`}
+                bodyStyle={{
+                  padding: 0,
+                  height: 'calc(100vh - 220px)',
+                  minHeight: 480,
+                  overflowY: 'auto',
+                }}
+              >
                 {activeTab === 'filtered' ? (
                   <List
                     loading={filteredLoading}
@@ -1356,6 +1365,11 @@ export default function MatchPage() {
                 size="small"
                 title={activeTab === 'filtered' ? '干扰项详情' : '详情处理'}
                 loading={activeTab === 'filtered' ? filteredLoading : reviewDetailLoading}
+                bodyStyle={{
+                  height: 'calc(100vh - 220px)',
+                  minHeight: 480,
+                  overflowY: 'auto',
+                }}
                 extra={activeTab === 'filtered'
                   ? (filteredDetail ? (
                     <Space>

@@ -1359,11 +1359,7 @@ export default function MatchPage() {
                         danger
                         icon={<StopOutlined />}
                         loading={confirmingIds.has(reviewDetail.id)}
-                        onClick={() => Modal.confirm({
-                          title: '确认排除此商品？',
-                          content: '排除后不会发布到分析库，也不会写入URL映射库。',
-                          onOk: () => handleExclude(reviewDetail.id),
-                        })}
+                        onClick={() => handleExclude(reviewDetail.id)}
                       >排除</Button>
                       {renderMatchStatus(reviewDetail.match_status)}
                       <Button size="small" onClick={() => refreshReviewWorkbench(reviewDetail.id)}>继续下一条</Button>

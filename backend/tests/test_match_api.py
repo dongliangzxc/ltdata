@@ -372,6 +372,70 @@ def test_confirm_match_excluded_saves_reason(db):
     assert result.reviewed_at is not None
 
 
+def test_revert_restores_state_before_exclude(db, match_client):
+    """排除操作应可撤销回到操作前的 pending / matched 状态。"""
+    model = ModelRecord(brand_code="DJI", model_code="Osmo-Action-6", category_code="camera")
+    db.add(model)
+    db.flush()
+    upload = UploadFileRecord(filename="revert.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+    clean_job = CleanJobRecord(file_ids=[upload.id], status="done")
+    db.add(clean_job)
+    db.flush()
+    raw = RawDataRecord(file_id=upload.id, item_name="配件", platform="jd", item_id="rev-1")
+    db.add(raw)
+    db.flush()
+    mr = MatchResult(
+        clean_job_id=clean_job.id,
+        raw_data_id=raw.id,
+        match_status="matched",
+        matched_by="auto",
+        match_source="s1",
+        model_id=model.id,
+    )
+    db.add(mr)
+    db.commit()
+
+    excluded = confirm_match(mr.id, {"excluded": True, "reason": "点错了"}, db)
+    assert excluded.match_status == "excluded"
+    assert excluded.model_id is None
+
+    revert_response = match_client.post(f"/api/match/items/{mr.id}/revert")
+    assert revert_response.status_code == 200
+    body = revert_response.json()
+    assert body["match_status"] == "matched"
+    assert body["model_id"] == model.id
+    assert body["matched_by"] == "auto"
+    assert body["match_source"] == "s1"
+    assert body["revertible"] is False
+
+    # 二次撤销应报 400，避免重复回滚
+    again = match_client.post(f"/api/match/items/{mr.id}/revert")
+    assert again.status_code == 400
+
+
+def test_review_detail_exposes_revertible_after_exclude(db, match_client):
+    upload = UploadFileRecord(filename="revert-detail.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+    clean_job = CleanJobRecord(file_ids=[upload.id], status="done")
+    db.add(clean_job)
+    db.flush()
+    raw = RawDataRecord(file_id=upload.id, item_name="干扰配件", platform="jd", item_id="rev-2")
+    db.add(raw)
+    db.flush()
+    mr = MatchResult(clean_job_id=clean_job.id, raw_data_id=raw.id, match_status="pending", matched_by="auto")
+    db.add(mr)
+    db.commit()
+
+    confirm_match(mr.id, {"excluded": True, "reason": "点错了"}, db)
+
+    detail = match_client.get(f"/api/match/items/{mr.id}/review-detail")
+    assert detail.status_code == 200
+    assert detail.json()["revertible"] is True
+
+
 def test_pending_endpoint_allows_disputed_and_review_detail(db, match_client):
     model = ModelRecord(brand_code="Sony", model_code="WH-XM5", category_code="headphone")
     db.add(model)

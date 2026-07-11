@@ -751,6 +751,14 @@ class MatchResult(Base):
     dispute_reason = Column(String(500), nullable=True)
     review_note = Column(String(500), nullable=True)
     reviewed_at = Column(DateTime, nullable=True)
+    # 人工操作前的状态快照，用于单条「撤销」回到上一次操作前
+    prev_match_status = Column(String(20), nullable=True)
+    prev_model_id = Column(Integer, nullable=True)
+    prev_matched_by = Column(String(20), nullable=True)
+    prev_match_source = Column(String(20), nullable=True)
+    prev_dispute_reason = Column(String(500), nullable=True)
+    prev_review_note = Column(String(500), nullable=True)
+    prev_reviewed_at = Column(DateTime, nullable=True)
     created_at     = Column(DateTime, default=datetime.utcnow)
     updated_at   = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -809,6 +817,7 @@ class MatchResultOut(BaseModel):
     dispute_reason: Optional[str] = None
     review_note: Optional[str] = None
     reviewed_at: Optional[datetime] = None
+    revertible: bool = False
     # 关联字段（join 查询后填充）
     item_name:     Optional[str] = None
     item_url:      Optional[str] = None

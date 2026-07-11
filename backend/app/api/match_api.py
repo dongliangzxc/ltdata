@@ -133,6 +133,39 @@ def _upsert_url_mapping_for_raw(db: Session, rd: RawDataRecord, model: ModelReco
     return True
 
 
+MANUAL_TERMINAL_STATUSES = {"confirmed", "excluded", "disputed"}
+
+
+def _snapshot_prev_state(mr: MatchResult) -> None:
+    """记录当前状态作为撤销回滚点。人工三态之外（比如 pending / matched）也照录，
+    这样从任意状态执行手工操作后都可以回到操作前的样子。"""
+    mr.prev_match_status = mr.match_status
+    mr.prev_model_id = mr.model_id
+    mr.prev_matched_by = mr.matched_by
+    mr.prev_match_source = mr.match_source
+    mr.prev_dispute_reason = mr.dispute_reason
+    mr.prev_review_note = mr.review_note
+    mr.prev_reviewed_at = mr.reviewed_at
+
+
+def _clear_prev_state(mr: MatchResult) -> None:
+    mr.prev_match_status = None
+    mr.prev_model_id = None
+    mr.prev_matched_by = None
+    mr.prev_match_source = None
+    mr.prev_dispute_reason = None
+    mr.prev_review_note = None
+    mr.prev_reviewed_at = None
+
+
+def _is_revertible(mr: MatchResult) -> bool:
+    return bool(
+        mr
+        and mr.match_status in MANUAL_TERMINAL_STATUSES
+        and mr.prev_match_status is not None
+    )
+
+
 def _run_post_confirm_hooks(db: Session, match_result_ids: list[int]) -> dict:
     if not match_result_ids:
         return {"matched_attrs": 0, "items_processed": 0}
@@ -575,6 +608,7 @@ def get_match_review_detail(match_id: int, db: Session = Depends(get_db)):
         "dispute_reason": mr.dispute_reason,
         "review_note": mr.review_note,
         "reviewed_at": format_beijing_datetime(mr.reviewed_at),
+        "revertible": _is_revertible(mr),
         "item_name": rd.item_name,
         "item_url": rd.item_url,
         "item_image": rd.item_image,
@@ -679,6 +713,7 @@ def confirm_match(match_id: int, payload: dict, db: Session = Depends(get_db)):
     reason = (payload.get("reason") or "").strip() or None
 
     if payload.get("excluded"):
+        _snapshot_prev_state(mr)
         mr.match_status = "excluded"
         mr.model_id = None
         mr.matched_by = "manual"
@@ -688,6 +723,7 @@ def confirm_match(match_id: int, payload: dict, db: Session = Depends(get_db)):
     elif payload.get("disputed"):
         if not reason:
             raise HTTPException(status_code=400, detail="暂存争议需填写原因")
+        _snapshot_prev_state(mr)
         mr.match_status = "disputed"
         mr.matched_by = "manual"
         mr.dispute_reason = reason
@@ -698,6 +734,7 @@ def confirm_match(match_id: int, payload: dict, db: Session = Depends(get_db)):
         m = db.query(ModelRecord).filter(ModelRecord.id == model_id).first()
         if not m:
             raise HTTPException(status_code=404, detail="型号不存在")
+        _snapshot_prev_state(mr)
         mr.model_id = model_id
         mr.match_status = "confirmed"
         mr.matched_by = "manual"
@@ -752,6 +789,64 @@ def confirm_match(match_id: int, payload: dict, db: Session = Depends(get_db)):
         model_code=model_info.model_code if model_info else None,
         brand_code=model_info.brand_code if model_info else None,
         sales_qty=rd.sales_qty if rd else None,
+        revertible=_is_revertible(mr),
+    )
+
+
+# ── 单条撤销：回到操作前的原状态 ─────────────────────────────────────────
+
+@router.post("/items/{match_id}/revert", response_model=MatchResultOut)
+def revert_match(match_id: int, db: Session = Depends(get_db)):
+    """撤销最近一次人工操作，把该条记录还原到操作前的 status/model_id/review 字段。
+
+    只有 status 为 confirmed/excluded/disputed 且有 prev_* 快照的记录支持撤销；
+    执行成功后 prev_* 快照会清空（暂不支持多级撤销）。
+    """
+    mr = db.query(MatchResult).filter(MatchResult.id == match_id).first()
+    if not mr:
+        raise HTTPException(status_code=404, detail="匹配记录不存在")
+    if not _is_revertible(mr):
+        raise HTTPException(status_code=400, detail="当前记录没有可撤销的历史操作")
+
+    # 已确认的记录如果之前把 URL 映射写成新型号，撤销时不动 URL 映射库——
+    # 避免误伤后来同链接的匹配；如需一并回滚需要单独在页面上处理。
+    mr.match_status = mr.prev_match_status
+    mr.model_id = mr.prev_model_id
+    mr.matched_by = mr.prev_matched_by or "auto"
+    mr.match_source = mr.prev_match_source
+    mr.dispute_reason = mr.prev_dispute_reason
+    mr.review_note = mr.prev_review_note
+    mr.reviewed_at = mr.prev_reviewed_at
+    _clear_prev_state(mr)
+
+    # 撤销后如果又回到有 model_id 的 matched/confirmed，可以重新跑属性匹配；
+    # 但为了避免撤销引起额外副作用，这里保持简单：不重跑属性/价格审核。
+    db.commit()
+    db.refresh(mr)
+
+    rd = db.query(RawDataRecord).filter(RawDataRecord.id == mr.raw_data_id).first()
+    model_info = db.query(ModelRecord).filter(ModelRecord.id == mr.model_id).first() if mr.model_id else None
+    return MatchResultOut(
+        id=mr.id,
+        clean_job_id=mr.clean_job_id,
+        raw_data_id=mr.raw_data_id,
+        model_id=mr.model_id,
+        match_status=mr.match_status,
+        matched_by=mr.matched_by,
+        match_source=mr.match_source,
+        price_flag=mr.price_flag,
+        price_ref=float(mr.price_ref) if mr.price_ref is not None else None,
+        sales_coefficient=float(mr.sales_coefficient) if mr.sales_coefficient is not None else None,
+        dispute_reason=mr.dispute_reason,
+        review_note=mr.review_note,
+        reviewed_at=mr.reviewed_at,
+        item_name=rd.item_name if rd else None,
+        item_url=rd.item_url if rd else None,
+        brand_raw=rd.brand_raw if rd else None,
+        model_code=model_info.model_code if model_info else None,
+        brand_code=model_info.brand_code if model_info else None,
+        sales_qty=rd.sales_qty if rd else None,
+        revertible=False,
     )
 
 
@@ -811,6 +906,7 @@ def _reviewed_row_payload(mr, rd, model=None, cat=None, attr_count: int = 0, cle
         corrected_sales_qty=corrected_qty,
         adjusted_sales_qty=adjusted_qty,
         category_name=cat.name if cat else None,
+        revertible=_is_revertible(mr),
     )
 
 

@@ -543,6 +543,8 @@ export const confirmMatch = (
   match_id: number,
   data: { model_id?: number; excluded?: boolean; disputed?: boolean; reason?: string }
 ) => api.put(`/match/confirm/${match_id}`, data)
+export const revertMatch = (match_id: number) =>
+  api.post<MatchResultOut>(`/match/items/${match_id}/revert`)
 export const getMatchReviewDetail = (match_id: number) =>
   api.get<MatchReviewDetail>(`/match/items/${match_id}/review-detail`)
 
@@ -995,6 +997,7 @@ export interface MatchResultOut {
   dispute_reason?: string | null
   review_note?: string | null
   reviewed_at?: string | null
+  revertible?: boolean
   item_name?: string | null
   item_url?: string | null
   brand_raw?: string | null

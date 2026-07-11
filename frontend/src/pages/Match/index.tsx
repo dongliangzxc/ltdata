@@ -4,12 +4,12 @@ import {
   message, Row, Col, Statistic, Tooltip, Progress, Alert, Popconfirm, InputNumber, Tabs,
   List, Descriptions, Empty, Modal, Image,
 } from 'antd'
-import { AimOutlined, StopOutlined, CloudUploadOutlined, LoadingOutlined, LinkOutlined, DownloadOutlined, PlusOutlined } from '@ant-design/icons'
+import { AimOutlined, StopOutlined, CloudUploadOutlined, LoadingOutlined, LinkOutlined, DownloadOutlined, PlusOutlined, UndoOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import { useSearchParams } from 'react-router-dom'
 import {
   listCleanJobs, runMatch, getMatchProgress, getMatchSummary, listPendingMatches,
-  confirmMatch, listModels, runPublish, listPublishJobs,
+  confirmMatch, revertMatch, listModels, runPublish, listPublishJobs,
   listReviewedMatches, updateMatchCoefficient, getMatchReviewDetail,
   enableMatch, avgPriceDisable, listDisabled,
   triggerExport, getExportJob, getDownloadUrl,
@@ -666,6 +666,17 @@ export default function MatchPage() {
     try {
       await confirmMatch(matchId, { excluded: true, reason: reason || undefined })
       message.success('已排除')
+      refreshReviewWorkbench(matchId)
+    } finally {
+      setConfirmingIds(prev => { const s = new Set(prev); s.delete(matchId); return s })
+    }
+  }
+
+  const handleRevert = async (matchId: number) => {
+    setConfirmingIds(prev => new Set(prev).add(matchId))
+    try {
+      await revertMatch(matchId)
+      message.success('已撤销，恢复到操作前状态')
       refreshReviewWorkbench(matchId)
     } finally {
       setConfirmingIds(prev => { const s = new Set(prev); s.delete(matchId); return s })
@@ -1361,6 +1372,21 @@ export default function MatchPage() {
                         loading={confirmingIds.has(reviewDetail.id)}
                         onClick={() => handleExclude(reviewDetail.id)}
                       >排除</Button>
+                      {reviewDetail.revertible ? (
+                        <Popconfirm
+                          title="撤销此条操作？"
+                          description="将回到操作前的状态；已同步到 URL 映射库的确认记录不会自动回滚。"
+                          okText="撤销"
+                          cancelText="取消"
+                          onConfirm={() => handleRevert(reviewDetail.id)}
+                        >
+                          <Button
+                            size="small"
+                            icon={<UndoOutlined />}
+                            loading={confirmingIds.has(reviewDetail.id)}
+                          >撤销</Button>
+                        </Popconfirm>
+                      ) : null}
                       {renderMatchStatus(reviewDetail.match_status)}
                       <Button size="small" onClick={() => refreshReviewWorkbench(reviewDetail.id)}>继续下一条</Button>
                       {reviewDetail.item_url ? <a href={reviewDetail.item_url} target="_blank" rel="noreferrer"><LinkOutlined /> 打开商品</a> : null}

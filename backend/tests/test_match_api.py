@@ -415,6 +415,35 @@ def test_revert_restores_state_before_exclude(db, match_client):
     assert again.status_code == 400
 
 
+def test_revert_without_snapshot_falls_back_to_pending(db, match_client):
+    """迁移前遗留的已排除记录没有 prev_* 快照，撤销时兜底重置为 pending。"""
+    upload = UploadFileRecord(filename="revert-legacy.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+    clean_job = CleanJobRecord(file_ids=[upload.id], status="done")
+    db.add(clean_job)
+    db.flush()
+    raw = RawDataRecord(file_id=upload.id, item_name="遗留配件", platform="jd", item_id="rev-3")
+    db.add(raw)
+    db.flush()
+    mr = MatchResult(
+        clean_job_id=clean_job.id,
+        raw_data_id=raw.id,
+        match_status="excluded",
+        matched_by="manual",
+        review_note="旧数据",
+    )
+    db.add(mr)
+    db.commit()
+
+    response = match_client.post(f"/api/match/items/{mr.id}/revert")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["match_status"] == "pending"
+    assert body["model_id"] is None
+    assert body["review_note"] is None
+
+
 def test_review_detail_exposes_revertible_after_exclude(db, match_client):
     upload = UploadFileRecord(filename="revert-detail.xlsx", status="done")
     db.add(upload)

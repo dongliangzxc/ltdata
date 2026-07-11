@@ -159,11 +159,9 @@ def _clear_prev_state(mr: MatchResult) -> None:
 
 
 def _is_revertible(mr: MatchResult) -> bool:
-    return bool(
-        mr
-        and mr.match_status in MANUAL_TERMINAL_STATUSES
-        and mr.prev_match_status is not None
-    )
+    # 有 prev_* 快照就精准回滚到操作前状态；即便老数据没有快照，只要当前是人工三态，
+    # 也允许撤销——按空快照兜底为 pending，让部署前的历史误操作也能修正
+    return bool(mr and mr.match_status in MANUAL_TERMINAL_STATUSES)
 
 
 def _run_post_confirm_hooks(db: Session, match_result_ids: list[int]) -> dict:
@@ -805,18 +803,28 @@ def revert_match(match_id: int, db: Session = Depends(get_db)):
     mr = db.query(MatchResult).filter(MatchResult.id == match_id).first()
     if not mr:
         raise HTTPException(status_code=404, detail="匹配记录不存在")
-    if not _is_revertible(mr):
+    if mr.match_status not in MANUAL_TERMINAL_STATUSES:
         raise HTTPException(status_code=400, detail="当前记录没有可撤销的历史操作")
 
     # 已确认的记录如果之前把 URL 映射写成新型号，撤销时不动 URL 映射库——
     # 避免误伤后来同链接的匹配；如需一并回滚需要单独在页面上处理。
-    mr.match_status = mr.prev_match_status
-    mr.model_id = mr.prev_model_id
-    mr.matched_by = mr.prev_matched_by or "auto"
-    mr.match_source = mr.prev_match_source
-    mr.dispute_reason = mr.prev_dispute_reason
-    mr.review_note = mr.prev_review_note
-    mr.reviewed_at = mr.prev_reviewed_at
+    if mr.prev_match_status is not None:
+        mr.match_status = mr.prev_match_status
+        mr.model_id = mr.prev_model_id
+        mr.matched_by = mr.prev_matched_by or "auto"
+        mr.match_source = mr.prev_match_source
+        mr.dispute_reason = mr.prev_dispute_reason
+        mr.review_note = mr.prev_review_note
+        mr.reviewed_at = mr.prev_reviewed_at
+    else:
+        # 老数据没有快照（迁移前误操作的历史记录），兜底重置为 pending
+        mr.match_status = "pending"
+        mr.model_id = None
+        mr.matched_by = "auto"
+        mr.match_source = None
+        mr.dispute_reason = None
+        mr.review_note = None
+        mr.reviewed_at = None
     _clear_prev_state(mr)
 
     # 撤销后如果又回到有 model_id 的 matched/confirmed，可以重新跑属性匹配；

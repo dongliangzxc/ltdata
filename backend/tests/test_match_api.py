@@ -1165,3 +1165,45 @@ def test_pending_search_by_invalid_value_falls_back_to_item_name(db, match_clien
     assert resp.status_code == 200
     assert resp.json()["total"] == 1
     assert resp.json()["items"][0]["id"] == hit.id
+
+
+def test_confirm_single_review_pending_transitions_and_upserts_url_mapping(db):
+    from app.api.match_api import confirm_single_review
+    from app.models.schemas import (
+        MatchResult,
+        ModelRecord,
+        RawDataRecord,
+        ItemUrlMapping,
+    )
+
+    upload = UploadFileRecord(filename="task1.xlsx", status="done")
+    db.add(upload); db.flush()
+    rd = RawDataRecord(
+        file_id=upload.id, platform="jd", item_id="10001",
+        item_url="https://jd.com/10001", item_name="SJCAM速影 C200PRO",
+        brand_raw="速影", price=724.6, sales_qty=18,
+    )
+    db.add(rd); db.flush()
+
+    model = ModelRecord(brand_code="速影", model_code="C200PRO")
+    db.add(model); db.flush()
+
+    mr = MatchResult(
+        clean_job_id=1, raw_data_id=rd.id, match_status="pending",
+        matched_by="auto", match_source="text",
+    )
+    db.add(mr); db.commit()
+
+    confirm_single_review(db, mr, model)
+    db.commit()
+
+    assert mr.match_status == "confirmed"
+    assert mr.matched_by == "manual"
+    assert mr.match_source == "manual"
+    assert mr.model_id == model.id
+    assert mr.reviewed_at is not None
+
+    mapping = db.query(ItemUrlMapping).filter_by(platform="jd", item_id="10001").first()
+    assert mapping is not None
+    assert mapping.model_id == model.id
+    assert mapping.brand_code == "速影"

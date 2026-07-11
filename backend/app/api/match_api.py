@@ -133,6 +133,24 @@ def _upsert_url_mapping_for_raw(db: Session, rd: RawDataRecord, model: ModelReco
     return True
 
 
+def confirm_single_review(db: Session, mr: MatchResult, model: ModelRecord) -> None:
+    """将一条 MatchResult 确认为指定型号；不做 commit，由调用方负责。"""
+    mr.model_id = model.id
+    mr.match_status = "confirmed"
+    mr.matched_by = "manual"
+    mr.match_source = "manual"
+    mr.dispute_reason = None
+    mr.review_note = None
+    mr.reviewed_at = datetime.utcnow()
+
+    if mr.raw_data_id:
+        rd_for_url = db.query(RawDataRecord).filter(RawDataRecord.id == mr.raw_data_id).first()
+        if rd_for_url:
+            _upsert_url_mapping_for_raw(db, rd_for_url, model, source="match_confirm")
+
+    db.query(MatchResultAttr).filter(MatchResultAttr.match_result_id == mr.id).delete()
+
+
 MANUAL_TERMINAL_STATUSES = {"confirmed", "excluded", "disputed"}
 
 
@@ -733,20 +751,7 @@ def confirm_match(match_id: int, payload: dict, db: Session = Depends(get_db)):
         if not m:
             raise HTTPException(status_code=404, detail="型号不存在")
         _snapshot_prev_state(mr)
-        mr.model_id = model_id
-        mr.match_status = "confirmed"
-        mr.matched_by = "manual"
-        mr.match_source = "manual"
-        mr.dispute_reason = None
-        mr.review_note = None
-        mr.reviewed_at = datetime.utcnow()
-
-        if mr.raw_data_id:
-            rd_for_url = db.query(RawDataRecord).filter(RawDataRecord.id == mr.raw_data_id).first()
-            if rd_for_url:
-                _upsert_url_mapping_for_raw(db, rd_for_url, m, source="match_confirm")
-
-        db.query(MatchResultAttr).filter(MatchResultAttr.match_result_id == mr.id).delete()
+        confirm_single_review(db, mr, m)
     else:
         raise HTTPException(status_code=400, detail="需提供 model_id、excluded=true 或 disputed=true")
 

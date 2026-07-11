@@ -15,9 +15,9 @@ import {
   triggerExport, getExportJob, getDownloadUrl,
   getCleanMonthlyPool, rerunCleanTaskWithCurrentRules,
   listFilteredItems, recoverFilteredItem,
-  batchConfirmMatch,
+  batchConfirmMatch, previewBatchConfirmMatch,
 } from '../../services/api'
-import type { CleanJobItem, MatchCandidateOut, ReviewedMatchResultOut, PriceFlag, MatchReviewDetail, FilteredItemOut, ModelItem } from '../../services/api'
+import type { CleanJobItem, MatchCandidateOut, ReviewedMatchResultOut, PriceFlag, MatchReviewDetail, FilteredItemOut, ModelItem, BatchConfirmFilter, BatchConfirmResult } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 import ProgressModal from '../../components/ProgressModal'
 import AttributeInsightCard from './components/AttributeInsightCard'
@@ -252,7 +252,11 @@ export default function MatchPage() {
   const [activeTab, setActiveTab] = useState<ReviewTabKey>('text_only')
   const [selectedBatchIds, setSelectedBatchIds] = useState<Set<number>>(new Set())
   const [batchConfirming, setBatchConfirming] = useState(false)
-  const resetBatchSelection = () => setSelectedBatchIds(new Set())
+  const [batchAllPages, setBatchAllPages] = useState(false)
+  const resetBatchSelection = () => {
+    setSelectedBatchIds(new Set())
+    setBatchAllPages(false)
+  }
   const [selectedReviewId, setSelectedReviewId] = useState<number | null>(null)
   const [selectedFilteredId, setSelectedFilteredId] = useState<number | null>(null)
   const [reviewDetail, setReviewDetail] = useState<MatchReviewDetail | null>(null)
@@ -680,28 +684,70 @@ export default function MatchPage() {
   }
 
   const handleBatchConfirm = async () => {
-    if (!selectedJobId || selectedBatchIds.size === 0) return
-    const ids = Array.from(selectedBatchIds)
+    if (!selectedJobId) return
+    const useFilterMode = batchAllPages
+    const filter: BatchConfirmFilter = {
+      tab: activeTab as 'text_only' | 'pending',
+      keyword: keyword || null,
+      search_by: searchBy,
+      category_name: categoryName ?? null,
+      sort_by: sortBy as BatchConfirmFilter['sort_by'],
+    }
+    let title = ''
+    let distributionLines: string[] = []
+    let processCount = 0
+    let truncatedNote = ''
+
+    if (useFilterMode) {
+      const { data: preview } = await previewBatchConfirmMatch(selectedJobId, filter)
+      if (preview.total_valid === 0) {
+        message.info('没有可确认的有效候选')
+        return
+      }
+      processCount = preview.total_valid
+      if (preview.total_valid > 500) {
+        truncatedNote = `\n※ 超出单次上限，将只处理前 500 条，剩余 ${preview.total_valid - 500} 条请再次执行。`
+        processCount = 500
+      }
+      distributionLines = preview.candidate_distribution.map(d =>
+        `  · [${d.brand_code}] ${d.model_code} × ${d.count}`,
+      )
+      title = `将确认 ${processCount} 条为系统候选型号`
+    } else {
+      if (selectedBatchIds.size === 0) return
+      processCount = selectedBatchIds.size
+      // 本地聚合展示
+      const items = pendingData?.items ?? []
+      const dist = new Map<string, number>()
+      items.filter((i: PendingItem) => selectedBatchIds.has(i.id)).forEach((i: PendingItem) => {
+        const top = getTopCandidate(i)
+        if (!top) return
+        const k = `[${top.brand_code}] ${top.model_code}`
+        dist.set(k, (dist.get(k) ?? 0) + 1)
+      })
+      distributionLines = Array.from(dist.entries()).map(([k, v]) => `  · ${k} × ${v}`)
+      title = `将确认 ${processCount} 条为系统候选型号`
+    }
+
     Modal.confirm({
-      title: `确认一键确认这 ${ids.length} 条商品？`,
-      content: '将按系统当前候选型号确认入库，并沉淀 URL 映射。',
+      title,
+      width: 480,
+      content: (
+        <div style={{ whiteSpace: 'pre-wrap' }}>
+          <div>候选型号分布：</div>
+          <div>{distributionLines.join('\n') || '  · （无）'}</div>
+          {truncatedNote && <div style={{ color: '#d48806' }}>{truncatedNote}</div>}
+        </div>
+      ),
       okText: '确认',
       cancelText: '取消',
       onOk: async () => {
         setBatchConfirming(true)
         try {
-          const { data } = await batchConfirmMatch(selectedJobId, { mode: 'ids', ids })
-          if (data.failed === 0) {
-            message.success(`已确认 ${data.success} 条`)
-            resetBatchSelection()
-          } else {
-            message.warning(`成功 ${data.success} 条，失败 ${data.failed} 条`)
-            const successIds = new Set(ids)
-            data.failures.forEach(f => successIds.delete(f.id))
-            const nextSelected = new Set(selectedBatchIds)
-            successIds.forEach(id => nextSelected.delete(id))
-            setSelectedBatchIds(nextSelected)
-          }
+          const { data } = useFilterMode
+            ? await batchConfirmMatch(selectedJobId, { mode: 'filter', filter })
+            : await batchConfirmMatch(selectedJobId, { mode: 'ids', ids: Array.from(selectedBatchIds) })
+          showBatchResult(data)
           refreshPending()
           if (selectedJobId) getMatchSummary(selectedJobId).then(r => setSummary(r.data))
         } catch (err: any) {
@@ -710,6 +756,37 @@ export default function MatchPage() {
           setBatchConfirming(false)
         }
       },
+    })
+  }
+
+  const showBatchResult = (data: BatchConfirmResult) => {
+    if (data.failed === 0) {
+      message.success(`已确认 ${data.success} 条`)
+      resetBatchSelection()
+      return
+    }
+    const failedIds = new Set(data.failures.map(f => f.id))
+    const nextSelected = new Set<number>()
+    failedIds.forEach(id => nextSelected.add(id))  // 失败条目保持勾选
+    setSelectedBatchIds(nextSelected)
+    setBatchAllPages(false)
+    Modal.info({
+      title: `成功 ${data.success} 条，失败 ${data.failed} 条`,
+      width: 640,
+      content: (
+        <Table
+          size="small"
+          pagination={false}
+          rowKey="id"
+          dataSource={data.failures}
+          scroll={{ y: 320 }}
+          columns={[
+            { title: '商品', dataIndex: 'item_name', ellipsis: true },
+            { title: '失败原因', dataIndex: 'reason', width: 220 },
+          ]}
+        />
+      ),
+      okText: '知道了',
     })
   }
 
@@ -1330,6 +1407,22 @@ export default function MatchPage() {
                 >
                   一键确认（{selectedBatchIds.size}）
                 </Button>
+              </div>
+            )
+          })()}
+          {(activeTab === 'text_only' || activeTab === 'pending') && pendingData && (() => {
+            const items: PendingItem[] = pendingData.items ?? []
+            const validIdsOnPage = items.filter((item: PendingItem) => isCandidateValidForBatch(item).ok).map((item: PendingItem) => item.id)
+            const allPageChecked = validIdsOnPage.length > 0 && validIdsOnPage.every((id: number) => selectedBatchIds.has(id))
+            const hasMorePages = pendingData.total > items.length
+            if (!allPageChecked || !hasMorePages) return null
+            return (
+              <div style={{ padding: '6px 12px', background: '#fffbe6', border: '1px solid #ffe58f', marginBottom: 12, fontSize: 13 }}>
+                {batchAllPages ? (
+                  <>已选中全部 <b>{pendingData.total}</b> 条搜索结果（含跨页） <Button type="link" size="small" onClick={() => setBatchAllPages(false)}>取消跨页选择</Button></>
+                ) : (
+                  <>已选中当前页 {validIdsOnPage.length} 条 · <Button type="link" size="small" onClick={() => setBatchAllPages(true)}>选择全部搜索结果的 {pendingData.total} 条</Button></>
+                )}
               </div>
             )
           })()}

@@ -103,3 +103,7 @@ assert.notEqual(source.indexOf('未识别品牌'), -1, '无效候选应携带未
 
 assert.notEqual(source.indexOf('batchConfirmMatch(selectedJobId'), -1, '批量确认接口应按 selectedJobId (clean_job_id) 路径调用');
 assert.notEqual(source.indexOf('previewBatchConfirmMatch(selectedJobId'), -1, '批量预览接口应按 selectedJobId (clean_job_id) 路径调用');
+
+const viewMatchResultsButtonIndex = source.indexOf('查看本任务匹配结果')
+assert.notEqual(viewMatchResultsButtonIndex, -1,
+  'Match/index.tsx should have "查看本任务匹配结果" button')

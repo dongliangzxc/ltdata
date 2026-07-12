@@ -6,7 +6,7 @@ import {
 } from 'antd'
 import { AimOutlined, StopOutlined, CloudUploadOutlined, LoadingOutlined, LinkOutlined, DownloadOutlined, PlusOutlined, UndoOutlined, SwapOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams, useNavigate } from 'react-router-dom'
 import {
   listCleanJobs, runMatch, getMatchProgress, getMatchSummary, listPendingMatches,
   confirmMatch, revertMatch, listModels, runPublish, listPublishJobs,
@@ -188,6 +188,7 @@ const searchByPlaceholderMap: Record<SearchBy, string> = {
 
 export default function MatchPage() {
   const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
   const [selectedJobId, setSelectedJobId] = useState<number | null>(
     searchParams.get('job_id') ? Number(searchParams.get('job_id')) : null
   )
@@ -1055,6 +1056,14 @@ export default function MatchPage() {
               style={{ borderColor: '#52c41a', color: '#52c41a' }}
             >
               发布到分析库
+            </Button>
+          </Col>
+          <Col>
+            <Button
+              disabled={!selectedJobId}
+              onClick={() => selectedJobId && navigate(`/match-results?job_id=${selectedJobId}`)}
+            >
+              查看本任务匹配结果
             </Button>
           </Col>
           <Col>

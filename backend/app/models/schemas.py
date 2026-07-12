@@ -775,6 +775,23 @@ class MatchResultCandidate(Base):
     created_at      = Column(DateTime, default=datetime.utcnow)
 
 
+class MatchTransferLog(Base):
+    __tablename__ = "match_transfer_logs"
+    __table_args__ = (
+        Index("idx_mtl_from_job", "from_clean_job_id"),
+        Index("idx_mtl_to_job", "to_clean_job_id"),
+        Index("idx_mtl_match_result", "match_result_id"),
+    )
+
+    id                = Column(Integer, primary_key=True, autoincrement=True)
+    match_result_id   = Column(Integer, nullable=False)
+    raw_data_id       = Column(Integer, nullable=False)
+    from_clean_job_id = Column(Integer, nullable=False)
+    to_clean_job_id   = Column(Integer, nullable=False)
+    operator          = Column(String(100), nullable=True)
+    transferred_at    = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class MatchResultAttr(Base):
     __tablename__ = "match_result_attrs"
     __table_args__ = (

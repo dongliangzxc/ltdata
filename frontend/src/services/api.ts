@@ -1333,3 +1333,31 @@ export const confirmUrlMappingImport = (payload: {
 }) => api.post<{ inserted: number; updated: number; skipped: number; errors: string[] }>(
   '/url-mappings/confirm', payload
 )
+
+// —— /match-results 页面用 ——
+export type MatchResultsTab = 'all' | 'pending_review' | 'confirmed'
+export type PriceFlagFilter = 'below' | 'above' | 'normal' | 'none'
+export interface MatchResultsQuery {
+  page?: number
+  page_size?: number
+  tab?: MatchResultsTab
+  clean_job_id?: number
+  match_source?: string[]
+  price_flag?: PriceFlagFilter
+  keyword?: string
+}
+export interface MatchResultsResponse {
+  total: number
+  page: number
+  page_size: number
+  items: ReviewedMatchResultOut[]
+  counts: { all: number; pending_review: number; confirmed: number }
+}
+export const listMatchResults = (params: MatchResultsQuery) =>
+  api.get<MatchResultsResponse>('/match/reviewed', {
+    params,
+    paramsSerializer: {
+      // match_source 数组按重复键序列化（axios 1.x）：?match_source=a&match_source=b
+      indexes: null,
+    },
+  })

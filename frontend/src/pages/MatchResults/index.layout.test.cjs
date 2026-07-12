@@ -28,7 +28,7 @@ const columnsReturnIndex = cols.indexOf('return [')
 assert.notEqual(columnsReturnIndex, -1, 'columns should return table column definitions')
 const columnDefinition = cols.slice(columnsReturnIndex)
 const sharedColumnLabels = [
-  '商品名称', '品牌', '匹配型号', '价格预警', '参考均价', '原销量',
+  '宝贝名称', '品牌', '匹配型号', '价格预警', '参考均价', '原销量',
   '修正销量', '调整系数', '调整后销量', '状态', '来源', '重新选择',
 ]
 let previousIndex = -1

@@ -76,7 +76,7 @@ export function buildMatchResultsColumns(
 
   return [
     {
-      title: '商品名称', dataIndex: 'item_name', ellipsis: true,
+      title: '宝贝名称', dataIndex: 'item_name', ellipsis: true,
       render: (value: string | null) =>
         value ? <Tooltip title={value}><Text style={{ fontSize: 12 }}>{value}</Text></Tooltip> : '-',
     },

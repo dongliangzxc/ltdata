@@ -21,6 +21,7 @@ import {
   FolderOutlined,
   ToolOutlined,
   ContainerOutlined,
+  CheckSquareOutlined,
   TeamOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
@@ -63,8 +64,9 @@ const menuItems: AppMenuItem[] = [
       { key: '/brands',       icon: <ShopOutlined />,        label: '品牌管理' },
       { key: '/url-mappings', icon: <LinkOutlined />,        label: '映射管理' },
       { key: '/historical',   icon: <HistoryOutlined />,     label: '历史库' },
-      { key: '/clean',        icon: <ClearOutlined />,       label: '清洗任务' },
-      { key: '/rules',        icon: <FilterOutlined />,      label: '规则管理' },
+      { key: '/clean',         icon: <ClearOutlined />,       label: '清洗任务' },
+      { key: '/match-results', icon: <CheckSquareOutlined />, label: '匹配结果' },
+      { key: '/rules',         icon: <FilterOutlined />,      label: '规则管理' },
     ],
   },
   {
@@ -108,6 +110,7 @@ menuItems.forEach(item => {
   }
 })
 pageTitles.set('/match', '清洗任务详情')
+pageTitles.set('/match-results', '匹配结果')
 
 interface Props {
   children: React.ReactNode

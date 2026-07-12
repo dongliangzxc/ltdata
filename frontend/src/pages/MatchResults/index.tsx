@@ -1,10 +1,10 @@
 import { useState, useMemo, useEffect } from 'react'
 import {
-  Card, Space, Select, Input, Button, Tabs, Table, Typography, Badge, Row, Col,
+  Card, Space, Select, Input, Button, Tabs, Table, Typography, Badge, Row, Col, message,
 } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
-import { listCleanJobs, type CleanJobItem, type ReviewedMatchResultOut,
+import { listCleanJobs, updateMatchCoefficient, type CleanJobItem, type ReviewedMatchResultOut,
          type MatchResultsTab } from '../../services/api'
 import { buildMatchResultsColumns } from './columns'
 import { useMatchResultsQuery } from './useMatchResultsQuery'
@@ -36,10 +36,45 @@ export default function MatchResultsPage() {
   const [reselectOpen, setReselectOpen] = useState(false)
   const [reselectMatchId, setReselectMatchId] = useState<number | null>(null)
   const [keywordInput, setKeywordInput] = useState<string>(state.keyword ?? '')
+  const [coefficientDrafts, setCoefficientDrafts] = useState<Record<number, number | null>>({})
+  const [editedCoefficientIds, setEditedCoefficientIds] = useState<Set<number>>(new Set())
+  const [savingCoefficientIds, setSavingCoefficientIds] = useState<Set<number>>(new Set())
 
   useEffect(() => {
     setKeywordInput(state.keyword ?? '')
   }, [state.keyword])
+
+  useEffect(() => {
+    setCoefficientDrafts(prev => {
+      const next = { ...prev }
+      for (const item of data?.items ?? []) {
+        if (!(item.id in next)) next[item.id] = item.sales_coefficient ?? null
+      }
+      return next
+    })
+  }, [data?.items])
+
+  const handleCoefficientChange = (matchId: number, value: number | null) => {
+    setCoefficientDrafts(prev => ({ ...prev, [matchId]: value }))
+    setEditedCoefficientIds(prev => new Set(prev).add(matchId))
+  }
+
+  const handleSaveCoefficient = async (matchId: number) => {
+    const coefficient = coefficientDrafts[matchId] ?? null
+    setSavingCoefficientIds(prev => new Set(prev).add(matchId))
+    try {
+      const res = await updateMatchCoefficient(matchId, coefficient)
+      setCoefficientDrafts(prev => ({ ...prev, [matchId]: res.data.sales_coefficient ?? null }))
+      setEditedCoefficientIds(prev => { const next = new Set(prev); next.delete(matchId); return next })
+      message.success(coefficient == null ? '已清除调整系数' : '已保存调整系数')
+      refresh()
+    } catch (error) {
+      console.error(error)
+      message.error('保存调整系数失败')
+    } finally {
+      setSavingCoefficientIds(prev => { const next = new Set(prev); next.delete(matchId); return next })
+    }
+  }
 
   const { data: jobsData } = useRequest(() => listCleanJobs().then(r => r.data))
   const jobOptions = useMemo(
@@ -51,11 +86,18 @@ export default function MatchResultsPage() {
   )
 
   const columns = useMemo(
-    () => buildMatchResultsColumns((row: ReviewedMatchResultOut) => {
-      setReselectMatchId(row.id)
-      setReselectOpen(true)
+    () => buildMatchResultsColumns({
+      coefficientDrafts,
+      editedCoefficientIds,
+      savingCoefficientIds,
+      onCoefficientChange: handleCoefficientChange,
+      onSaveCoefficient: handleSaveCoefficient,
+      onReselect: (row: ReviewedMatchResultOut) => {
+        setReselectMatchId(row.id)
+        setReselectOpen(true)
+      },
     }),
-    [],
+    [coefficientDrafts, editedCoefficientIds, savingCoefficientIds],
   )
 
   const counts = data?.counts ?? { all: 0, pending_review: 0, confirmed: 0 }

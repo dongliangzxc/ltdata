@@ -21,6 +21,7 @@ const selectOtherModelIndex = source.indexOf('handleSelectOtherModel');
 const systemSourceIndex = source.indexOf('<Descriptions.Item label="系统来源">{renderMatchSource(reviewDetail.match_source)}</Descriptions.Item>');
 const reviewedTableTitleIndex = source.indexOf('<span>已匹配 / 已确认条目</span>');
 const reselectButtonIndex = source.indexOf('重新选择');
+const sharedReviewedColumnsIndex = source.indexOf('buildMatchResultsColumns({');
 const reselectModalUsageIndex = source.indexOf('<ReselectModal');
 const reselectModalIndex = reselectModalSource.indexOf('title="重新选择型号"');
 const reselectConfirmIndex = reselectModalSource.indexOf('okText="确认纠错"');
@@ -51,7 +52,7 @@ assert.notEqual(modelSearchApiIndex, -1, 'model search should call listModels');
 assert.notEqual(selectOtherModelIndex, -1, 'selecting another model should confirm the model');
 assert.equal(systemSourceIndex, -1, 'review product detail should not show 系统来源');
 assert.notEqual(reviewedTableTitleIndex, -1, 'reviewed table title should exist');
-assert.notEqual(reselectButtonIndex, -1, 'reviewed table should include a reselect action');
+assert.notEqual(source.indexOf('onReselect: openReselectModal'), -1, 'reviewed table should pass reselect action to shared columns');
 assert.notEqual(reselectModalUsageIndex, -1, 'Match/index.tsx should mount <ReselectModal>');
 assert.notEqual(reselectModalIndex, -1, 'reselect modal title should exist in ReselectModal.tsx');
 assert.notEqual(reselectConfirmIndex, -1, 'reselect modal should use confirm correction copy in ReselectModal.tsx');
@@ -80,8 +81,8 @@ assert.ok(
   'search/select and create model controls should stay in the product detail block',
 );
 assert.ok(
-  reviewedTableTitleIndex < reselectButtonIndex && reselectButtonIndex < reselectModalUsageIndex,
-  'reviewed table should expose reselect before rendering the reselect modal',
+  sharedReviewedColumnsIndex !== -1 && sharedReviewedColumnsIndex < reselectModalUsageIndex,
+  'reviewed table should build shared columns with reselect before rendering the reselect modal',
 );
 
 assert.notEqual(interventionRuleModalSource.indexOf("name=\"enable_reference_price\""), -1, "intervention edit form should expose the reference price toggle");
@@ -107,3 +108,7 @@ assert.notEqual(source.indexOf('previewBatchConfirmMatch(selectedJobId'), -1, '�
 const viewMatchResultsButtonIndex = source.indexOf('查看本任务匹配结果')
 assert.notEqual(viewMatchResultsButtonIndex, -1,
   'Match/index.tsx should have "查看本任务匹配结果" button')
+
+assert.notEqual(source.indexOf("import { buildMatchResultsColumns } from '../MatchResults/columns'"), -1, 'Match page should import shared match result columns')
+assert.notEqual(source.indexOf('buildMatchResultsColumns({'), -1, 'Match page should build reviewed columns from shared factory')
+assert.equal(source.indexOf('const reviewedColumns = ['), -1, 'Match page should not keep a local reviewedColumns array')

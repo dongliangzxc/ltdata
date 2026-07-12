@@ -23,12 +23,23 @@ assert.notEqual(idx.indexOf('匹配来源（多选）'), -1, 'source select plac
 assert.notEqual(idx.indexOf('按商品名称搜索'), -1, 'keyword search placeholder')
 // 未选任务提示
 assert.notEqual(idx.indexOf('未选任务时展示全库最新结果'), -1, 'no-job hint')
-// 表格列不含量价审核列
-assert.equal(cols.indexOf('调整系数'), -1, 'columns should NOT have 调整系数')
-assert.equal(cols.indexOf('修正销量'), -1, 'columns should NOT have 修正销量')
-assert.equal(cols.indexOf('调整后销量'), -1, 'columns should NOT have 调整后销量')
-// 表格列含"重新选择"操作
-assert.notEqual(cols.indexOf('重新选择'), -1, 'columns should have 重新选择 button')
+// 表格列使用完整共享列集
+const columnsReturnIndex = cols.indexOf('return [')
+assert.notEqual(columnsReturnIndex, -1, 'columns should return table column definitions')
+const columnDefinition = cols.slice(columnsReturnIndex)
+const sharedColumnLabels = [
+  '商品名称', '品牌', '匹配型号', '价格预警', '参考均价', '原销量',
+  '修正销量', '调整系数', '调整后销量', '状态', '来源', '重新选择',
+]
+let previousIndex = -1
+for (const label of sharedColumnLabels) {
+  const currentIndex = columnDefinition.indexOf(label)
+  assert.notEqual(currentIndex, -1, `columns should include ${label}`)
+  assert.ok(currentIndex > previousIndex, `${label} should appear after previous shared column`)
+  previousIndex = currentIndex
+}
+assert.notEqual(cols.indexOf('renderMatchStatus'), -1, 'columns should render Chinese match status labels')
+assert.notEqual(cols.indexOf('renderMatchSource'), -1, 'columns should render match source labels')
 // URL query 双向同步 key
 assert.notEqual(hook.indexOf("params.get('tab')"), -1)
 assert.notEqual(hook.indexOf("params.getAll('match_source')"), -1)

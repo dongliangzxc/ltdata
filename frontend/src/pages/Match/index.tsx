@@ -18,7 +18,7 @@ import {
   batchConfirmMatch, previewBatchConfirmMatch,
   searchCleanTasks, transferMatchItem,
 } from '../../services/api'
-import type { CleanJobItem, MatchCandidateOut, ReviewedMatchResultOut, PriceFlag, MatchReviewDetail, FilteredItemOut, ModelItem, BatchConfirmFilter, BatchConfirmResult, CleanTaskSearchItem } from '../../services/api'
+import type { CleanJobItem, MatchCandidateOut, ReviewedMatchResultOut, MatchReviewDetail, FilteredItemOut, ModelItem, BatchConfirmFilter, BatchConfirmResult, CleanTaskSearchItem } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 import ProgressModal from '../../components/ProgressModal'
 import AttributeInsightCard from './components/AttributeInsightCard'
@@ -26,33 +26,17 @@ import SameTitleBatchActions from './components/SameTitleBatchActions'
 import InterventionRuleModal from './components/InterventionRuleModal'
 import CreateModelModal from '../../components/CreateModelModal'
 import ReselectModal from './components/ReselectModal'
+import { buildMatchResultsColumns } from '../MatchResults/columns'
 
 const { Text } = Typography
-
-const priceFlagMeta: Record<PriceFlag, { label: string; color: string }> = {
-  ok: { label: '正常', color: 'green' },
-  high: { label: '偏高', color: 'red' },
-  low: { label: '偏低', color: 'orange' },
-  no_history: { label: '无历史', color: 'default' },
-}
 
 const formatNumber = (value?: number | null) => (
   value != null ? value.toLocaleString() : '-'
 )
 
-const getBaseSalesQty = (row: ReviewedMatchResultOut) => row.corrected_sales_qty ?? row.sales_qty ?? null
-
-const getAdjustedSalesQty = (row: ReviewedMatchResultOut, draftCoefficient?: number | null, hasLocalEdit = false) => {
-  if (!hasLocalEdit && row.adjusted_sales_qty != null) return row.adjusted_sales_qty
-  const coefficient = hasLocalEdit ? draftCoefficient ?? null : row.sales_coefficient ?? null
-  const base = getBaseSalesQty(row)
-  return base != null && coefficient != null ? Math.round(base * coefficient) : base
-}
-
-const isPlaceholderCode = (value?: string | null) => {
-  const normalized = (value ?? '').trim()
-  return normalized === '' || /^-+$/.test(normalized)
-}
+const isPlaceholderCode = (value?: string | null) => (
+  !value || value === '未知' || value === '未识别品牌'
+)
 
 const hasDisplayModel = (brandCode?: string | null, modelCode?: string | null) => (
   !isPlaceholderCode(brandCode) && !isPlaceholderCode(modelCode)
@@ -907,80 +891,17 @@ export default function MatchPage() {
     }
   }
 
-  const reviewedColumns = [
-    {
-      title: '宝贝名称', dataIndex: 'item_name', ellipsis: true,
-      render: (v: string | null) => v ? <Tooltip title={v}><Text style={{ fontSize: 12 }}>{v}</Text></Tooltip> : '-'
+  const reviewedColumns = buildMatchResultsColumns({
+    coefficientDrafts,
+    editedCoefficientIds,
+    savingCoefficientIds,
+    onCoefficientChange: (matchId, value) => {
+      setCoefficientDrafts(prev => ({ ...prev, [matchId]: value }))
+      setEditedCoefficientIds(prev => new Set(prev).add(matchId))
     },
-    { title: '品牌', dataIndex: 'brand_raw', width: 110, render: (v: string | null) => v ?? '-' },
-    {
-      title: '匹配型号', width: 160,
-      render: (_: unknown, row: ReviewedMatchResultOut) =>
-        hasDisplayModel(row.brand_code, row.model_code)
-          ? <Text code style={{ fontSize: 12 }}>[{row.brand_code}] {row.model_code}</Text>
-          : <Text type="secondary">-</Text>
-    },
-    {
-      title: '价格预警', width: 110,
-      render: (_: unknown, row: ReviewedMatchResultOut) => {
-        const flag = row.price_flag
-        if (!flag) return <Tag color="default">-</Tag>
-        const meta = priceFlagMeta[flag]
-        return <Tag color={meta.color}>{meta.label}</Tag>
-      },
-    },
-    {
-      title: '参考均价', dataIndex: 'price_ref', width: 100,
-      render: (v: number | null) => v != null ? `¥${v.toLocaleString()}` : '-'
-    },
-    {
-      title: '原销量', dataIndex: 'sales_qty', width: 90,
-      render: (v: number | null) => formatNumber(v),
-    },
-    {
-      title: '修正销量', dataIndex: 'corrected_sales_qty', width: 90,
-      render: (_: number | null, row: ReviewedMatchResultOut) => formatNumber(getBaseSalesQty(row)),
-    },
-    {
-      title: '调整系数', width: 180,
-      render: (_: unknown, row: ReviewedMatchResultOut) => (
-        <Space size={4}>
-          <InputNumber
-            size="small"
-            min={0}
-            max={999.9999}
-            precision={4}
-            placeholder="不调整"
-            value={coefficientDrafts[row.id] ?? null}
-            onChange={v => {
-              setCoefficientDrafts(prev => ({ ...prev, [row.id]: v == null ? null : Number(v) }))
-              setEditedCoefficientIds(prev => new Set(prev).add(row.id))
-            }}
-            style={{ width: 100 }}
-          />
-          <Button
-            size="small"
-            loading={savingCoefficientIds.has(row.id)}
-            onClick={() => handleSaveCoefficient(row.id)}
-          >保存</Button>
-        </Space>
-      ),
-    },
-    {
-      title: '调整后销量', width: 100,
-      render: (_: unknown, row: ReviewedMatchResultOut) => formatNumber(
-        getAdjustedSalesQty(row, coefficientDrafts[row.id], editedCoefficientIds.has(row.id))
-      ),
-    },
-    {
-      title: '状态', dataIndex: 'match_status', width: 90,
-      render: (v: string) => <Tag color={v === 'confirmed' ? 'blue' : 'green'}>{v}</Tag>,
-    },
-    {
-      title: '来源', width: 130,
-      render: (_: unknown, row: ReviewedMatchResultOut) => renderMatchSource(row.match_source),
-    },
-  ]
+    onSaveCoefficient: handleSaveCoefficient,
+    onReselect: openReselectModal,
+  })
 
   const publishColumns = [
     { title: '发布ID', dataIndex: 'id', width: 70 },
@@ -1721,15 +1642,7 @@ export default function MatchPage() {
         >
           <Table
             dataSource={reviewedData?.items ?? []}
-            columns={[
-              ...reviewedColumns,
-              {
-                title: '操作', width: 100, fixed: 'right' as const,
-                render: (_: unknown, row: ReviewedMatchResultOut) => (
-                  <Button size="small" type="link" onClick={() => openReselectModal(row)}>重新选择</Button>
-                ),
-              },
-            ]}
+            columns={reviewedColumns}
             rowKey="id"
             size="small"
             loading={reviewedLoading}

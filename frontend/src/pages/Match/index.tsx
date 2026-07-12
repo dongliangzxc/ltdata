@@ -4,7 +4,7 @@ import {
   message, Row, Col, Statistic, Tooltip, Progress, Alert, Popconfirm, InputNumber, Tabs,
   List, Descriptions, Empty, Modal, Image, Checkbox,
 } from 'antd'
-import { AimOutlined, StopOutlined, CloudUploadOutlined, LoadingOutlined, LinkOutlined, DownloadOutlined, PlusOutlined, UndoOutlined } from '@ant-design/icons'
+import { AimOutlined, StopOutlined, CloudUploadOutlined, LoadingOutlined, LinkOutlined, DownloadOutlined, PlusOutlined, UndoOutlined, SwapOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import { useSearchParams } from 'react-router-dom'
 import {
@@ -16,8 +16,9 @@ import {
   getCleanMonthlyPool, rerunCleanTaskWithCurrentRules,
   listFilteredItems, recoverFilteredItem,
   batchConfirmMatch, previewBatchConfirmMatch,
+  searchCleanTasks, transferMatchItem,
 } from '../../services/api'
-import type { CleanJobItem, MatchCandidateOut, ReviewedMatchResultOut, PriceFlag, MatchReviewDetail, FilteredItemOut, ModelItem, BatchConfirmFilter, BatchConfirmResult } from '../../services/api'
+import type { CleanJobItem, MatchCandidateOut, ReviewedMatchResultOut, PriceFlag, MatchReviewDetail, FilteredItemOut, ModelItem, BatchConfirmFilter, BatchConfirmResult, CleanTaskSearchItem } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 import ProgressModal from '../../components/ProgressModal'
 import AttributeInsightCard from './components/AttributeInsightCard'
@@ -91,21 +92,6 @@ const isCandidateValidForBatch = (item: PendingItem): { ok: boolean; reason?: st
   return { ok: true }
 }
 
-const statusMeta: Record<string, { label: string; color: string }> = {
-  pending: { label: '待确认', color: 'orange' },
-  text_only: { label: 'URL待确认', color: 'gold' },
-  disputed: { label: '争议', color: 'red' },
-  matched: { label: '已匹配', color: 'green' },
-  url_matched: { label: '精准匹配', color: 'green' },
-  confirmed: { label: '已人工确认', color: 'blue' },
-  excluded: { label: '已排除', color: 'default' },
-}
-
-const renderMatchStatus = (status?: string | null) => {
-  if (!status) return <Tag color="default">未知</Tag>
-  const meta = statusMeta[status]
-  return meta ? <Tag color={meta.color}>{meta.label}</Tag> : <Tag>{status}</Tag>
-}
 
 type MatchSummary = {
   clean_job_id: number
@@ -256,6 +242,13 @@ export default function MatchPage() {
   const [createModelOpen, setCreateModelOpen] = useState(false)
   const [reselectOpen, setReselectOpen] = useState(false)
   const [reselectMatchId, setReselectMatchId] = useState<number | null>(null)
+  const [transferModalOpen, setTransferModalOpen] = useState(false)
+  const [transferTargetId, setTransferTargetId] = useState<number | undefined>(undefined)
+  const [transferOptions, setTransferOptions] = useState<CleanTaskSearchItem[]>([])
+  const [transferSearching, setTransferSearching] = useState(false)
+  const [transferSubmitting, setTransferSubmitting] = useState(false)
+  const [transferError, setTransferError] = useState<string | null>(null)
+  const debouncedSearchClean = useRef<number | null>(null)
   const { options: categoryOptions } = useCategoryOptions()
   const preciseMatchedCount = summary?.precise_matched ?? summary?.url_matched ?? 0
   const otherAutoMatchedCount = summary ? Math.max(summary.matched - Math.max(preciseMatchedCount - (summary.url_matched ?? 0), 0), 0) : 0
@@ -508,6 +501,54 @@ export default function MatchPage() {
     refreshPending()
     refreshReviewed()
     getMatchSummary(selectedJobId!).then(r => setSummary(r.data))
+  }
+
+  const doSearchCleanTasks = (keyword: string) => {
+    if (debouncedSearchClean.current) {
+      window.clearTimeout(debouncedSearchClean.current)
+    }
+    setTransferSearching(true)
+    debouncedSearchClean.current = window.setTimeout(async () => {
+      try {
+        const excludeId = reviewDetail?.clean_job_id
+        const res = await searchCleanTasks({
+          keyword: keyword.trim() || undefined,
+          exclude_id: excludeId,
+          limit: 50,
+        })
+        setTransferOptions(res.data)
+      } catch (e: any) {
+        message.error(e?.response?.data?.detail || '搜索清洗任务失败')
+      } finally {
+        setTransferSearching(false)
+      }
+    }, 300)
+  }
+
+  const openTransferModal = () => {
+    setTransferTargetId(undefined)
+    setTransferOptions([])
+    setTransferError(null)
+    setTransferModalOpen(true)
+    doSearchCleanTasks('')
+  }
+
+  const handleTransferSubmit = async () => {
+    if (!reviewDetail || !transferTargetId) return
+    setTransferSubmitting(true)
+    setTransferError(null)
+    try {
+      await transferMatchItem(reviewDetail.id, transferTargetId)
+      const target = transferOptions.find(x => x.id === transferTargetId)
+      message.success(`已转移到 ${target?.task_name || `任务#${transferTargetId}`}`)
+      setTransferModalOpen(false)
+      // 当前条已离开本任务，自动跳到下一条并刷新工作台
+      refreshReviewWorkbench(reviewDetail.id)
+    } catch (e: any) {
+      setTransferError(e?.response?.data?.detail || '转移失败')
+    } finally {
+      setTransferSubmitting(false)
+    }
   }
 
   const refreshReviewDetailInPlace = async (matchId: number) => {
@@ -1505,7 +1546,11 @@ export default function MatchPage() {
                           >撤销</Button>
                         </Popconfirm>
                       ) : null}
-                      {renderMatchStatus(reviewDetail.match_status)}
+                      <Button
+                        size="small"
+                        icon={<SwapOutlined />}
+                        onClick={openTransferModal}
+                      >转移到其他任务</Button>
                       <Button size="small" onClick={() => refreshReviewWorkbench(reviewDetail.id)}>继续下一条</Button>
                       {reviewDetail.item_url ? <a href={reviewDetail.item_url} target="_blank" rel="noreferrer"><LinkOutlined /> 打开商品</a> : null}
                       {reviewDetail.item_image ? (
@@ -1697,6 +1742,62 @@ export default function MatchPage() {
         onClose={() => { setReselectOpen(false); setReselectMatchId(null) }}
         onSuccess={handleReselectSuccess}
       />
+
+      <Modal
+        title="转移到其他清洗任务"
+        open={transferModalOpen}
+        onOk={handleTransferSubmit}
+        onCancel={() => setTransferModalOpen(false)}
+        okText="确认转移"
+        cancelText="取消"
+        okButtonProps={{ disabled: !transferTargetId, loading: transferSubmitting }}
+        width={560}
+      >
+        {reviewDetail ? (
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Descriptions size="small" column={1} bordered>
+              <Descriptions.Item label="商品名称">{reviewDetail.item_name || '-'}</Descriptions.Item>
+              <Descriptions.Item label="原品牌">{reviewDetail.brand_raw || '-'}</Descriptions.Item>
+              <Descriptions.Item label="价格">
+                {reviewDetail.price != null ? `¥${reviewDetail.price}` : '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="商品ID">{reviewDetail.item_id || '-'}</Descriptions.Item>
+              <Descriptions.Item label="当前任务">
+                #{reviewDetail.clean_job_id}
+              </Descriptions.Item>
+            </Descriptions>
+
+            <div>
+              <div style={{ marginBottom: 4 }}>目标任务</div>
+              <Select
+                showSearch
+                filterOption={false}
+                placeholder="按任务名 / 品类 / 平台搜索"
+                style={{ width: '100%' }}
+                value={transferTargetId}
+                onSearch={doSearchCleanTasks}
+                onChange={setTransferTargetId}
+                loading={transferSearching}
+                options={transferOptions.map(o => ({
+                  value: o.id,
+                  label: `[${o.category_code || '-'}] · [${o.platform || '-'}] · [${o.month ?? '-'}] · ${o.task_name || '未命名'} (#${o.id})`,
+                }))}
+                notFoundContent={transferSearching ? '搜索中...' : '暂无匹配任务'}
+              />
+            </div>
+
+            <Alert
+              type="warning"
+              showIcon
+              message="转移后会按目标任务品类重新跑匹配，本条状态重置为「待处理」；转移操作不可撤销，且不会自动回滚 URL 映射库。"
+            />
+
+            {transferError ? (
+              <Alert type="error" showIcon message={transferError} />
+            ) : null}
+          </Space>
+        ) : null}
+      </Modal>
 
       {summary && (summary.disabled ?? 0) > 0 && (
         <Card title={`禁用列表（${disabledTotal} 条）`}>

@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import {
   Card, Space, Select, Input, Button, Tabs, Table, Typography, Badge, Row, Col,
 } from 'antd'
@@ -35,6 +35,11 @@ export default function MatchResultsPage() {
   const { state, setState, reset, data, loading, refresh } = useMatchResultsQuery()
   const [reselectOpen, setReselectOpen] = useState(false)
   const [reselectMatchId, setReselectMatchId] = useState<number | null>(null)
+  const [keywordInput, setKeywordInput] = useState<string>(state.keyword ?? '')
+
+  useEffect(() => {
+    setKeywordInput(state.keyword ?? '')
+  }, [state.keyword])
 
   const { data: jobsData } = useRequest(() => listCleanJobs().then(r => r.data))
   const jobOptions = useMemo(
@@ -108,7 +113,8 @@ export default function MatchResultsPage() {
             <Input.Search
               allowClear
               placeholder="按商品名称搜索"
-              defaultValue={state.keyword}
+              value={keywordInput}
+              onChange={e => setKeywordInput(e.target.value)}
               onSearch={v => setState({ keyword: v })}
               style={{ maxWidth: 320 }}
             />

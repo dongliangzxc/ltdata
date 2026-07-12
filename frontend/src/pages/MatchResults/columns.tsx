@@ -39,10 +39,16 @@ const hasDisplayModel = (b?: string | null, m?: string | null) =>
 
 const formatNumber = (v?: number | null) => v != null ? v.toLocaleString() : '-'
 
-const statusColor = (v: string) => {
-  if (v === 'confirmed') return 'blue'
-  if (v === 'url_matched') return 'green'
-  return 'green'
+const MATCH_STATUS_META: Record<string, { label: string; color: string }> = {
+  pending: { label: '待确认', color: 'orange' },
+  matched: { label: '已匹配', color: 'green' },
+  url_matched: { label: '精准匹配', color: 'cyan' },
+  confirmed: { label: '已人工确认', color: 'blue' },
+  excluded: { label: '已排除', color: 'default' },
+}
+const renderMatchStatus = (v: string) => {
+  const m = MATCH_STATUS_META[v] ?? { label: v, color: 'default' }
+  return <Tag color={m.color}>{m.label}</Tag>
 }
 
 export function buildMatchResultsColumns(
@@ -81,7 +87,7 @@ export function buildMatchResultsColumns(
     },
     {
       title: '状态', dataIndex: 'match_status', width: 100,
-      render: (v: string) => <Tag color={statusColor(v)}>{v}</Tag>,
+      render: (v: string) => renderMatchStatus(v),
     },
     {
       title: '来源', width: 130,

@@ -878,6 +878,56 @@ def _pick_top_candidate(db: Session, mr: MatchResult) -> Optional[ModelRecord]:
     return db.query(ModelRecord).filter(ModelRecord.id == cand.model_id).first()
 
 
+def _fetch_top_candidates_bulk(
+    db: Session, mr_ids: list[int]
+) -> dict[int, ModelRecord]:
+    """批量取多条 mr 的首个候选型号，返回 {mr_id: ModelRecord}。
+
+    策略（O(1) queries，避免 N+1）：
+      1. 子查询：按 match_result_id 分组取 min(rank)
+      2. 关联 MatchResultCandidate 拿到 min(rank) 上的候选行；同 rank 多条时在 Python 里
+         按 id 升序取第一条（与 `_pick_top_candidate` 的 order_by 一致）
+      3. 一次性 IN 查询把候选对应的 ModelRecord 拉回来
+    过滤掉 model_id IS NULL 的候选，与 `_pick_top_candidate` 行为保持一致。
+    """
+    if not mr_ids:
+        return {}
+    min_rank_sq = (
+        db.query(
+            MatchResultCandidate.match_result_id.label("mr_id"),
+            func.min(MatchResultCandidate.rank).label("min_rank"),
+        )
+        .filter(MatchResultCandidate.match_result_id.in_(mr_ids))
+        .group_by(MatchResultCandidate.match_result_id)
+        .subquery()
+    )
+    cands = (
+        db.query(MatchResultCandidate)
+        .join(
+            min_rank_sq,
+            (MatchResultCandidate.match_result_id == min_rank_sq.c.mr_id)
+            & (MatchResultCandidate.rank == min_rank_sq.c.min_rank),
+        )
+        .filter(MatchResultCandidate.model_id.isnot(None))
+        .all()
+    )
+    best: dict[int, MatchResultCandidate] = {}
+    for c in cands:
+        cur = best.get(c.match_result_id)
+        if cur is None or c.id < cur.id:
+            best[c.match_result_id] = c
+    model_ids = list({c.model_id for c in best.values()})
+    if not model_ids:
+        return {}
+    models = db.query(ModelRecord).filter(ModelRecord.id.in_(model_ids)).all()
+    by_model = {m.id: m for m in models}
+    return {
+        mr_id: by_model[c.model_id]
+        for mr_id, c in best.items()
+        if c.model_id in by_model
+    }
+
+
 def _candidate_is_valid(mr: MatchResult, model: Optional[ModelRecord]) -> bool:
     if not model:
         return False
@@ -1020,7 +1070,14 @@ def batch_confirm(clean_job_id: int, payload: dict, db: Session = Depends(get_db
         matched_total = q.count()
         truncated = matched_total > _BATCH_FILTER_LIMIT
         rows = q.limit(_BATCH_FILTER_LIMIT).all()
-        targets = [mr for mr, _rd, _model in rows]
+        candidates = [mr for mr, _rd, _model in rows]
+        # 预取首个候选型号，避免逐条 N+1；filter 模式无效候选直接跳过（§4.2 step 3），
+        # 不算入 total/failures，与 ids 模式差异化处理。
+        top_map = _fetch_top_candidates_bulk(db, [mr.id for mr in candidates])
+        targets = [
+            mr for mr in candidates
+            if _candidate_is_valid(mr, top_map.get(mr.id))
+        ]
         result = _run_batch_confirm(db, clean_job_id, targets)
         return {
             "total": len(targets),
@@ -1047,11 +1104,14 @@ def batch_confirm_preview(
     )
     rows = q.all()  # preview 不做上限（只统计），若 review 反馈慢再加
 
+    # 用 bulk 查询一次性拿到每条 mr 的首个候选，避免逐条 SELECT 造成 N+1。
+    mrs = [mr for mr, _rd, _model in rows]
+    top_map = _fetch_top_candidates_bulk(db, [mr.id for mr in mrs])
     dist: Counter = Counter()
     total_valid = 0
     total_invalid = 0
-    for mr, _rd, _model in rows:
-        cand_model = _pick_top_candidate(db, mr)
+    for mr in mrs:
+        cand_model = top_map.get(mr.id)
         if _candidate_is_valid(mr, cand_model):
             total_valid += 1
             dist[(cand_model.brand_code, cand_model.model_code)] += 1

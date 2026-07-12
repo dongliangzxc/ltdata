@@ -1409,6 +1409,69 @@ def test_batch_confirm_filter_mode_processes_matching_rows(db, match_client):
     assert body["truncated"] is False
 
 
+def test_batch_confirm_filter_mode_skips_invalid_candidates(db, match_client):
+    """filter 模式：无效候选不算入 total，也不进 failures（§4.2 step 3）。"""
+    from app.models.schemas import (
+        MatchResult, MatchResultCandidate, ModelRecord, RawDataRecord,
+        CleanJobRecord, UploadFileRecord,
+    )
+
+    upload = UploadFileRecord(filename="filter_invalid.xlsx", status="done")
+    db.add(upload); db.flush()
+
+    db.add(CleanJobRecord(id=560, file_ids=[upload.id], status="done"))
+    m_ok = ModelRecord(brand_code="速影", model_code="C200PRO")
+    m_dash = ModelRecord(brand_code="速影", model_code="-")
+    db.add_all([m_ok, m_dash]); db.flush()
+
+    def _mk(idx: int, model: ModelRecord, brand_identified: int = 1):
+        rd = RawDataRecord(
+            file_id=upload.id, platform="jd", item_id=f"IV{idx}",
+            item_url=f"https://jd.com/IV{idx}",
+            item_name="SJCAM 200pro 变种", brand_raw="速影",
+            price=1.0, sales_qty=1,
+        )
+        db.add(rd); db.flush()
+        mr = MatchResult(
+            clean_job_id=560, raw_data_id=rd.id, match_status="pending",
+            matched_by="auto", match_source="text",
+            brand_identified=brand_identified,
+        )
+        db.add(mr); db.flush()
+        db.add(MatchResultCandidate(
+            match_result_id=mr.id, model_id=model.id, match_source="text",
+            score=100, rank=1,
+        ))
+        return mr
+
+    # 3 条有效
+    for i in range(3):
+        _mk(i, m_ok)
+    # 2 条无效：一条候选是 "-"，一条未识别品牌
+    _mk(10, m_dash)
+    _mk(11, m_ok, brand_identified=0)
+    db.commit()
+
+    resp = match_client.post(
+        f"/api/match/560/batch-confirm",
+        json={"mode": "filter", "filter": {
+            "tab": "pending", "keyword": "200pro", "search_by": "item_name",
+            "sort_by": "default",
+        }},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # matched_total 是原始 DB 匹配的全部条数（截断前，过滤无效前）
+    assert body["matched_total"] == 5
+    # total 只算有效条目
+    assert body["total"] == 3
+    assert body["success"] == 3
+    assert body["failed"] == 0
+    # 无效条目不出现在 failures
+    reasons = [f["reason"] for f in body["failures"]]
+    assert "候选型号无效" not in reasons
+
+
 def test_batch_confirm_filter_mode_rejects_invalid_tab(match_client):
     resp = match_client.post(
         "/api/match/1/batch-confirm",

@@ -381,6 +381,17 @@ export default function MatchPage() {
       .finally(() => setReviewDetailLoading(false))
   }, [activeTab, selectedReviewId])
 
+  // 跨页全选模式下翻新页：新页可选项默认全部勾中（§3.3 "翻页保留"）
+  useEffect(() => {
+    if (!batchAllPages) return
+    if (activeTab !== 'text_only' && activeTab !== 'pending') return
+    const items: PendingItem[] = pendingData?.items ?? []
+    const validIds = items
+      .filter(item => isCandidateValidForBatch(item).ok)
+      .map(item => item.id)
+    setSelectedBatchIds(new Set(validIds))
+  }, [batchAllPages, activeTab, pendingData])
+
   const { data: reviewedData, loading: reviewedLoading, refresh: refreshReviewed } = useRequest(
     () => listReviewedMatches(selectedJobId!, {
       page: reviewedPage,
@@ -699,7 +710,14 @@ export default function MatchPage() {
     let truncatedNote = ''
 
     if (useFilterMode) {
-      const { data: preview } = await previewBatchConfirmMatch(selectedJobId, filter)
+      let preview
+      try {
+        const resp = await previewBatchConfirmMatch(selectedJobId, filter)
+        preview = resp.data
+      } catch (err: any) {
+        message.error(err?.response?.data?.detail || '预览候选分布失败')
+        return
+      }
       if (preview.total_valid === 0) {
         message.info('没有可确认的有效候选')
         return
@@ -1504,7 +1522,7 @@ export default function MatchPage() {
                       current: page,
                       pageSize: 20,
                       total: pendingData?.total ?? 0,
-                      onChange: (p: number) => { setPage(p); resetBatchSelection() },
+                      onChange: (p: number) => { setPage(p) },
                       size: 'small',
                       showSizeChanger: false,
                     }}

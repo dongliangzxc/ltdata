@@ -2,7 +2,7 @@
 导出服务：基于型号匹配结果，按品类分 Sheet 导出。
 - 已匹配/已确认的条目 → 按 category_name 分 Sheet，含动态规格列
 - 待确认条目 → 单独"待确认" Sheet，无规格列
-- URL 映射待确认（text_only）→ 按品类分 Sheet，命名"{品类}-待审核"
+- URL 映射待确认（text_only）→ 按品类分 Sheet，命名"{品类}-URL映射待确认"
 - 争议复核 / 已排除 → 分别一个总 Sheet，基础列
 - 干扰项过滤 → 单独 Sheet，基础列 + 命中关键词/规则/原因；仅导出未恢复项
 - 规格列按品类过滤：每个 Sheet 只显示本品类（category_code）的规格列
@@ -204,7 +204,7 @@ def export_match_job(
 
     def get_text_only_sheet(cat: str):
         if cat not in text_only_sheets:
-            worksheet = workbook.create_sheet(title=_sheet_name(f"{cat}-待审核", used_sheet_names))
+            worksheet = workbook.create_sheet(title=_sheet_name(f"{cat}-URL映射待确认", used_sheet_names))
             worksheet.append(BASE_CN_NAMES)
             text_only_sheets[cat] = (worksheet,)
         return text_only_sheets[cat][0]

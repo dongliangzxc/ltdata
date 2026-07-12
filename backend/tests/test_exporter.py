@@ -72,6 +72,29 @@ def test_brand_name_and_model_name_in_export(db):
     assert xl["型号名称"].iloc[0] == "WH-1000XM5降噪耳机"
 
 
+def test_text_only_export_sheet_uses_url_mapping_pending_label(db):
+    """URL 映射待确认 Sheet 应与复核工作台 Tab 文案一致。"""
+    clean_job_id = _seed(db)
+    model = db.query(ModelRecord).first()
+    rd = _make_extra_raw(db, "200000", "URL 映射待确认商品")
+    db.add(MatchResult(
+        clean_job_id=clean_job_id,
+        raw_data_id=rd.id,
+        model_id=model.id,
+        match_status="text_only",
+        matched_by="auto",
+        match_source="s1",
+        is_disabled=0,
+    ))
+    db.commit()
+
+    result = export_match_job(db, clean_job_id)
+    sheets = pd.ExcelFile(result[0]["path"]).sheet_names
+
+    assert "耳机-URL映射待确认" in sheets
+    assert "耳机-待审核" not in sheets
+
+
 def test_disabled_items_excluded_from_export(db):
     """is_disabled=1 的条目不应出现在已匹配 Sheet。"""
     clean_job_id = _seed(db)

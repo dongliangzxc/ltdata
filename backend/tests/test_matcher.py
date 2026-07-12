@@ -414,3 +414,22 @@ def test_s0_url_brand_hint_with_model_match(db):
     assert result.model_id == model.id
     assert result.brand_identified == 1
     assert result.match_source == "s1"
+
+
+def test_load_match_context_filters_by_category(db):
+    """给定 category_code 时，valid_model_ids 只包含该品类的型号。"""
+    from app.services.matcher import _load_match_context
+    from app.models.schemas import ModelRecord
+
+    cam = ModelRecord(brand_code="DJI", model_code="Osmo-6", category_code="camera")
+    lock = ModelRecord(brand_code="KDLK", model_code="X1", category_code="smartlock")
+    db.add_all([cam, lock])
+    db.commit()
+
+    ctx = _load_match_context(db, "camera")
+    assert cam.id in ctx.valid_model_ids
+    assert lock.id not in ctx.valid_model_ids
+
+    ctx_all = _load_match_context(db, None)
+    assert cam.id in ctx_all.valid_model_ids
+    assert lock.id in ctx_all.valid_model_ids

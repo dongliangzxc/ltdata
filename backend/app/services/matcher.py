@@ -47,6 +47,7 @@ brand_identified 标记：S1/S2/S3 任意阶段识别到品牌即置 1，即使�
 支持重复执行：每次运行先删除该 clean_job 的旧结果再重新写入。
 """
 import logging
+from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
 from app.models.schemas import CleanedDataRecord, ModelRecord, ModelAlias, MatchResult, MatchResultAttr, MatchResultCandidate, ItemUrlMapping, MatchRule, HistoricalMapping, CleanJobRecord
@@ -55,6 +56,64 @@ from app.services.attribute_matcher import run_attribute_matching
 from app.services.price_auditor import audit_price
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class MatchContext:
+    """匹配上下文：URL 映射、显式规则、品牌索引、别名等预加载结构，
+    供整批 run_match 与单条 run_match_for_result 共用。"""
+    job_category_code: str | None
+    url_map: dict = field(default_factory=dict)
+    url_brand_map: dict = field(default_factory=dict)
+    valid_model_ids: set = field(default_factory=set)
+    explicit_rules: list = field(default_factory=list)
+    brand_code_index: dict = field(default_factory=dict)
+    brand_name_index: dict = field(default_factory=dict)
+    long_code_models: list = field(default_factory=list)
+    alias_map: dict = field(default_factory=dict)
+    brand_raw_cache: dict = field(default_factory=dict)
+
+
+def _load_match_context(db: Session, category_code: str | None) -> MatchContext:
+    """加载给定品类下的匹配上下文；category_code=None 时不做品类过滤，
+    保留 run_match 原有行为（全部有效型号进入 valid_model_ids）。"""
+    ctx = MatchContext(job_category_code=category_code)
+
+    model_query = db.query(ModelRecord)
+    if category_code:
+        model_query = model_query.filter(ModelRecord.category_code == category_code)
+    model_rows = model_query.all()
+    ctx.valid_model_ids = {m.id for m in model_rows if _is_valid_model(m)}
+
+    for um in db.query(ItemUrlMapping).all():
+        if um.model_id and um.model_id in ctx.valid_model_ids:
+            ctx.url_map[(um.platform, um.item_id)] = um.model_id
+        elif um.brand_code:
+            ctx.url_brand_map[(um.platform, um.item_id)] = um.brand_code
+
+    ctx.explicit_rules = (
+        db.query(MatchRule)
+        .filter(MatchRule.is_active == 1, MatchRule.model_id.in_(ctx.valid_model_ids))
+        .order_by(MatchRule.priority)
+        .all()
+    )
+
+    all_models = [m for m in model_rows if m.id in ctx.valid_model_ids]
+
+    for m in all_models:
+        key = _norm(m.brand_code)
+        if key:
+            ctx.brand_code_index.setdefault(key, []).append(m)
+    for m in all_models:
+        key = _norm(m.brand_name)
+        if len(key) >= 2:
+            ctx.brand_name_index.setdefault(key, []).append(m)
+    ctx.long_code_models = [m for m in all_models if len(_norm(m.model_code)) >= 5]
+
+    for a in db.query(ModelAlias).all():
+        ctx.alias_map.setdefault(a.model_id, []).append(_norm(a.alias_code))
+
+    return ctx
 
 
 def _norm(s: str | None) -> str:
@@ -168,54 +227,16 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
     if clean_job:
         job_category_code = clean_job.category_code or clean_job.dispatch_category_code
 
-    # ── S0: 预加载 URL 映射表 ─────────────────────────────────────
-    url_map: dict[tuple[str, str], int] = {}        # model_id 已知的条目
-    url_brand_map: dict[tuple[str, str], str] = {}  # 品牌已知但 model_id=NULL 的条目
-    model_query = db.query(ModelRecord)
-    if job_category_code:
-        model_query = model_query.filter(ModelRecord.category_code == job_category_code)
-    model_rows = model_query.all()
-    valid_model_ids = {m.id for m in model_rows if _is_valid_model(m)}
-
-    for um in db.query(ItemUrlMapping).all():
-        if um.model_id and um.model_id in valid_model_ids:
-            url_map[(um.platform, um.item_id)] = um.model_id
-        elif um.brand_code:
-            url_brand_map[(um.platform, um.item_id)] = um.brand_code
-
-    # ── S0.5: 预加载显式匹配规则（按 priority 升序）────────────────
-    explicit_rules = (
-        db.query(MatchRule)
-        .filter(MatchRule.is_active == 1, MatchRule.model_id.in_(valid_model_ids))
-        .order_by(MatchRule.priority)
-        .all()
-    )
-
-    # ── 构建内存索引 ─────────────────────────────────────────────
-    all_models = [m for m in model_rows if m.id in valid_model_ids]
-
-    brand_code_index: dict[str, list[ModelRecord]] = {}
-    for m in all_models:
-        key = _norm(m.brand_code)
-        if key:
-            brand_code_index.setdefault(key, []).append(m)
-
-    brand_name_index: dict[str, list[ModelRecord]] = {}
-    for m in all_models:
-        key = _norm(m.brand_name)
-        if len(key) >= 2:
-            brand_name_index.setdefault(key, []).append(m)
-
-    # S4 候选：model_code 足够长（≥5）的全量型号
-    long_code_models = [m for m in all_models if len(_norm(m.model_code)) >= 5]
-
-    # ── 预加载别名 {model_id: [alias_code_upper, ...]} ───────────
-    alias_map: dict[int, list[str]] = {}
-    for a in db.query(ModelAlias).all():
-        alias_map.setdefault(a.model_id, []).append(_norm(a.alias_code))
-
-    # ── brand_raw → 候选列表缓存 ─────────────────────────────────
-    brand_raw_cache: dict[str, list[ModelRecord]] = {}
+    ctx = _load_match_context(db, job_category_code)
+    url_map = ctx.url_map
+    url_brand_map = ctx.url_brand_map
+    valid_model_ids = ctx.valid_model_ids
+    explicit_rules = ctx.explicit_rules
+    brand_code_index = ctx.brand_code_index
+    brand_name_index = ctx.brand_name_index
+    long_code_models = ctx.long_code_models
+    alias_map = ctx.alias_map
+    brand_raw_cache = ctx.brand_raw_cache
 
     def _candidates_by_brand_raw(brand_raw: str) -> list[ModelRecord]:
         if brand_raw in brand_raw_cache:

@@ -1449,3 +1449,91 @@ def list_disabled(
         for mr, rd in rows
     ]
     return PaginatedResponse(total=total, page=page, page_size=page_size, items=items)
+
+
+from typing import Literal
+
+@router.get("/reviewed", response_model=None)  # 使用 dict 返回以携带 counts
+def list_reviewed_global(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    tab: Literal["all", "pending_review", "confirmed"] = "all",
+    clean_job_id: Optional[int] = None,
+    match_source: Optional[list[str]] = Query(None),
+    price_flag: Optional[Literal["below", "above", "normal", "none"]] = None,
+    keyword: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """跨任务的匹配结果查询，支持三 Tab 语义与筛选叠加。返回 counts 供 Tab 徽标。"""
+    reviewable_statuses = ["matched", "url_matched", "confirmed"]
+
+    price_flag_map = {"below": "low", "above": "high", "normal": "ok"}
+
+    def apply_common_filters(q, *, join_raw=False):
+        if join_raw:
+            q = q.join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
+        q = q.filter(MatchResult.match_status.in_(reviewable_statuses))
+        if clean_job_id is not None:
+            q = q.filter(MatchResult.clean_job_id == clean_job_id)
+        if match_source:
+            q = q.filter(MatchResult.match_source.in_(match_source))
+        if price_flag is not None:
+            if price_flag == "none":
+                q = q.filter(MatchResult.price_flag.is_(None))
+            else:
+                q = q.filter(MatchResult.price_flag == price_flag_map[price_flag])
+        if keyword:
+            q = q.filter(RawDataRecord.item_name.like(f"%{keyword}%"))
+        return q
+
+    def apply_tab(q, which: str):
+        if which == "pending_review":
+            q = q.filter(MatchResult.match_status.in_(["matched", "url_matched"]))
+            # NULL 也算 pending_review（没经过人工过目）
+            q = q.filter((MatchResult.match_source == None) |  # noqa: E711
+                         (MatchResult.match_source != "manual"))
+        elif which == "confirmed":
+            q = q.filter(MatchResult.match_status == "confirmed")
+        return q
+
+    # counts：先建 base，再按 tab 分别 count
+    counts = {}
+    for which in ("all", "pending_review", "confirmed"):
+        q_count = apply_common_filters(db.query(MatchResult.id), join_raw=bool(keyword))
+        q_count = apply_tab(q_count, which)
+        counts[which] = q_count.distinct().count()
+
+    # items：查询绑定当前 tab
+    q = (
+        db.query(MatchResult, RawDataRecord, ModelRecord)
+        .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
+        .outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
+    )
+    q = apply_common_filters(q, join_raw=False)
+    q = apply_tab(q, tab)
+    total = counts[tab]
+    rows = q.order_by(MatchResult.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
+
+    items = []
+    for mr, rd, model in rows:
+        items.append(MatchResultOut(
+            id=mr.id, clean_job_id=mr.clean_job_id, raw_data_id=mr.raw_data_id,
+            model_id=mr.model_id, match_status=mr.match_status, matched_by=mr.matched_by,
+            match_source=mr.match_source,
+            is_disabled=mr.is_disabled or 0,
+            disable_reason=mr.disable_reason,
+            brand_identified=1 if mr.brand_identified is None else mr.brand_identified,
+            price_flag=mr.price_flag, price_ref=mr.price_ref,
+            sales_coefficient=float(mr.sales_coefficient) if mr.sales_coefficient is not None else None,
+            reviewed_at=mr.reviewed_at,
+            item_name=rd.item_name, item_url=rd.item_url, brand_raw=rd.brand_raw,
+            model_code=model.model_code if model else None,
+            brand_code=model.brand_code if model else None,
+            sales_qty=rd.sales_qty,
+        ))
+
+    return {
+        "total": total, "page": page, "page_size": page_size,
+        "items": [item.model_dump() for item in items],
+        "counts": counts,
+    }

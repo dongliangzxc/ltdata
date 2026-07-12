@@ -81,7 +81,10 @@ const modelOptionFromModel = (m: ModelItem): ModelOption => ({
   brand_name: m.brand_name ?? null,
   model_name: m.model_name ?? null,
 })
-const modelOptionLabel = (opt: ModelOption) => `[${opt.brand_code || '-'}] ${opt.model_code || '-'}`
+const modelOptionLabel = (opt: ModelOption) => {
+  const base = `[${opt.brand_code || '-'}] ${opt.model_code || '-'}`
+  return opt.model_name ? `${base} · ${opt.model_name}` : base
+}
 const mergeModelOption = (list: ModelOption[], opt: ModelOption) =>
   list.some(x => x.id === opt.id) ? list : [opt, ...list]
 

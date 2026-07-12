@@ -433,3 +433,116 @@ def test_load_match_context_filters_by_category(db):
     ctx_all = _load_match_context(db, None)
     assert cam.id in ctx_all.valid_model_ids
     assert lock.id in ctx_all.valid_model_ids
+
+
+# ── run_match_for_result 单条匹配测试 ──────────────────────────
+
+
+def test_run_match_for_result_hits_url_mapping(db):
+    """单条重跑：目标品类下 URL 映射有命中，状态应转为 url_matched。"""
+    from app.services.matcher import run_match_for_result
+    from app.models.schemas import (
+        ModelRecord, UploadFileRecord, RawDataRecord, CleanJobRecord,
+        MatchResult, ItemUrlMapping,
+    )
+
+    model = ModelRecord(brand_code="DJI", model_code="Osmo-Nano", category_code="camera")
+    db.add(model)
+    db.flush()
+
+    upload = UploadFileRecord(filename="t.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+
+    cj = CleanJobRecord(file_ids=[upload.id], status="done", category_code="camera")
+    db.add(cj)
+    db.flush()
+
+    raw = RawDataRecord(
+        file_id=upload.id, item_name="Osmo Nano 相机", brand_raw="DJI",
+        platform="jd", item_id="jd-osmo-1",
+        item_url="https://item.jd.com/jd-osmo-1.html",
+    )
+    db.add(raw)
+    db.flush()
+
+    db.add(ItemUrlMapping(platform="jd", item_id="jd-osmo-1", model_id=model.id))
+
+    mr = MatchResult(
+        clean_job_id=cj.id, raw_data_id=raw.id,
+        match_status="pending", matched_by="auto",
+    )
+    db.add(mr)
+    db.commit()
+
+    result = run_match_for_result(db, mr.id)
+    assert result.match_status == "url_matched"
+    assert result.model_id == model.id
+    assert result.match_source == "s0"
+
+
+def test_run_match_for_result_no_hit_stays_pending(db):
+    """单条重跑：目标品类下没有可命中的型号，应保持 pending。"""
+    from app.services.matcher import run_match_for_result
+    from app.models.schemas import (
+        UploadFileRecord, RawDataRecord, CleanJobRecord, MatchResult,
+    )
+
+    upload = UploadFileRecord(filename="t2.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+    cj = CleanJobRecord(file_ids=[upload.id], status="done", category_code="camera")
+    db.add(cj)
+    db.flush()
+    raw = RawDataRecord(
+        file_id=upload.id, item_name="不明配件", brand_raw="Unknown",
+        platform="jd", item_id="jd-x-1",
+    )
+    db.add(raw)
+    db.flush()
+    mr = MatchResult(
+        clean_job_id=cj.id, raw_data_id=raw.id,
+        match_status="pending", matched_by="auto",
+    )
+    db.add(mr)
+    db.commit()
+
+    result = run_match_for_result(db, mr.id)
+    assert result.match_status == "pending"
+    assert result.model_id is None
+
+
+def test_run_match_for_result_ignores_out_of_category_models(db):
+    """目标 clean_job 品类为 camera，即使数据库里存在其他品类的完全同名型号，也不应匹配。"""
+    from app.services.matcher import run_match_for_result
+    from app.models.schemas import (
+        ModelRecord, UploadFileRecord, RawDataRecord,
+        CleanJobRecord, MatchResult,
+    )
+
+    lock = ModelRecord(brand_code="KDLK", model_code="X1PRO", category_code="smartlock")
+    db.add(lock)
+    db.flush()
+
+    upload = UploadFileRecord(filename="t3.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+    cj = CleanJobRecord(file_ids=[upload.id], status="done", category_code="camera")
+    db.add(cj)
+    db.flush()
+    raw = RawDataRecord(
+        file_id=upload.id, item_name="KDLK X1PRO 门锁", brand_raw="KDLK",
+        platform="jd", item_id="jd-lock-1",
+    )
+    db.add(raw)
+    db.flush()
+    mr = MatchResult(
+        clean_job_id=cj.id, raw_data_id=raw.id,
+        match_status="pending", matched_by="auto",
+    )
+    db.add(mr)
+    db.commit()
+
+    result = run_match_for_result(db, mr.id)
+    assert result.match_status == "pending"
+    assert result.model_id is None

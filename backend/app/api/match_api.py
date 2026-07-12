@@ -888,7 +888,9 @@ def _fetch_top_candidates_bulk(
       2. 关联 MatchResultCandidate 拿到 min(rank) 上的候选行；同 rank 多条时在 Python 里
          按 id 升序取第一条（与 `_pick_top_candidate` 的 order_by 一致）
       3. 一次性 IN 查询把候选对应的 ModelRecord 拉回来
-    过滤掉 model_id IS NULL 的候选，与 `_pick_top_candidate` 行为保持一致。
+    NULL model_id 语义与 `_pick_top_candidate` 保持一致：先按 (rank, id) 选出
+    Top-1，再判 model_id 是否为空——同 rank 若 min-id 那条 model_id 为 NULL，
+    则该 mr 视为无有效首候选（不后退到 rank 相同但 id 更大的其他候选）。
     """
     if not mr_ids:
         return {}
@@ -908,7 +910,6 @@ def _fetch_top_candidates_bulk(
             (MatchResultCandidate.match_result_id == min_rank_sq.c.mr_id)
             & (MatchResultCandidate.rank == min_rank_sq.c.min_rank),
         )
-        .filter(MatchResultCandidate.model_id.isnot(None))
         .all()
     )
     best: dict[int, MatchResultCandidate] = {}
@@ -916,6 +917,8 @@ def _fetch_top_candidates_bulk(
         cur = best.get(c.match_result_id)
         if cur is None or c.id < cur.id:
             best[c.match_result_id] = c
+    # 与 `_pick_top_candidate` 对齐：min-id 候选若 model_id 为 NULL 视为无首候选
+    best = {mr_id: c for mr_id, c in best.items() if c.model_id is not None}
     model_ids = list({c.model_id for c in best.values()})
     if not model_ids:
         return {}

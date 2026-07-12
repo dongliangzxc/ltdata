@@ -1,8 +1,9 @@
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
+from pydantic import BaseModel
 from app.models.database import get_db
 from app.models.schemas import (
     CleanJobRecord,
@@ -647,3 +648,60 @@ def preview_clean_job(
         "page_size": page_size,
         "items": [CleanedDataOut.model_validate(r) for r in items],
     }
+
+
+class CleanTaskSearchItem(BaseModel):
+    id: int
+    task_name: str | None = None
+    category_code: str | None = None
+    category_name: str | None = None
+    platform: str | None = None
+    month: int | None = None
+    status: str
+
+
+ACTIVE_TASK_STATUSES_FOR_TRANSFER = {"created", "cleaning", "matching", "reviewing", "processing", "done"}
+
+
+@router.get("/tasks/search", response_model=list[CleanTaskSearchItem])
+def search_clean_tasks(
+    keyword: str = Query("", description="任务名/品类码/品类名/平台关键字，可空"),
+    exclude_id: int | None = Query(None, description="排除的 clean_job_id（通常传当前任务）"),
+    limit: int = Query(50, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    kw = (keyword or "").strip()
+    q = (
+        db.query(CleanJobRecord, Category)
+        .outerjoin(Category, CleanJobRecord.category_code == Category.code)
+        .filter(CleanJobRecord.status.in_(ACTIVE_TASK_STATUSES_FOR_TRANSFER))
+    )
+    if exclude_id is not None:
+        q = q.filter(CleanJobRecord.id != exclude_id)
+    if kw:
+        like = f"%{kw}%"
+        q = q.filter(or_(
+            CleanJobRecord.task_name.ilike(like),
+            CleanJobRecord.category_code.ilike(like),
+            CleanJobRecord.platform.ilike(like),
+            Category.name.ilike(like),
+        ))
+    q = q.order_by(CleanJobRecord.created_at.desc()).limit(limit)
+
+    items: list[CleanTaskSearchItem] = []
+    for cj, cat in q.all():
+        month = None
+        if isinstance(cj.source_scope, dict):
+            month_val = cj.source_scope.get("month")
+            if isinstance(month_val, int):
+                month = month_val
+        items.append(CleanTaskSearchItem(
+            id=cj.id,
+            task_name=cj.task_name,
+            category_code=cj.category_code,
+            category_name=cat.name if cat else None,
+            platform=cj.platform,
+            month=month,
+            status=cj.status,
+        ))
+    return items

@@ -585,6 +585,27 @@ export const previewBatchConfirmMatch = (clean_job_id: number, filter: BatchConf
 
 export const revertMatch = (match_id: number) =>
   api.post<MatchResultOut>(`/match/items/${match_id}/revert`)
+
+export interface CleanTaskSearchItem {
+  id: number
+  task_name: string | null
+  category_code: string | null
+  category_name: string | null
+  platform: string | null
+  month: number | null
+  status: string
+}
+
+export const searchCleanTasks = (params: {
+  keyword?: string
+  exclude_id?: number
+  limit?: number
+}) =>
+  api.get<CleanTaskSearchItem[]>('/clean/tasks/search', { params })
+
+export const transferMatchItem = (match_id: number, target_clean_job_id: number) =>
+  api.post<MatchResultOut>(`/match/items/${match_id}/transfer`, { target_clean_job_id })
+
 export const getMatchReviewDetail = (match_id: number) =>
   api.get<MatchReviewDetail>(`/match/items/${match_id}/review-detail`)
 

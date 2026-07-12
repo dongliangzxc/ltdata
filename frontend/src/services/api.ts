@@ -594,6 +594,7 @@ export interface CleanTaskSearchItem {
   platform: string | null
   month: number | null
   status: string
+  display_name: string | null
 }
 
 export const searchCleanTasks = (params: {

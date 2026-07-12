@@ -659,6 +659,7 @@ class CleanTaskSearchItem(BaseModel):
     platform: str | None = None
     month: int | None = None
     status: str
+    display_name: str | None = None
 
 
 @router.get("/tasks/search", response_model=list[CleanTaskSearchItem])
@@ -688,18 +689,14 @@ def search_clean_tasks(
 
     items: list[CleanTaskSearchItem] = []
     for cj, cat in q.all():
-        month = None
-        if isinstance(cj.source_scope, dict):
-            month_val = cj.source_scope.get("month")
-            if isinstance(month_val, int):
-                month = month_val
         items.append(CleanTaskSearchItem(
             id=cj.id,
             task_name=cj.task_name,
             category_code=cj.category_code,
             category_name=cat.name if cat else None,
             platform=cj.platform,
-            month=month,
+            month=_job_month(cj),
             status=cj.status,
+            display_name=_build_clean_scope_desc(db, cj),
         ))
     return items

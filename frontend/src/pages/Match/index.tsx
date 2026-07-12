@@ -1789,7 +1789,9 @@ export default function MatchPage() {
                 loading={transferSearching}
                 options={transferOptions.map(o => ({
                   value: o.id,
-                  label: `[${o.category_code || '-'}] · [${o.platform || '-'}] · [${o.month ?? '-'}] · ${o.task_name || '未命名'} (#${o.id})`,
+                  label: o.display_name
+                    ? `${o.display_name} (#${o.id})`
+                    : `[${o.category_code || '-'}] · [${o.platform || '-'}] · [${o.month ?? '-'}] · ${o.task_name || '未命名'} (#${o.id})`,
                 }))}
                 notFoundContent={transferSearching ? '搜索中...' : '暂无匹配任务'}
               />

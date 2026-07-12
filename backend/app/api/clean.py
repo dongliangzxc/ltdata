@@ -31,6 +31,7 @@ from app.models.schemas import (
     CleanJobItemRecord,
 )
 from app.services.clean_task_snapshot import (
+    ACTIVE_TASK_STATUSES,
     create_category_task_snapshot,
     get_clean_pool_summary,
     get_monthly_clean_pool,
@@ -660,9 +661,6 @@ class CleanTaskSearchItem(BaseModel):
     status: str
 
 
-ACTIVE_TASK_STATUSES_FOR_TRANSFER = {"created", "cleaning", "matching", "reviewing", "processing", "done"}
-
-
 @router.get("/tasks/search", response_model=list[CleanTaskSearchItem])
 def search_clean_tasks(
     keyword: str = Query("", description="任务名/品类码/品类名/平台关键字，可空"),
@@ -674,7 +672,7 @@ def search_clean_tasks(
     q = (
         db.query(CleanJobRecord, Category)
         .outerjoin(Category, CleanJobRecord.category_code == Category.code)
-        .filter(CleanJobRecord.status.in_(ACTIVE_TASK_STATUSES_FOR_TRANSFER))
+        .filter(CleanJobRecord.status.in_(ACTIVE_TASK_STATUSES))
     )
     if exclude_id is not None:
         q = q.filter(CleanJobRecord.id != exclude_id)

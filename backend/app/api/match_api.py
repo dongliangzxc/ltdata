@@ -22,6 +22,7 @@ from app.models.schemas import (
     PaginatedResponse,
     MatchTransferLog,
 )
+from app.services.clean_task_snapshot import ACTIVE_TASK_STATUSES
 from app.services.matcher import run_match, run_match_for_result
 from app.services.price_auditor import audit_price
 from app.utils.time_utils import format_beijing_datetime
@@ -1542,10 +1543,6 @@ def list_reviewed_global(
 
 # ── 单条转移到其他清洗任务 ─────────────────────────────────────────────────
 
-ACTIVE_TASK_STATUSES_FOR_TRANSFER = {
-    "created", "cleaning", "matching", "reviewing", "processing", "done",
-}
-
 
 class TransferPayload(_PydanticBase):
     target_clean_job_id: int
@@ -1573,7 +1570,7 @@ def transfer_match(match_id: int, payload: TransferPayload, db: Session = Depend
         raise HTTPException(status_code=400, detail="不能转移到当前任务")
 
     target = db.query(CleanJobRecord).filter(CleanJobRecord.id == target_id).first()
-    if not target or target.status not in ACTIVE_TASK_STATUSES_FOR_TRANSFER:
+    if not target or target.status not in ACTIVE_TASK_STATUSES:
         raise HTTPException(status_code=400, detail="目标清洗任务不存在或已归档")
 
     dup = (

@@ -20,8 +20,9 @@ from app.models.schemas import (
     MetadataSpec, ModelSpec, CleanedDataRecord,
     DispatchItem,
     PaginatedResponse,
+    MatchTransferLog,
 )
-from app.services.matcher import run_match
+from app.services.matcher import run_match, run_match_for_result
 from app.services.price_auditor import audit_price
 from app.utils.time_utils import format_beijing_datetime
 
@@ -1537,3 +1538,134 @@ def list_reviewed_global(
         "items": [item.model_dump() for item in items],
         "counts": counts,
     }
+
+
+# ── 单条转移到其他清洗任务 ─────────────────────────────────────────────────
+
+ACTIVE_TASK_STATUSES_FOR_TRANSFER = {
+    "created", "cleaning", "matching", "reviewing", "processing", "done",
+}
+
+
+class TransferPayload(_PydanticBase):
+    target_clean_job_id: int
+
+
+@router.post("/items/{match_id}/transfer", response_model=MatchResultOut)
+def transfer_match(match_id: int, payload: TransferPayload, db: Session = Depends(get_db)):
+    """把单条 match_result 转移到其他清洗任务：
+    - 预检：目标存在且未归档、与当前任务不同、目标任务未有相同 raw_data
+    - 执行：清空 prev_*/dispute/review 状态、清空 candidates+attrs、改 clean_job_id、按目标品类跑单条匹配
+    - 审计：写 match_transfer_logs
+    """
+    # 加行锁避免并发转移
+    mr = (
+        db.query(MatchResult)
+        .filter(MatchResult.id == match_id)
+        .with_for_update()
+        .first()
+    )
+    if not mr:
+        raise HTTPException(status_code=404, detail="匹配记录不存在")
+
+    target_id = payload.target_clean_job_id
+    if target_id == mr.clean_job_id:
+        raise HTTPException(status_code=400, detail="不能转移到当前任务")
+
+    target = db.query(CleanJobRecord).filter(CleanJobRecord.id == target_id).first()
+    if not target or target.status not in ACTIVE_TASK_STATUSES_FOR_TRANSFER:
+        raise HTTPException(status_code=400, detail="目标清洗任务不存在或已归档")
+
+    dup = (
+        db.query(MatchResult)
+        .filter(
+            MatchResult.clean_job_id == target_id,
+            MatchResult.raw_data_id == mr.raw_data_id,
+        )
+        .first()
+    )
+    if dup:
+        raise HTTPException(
+            status_code=400,
+            detail=f"目标任务已有该商品记录 (match_result_id={dup.id})",
+        )
+
+    from_job_id = mr.clean_job_id
+    raw_data_id = mr.raw_data_id
+
+    # 清空候选与属性
+    db.query(MatchResultCandidate).filter(
+        MatchResultCandidate.match_result_id == mr.id
+    ).delete(synchronize_session=False)
+    db.query(MatchResultAttr).filter(
+        MatchResultAttr.match_result_id == mr.id
+    ).delete(synchronize_session=False)
+
+    # 归属 + 状态重置（不动 is_disabled/disable_reason，rerun 会重设 brand_identified）
+    mr.clean_job_id = target_id
+    mr.match_status = "pending"
+    mr.model_id = None
+    mr.matched_by = "auto"
+    mr.match_source = None
+    mr.dispute_reason = None
+    mr.review_note = None
+    mr.reviewed_at = None
+    mr.prev_match_status = None
+    mr.prev_model_id = None
+    mr.prev_matched_by = None
+    mr.prev_match_source = None
+    mr.prev_dispute_reason = None
+    mr.prev_review_note = None
+    mr.prev_reviewed_at = None
+    mr.price_flag = None
+    mr.price_ref = None
+    mr.sales_coefficient = None
+    mr.updated_at = datetime.utcnow()
+    db.flush()
+
+    # 按目标品类跑单条匹配
+    run_match_for_result(db, mr.id, commit=False)
+
+    # 审计日志（每次转移写一条）
+    db.add(MatchTransferLog(
+        match_result_id=mr.id,
+        raw_data_id=raw_data_id,
+        from_clean_job_id=from_job_id,
+        to_clean_job_id=target_id,
+        operator=None,
+    ))
+
+    db.commit()
+    db.refresh(mr)
+
+    rd = db.query(RawDataRecord).filter(RawDataRecord.id == mr.raw_data_id).first()
+    model_info = (
+        db.query(ModelRecord).filter(ModelRecord.id == mr.model_id).first()
+        if mr.model_id
+        else None
+    )
+
+    return MatchResultOut(
+        id=mr.id,
+        clean_job_id=mr.clean_job_id,
+        raw_data_id=mr.raw_data_id,
+        model_id=mr.model_id,
+        match_status=mr.match_status,
+        matched_by=mr.matched_by,
+        match_source=mr.match_source,
+        price_flag=mr.price_flag,
+        price_ref=float(mr.price_ref) if mr.price_ref is not None else None,
+        sales_coefficient=(
+            float(mr.sales_coefficient) if mr.sales_coefficient is not None else None
+        ),
+        dispute_reason=mr.dispute_reason,
+        review_note=mr.review_note,
+        reviewed_at=mr.reviewed_at,
+        item_name=rd.item_name if rd else None,
+        item_url=rd.item_url if rd else None,
+        brand_raw=rd.brand_raw if rd else None,
+        model_code=model_info.model_code if model_info else None,
+        brand_code=model_info.brand_code if model_info else None,
+        sales_qty=rd.sales_qty if rd else None,
+        revertible=_is_revertible(mr),
+    )

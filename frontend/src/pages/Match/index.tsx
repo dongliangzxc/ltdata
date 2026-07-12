@@ -24,6 +24,7 @@ import AttributeInsightCard from './components/AttributeInsightCard'
 import SameTitleBatchActions from './components/SameTitleBatchActions'
 import InterventionRuleModal from './components/InterventionRuleModal'
 import CreateModelModal from '../../components/CreateModelModal'
+import ReselectModal from './components/ReselectModal'
 
 const { Text } = Typography
 
@@ -165,22 +166,6 @@ const modelOptionFromModel = (model: ModelItem): ModelOption => ({
   model_name: model.model_name ?? null,
 })
 
-const modelOptionFromCandidate = (candidate: MatchCandidateOut): ModelOption => ({
-  id: candidate.model_id,
-  brand_code: candidate.brand_code ?? '',
-  model_code: candidate.model_code ?? '',
-  brand_name: null,
-  model_name: null,
-})
-
-const modelOptionLabel = (option: ModelOption) => (
-  `[${option.brand_code || '-'}] ${option.model_code || '-'}${option.model_name ? ` · ${option.model_name}` : ''}`
-)
-
-const mergeModelOption = (options: ModelOption[], option: ModelOption) => (
-  options.some(item => item.id === option.id) ? options : [option, ...options]
-)
-
 type PublishJob = {
   id: number
   clean_job_id: number
@@ -270,15 +255,7 @@ export default function MatchPage() {
   const [modelSearchLoading, setModelSearchLoading] = useState(false)
   const [createModelOpen, setCreateModelOpen] = useState(false)
   const [reselectOpen, setReselectOpen] = useState(false)
-  const [reselectDetail, setReselectDetail] = useState<MatchReviewDetail | null>(null)
-  const [reselectModelId, setReselectModelId] = useState<number | undefined>()
-  const [reselectModelOptions, setReselectModelOptions] = useState<ModelOption[]>([])
-  const [reselectLoading, setReselectLoading] = useState(false)
-  const [reselectSubmitting, setReselectSubmitting] = useState(false)
-  const [reselectModelSearchLoading, setReselectModelSearchLoading] = useState(false)
-  const reselectRequestSeqRef = useRef(0)
-  const reselectSearchRequestSeqRef = useRef(0)
-  const reselectDetailRef = useRef<MatchReviewDetail | null>(null)
+  const [reselectMatchId, setReselectMatchId] = useState<number | null>(null)
   const { options: categoryOptions } = useCategoryOptions()
   const preciseMatchedCount = summary?.precise_matched ?? summary?.url_matched ?? 0
   const otherAutoMatchedCount = summary ? Math.max(summary.matched - Math.max(preciseMatchedCount - (summary.url_matched ?? 0), 0), 0) : 0
@@ -548,113 +525,18 @@ export default function MatchPage() {
     }
   }
 
-  const openReselectModal = async (row: ReviewedMatchResultOut) => {
-    const requestSeq = reselectRequestSeqRef.current + 1
-    reselectRequestSeqRef.current = requestSeq
-    reselectSearchRequestSeqRef.current += 1
-    reselectDetailRef.current = null
+  const openReselectModal = (row: ReviewedMatchResultOut) => {
+    setReselectMatchId(row.id)
     setReselectOpen(true)
-    setReselectDetail(null)
-    setReselectModelId(undefined)
-    setReselectModelOptions([])
-    setReselectModelSearchLoading(false)
-    setReselectLoading(true)
-    try {
-      const res = await getMatchReviewDetail(row.id)
-      const detail = res.data
-      if (requestSeq !== reselectRequestSeqRef.current || detail.id !== row.id) return
-      const options: ModelOption[] = []
-      if (detail.model_id && hasDisplayModel(detail.brand_code, detail.model_code)) {
-        options.push({
-          id: detail.model_id,
-          brand_code: detail.brand_code ?? '',
-          model_code: detail.model_code ?? '',
-          brand_name: null,
-          model_name: null,
-        })
-      }
-      ;(detail.candidates ?? []).forEach(candidate => {
-        const option = modelOptionFromCandidate(candidate)
-        if (!options.some(item => item.id === option.id)) options.push(option)
-      })
-      reselectDetailRef.current = detail
-      setReselectDetail(detail)
-      setReselectModelId(detail.model_id ?? undefined)
-      setReselectModelOptions(options)
-    } catch {
-      if (requestSeq === reselectRequestSeqRef.current) message.error('纠错详情加载失败，请稍后重试')
-    } finally {
-      if (requestSeq === reselectRequestSeqRef.current) setReselectLoading(false)
-    }
   }
 
-  const handleReselectModelSearch = async (keyword: string) => {
-    if (!keyword.trim() || !reselectDetail) return
-    const detailId = reselectDetail.id
-    const searchSeq = reselectSearchRequestSeqRef.current + 1
-    reselectSearchRequestSeqRef.current = searchSeq
-    setReselectModelSearchLoading(true)
-    try {
-      const res = await listModels({
-        keyword,
-        page: 1,
-        page_size: 50,
-        category_code: reselectDetail?.category_code || undefined,
-      }).then(r => r.data)
-      if (searchSeq !== reselectSearchRequestSeqRef.current || reselectDetailRef.current?.id !== detailId) return
-      setReselectModelOptions((res.items ?? []).map(modelOptionFromModel))
-    } finally {
-      if (searchSeq === reselectSearchRequestSeqRef.current && reselectDetailRef.current?.id === detailId) {
-        setReselectModelSearchLoading(false)
-      }
-    }
-  }
-
-  const handlePickReselectCandidate = (candidate: MatchCandidateOut) => {
-    const option = modelOptionFromCandidate(candidate)
-    setReselectModelOptions(prev => mergeModelOption(prev, option))
-    setReselectModelId(candidate.model_id)
-  }
-
-  const closeReselectModal = () => {
-    if (reselectSubmitting) return
-    reselectRequestSeqRef.current += 1
-    reselectSearchRequestSeqRef.current += 1
-    reselectDetailRef.current = null
-    setReselectOpen(false)
-    setReselectDetail(null)
-    setReselectModelId(undefined)
-    setReselectModelOptions([])
-    setReselectModelSearchLoading(false)
-  }
-
-  const handleConfirmReselect = async () => {
-    if (!reselectDetail) return
-    if (!reselectModelId) {
-      message.warning('请选择要纠错的型号')
-      return
-    }
-    setReselectSubmitting(true)
-    try {
-      await confirmMatch(reselectDetail.id, { model_id: reselectModelId })
-      message.success('已完成型号纠错；有可用 URL 线索时会同步更新 URL 映射')
-      reselectRequestSeqRef.current += 1
-      reselectSearchRequestSeqRef.current += 1
-      reselectDetailRef.current = null
-      setReselectOpen(false)
-      setReselectDetail(null)
-      setReselectModelId(undefined)
-      setReselectModelOptions([])
-      setReselectModelSearchLoading(false)
-      if (selectedReviewId === reselectDetail.id && activeTab !== 'filtered') {
-        await refreshReviewDetailInPlace(reselectDetail.id)
-      } else {
-        refreshPending()
-        refreshReviewed()
-        if (selectedJobId) getMatchSummary(selectedJobId).then(r => setSummary(r.data))
-      }
-    } finally {
-      setReselectSubmitting(false)
+  const handleReselectSuccess = async (id: number) => {
+    if (selectedReviewId === id && activeTab !== 'filtered') {
+      await refreshReviewDetailInPlace(id)
+    } else {
+      refreshPending()
+      refreshReviewed()
+      if (selectedJobId) getMatchSummary(selectedJobId).then(r => setSummary(r.data))
     }
   }
 
@@ -1809,95 +1691,12 @@ export default function MatchPage() {
         </Card>
       )}
 
-      <Modal
-        title="重新选择型号"
+      <ReselectModal
         open={reselectOpen}
-        onCancel={closeReselectModal}
-        onOk={handleConfirmReselect}
-        okText="确认纠错"
-        cancelText="取消"
-        confirmLoading={reselectSubmitting}
-        okButtonProps={{ disabled: reselectLoading || !reselectDetail || !reselectModelId }}
-        destroyOnClose
-        width={720}
-      >
-        {reselectLoading ? (
-          <Space><LoadingOutlined /> <span>正在加载纠错详情...</span></Space>
-        ) : reselectDetail ? (
-          <Space direction="vertical" style={{ width: '100%' }} size="middle">
-            <Alert
-              type="info"
-              showIcon
-              message="有可用 URL 线索时，纠错会同步覆盖对应 URL 映射，后续同链接将优先匹配到新型号。"
-            />
-            <Descriptions size="small" bordered column={2}>
-              <Descriptions.Item label="商品名称" span={2}>{reselectDetail.item_name || '-'}</Descriptions.Item>
-              <Descriptions.Item label="当前型号">
-                {hasDisplayModel(reselectDetail.brand_code, reselectDetail.model_code)
-                  ? <Text code>[{reselectDetail.brand_code}] {reselectDetail.model_code}</Text>
-                  : '-'}
-              </Descriptions.Item>
-              <Descriptions.Item label="状态">{renderMatchStatus(reselectDetail.match_status)}</Descriptions.Item>
-              <Descriptions.Item label="来源">{renderMatchSource(reselectDetail.match_source)}</Descriptions.Item>
-              <Descriptions.Item label="价格预警">
-                {reselectDetail.price_flag
-                  ? <Tag color={priceFlagMeta[reselectDetail.price_flag].color}>{priceFlagMeta[reselectDetail.price_flag].label}</Tag>
-                  : <Tag color="default">-</Tag>}
-              </Descriptions.Item>
-              <Descriptions.Item label="参考均价">
-                {reselectDetail.price_ref != null ? `¥${reselectDetail.price_ref.toLocaleString()}` : '-'}
-              </Descriptions.Item>
-            </Descriptions>
-
-            <div>
-              <Text strong>候选型号</Text>
-              {(reselectDetail.candidates ?? []).length > 0 ? (
-                <List
-                  size="small"
-                  dataSource={reselectDetail.candidates ?? []}
-                  renderItem={(candidate: MatchCandidateOut) => (
-                    <List.Item
-                      actions={[
-                        <Button
-                          key="pick"
-                          size="small"
-                          type={reselectModelId === candidate.model_id ? 'primary' : 'link'}
-                          onClick={() => handlePickReselectCandidate(candidate)}
-                        >选用</Button>,
-                      ]}
-                    >
-                      <Text code>[{candidate.brand_code || '-'}] {candidate.model_code || '-'}</Text>
-                    </List.Item>
-                  )}
-                />
-              ) : (
-                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无候选型号，可搜索其他型号" />
-              )}
-            </div>
-
-            <div>
-              <Text strong>搜索其他型号</Text>
-              <Select
-                showSearch
-                allowClear
-                filterOption={false}
-                placeholder="搜索/选择纠错型号"
-                style={{ width: '100%', marginTop: 8 }}
-                value={reselectModelId}
-                loading={reselectModelSearchLoading}
-                onSearch={handleReselectModelSearch}
-                onChange={value => setReselectModelId(value)}
-                options={reselectModelOptions.map(option => ({
-                  label: modelOptionLabel(option),
-                  value: option.id,
-                }))}
-              />
-            </div>
-          </Space>
-        ) : (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="纠错详情加载失败" />
-        )}
-      </Modal>
+        matchId={reselectMatchId}
+        onClose={() => { setReselectOpen(false); setReselectMatchId(null) }}
+        onSuccess={handleReselectSuccess}
+      />
 
       {summary && (summary.disabled ?? 0) > 0 && (
         <Card title={`禁用列表（${disabledTotal} 条）`}>

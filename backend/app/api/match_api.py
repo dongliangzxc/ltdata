@@ -962,9 +962,9 @@ def _existing_url_mapping_conflict(
 
 
 def _run_batch_confirm(
-    db: Session, clean_job_id: int, targets: list[MatchResult]
+    db: Session, clean_job_id: int, targets: list[MatchResult], selected_model: ModelRecord
 ) -> dict:
-    """对给定 targets 逐条独立提交确认；返回统一响应结构。"""
+    """对给定 targets 逐条独立提交确认到 selected_model；返回统一响应结构。"""
     success = 0
     failures: list[dict] = []
     ok_ids: list[int] = []
@@ -976,9 +976,9 @@ def _run_batch_confirm(
             if mr.match_status not in _BATCH_ALLOWED_STATUSES:
                 failures.append({"id": mr.id, "item_name": item_name, "reason": "状态已变更"})
                 continue
-            model = _pick_top_candidate(db, mr)
+            model = selected_model
             if not _candidate_is_valid(mr, model):
-                failures.append({"id": mr.id, "item_name": item_name, "reason": "候选型号无效"})
+                failures.append({"id": mr.id, "item_name": item_name, "reason": "目标型号无效"})
                 continue
             conflict = _existing_url_mapping_conflict(db, rd, model)
             if conflict is not None:
@@ -1034,6 +1034,13 @@ def _run_batch_confirm(
 def batch_confirm(clean_job_id: int, payload: dict, db: Session = Depends(get_db)):
     """一键批量确认。支持 ids 模式与 filter 模式。"""
     mode = (payload or {}).get("mode")
+    model_id = (payload or {}).get("model_id")
+    if not model_id:
+        raise HTTPException(status_code=400, detail="model_id 不能为空")
+    selected_model = db.query(ModelRecord).filter(ModelRecord.id == model_id).first()
+    if not selected_model:
+        raise HTTPException(status_code=400, detail="型号不存在")
+
     if mode == "ids":
         ids = payload.get("ids") or []
         if not isinstance(ids, list) or not ids:
@@ -1052,7 +1059,7 @@ def batch_confirm(clean_job_id: int, payload: dict, db: Session = Depends(get_db
         by_id = {mr.id: mr for mr in targets}
         ordered = [by_id[i] for i in ids if i in by_id]
         missing = [i for i in ids if i not in by_id]
-        result = _run_batch_confirm(db, clean_job_id, ordered)
+        result = _run_batch_confirm(db, clean_job_id, ordered, selected_model)
         for i in missing:
             result["failures"].append({"id": i, "item_name": None, "reason": "状态已变更"})
             result["failed"] += 1
@@ -1076,14 +1083,10 @@ def batch_confirm(clean_job_id: int, payload: dict, db: Session = Depends(get_db
         truncated = matched_total > _BATCH_FILTER_LIMIT
         rows = q.limit(_BATCH_FILTER_LIMIT).all()
         candidates = [mr for mr, _rd, _model in rows]
-        # 预取首个候选型号，避免逐条 N+1；filter 模式无效候选直接跳过（§4.2 step 3），
-        # 不算入 total/failures，与 ids 模式差异化处理。
-        top_map = _fetch_top_candidates_bulk(db, [mr.id for mr in candidates])
-        targets = [
-            mr for mr in candidates
-            if _candidate_is_valid(mr, top_map.get(mr.id))
-        ]
-        result = _run_batch_confirm(db, clean_job_id, targets)
+        # 目标型号由用户统一选择，filter 模式不再依赖候选型号有效性；
+        # 仅跳过未识别品牌，避免把不可确认品牌直接批量落库。
+        targets = [mr for mr in candidates if getattr(mr, "brand_identified", 1) != 0]
+        result = _run_batch_confirm(db, clean_job_id, targets, selected_model)
         return {
             "total": len(targets),
             "matched_total": matched_total,
@@ -1117,11 +1120,12 @@ def batch_confirm_preview(
     total_invalid = 0
     for mr in mrs:
         cand_model = top_map.get(mr.id)
-        if _candidate_is_valid(mr, cand_model):
-            total_valid += 1
-            dist[(cand_model.brand_code, cand_model.model_code)] += 1
-        else:
+        if getattr(mr, "brand_identified", 1) == 0:
             total_invalid += 1
+            continue
+        total_valid += 1
+        if cand_model and _candidate_is_valid(mr, cand_model):
+            dist[(cand_model.brand_code, cand_model.model_code)] += 1
     top = dist.most_common(20)
     return {
         "total_valid": total_valid,

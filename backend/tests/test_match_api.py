@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from app.models.database import get_db
 from app.models.schemas import (
     ModelRecord, UploadFileRecord, RawDataRecord,
-    CleanJobRecord, MatchResult, ItemUrlMapping, CleanedDataRecord,
+    CleanJobRecord, MatchResult, MatchResultCandidate, ItemUrlMapping, CleanedDataRecord,
     HistoricalMapping, MatchResultAttr, MetadataSpec, ModelSpec, Category, AttrRule,
 )
 from app.api.match_api import confirm_match, router as match_router
@@ -74,6 +74,66 @@ def _seed_review_row(
     return mr
 
 
+def _seed_batch_confirm_rows(db, *, row_count=1, item_id="batch-1"):
+    upload = UploadFileRecord(filename="batch.xlsx", platform="jd", status="done")
+    db.add(upload)
+    db.flush()
+
+    clean_job = CleanJobRecord(file_ids=[upload.id], status="reviewing")
+    db.add(clean_job)
+    candidate_model = ModelRecord(
+        brand_code="B1",
+        model_code="M1",
+        brand_name="品牌1",
+        model_name="候选型号",
+        category_code="cat-1",
+    )
+    selected_model = ModelRecord(
+        brand_code="B2",
+        model_code="M2",
+        brand_name="品牌2",
+        model_name="选择型号",
+        category_code="cat-1",
+    )
+    db.add_all([candidate_model, selected_model])
+    db.flush()
+
+    matches = []
+    for index in range(row_count):
+        raw = RawDataRecord(
+            file_id=upload.id,
+            platform="jd",
+            item_id=item_id if row_count == 1 else f"{item_id}-{index}",
+            item_url=f"https://example.com/{item_id}/{index}",
+            item_name=f"批量商品{index}",
+            brand_raw="品牌1",
+            sales_qty=10 + index,
+        )
+        db.add(raw)
+        db.flush()
+        match = MatchResult(
+            clean_job_id=clean_job.id,
+            raw_data_id=raw.id,
+            model_id=candidate_model.id,
+            match_status="pending",
+            matched_by="auto",
+            match_source="s1",
+            brand_identified=1,
+        )
+        db.add(match)
+        db.flush()
+        db.add(MatchResultCandidate(
+            match_result_id=match.id,
+            model_id=candidate_model.id,
+            match_source="s1",
+            score=0.9,
+            rank=1,
+        ))
+        matches.append(match)
+    db.commit()
+    return (clean_job, candidate_model, selected_model, *matches)
+
+
 def test_confirm_matched_backfills_null_url_mapping(db):
     """
     prev_status='matched' 且 item_url_mappings.model_id=NULL 时，
@@ -123,6 +183,66 @@ def test_confirm_matched_backfills_null_url_mapping(db):
 
     mapping = db.query(ItemUrlMapping).filter_by(platform="jd", item_id="88888").first()
     assert mapping.model_id == model.id
+
+
+def test_batch_confirm_requires_model_id(match_client, db):
+    job, _candidate_model, _selected_model, match = _seed_batch_confirm_rows(db)
+
+    response = match_client.post(f"/{job.id}/batch-confirm", json={"mode": "ids", "ids": [match.id]})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "model_id 不能为空"
+
+
+def test_batch_confirm_uses_selected_model_for_all_rows(match_client, db, monkeypatch):
+    monkeypatch.setattr("app.api.match_api.audit_price", lambda *_args, **_kwargs: None)
+    job, candidate_model, selected_model, first, second = _seed_batch_confirm_rows(db, row_count=2)
+
+    response = match_client.post(
+        f"/{job.id}/batch-confirm",
+        json={"mode": "ids", "ids": [first.id, second.id], "model_id": selected_model.id},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["success"] == 2
+    db.refresh(first)
+    db.refresh(second)
+    assert first.model_id == selected_model.id
+    assert second.model_id == selected_model.id
+    assert first.model_id != candidate_model.id
+    assert first.match_status == "confirmed"
+    assert second.match_status == "confirmed"
+
+
+def test_batch_confirm_selected_model_preserves_url_mapping_conflict(match_client, db, monkeypatch):
+    monkeypatch.setattr("app.api.match_api.audit_price", lambda *_args, **_kwargs: None)
+    job, _candidate_model, selected_model, match = _seed_batch_confirm_rows(db, item_id="conflict-1")
+    conflict_model = ModelRecord(
+        brand_code="B3",
+        model_code="M3",
+        brand_name="品牌3",
+        model_name="型号3",
+    )
+    db.add(conflict_model)
+    db.flush()
+    db.add(ItemUrlMapping(
+        platform="jd",
+        item_id="conflict-1",
+        model_id=conflict_model.id,
+        source="manual",
+    ))
+    db.commit()
+
+    response = match_client.post(
+        f"/{job.id}/batch-confirm",
+        json={"mode": "ids", "ids": [match.id], "model_id": selected_model.id},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] == 0
+    assert body["failed"] == 1
+    assert "URL 映射冲突" in body["failures"][0]["reason"]
 
 
 def test_confirm_match_overwrites_existing_url_mapping_and_marks_manual(db):
@@ -1253,7 +1373,7 @@ def test_batch_confirm_ids_mode_confirms_valid_and_reports_invalid(db, match_cli
 
     resp = match_client.post(
         f"/api/match/{555}/batch-confirm",
-        json={"mode": "ids", "ids": [mr_ok.id, mr_ok2.id, mr_wrong_status.id]},
+        json={"mode": "ids", "ids": [mr_ok.id, mr_ok2.id, mr_wrong_status.id], "model_id": model.id},
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -1316,35 +1436,45 @@ def test_batch_confirm_ids_mode_flags_invalid_candidate_and_url_mapping_conflict
 
     resp = match_client.post(
         f"/api/match/{556}/batch-confirm",
-        json={"mode": "ids", "ids": [mr_invalid.id, mr_unident.id, mr_conflict.id]},
+        json={"mode": "ids", "ids": [mr_invalid.id, mr_unident.id, mr_conflict.id], "model_id": good_model.id},
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
     failures_by_id = {f["id"]: f["reason"] for f in body["failures"]}
-    assert failures_by_id[mr_invalid.id] == "候选型号无效"
-    assert failures_by_id[mr_unident.id] == "候选型号无效"
+    assert failures_by_id[mr_unident.id] == "目标型号无效"
     assert "URL 映射冲突" in failures_by_id[mr_conflict.id]
-    assert body["success"] == 0
-    assert body["failed"] == 3
+    assert body["success"] == 1
+    assert body["failed"] == 2
+    db.expire_all()
+    assert db.query(MatchResult).get(mr_invalid.id).model_id == good_model.id
 
 
-def test_batch_confirm_rejects_empty_ids(match_client):
-    resp = match_client.post("/api/match/1/batch-confirm", json={"mode": "ids", "ids": []})
+def test_batch_confirm_rejects_empty_ids(db, match_client):
+    model = ModelRecord(brand_code="速影", model_code="C200PRO")
+    db.add(model); db.commit()
+
+    resp = match_client.post("/api/match/1/batch-confirm", json={"mode": "ids", "ids": [], "model_id": model.id})
     assert resp.status_code == 400
     assert "ids 不能为空" in resp.text
 
 
-def test_batch_confirm_rejects_over_limit_ids(match_client):
+def test_batch_confirm_rejects_over_limit_ids(db, match_client):
+    model = ModelRecord(brand_code="速影", model_code="C200PRO")
+    db.add(model); db.commit()
+
     resp = match_client.post(
         "/api/match/1/batch-confirm",
-        json={"mode": "ids", "ids": list(range(1, 202))},
+        json={"mode": "ids", "ids": list(range(1, 202)), "model_id": model.id},
     )
     assert resp.status_code == 400
     assert "200" in resp.text
 
 
-def test_batch_confirm_rejects_unknown_mode(match_client):
-    resp = match_client.post("/api/match/1/batch-confirm", json={"mode": "wat"})
+def test_batch_confirm_rejects_unknown_mode(db, match_client):
+    model = ModelRecord(brand_code="速影", model_code="C200PRO")
+    db.add(model); db.commit()
+
+    resp = match_client.post("/api/match/1/batch-confirm", json={"mode": "wat", "model_id": model.id})
     assert resp.status_code == 400
 
 
@@ -1395,7 +1525,7 @@ def test_batch_confirm_filter_mode_processes_matching_rows(db, match_client):
 
     resp = match_client.post(
         f"/api/match/557/batch-confirm",
-        json={"mode": "filter", "filter": {
+        json={"mode": "filter", "model_id": model.id, "filter": {
             "tab": "pending", "keyword": "200pro", "search_by": "item_name",
             "sort_by": "default",
         }},
@@ -1409,8 +1539,8 @@ def test_batch_confirm_filter_mode_processes_matching_rows(db, match_client):
     assert body["truncated"] is False
 
 
-def test_batch_confirm_filter_mode_skips_invalid_candidates(db, match_client):
-    """filter 模式：无效候选不算入 total，也不进 failures（§4.2 step 3）。"""
+def test_batch_confirm_filter_mode_uses_selected_model_without_candidate_filter(db, match_client):
+    """filter 模式：目标型号由用户选择，不再因候选型号无效而跳过。"""
     from app.models.schemas import (
         MatchResult, MatchResultCandidate, ModelRecord, RawDataRecord,
         CleanJobRecord, UploadFileRecord,
@@ -1454,7 +1584,7 @@ def test_batch_confirm_filter_mode_skips_invalid_candidates(db, match_client):
 
     resp = match_client.post(
         f"/api/match/560/batch-confirm",
-        json={"mode": "filter", "filter": {
+        json={"mode": "filter", "model_id": m_ok.id, "filter": {
             "tab": "pending", "keyword": "200pro", "search_by": "item_name",
             "sort_by": "default",
         }},
@@ -1463,19 +1593,21 @@ def test_batch_confirm_filter_mode_skips_invalid_candidates(db, match_client):
     body = resp.json()
     # matched_total 是原始 DB 匹配的全部条数（截断前，过滤无效前）
     assert body["matched_total"] == 5
-    # total 只算有效条目
-    assert body["total"] == 3
-    assert body["success"] == 3
+    # 候选为 "-" 的记录也应按用户选择的目标型号确认；未识别品牌仍跳过。
+    assert body["total"] == 4
+    assert body["success"] == 4
     assert body["failed"] == 0
-    # 无效条目不出现在 failures
     reasons = [f["reason"] for f in body["failures"]]
     assert "候选型号无效" not in reasons
 
 
-def test_batch_confirm_filter_mode_rejects_invalid_tab(match_client):
+def test_batch_confirm_filter_mode_rejects_invalid_tab(db, match_client):
+    model = ModelRecord(brand_code="速影", model_code="C200PRO")
+    db.add(model); db.commit()
+
     resp = match_client.post(
         "/api/match/1/batch-confirm",
-        json={"mode": "filter", "filter": {"tab": "confirmed"}},
+        json={"mode": "filter", "model_id": model.id, "filter": {"tab": "confirmed"}},
     )
     assert resp.status_code == 400
 
@@ -1525,8 +1657,8 @@ def test_batch_confirm_preview_returns_candidate_distribution(db, match_client):
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["total_valid"] == 5
-    assert body["total_invalid"] == 2
+    assert body["total_valid"] == 6
+    assert body["total_invalid"] == 1
     dist = {(d["brand_code"], d["model_code"]): d["count"] for d in body["candidate_distribution"]}
     assert dist[("速影", "C200PRO")] == 3
     assert dist[("速影", "C200")] == 2

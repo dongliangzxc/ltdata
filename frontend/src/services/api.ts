@@ -553,8 +553,8 @@ export type BatchConfirmFilter = {
 }
 
 export type BatchConfirmPayload =
-  | { mode: 'ids'; ids: number[] }
-  | { mode: 'filter'; filter: BatchConfirmFilter }
+  | { mode: 'ids'; ids: number[]; model_id: number }
+  | { mode: 'filter'; filter: BatchConfirmFilter; model_id: number }
 
 export type BatchConfirmFailure = {
   id: number
@@ -600,6 +600,9 @@ export interface CleanTaskSearchItem {
 export const searchCleanTasks = (params: {
   keyword?: string
   exclude_id?: number
+  category_code?: string
+  platform?: string
+  month?: number
   limit?: number
 }) =>
   api.get<CleanTaskSearchItem[]>('/clean/tasks/search', { params })

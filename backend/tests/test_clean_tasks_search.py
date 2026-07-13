@@ -31,6 +31,7 @@ def _seed_task(db, *, task_name, category_code, platform=None, month=None, statu
         category_code=category_code,
         platform=platform,
         status=status,
+        source_scope={"months": [month]} if month is not None else None,
     )
     db.add(cj)
     db.commit()
@@ -69,6 +70,28 @@ def test_clean_tasks_search_excludes_current_and_archived(db, clean_client):
     assert active.id in ids
     assert current.id not in ids
     assert archived.id not in ids
+
+
+def test_clean_tasks_search_filters_by_category_platform_and_month(db, clean_client):
+    db.add(Category(code="camera", name="运动相机"))
+    db.add(Category(code="soundbar", name="回音壁"))
+    db.commit()
+    target = _seed_task(db, task_name="目标任务", category_code="camera", platform="jd", month=202512)
+    other_platform = _seed_task(db, task_name="同品类其他平台", category_code="camera", platform="douyin", month=202512)
+    other_month = _seed_task(db, task_name="同品类其他月份", category_code="camera", platform="jd", month=202504)
+    other_category = _seed_task(db, task_name="其他品类", category_code="soundbar", platform="jd", month=202512)
+
+    resp = clean_client.get(
+        "/api/clean/tasks/search",
+        params={"category_code": "camera", "platform": "jd", "month": 202512},
+    )
+    assert resp.status_code == 200
+    ids = [x["id"] for x in resp.json()]
+    assert ids == [target.id]
+    assert other_platform.id not in ids
+    assert other_month.id not in ids
+    assert other_category.id not in ids
+    assert resp.json()[0]["month"] == 202512
 
 
 def test_clean_tasks_search_by_category_name(db, clean_client):

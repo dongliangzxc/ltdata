@@ -4,6 +4,42 @@ const assert = require('node:assert/strict');
 
 const sourcePath = path.join(__dirname, 'index.tsx');
 const source = fs.readFileSync(sourcePath, 'utf8');
+const {
+  buildTransferFilterState,
+  shouldClearTransferTarget,
+} = require('./utils/transferFilters.cjs');
+
+assert.match(source, /transferCategoryFilter/, 'transfer modal should keep category filter state');
+assert.match(source, /transferPlatformFilter/, 'transfer modal should keep platform filter state');
+assert.match(source, /transferMonthFilter/, 'transfer modal should keep month filter state');
+assert.match(source, /placeholder="品类"/, 'transfer modal should expose a category filter');
+assert.match(source, /placeholder="平台"/, 'transfer modal should expose a platform filter');
+assert.match(source, /placeholder="月度"/, 'transfer modal should expose a month filter');
+assert.match(source, /buildTransferFilterState\(/, 'transfer modal should use shared filter behavior');
+assert.match(source, /shouldClearTransferTarget\(/, 'transfer modal should clear hidden selected target through shared behavior');
+assert.match(source, /category_code: transferCategoryFilter/, 'transfer modal search should send category filter to the API');
+assert.match(source, /platform: transferPlatformFilter/, 'transfer modal search should send platform filter to the API');
+assert.match(source, /month: transferMonthFilter/, 'transfer modal search should send month filter to the API');
+assert.match(source, /seq !== transferSearchSeqRef\.current/, 'transfer modal search should ignore stale responses');
+
+const transferTasks = [
+  { id: 1, task_name: '运动相机 / jd / 202512', category_code: 'action_cameras', category_name: '运动相机', platform: 'jd', month: 202512, status: 'done', display_name: '运动相机 / jd / 202512' },
+  { id: 2, task_name: '运动相机 / douyin / 202504', category_code: 'action_cameras', category_name: '运动相机', platform: 'douyin', month: 202504, status: 'done', display_name: '运动相机 / douyin / 202504' },
+  { id: 3, task_name: '回音壁 / douyin / 202605', category_code: 'soundbar', category_name: '回音壁', platform: 'douyin', month: 202605, status: 'done', display_name: '回音壁 / douyin / 202605' },
+];
+
+const filteredState = buildTransferFilterState(
+  transferTasks,
+  { category: 'action_cameras', platform: 'jd', month: 202512 },
+  new Map([['action_cameras', '运动相机'], ['soundbar', '回音壁']])
+);
+assert.deepEqual(filteredState.filteredOptions.map(item => item.id), [1], 'transfer filters should narrow target tasks by category/platform/month');
+assert.deepEqual(filteredState.categoryOptions.map(item => item.value), ['soundbar', 'action_cameras'], 'transfer category options should be derived from candidate tasks');
+assert.deepEqual(filteredState.platformOptions.map(item => item.value), ['douyin', 'jd'], 'transfer platform options should be derived from candidate tasks');
+assert.deepEqual(filteredState.monthOptions.map(item => item.value), [202605, 202512, 202504], 'transfer month options should sort newest first');
+assert.equal(shouldClearTransferTarget(2, filteredState.filteredOptions), true, 'selected target should clear when filters hide it');
+assert.equal(shouldClearTransferTarget(1, filteredState.filteredOptions), false, 'selected target should remain when filters keep it visible');
+assert.equal(shouldClearTransferTarget(undefined, filteredState.filteredOptions), false, 'empty selection should not be cleared again');
 const interventionRuleModalPath = path.join(__dirname, 'components', 'InterventionRuleModal.tsx');
 const interventionRuleModalSource = fs.readFileSync(interventionRuleModalPath, 'utf8');
 const reselectModalPath = path.join(__dirname, 'components', 'ReselectModal.tsx');
@@ -99,11 +135,16 @@ assert.ok(
   `批量确认按钮应至少在 3 处（复选框列 / 批量操作条 / 跨页提示条）被 text_only|pending Tab 门控，实际 ${batchTabGateOccurrences} 处`,
 );
 
-assert.notEqual(source.indexOf('isCandidateValidForBatch'), -1, '应存在 isCandidateValidForBatch 校验以禁用无效候选复选框');
-assert.notEqual(source.indexOf('未识别品牌'), -1, '无效候选应携带未识别品牌相关提示文案');
+assert.notEqual(source.indexOf('isCandidateValidForBatch'), -1, '应存在 isCandidateValidForBatch 校验以禁用不可批量确认复选框');
+assert.notEqual(source.indexOf('未识别品牌'), -1, '不可批量确认时应携带未识别品牌相关提示文案');
+assert.equal(source.indexOf('候选型号码无效'), -1, '一键确认不应再因候选型号码无效禁用记录');
 
 assert.notEqual(source.indexOf('batchConfirmMatch(selectedJobId'), -1, '批量确认接口应按 selectedJobId (clean_job_id) 路径调用');
 assert.notEqual(source.indexOf('previewBatchConfirmMatch(selectedJobId'), -1, '批量预览接口应按 selectedJobId (clean_job_id) 路径调用');
+assert.notEqual(source.indexOf('搜索并选择确认型号'), -1, '一键确认弹窗应要求选择确认型号');
+assert.notEqual(source.indexOf('请选择确认型号'), -1, '未选择型号时应提示用户');
+assert.notEqual(source.indexOf('model_id: batchModelId'), -1, '批量确认 payload 应传递用户选择的 model_id');
+assert.notEqual(source.indexOf("setCreateModelContext('batch')"), -1, '一键确认弹窗应支持新建型号并回填选择');
 
 const viewMatchResultsButtonIndex = source.indexOf('查看本任务匹配结果')
 assert.notEqual(viewMatchResultsButtonIndex, -1,

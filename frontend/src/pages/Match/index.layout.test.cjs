@@ -37,6 +37,17 @@ assert.deepEqual(filteredState.filteredOptions.map(item => item.id), [1], 'trans
 assert.deepEqual(filteredState.categoryOptions.map(item => item.value), ['soundbar', 'action_cameras'], 'transfer category options should be derived from candidate tasks');
 assert.deepEqual(filteredState.platformOptions.map(item => item.value), ['douyin', 'jd'], 'transfer platform options should be derived from candidate tasks');
 assert.deepEqual(filteredState.monthOptions.map(item => item.value), [202605, 202512, 202504], 'transfer month options should sort newest first');
+
+const allTaskFilterState = buildTransferFilterState(
+  [
+    ...transferTasks,
+    { id: 51, category_code: 'projector', platform: 'jd', month: 202401 },
+  ],
+  {},
+  new Map([['projector', '投影仪']])
+);
+assert.equal(allTaskFilterState.categoryOptions.some(item => item.value === 'projector'), true, 'transfer filter options should be derivable from the full task list, not only current search results');
+
 assert.equal(shouldClearTransferTarget(2, filteredState.filteredOptions), true, 'selected target should clear when filters hide it');
 assert.equal(shouldClearTransferTarget(1, filteredState.filteredOptions), false, 'selected target should remain when filters keep it visible');
 assert.equal(shouldClearTransferTarget(undefined, filteredState.filteredOptions), false, 'empty selection should not be cleared again');

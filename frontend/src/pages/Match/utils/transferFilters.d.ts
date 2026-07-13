@@ -1,4 +1,10 @@
-import type { CleanTaskSearchItem } from '../../../services/api'
+export interface TransferTaskLike {
+  id: number
+  category_code?: string | null
+  category_name?: string | null
+  platform?: string | null
+  month?: number | null
+}
 
 export interface TransferFilters {
   category?: string
@@ -11,20 +17,20 @@ export interface TransferSelectOption<T extends string | number = string | numbe
   label: string
 }
 
-export interface TransferFilterState {
+export interface TransferFilterState<TTask extends TransferTaskLike = TransferTaskLike> {
   categoryOptions: TransferSelectOption<string>[]
   platformOptions: TransferSelectOption<string>[]
   monthOptions: TransferSelectOption<number>[]
-  filteredOptions: CleanTaskSearchItem[]
+  filteredOptions: TTask[]
 }
 
-export function buildTransferFilterState(
-  tasks: CleanTaskSearchItem[],
+export function buildTransferFilterState<TTask extends TransferTaskLike>(
+  tasks: TTask[],
   filters: TransferFilters,
   categoryLabelMap?: Map<string, string>
-): TransferFilterState
+): TransferFilterState<TTask>
 
-export function shouldClearTransferTarget(
+export function shouldClearTransferTarget<TTask extends TransferTaskLike>(
   targetId: number | undefined,
-  visibleTasks: CleanTaskSearchItem[]
+  visibleTasks: TTask[]
 ): boolean

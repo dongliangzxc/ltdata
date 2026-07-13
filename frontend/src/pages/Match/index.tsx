@@ -251,8 +251,8 @@ export default function MatchPage() {
     categoryOptions: transferCategoryOptions,
     platformOptions: transferPlatformOptions,
     monthOptions: transferMonthOptions,
-    filteredOptions: filteredTransferOptions,
-  } = buildTransferFilterState(
+  } = buildTransferFilterState(jobsData ?? [], {}, categoryLabelMap)
+  const { filteredOptions: filteredTransferOptions } = buildTransferFilterState(
     transferOptions,
     {
       category: transferCategoryFilter,

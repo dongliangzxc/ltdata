@@ -460,9 +460,10 @@ function DispatchExportTab() {
   const { options: categoryOptions } = useCategoryOptions()
   const { data: exportJobsData, loading: exportJobsLoading, refresh: refreshExportJobs } = useRequest(
     () => listDispatchExportJobs({ page: 1, page_size: 50 }),
-    { pollingInterval: 2000 }
+    { pollingInterval: 10000 }
   )
   const exportJobs = exportJobsData?.data.items ?? []
+  const exportJobsInitialLoading = exportJobsLoading && !exportJobsData
 
   const handleExport = async () => {
     if (!categoryCode && !platform && months.length === 0) {
@@ -603,13 +604,13 @@ function DispatchExportTab() {
       <div style={{ marginTop: 24 }}>
         <Space style={{ width: '100%', justifyContent: 'space-between', marginBottom: 12 }}>
           <Text strong>导出任务列表</Text>
-          <Button onClick={refreshExportJobs} loading={exportJobsLoading}>刷新列表</Button>
+          <Button onClick={refreshExportJobs} loading={exportJobsInitialLoading}>刷新列表</Button>
         </Space>
         <Table
           rowKey="job_id"
           size="small"
           bordered
-          loading={exportJobsLoading}
+          loading={exportJobsInitialLoading}
           columns={exportJobColumns}
           dataSource={exportJobs}
           pagination={false}

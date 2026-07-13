@@ -26,6 +26,7 @@ import SameTitleBatchActions from './components/SameTitleBatchActions'
 import InterventionRuleModal from './components/InterventionRuleModal'
 import CreateModelModal from '../../components/CreateModelModal'
 import ReselectModal from './components/ReselectModal'
+import { buildTransferFilterState, shouldClearTransferTarget } from './utils/transferFilters'
 import { buildMatchResultsColumns } from '../MatchResults/columns'
 
 const { Text } = Typography
@@ -62,17 +63,11 @@ const renderMatchSource = (source?: string | null) => {
   return entry ? <Tag color={entry.color}>{entry.label}</Tag> : <Tag>{source}</Tag>
 }
 
-const INVALID_CANDIDATE_CODES = new Set(['', '-', '--'])
-
 const getTopCandidate = (item: PendingItem): MatchCandidateOut | undefined =>
   item.candidates?.slice().sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0))[0]
 
 const isCandidateValidForBatch = (item: PendingItem): { ok: boolean; reason?: string } => {
   if (item.brand_identified === 0) return { ok: false, reason: '未识别品牌，请先补充品牌写法' }
-  const top = getTopCandidate(item)
-  if (!top) return { ok: false, reason: '暂无候选型号' }
-  if (!top.brand_code || INVALID_CANDIDATE_CODES.has(top.brand_code)) return { ok: false, reason: '候选品牌码无效' }
-  if (!top.model_code || INVALID_CANDIDATE_CODES.has(top.model_code)) return { ok: false, reason: '候选型号码无效' }
   return { ok: true }
 }
 
@@ -225,6 +220,17 @@ export default function MatchPage() {
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
   const [modelSearchLoading, setModelSearchLoading] = useState(false)
   const [createModelOpen, setCreateModelOpen] = useState(false)
+  const [createModelContext, setCreateModelContext] = useState<'review' | 'batch'>('review')
+  const [batchConfirmModalOpen, setBatchConfirmModalOpen] = useState(false)
+  const [batchConfirmUseFilterMode, setBatchConfirmUseFilterMode] = useState(false)
+  const [batchConfirmFilter, setBatchConfirmFilter] = useState<BatchConfirmFilter | null>(null)
+  const [batchConfirmProcessCount, setBatchConfirmProcessCount] = useState(0)
+  const [batchConfirmDistributionLines, setBatchConfirmDistributionLines] = useState<string[]>([])
+  const [batchConfirmTruncatedNote, setBatchConfirmTruncatedNote] = useState('')
+  const [batchModelOptions, setBatchModelOptions] = useState<ModelOption[]>([])
+  const [batchModelId, setBatchModelId] = useState<number | null>(null)
+  const [batchModelSearchLoading, setBatchModelSearchLoading] = useState(false)
+  const batchModelSearchSeqRef = useRef(0)
   const [reselectOpen, setReselectOpen] = useState(false)
   const [reselectMatchId, setReselectMatchId] = useState<number | null>(null)
   const [transferModalOpen, setTransferModalOpen] = useState(false)
@@ -233,8 +239,39 @@ export default function MatchPage() {
   const [transferSearching, setTransferSearching] = useState(false)
   const [transferSubmitting, setTransferSubmitting] = useState(false)
   const [transferError, setTransferError] = useState<string | null>(null)
+  const [transferKeyword, setTransferKeyword] = useState('')
+  const [transferCategoryFilter, setTransferCategoryFilter] = useState<string | undefined>(undefined)
+  const [transferPlatformFilter, setTransferPlatformFilter] = useState<string | undefined>(undefined)
+  const [transferMonthFilter, setTransferMonthFilter] = useState<number | undefined>(undefined)
   const debouncedSearchClean = useRef<number | null>(null)
+  const transferSearchSeqRef = useRef(0)
   const { options: categoryOptions } = useCategoryOptions()
+  const categoryLabelMap = new Map(categoryOptions.map(item => [item.value, item.label]))
+  const {
+    categoryOptions: transferCategoryOptions,
+    platformOptions: transferPlatformOptions,
+    monthOptions: transferMonthOptions,
+    filteredOptions: filteredTransferOptions,
+  } = buildTransferFilterState(
+    transferOptions,
+    {
+      category: transferCategoryFilter,
+      platform: transferPlatformFilter,
+      month: transferMonthFilter,
+    },
+    categoryLabelMap
+  )
+
+  useEffect(() => {
+    if (shouldClearTransferTarget(transferTargetId, filteredTransferOptions)) {
+      setTransferTargetId(undefined)
+    }
+  }, [filteredTransferOptions, transferTargetId])
+
+  useEffect(() => {
+    if (!transferModalOpen) return
+    doSearchCleanTasks(transferKeyword)
+  }, [transferCategoryFilter, transferPlatformFilter, transferMonthFilter])
   const preciseMatchedCount = summary?.precise_matched ?? summary?.url_matched ?? 0
   const otherAutoMatchedCount = summary ? Math.max(summary.matched - Math.max(preciseMatchedCount - (summary.url_matched ?? 0), 0), 0) : 0
   const readyCount = summary ? (summary?.url_matched ?? 0) + summary.matched + summary.confirmed : 0
@@ -255,9 +292,45 @@ export default function MatchPage() {
     }
   }
 
+  const handleBatchModelSearch = async (keyword: string) => {
+    if (!keyword.trim()) return
+    const searchSeq = batchModelSearchSeqRef.current + 1
+    batchModelSearchSeqRef.current = searchSeq
+    setBatchModelSearchLoading(true)
+    try {
+      const res = await listModels({
+        keyword,
+        page: 1,
+        page_size: 50,
+        category_code: selectedJob?.category_code || selectedJob?.dispatch_category_code || undefined,
+      }).then(r => r.data)
+      if (searchSeq !== batchModelSearchSeqRef.current) return
+      setBatchModelOptions((res.items ?? []).map(modelOptionFromModel))
+    } finally {
+      if (searchSeq === batchModelSearchSeqRef.current) setBatchModelSearchLoading(false)
+    }
+  }
+
+  const closeCreateModelModal = () => {
+    setCreateModelOpen(false)
+    setCreateModelContext('review')
+  }
+
   const handleCreatedModel = (model: ModelItem) => {
-    if (!reviewDetail) return
     const option = modelOptionFromModel(model)
+    if (createModelContext === 'batch') {
+      setBatchModelOptions(prev => {
+        const exists = prev.some(item => item.id === model.id)
+        return exists ? prev : [option, ...prev]
+      })
+      setBatchModelId(model.id)
+      setCreateModelOpen(false)
+      setCreateModelContext('review')
+      message.success('型号已创建并选中')
+      return
+    }
+
+    if (!reviewDetail) return
     setModelOptions(prev => {
       const exists = prev.some(item => item.id === model.id)
       return exists ? prev : [option, ...prev]
@@ -489,23 +562,30 @@ export default function MatchPage() {
   }
 
   const doSearchCleanTasks = (keyword: string) => {
+    setTransferKeyword(keyword)
     if (debouncedSearchClean.current) {
       window.clearTimeout(debouncedSearchClean.current)
     }
     setTransferSearching(true)
+    const seq = ++transferSearchSeqRef.current
     debouncedSearchClean.current = window.setTimeout(async () => {
       try {
         const excludeId = reviewDetail?.clean_job_id
         const res = await searchCleanTasks({
           keyword: keyword.trim() || undefined,
           exclude_id: excludeId,
+          category_code: transferCategoryFilter,
+          platform: transferPlatformFilter,
+          month: transferMonthFilter,
           limit: 50,
         })
+        if (seq !== transferSearchSeqRef.current) return
         setTransferOptions(res.data)
       } catch (e: any) {
+        if (seq !== transferSearchSeqRef.current) return
         message.error(e?.response?.data?.detail || '搜索清洗任务失败')
       } finally {
-        setTransferSearching(false)
+        if (seq === transferSearchSeqRef.current) setTransferSearching(false)
       }
     }, 300)
   }
@@ -514,6 +594,10 @@ export default function MatchPage() {
     setTransferTargetId(undefined)
     setTransferOptions([])
     setTransferError(null)
+    setTransferKeyword('')
+    setTransferCategoryFilter(undefined)
+    setTransferPlatformFilter(undefined)
+    setTransferMonthFilter(undefined)
     setTransferModalOpen(true)
     doSearchCleanTasks('')
   }
@@ -612,7 +696,6 @@ export default function MatchPage() {
       category_name: categoryName ?? null,
       sort_by: sortBy as BatchConfirmFilter['sort_by'],
     }
-    let title = ''
     let distributionLines: string[] = []
     let processCount = 0
     let truncatedNote = ''
@@ -638,7 +721,6 @@ export default function MatchPage() {
       distributionLines = preview.candidate_distribution.map(d =>
         `  · [${d.brand_code}] ${d.model_code} × ${d.count}`,
       )
-      title = `将确认 ${processCount} 条为系统候选型号`
     } else {
       if (selectedBatchIds.size === 0) return
       processCount = selectedBatchIds.size
@@ -652,37 +734,38 @@ export default function MatchPage() {
         dist.set(k, (dist.get(k) ?? 0) + 1)
       })
       distributionLines = Array.from(dist.entries()).map(([k, v]) => `  · ${k} × ${v}`)
-      title = `将确认 ${processCount} 条为系统候选型号`
     }
 
-    Modal.confirm({
-      title,
-      width: 480,
-      content: (
-        <div style={{ whiteSpace: 'pre-wrap' }}>
-          <div>候选型号分布：</div>
-          <div>{distributionLines.join('\n') || '  · （无）'}</div>
-          {truncatedNote && <div style={{ color: '#d48806' }}>{truncatedNote}</div>}
-        </div>
-      ),
-      okText: '确认',
-      cancelText: '取消',
-      onOk: async () => {
-        setBatchConfirming(true)
-        try {
-          const { data } = useFilterMode
-            ? await batchConfirmMatch(selectedJobId, { mode: 'filter', filter })
-            : await batchConfirmMatch(selectedJobId, { mode: 'ids', ids: Array.from(selectedBatchIds) })
-          showBatchResult(data)
-          refreshPending()
-          if (selectedJobId) getMatchSummary(selectedJobId).then(r => setSummary(r.data))
-        } catch (err: any) {
-          message.error(err?.response?.data?.detail || '批量确认失败')
-        } finally {
-          setBatchConfirming(false)
-        }
-      },
-    })
+    setBatchConfirmUseFilterMode(useFilterMode)
+    setBatchConfirmFilter(filter)
+    setBatchConfirmProcessCount(processCount)
+    setBatchConfirmDistributionLines(distributionLines)
+    setBatchConfirmTruncatedNote(truncatedNote)
+    setBatchModelId(null)
+    setBatchModelOptions([])
+    setBatchConfirmModalOpen(true)
+  }
+
+  const submitBatchConfirm = async () => {
+    if (!selectedJobId || !batchConfirmFilter) return
+    if (!batchModelId) {
+      message.warning('请选择确认型号')
+      return
+    }
+    setBatchConfirming(true)
+    try {
+      const { data } = batchConfirmUseFilterMode
+        ? await batchConfirmMatch(selectedJobId, { mode: 'filter', filter: batchConfirmFilter, model_id: batchModelId })
+        : await batchConfirmMatch(selectedJobId, { mode: 'ids', ids: Array.from(selectedBatchIds), model_id: batchModelId })
+      showBatchResult(data)
+      setBatchConfirmModalOpen(false)
+      refreshPending()
+      if (selectedJobId) getMatchSummary(selectedJobId).then(r => setSummary(r.data))
+    } catch (err: any) {
+      message.error(err?.response?.data?.detail || '批量确认失败')
+    } finally {
+      setBatchConfirming(false)
+    }
   }
 
   const showBatchResult = (data: BatchConfirmResult) => {
@@ -1576,7 +1659,7 @@ export default function MatchPage() {
                               }
                             }}
                           />
-                          <Button size="small" icon={<PlusOutlined />} onClick={() => setCreateModelOpen(true)}>
+                          <Button size="small" icon={<PlusOutlined />} onClick={() => { setCreateModelContext('review'); setCreateModelOpen(true) }}>
                             新建型号
                           </Button>
                         </Space>
@@ -1691,6 +1774,40 @@ export default function MatchPage() {
 
             <div>
               <div style={{ marginBottom: 4 }}>目标任务</div>
+              <Row gutter={8} style={{ marginBottom: 8 }}>
+                <Col span={8}>
+                  <Select
+                    allowClear
+                    placeholder="品类"
+                    style={{ width: '100%' }}
+                    value={transferCategoryFilter}
+                    options={transferCategoryOptions}
+                    showSearch
+                    optionFilterProp="label"
+                    onChange={value => setTransferCategoryFilter(value)}
+                  />
+                </Col>
+                <Col span={8}>
+                  <Select
+                    allowClear
+                    placeholder="平台"
+                    style={{ width: '100%' }}
+                    value={transferPlatformFilter}
+                    options={transferPlatformOptions}
+                    onChange={value => setTransferPlatformFilter(value)}
+                  />
+                </Col>
+                <Col span={8}>
+                  <Select
+                    allowClear
+                    placeholder="月度"
+                    style={{ width: '100%' }}
+                    value={transferMonthFilter}
+                    options={transferMonthOptions}
+                    onChange={value => setTransferMonthFilter(value)}
+                  />
+                </Col>
+              </Row>
               <Select
                 showSearch
                 filterOption={false}
@@ -1700,7 +1817,7 @@ export default function MatchPage() {
                 onSearch={doSearchCleanTasks}
                 onChange={setTransferTargetId}
                 loading={transferSearching}
-                options={transferOptions.map(o => ({
+                options={filteredTransferOptions.map(o => ({
                   value: o.id,
                   label: o.display_name
                     ? `${o.display_name} (#${o.id})`
@@ -1798,14 +1915,58 @@ export default function MatchPage() {
         onRulesChanged={() => {}}
       />
 
+      <Modal
+        open={batchConfirmModalOpen}
+        title={`将确认 ${batchConfirmProcessCount} 条到所选型号`}
+        width={560}
+        okText="确认"
+        cancelText="取消"
+        confirmLoading={batchConfirming}
+        onOk={submitBatchConfirm}
+        onCancel={() => setBatchConfirmModalOpen(false)}
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Alert
+            type="warning"
+            showIcon
+            message="一键确认会将本次范围内的记录统一确认到下方选择的型号，不再直接确认为候选型号。"
+          />
+          <div style={{ whiteSpace: 'pre-wrap' }}>
+            <div>当前候选型号分布：</div>
+            <div>{batchConfirmDistributionLines.join('\n') || '  · （无）'}</div>
+            {batchConfirmTruncatedNote && <div style={{ color: '#d48806' }}>{batchConfirmTruncatedNote}</div>}
+          </div>
+          <Space.Compact style={{ width: '100%' }}>
+            <Select
+              showSearch
+              allowClear
+              value={batchModelId ?? undefined}
+              placeholder="搜索并选择确认型号"
+              style={{ flex: 1 }}
+              filterOption={false}
+              onSearch={handleBatchModelSearch}
+              onChange={(value) => setBatchModelId(value ?? null)}
+              loading={batchModelSearchLoading}
+              options={batchModelOptions.map(m => ({
+                value: m.id,
+                label: `[${m.brand_code || '-'}] ${m.model_code || '-'}${m.model_name ? ` - ${m.model_name}` : ''}`,
+              }))}
+            />
+            <Button icon={<PlusOutlined />} onClick={() => { setCreateModelContext('batch'); setCreateModelOpen(true) }}>
+              新建型号
+            </Button>
+          </Space.Compact>
+        </Space>
+      </Modal>
+
       <CreateModelModal
         open={createModelOpen}
-        onCancel={() => setCreateModelOpen(false)}
+        onCancel={closeCreateModelModal}
         onCreated={handleCreatedModel}
-        defaultCategoryCode={reviewDetail?.category_code ?? null}
-        defaultCategoryName={reviewDetail?.category_name ?? null}
-        metadataSpecs={reviewDetail?.metadata_specs ?? []}
-        brandSuggestion={reviewDetail?.brand_raw ?? null}
+        defaultCategoryCode={createModelContext === 'batch' ? selectedJob?.category_code || selectedJob?.dispatch_category_code || null : reviewDetail?.category_code ?? null}
+        defaultCategoryName={createModelContext === 'batch' ? null : reviewDetail?.category_name ?? null}
+        metadataSpecs={createModelContext === 'batch' ? [] : reviewDetail?.metadata_specs ?? []}
+        brandSuggestion={createModelContext === 'batch' ? null : reviewDetail?.brand_raw ?? null}
       />
 
       <ProgressModal

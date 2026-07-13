@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, or_, select
+from sqlalchemy import String, func, or_, select
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from app.models.database import get_db
@@ -666,6 +666,9 @@ class CleanTaskSearchItem(BaseModel):
 def search_clean_tasks(
     keyword: str = Query("", description="任务名/品类码/品类名/平台关键字，可空"),
     exclude_id: int | None = Query(None, description="排除的 clean_job_id（通常传当前任务）"),
+    category_code: str | None = Query(None, description="按品类码精确筛选"),
+    platform: str | None = Query(None, description="按平台精确筛选"),
+    month: int | None = Query(None, description="按任务月份精确筛选"),
     limit: int = Query(50, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
@@ -685,6 +688,12 @@ def search_clean_tasks(
             CleanJobRecord.platform.ilike(like),
             Category.name.ilike(like),
         ))
+    if category_code:
+        q = q.filter(CleanJobRecord.category_code == category_code)
+    if platform:
+        q = q.filter(CleanJobRecord.platform == platform)
+    if month is not None:
+        q = q.filter(CleanJobRecord.source_scope.cast(String).ilike(f"%{month}%"))
     q = q.order_by(CleanJobRecord.created_at.desc()).limit(limit)
 
     items: list[CleanTaskSearchItem] = []

@@ -450,7 +450,7 @@ def test_get_batch_stats_returns_category_names_and_rule_counts(client_and_db):
     ]
 
 
-def test_get_batch_stats_rule_count_uses_actual_matches_not_only_assigned_rows(client_and_db):
+def test_get_batch_stats_rule_count_uses_assigned_rows_without_recount(client_and_db):
     client, db = client_and_db
     db.add(Category(code="projector", name="投影仪", sort_order=1))
     file_record = UploadFileRecord(filename="actual-rule-count.xlsx", platform="DY", row_count=31, status="done")
@@ -517,7 +517,7 @@ def test_get_batch_stats_rule_count_uses_actual_matches_not_only_assigned_rows(c
 
     assert response.status_code == 200
     rules = {row["rule_id"]: row for row in response.json()["rules"]}
-    assert rules[low_priority_rule.id]["count"] == 31
+    assert rules[low_priority_rule.id]["count"] == 3
     assert rules[low_priority_rule.id]["assigned_count"] == 3
 
 
@@ -1111,3 +1111,50 @@ def test_export_batch_raw_data_returns_404_when_no_data(client_and_db):
 
     assert response.status_code == 404
     assert response.json()["detail"] == "没有可导出的分发数据"
+
+
+def test_batch_stats_uses_assigned_rule_counts_without_raw_recount(client_and_db, monkeypatch):
+    client, db = client_and_db
+    file_record = UploadFileRecord(filename="stats.xlsx", platform="DOUYIN", month_range="202606", row_count=1)
+    category = Category(code="phone", name="手机")
+    rule = DispatchRule(
+        category_code="phone",
+        field="category_lv1",
+        match_type="contains",
+        value="手机",
+        priority=10,
+        is_active=1,
+    )
+    db.add_all([file_record, category, rule])
+    db.flush()
+    batch = DispatchBatch(file_id=file_record.id, status="done", total_rows=1, dispatched_rows=1, unmatched_rows=0)
+    raw = RawDataRecord(file_id=file_record.id, platform="DOUYIN", category_lv1="手机", item_name="测试手机")
+    db.add_all([batch, raw])
+    db.flush()
+    db.add(DispatchItem(batch_id=batch.id, raw_data_id=raw.id, category_code="phone", matched_rule_id=rule.id))
+    db.commit()
+
+    def fail_if_recount_called(*args, **kwargs):
+        raise AssertionError("stats endpoint should not rescan raw_data to recount rule matches")
+
+    monkeypatch.setattr(dispatch_api, "_count_rule_matches_for_batch", fail_if_recount_called)
+
+    response = client.get(f"/api/dispatch/batches/{batch.id}/stats")
+
+    assert response.status_code == 200
+    assert response.json()["rules"] == [
+        {
+            "rule_id": rule.id,
+            "category_code": "phone",
+            "category_name": "手机",
+            "field": "category_lv1",
+            "match_type": "contains",
+            "value": "手机",
+            "item_name_keyword": None,
+            "platform": None,
+            "priority": 10,
+            "is_active": 1,
+            "count": 1,
+            "assigned_count": 1,
+        }
+    ]

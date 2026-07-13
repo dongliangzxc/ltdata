@@ -654,12 +654,6 @@ def get_batch_stats(batch_id: int, db: Session = Depends(get_db)):
         .order_by(rule_stats_subq.c.count.desc(), DispatchRule.priority, rule_stats_subq.c.rule_id)
         .all()
     )
-    actual_rule_counts = _count_rule_matches_for_batch(
-        db,
-        batch,
-        [row.rule_id for row in rule_rows if row.field and row.match_type and row.value],
-    )
-
     return {
         "batch_id": batch_id,
         "total_rows": batch.total_rows,
@@ -686,7 +680,7 @@ def get_batch_stats(batch_id: int, db: Session = Depends(get_db)):
                 "platform": row.platform,
                 "priority": row.priority,
                 "is_active": row.is_active,
-                "count": actual_rule_counts.get(row.rule_id, row.assigned_count),
+                "count": row.assigned_count,
                 "assigned_count": row.assigned_count,
             }
             for row in rule_rows

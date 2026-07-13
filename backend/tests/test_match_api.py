@@ -8,6 +8,7 @@ from app.models.schemas import (
     ModelRecord, UploadFileRecord, RawDataRecord,
     CleanJobRecord, MatchResult, MatchResultCandidate, ItemUrlMapping, CleanedDataRecord,
     HistoricalMapping, MatchResultAttr, MetadataSpec, ModelSpec, Category, AttrRule,
+    DispatchItem,
 )
 from app.api.match_api import confirm_match, router as match_router
 
@@ -1151,6 +1152,41 @@ def _seed_pending_for_search(db, *, clean_job_id, upload_id, model_id, item_name
     db.add(mr)
     db.flush()
     return mr
+
+
+def test_pending_queue_deduplicates_dispatch_items_for_same_raw_data(db, match_client):
+    upload = UploadFileRecord(filename="dup.xlsx", platform="jd", status="done")
+    db.add(upload)
+    db.flush()
+    clean_job = CleanJobRecord(
+        file_ids=[upload.id],
+        status="reviewing",
+        dispatch_batch_id=20260713,
+    )
+    model = ModelRecord(brand_code="DJI", model_code="Osmo6", category_code="camera")
+    db.add_all([clean_job, model])
+    db.flush()
+    match_row = _seed_pending_for_search(
+        db,
+        clean_job_id=clean_job.id,
+        upload_id=upload.id,
+        model_id=model.id,
+        item_name="大疆运动相机",
+        brand_raw="大疆",
+    )
+    db.add_all([
+        DispatchItem(batch_id=clean_job.dispatch_batch_id, raw_data_id=match_row.raw_data_id, category_code="camera"),
+        DispatchItem(batch_id=clean_job.dispatch_batch_id, raw_data_id=match_row.raw_data_id, category_code="camera"),
+    ])
+    db.commit()
+
+    resp = match_client.get(f"/api/match/{clean_job.id}/pending", params={"status": "pending"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert [item["id"] for item in body["items"]] == [match_row.id]
+
 
 
 def test_pending_search_by_brand_raw_filters_on_raw_brand(db, match_client):

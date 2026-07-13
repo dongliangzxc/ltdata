@@ -379,6 +379,11 @@ def _build_review_queue_query(
     if category_name:
         q = q.filter(Category.code == category_name)
 
+    # DispatchItem is joined only for category filtering. A raw row may have
+    # multiple dispatch_items in the same batch, so collapse duplicated matches
+    # before count/pagination/batch filter processing.
+    q = q.distinct()
+
     if sort_by == "sales_qty_desc":
         q = q.order_by(func.isnull(RawDataRecord.sales_qty).asc(), RawDataRecord.sales_qty.desc())
     elif sort_by == "sales_qty_asc":

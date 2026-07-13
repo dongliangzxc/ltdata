@@ -143,6 +143,8 @@ assert.notEqual(source.indexOf('batchConfirmMatch(selectedJobId'), -1, '批量�
 assert.notEqual(source.indexOf('previewBatchConfirmMatch(selectedJobId'), -1, '批量预览接口应按 selectedJobId (clean_job_id) 路径调用');
 assert.notEqual(source.indexOf('搜索并选择确认型号'), -1, '一键确认弹窗应要求选择确认型号');
 assert.notEqual(source.indexOf('请选择确认型号'), -1, '未选择型号时应提示用户');
+assert.notEqual(source.indexOf('已选当前页'), -1, '当前页批量选择计数应明确使用当前页口径');
+assert.notEqual(source.indexOf('已选择全部搜索结果'), -1, '跨页全选计数应明确使用全部搜索结果口径');
 assert.notEqual(source.indexOf('model_id: batchModelId'), -1, '批量确认 payload 应传递用户选择的 model_id');
 assert.notEqual(source.indexOf("setCreateModelContext('batch')"), -1, '一键确认弹窗应支持新建型号并回填选择');
 

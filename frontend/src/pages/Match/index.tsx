@@ -1351,15 +1351,19 @@ export default function MatchPage() {
                 >
                   全选当前页（{validIds.length}）
                 </Checkbox>
-                <span style={{ color: '#8c8c8c', fontSize: 12 }}>已选 {selectedBatchIds.size} 条</span>
+                <span style={{ color: '#8c8c8c', fontSize: 12 }}>
+                  {batchAllPages
+                    ? `已选择全部搜索结果 ${pendingData?.total ?? 0} 条`
+                    : `已选当前页 ${selectedOnPage.length} / ${validIds.length} 条`}
+                </span>
                 <div style={{ flex: 1 }} />
                 <Button
                   type="primary"
                   loading={batchConfirming}
-                  disabled={selectedBatchIds.size === 0}
+                  disabled={batchAllPages ? (pendingData?.total ?? 0) === 0 : selectedBatchIds.size === 0}
                   onClick={() => handleBatchConfirm()}
                 >
-                  一键确认（{selectedBatchIds.size}）
+                  一键确认（{batchAllPages ? pendingData?.total ?? 0 : selectedBatchIds.size}）
                 </Button>
               </div>
             )

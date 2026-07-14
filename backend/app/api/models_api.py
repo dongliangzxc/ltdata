@@ -159,9 +159,8 @@ def models_confirm(
             errors.append(f"Row {i}: missing brand_code or model_code")
             continue
 
-        # category_code: from Excel if present and non-empty, else fallback
-        cat_val = str(row_dict.get("category_code") or "").strip()
-        category_code = cat_val if cat_val else payload.category_code
+        # Use the category selected in step 1 as the authoritative import category.
+        category_code = payload.category_code
 
         optional_fields = {
             k: str(row_dict.get(k) or "").strip() or None

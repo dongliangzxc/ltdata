@@ -200,6 +200,28 @@ def test_models_confirm_category_fallback(client):
     assert d["models_inserted"] == 1
 
 
+def test_models_confirm_selected_category_overrides_excel_category(client):
+    """Import should use the category selected in step 1, not a stale Excel category value."""
+    resp = _headers_then_confirm(
+        client,
+        headers=["brand_code", "model_code", "category_code"],
+        data_rows=[["BR1", "M1", "STALE_CAT"]],
+        mapping={
+            "brand_code": "brand_code",
+            "model_code": "model_code",
+            "category_code": "category_code",
+        },
+        category_code="FALLBACK_CAT",
+    )
+    assert resp.status_code == 200
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        model = db.query(ModelRecord).filter_by(brand_code="BR1", model_code="M1").one()
+        assert model.category_code == "FALLBACK_CAT"
+    finally:
+        db.close()
+
+
 def test_models_confirm_missing_required_field(client):
     """Rows missing brand_code or model_code are counted as errors."""
     resp = _headers_then_confirm(

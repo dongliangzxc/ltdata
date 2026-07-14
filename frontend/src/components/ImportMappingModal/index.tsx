@@ -340,6 +340,7 @@ export default function ImportMappingModal({
                 {typeof result.inserted === 'number' && <Text>新增：{result.inserted} 条</Text>}
                 {typeof result.models_inserted === 'number' && <Text>新增型号：{result.models_inserted} 条</Text>}
                 {typeof result.models_updated === 'number' && <Text>更新型号：{result.models_updated} 条</Text>}
+                {typeof result.specs_inserted === 'number' && <Text>导入型号规格：{result.specs_inserted} 条</Text>}
                 {typeof result.updated === 'number' && <Text>更新：{result.updated} 条</Text>}
                 {typeof result.skipped === 'number' && <Text>跳过：{result.skipped} 条</Text>}
                 {errors.length > 0 && <Text type="warning">异常：{errors.length} 条</Text>}

@@ -47,7 +47,7 @@ router = APIRouter(prefix="/api/clean", tags=["clean"])
 def _build_clean_scope_desc(db: Session, job: CleanJobRecord) -> str:
     files = []
     if job.file_ids:
-        files = db.query(UploadFileRecord).filter(UploadFileRecord.id.in_(job.file_ids)).all()
+        files = _job_files(db, job)
     platforms = sorted({f.platform for f in files if f.platform})
     months = sorted({f.month_range for f in files if f.month_range})
     filenames = [f.filename for f in files if f.filename]
@@ -58,7 +58,7 @@ def _build_clean_scope_desc(db: Session, job: CleanJobRecord) -> str:
     if is_task_snapshot:
         if job.task_name:
             parts.append(job.task_name)
-        category_code = job.category_code or job.dispatch_category_code
+        category_code = _job_category_code(job)
         if category_code:
             category = db.query(Category).filter(Category.code == category_code).first()
             category_label = f"{category.name}（{category.code}）" if category else category_code
@@ -95,17 +95,51 @@ def _match_status_counts(db: Session, clean_job_id: int) -> dict[str, int]:
     }
 
 
-def _job_month(job: CleanJobRecord) -> int | None:
+def _job_category_code(job: CleanJobRecord) -> str | None:
+    return job.category_code or job.dispatch_category_code
+
+
+def _job_files(db: Session, job: CleanJobRecord) -> list[UploadFileRecord]:
+    if not job.file_ids:
+        return []
+    return db.query(UploadFileRecord).filter(UploadFileRecord.id.in_(job.file_ids)).all()
+
+
+def _job_platform(job: CleanJobRecord, files: list[UploadFileRecord] | None = None) -> str | None:
+    if job.platform:
+        return job.platform
+    platforms = sorted({f.platform for f in (files or []) if f.platform})
+    if len(platforms) == 1:
+        return platforms[0]
+    return None
+
+
+def _month_range_to_int(value) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if text.isdigit():
+        return int(text)
+    parts = text.split("-", 1)
+    if len(parts) == 2 and parts[0] == parts[1] and parts[0].isdigit():
+        return int(parts[0])
+    return None
+
+
+def _job_month(job: CleanJobRecord, files: list[UploadFileRecord] | None = None) -> int | None:
     scope = job.source_scope
-    if not isinstance(scope, dict):
-        return None
-    months = scope.get("months")
-    if not isinstance(months, list) or len(months) != 1:
-        return None
-    try:
-        return int(months[0])
-    except (TypeError, ValueError):
-        return None
+    if isinstance(scope, dict):
+        months = scope.get("months")
+        if isinstance(months, list) and len(months) == 1:
+            try:
+                return int(months[0])
+            except (TypeError, ValueError):
+                pass
+
+    months = sorted({month for month in (_month_range_to_int(f.month_range) for f in (files or [])) if month is not None})
+    if len(months) == 1:
+        return months[0]
+    return None
 
 
 def _clean_job_to_dict(db: Session, job: CleanJobRecord, match_counts: dict[str, int] | None = None) -> dict:
@@ -129,7 +163,7 @@ def _clean_job_to_dict(db: Session, job: CleanJobRecord, match_counts: dict[str,
         "dispatch_batch_id": job.dispatch_batch_id,
         "dispatch_category_code": job.dispatch_category_code,
         "task_name": job.task_name,
-        "category_code": job.category_code or job.dispatch_category_code,
+        "category_code": _job_category_code(job),
         "platform": job.platform,
         "month": _job_month(job),
         "source_scope": job.source_scope,
@@ -688,24 +722,34 @@ def search_clean_tasks(
             CleanJobRecord.platform.ilike(like),
             Category.name.ilike(like),
         ))
-    if category_code:
-        q = q.filter(CleanJobRecord.category_code == category_code)
-    if platform:
-        q = q.filter(CleanJobRecord.platform == platform)
-    if month is not None:
-        q = q.filter(CleanJobRecord.source_scope.cast(String).ilike(f"%{month}%"))
-    q = q.order_by(CleanJobRecord.created_at.desc()).limit(limit)
+    q = q.order_by(CleanJobRecord.created_at.desc()).limit(max(limit, 100))
 
     items: list[CleanTaskSearchItem] = []
     for cj, cat in q.all():
+        files = _job_files(db, cj)
+        effective_category_code = _job_category_code(cj)
+        effective_platform = _job_platform(cj, files)
+        effective_month = _job_month(cj, files)
+        effective_category_name = cat.name if cat and cat.code == effective_category_code else None
+        if effective_category_code and effective_category_name is None:
+            category = db.query(Category).filter(Category.code == effective_category_code).first()
+            effective_category_name = category.name if category else None
+        if category_code and effective_category_code != category_code:
+            continue
+        if platform and effective_platform != platform:
+            continue
+        if month is not None and effective_month != month:
+            continue
         items.append(CleanTaskSearchItem(
             id=cj.id,
             task_name=cj.task_name,
-            category_code=cj.category_code,
-            category_name=cat.name if cat else None,
-            platform=cj.platform,
-            month=_job_month(cj),
+            category_code=effective_category_code,
+            category_name=effective_category_name,
+            platform=effective_platform,
+            month=effective_month,
             status=cj.status,
             display_name=_build_clean_scope_desc(db, cj),
         ))
+        if len(items) >= limit:
+            break
     return items

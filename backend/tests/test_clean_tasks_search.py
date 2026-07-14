@@ -21,17 +21,34 @@ def clean_client(db):
     return TestClient(app)
 
 
-def _seed_task(db, *, task_name, category_code, platform=None, month=None, status="done"):
-    upload = UploadFileRecord(filename=f"{task_name}.xlsx", status="done")
+def _seed_task(
+    db,
+    *,
+    task_name,
+    category_code,
+    platform=None,
+    month=None,
+    status="done",
+    dispatch_category_code=None,
+    job_platform=None,
+    source_scope=None,
+):
+    upload = UploadFileRecord(
+        filename=f"{task_name}.xlsx",
+        platform=platform,
+        month_range=str(month) if month is not None else None,
+        status="done",
+    )
     db.add(upload)
     db.flush()
     cj = CleanJobRecord(
         file_ids=[upload.id],
         task_name=task_name,
         category_code=category_code,
-        platform=platform,
+        dispatch_category_code=dispatch_category_code,
+        platform=platform if job_platform is None else job_platform,
         status=status,
-        source_scope={"months": [month]} if month is not None else None,
+        source_scope=source_scope if source_scope is not None else ({"months": [month]} if month is not None else None),
     )
     db.add(cj)
     db.commit()
@@ -114,3 +131,42 @@ def test_clean_tasks_search_by_platform(db, clean_client):
     ids = [x["id"] for x in resp.json()]
     assert jd_task.id in ids
     assert tmall_task.id not in ids
+
+
+def test_clean_tasks_search_filters_legacy_dispatch_job_metadata(db, clean_client):
+    db.add(Category(code="soundbar", name="回音壁"))
+    db.add(Category(code="camera", name="运动相机"))
+    db.commit()
+    legacy_task = _seed_task(
+        db,
+        task_name="旧分发任务",
+        category_code=None,
+        dispatch_category_code="soundbar",
+        platform="jd",
+        job_platform=None,
+        month=202605,
+        source_scope={},
+    )
+    other_category = _seed_task(
+        db,
+        task_name="其他旧分发任务",
+        category_code=None,
+        dispatch_category_code="camera",
+        platform="jd",
+        job_platform=None,
+        month=202605,
+        source_scope={},
+    )
+
+    resp = clean_client.get(
+        "/api/clean/tasks/search",
+        params={"category_code": "soundbar", "platform": "jd", "month": 202605},
+    )
+    assert resp.status_code == 200
+    items = resp.json()
+    assert [x["id"] for x in items] == [legacy_task.id]
+    assert items[0]["category_code"] == "soundbar"
+    assert items[0]["category_name"] == "回音壁"
+    assert items[0]["platform"] == "jd"
+    assert items[0]["month"] == 202605
+    assert other_category.id not in [x["id"] for x in items]

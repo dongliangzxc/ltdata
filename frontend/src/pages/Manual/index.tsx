@@ -295,33 +295,34 @@ export default function ManualPage() {
           <Paragraph>
             进入清洗任务详情后处理未识别品牌、URL 映射待确认、待确认和争议复核。任务创建后会自动完成清洗和匹配，不需要手动执行匹配。
           </Paragraph>
-          <Title level={5}>匹配统计说明</Title>
+          <Title level={5}>匹配复核规则说明（简洁版）</Title>
           <Paragraph>
-            <Tag color="green">自动匹配</Tag> 系统自动识别出型号的数量&emsp;
-            <Tag color="orange">待确认</Tag> 需人工处理&emsp;
-            <Tag color="blue">已人工确认</Tag> 手动指定型号&emsp;
-            <Tag color="red">已排除</Tag> 不在分析范围内
+            清洗任务详情页按以下顺序展示 8 个复核队列，每个队列代表一种处理状态：
           </Paragraph>
-          <Title level={5}>匹配来源标签说明</Title>
+          <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 16 }}>
+            <thead>
+              <tr>
+                <th style={{ textAlign: 'left', borderBottom: '1px solid #eee', padding: '8px 6px' }}>队列</th>
+                <th style={{ textAlign: 'left', borderBottom: '1px solid #eee', padding: '8px 6px' }}>是干嘛的</th>
+                <th style={{ textAlign: 'left', borderBottom: '1px solid #eee', padding: '8px 6px' }}>例子</th>
+                <th style={{ textAlign: 'left', borderBottom: '1px solid #eee', padding: '8px 6px' }}>处理方式</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td style={{ padding: '8px 6px' }}><S>未识别品牌</S></td><td>有品牌线索，但系统还没确认到具体型号。</td><td>康佳电视显示「康佳（KONKA）」，但当前型号是「未知」。</td><td>看链接和标题，确认型号后选择或新建型号；不确定就暂存争议。</td></tr>
+              <tr><td style={{ padding: '8px 6px' }}><S>URL映射待确认</S></td><td>标题匹配到型号，但链接还没确认过。</td><td>同一商品链接第一次出现，系统没有 URL 映射记录。</td><td>打开链接核对；正确就确认，错误就重选型号或排除。</td></tr>
+              <tr><td style={{ padding: '8px 6px' }}><S>待确认</S></td><td>系统有线索，但不能确定最终型号。</td><td>品牌能识别，但标题型号不清楚，或候选型号有多个。</td><td>查看标题、链接和候选型号；能判断就确认，不能判断就暂存争议。</td></tr>
+              <tr><td style={{ padding: '8px 6px' }}><S>争议复核</S></td><td>人工看过但暂时判断不了。</td><td>标题、图片、详情页不一致，或疑似套装/组合装。</td><td>写清争议原因；后续确认后再改为确认或排除。</td></tr>
+              <tr><td style={{ padding: '8px 6px' }}><S>已匹配</S></td><td>系统已自动匹配到型号。</td><td>URL 映射、历史库、规则或算法已命中型号。</td><td>一般不用处理；发现错误时重新选择型号。</td></tr>
+              <tr><td style={{ padding: '8px 6px' }}><S>已人工确认</S></td><td>人工已经指定过型号。</td><td>分析师从待确认、未识别品牌等队列确认过。</td><td>一般不用处理；发现错误时重新选择型号。</td></tr>
+              <tr><td style={{ padding: '8px 6px' }}><S>已排除</S></td><td>人工确认不参与本次入库或分析。</td><td>非目标品类、无效商品、明显不属于当前任务。</td><td>一般不用处理；误排除时撤销后重新处理。</td></tr>
+              <tr><td style={{ padding: '8px 6px' }}><S>干扰项过滤</S></td><td>清洗阶段被规则过滤掉，不属于匹配结果。</td><td>命中低价、赠品、配件、无关关键词等规则。</td><td>检查过滤是否合理；误过滤就调整规则并重新清洗。</td></tr>
+            </tbody>
+          </table>
           <Paragraph>
-            「待确认条目」列表的「来源」列显示该条目通过哪个阶段被匹配：
+            处理时记住三句话：能确认型号就选择或新建型号后确认；暂时判断不了就暂存争议并写清原因；不属于本次分析范围就排除。
           </Paragraph>
-          <Paragraph>
-            <Tag color="blue">URL映射</Tag> S0 精确URL匹配&emsp;
-            <Tag color="purple">历史库</Tag> S0.2 历史对照表命中&emsp;
-            <Tag color="cyan">规则</Tag> S0.5 显式关键词规则&emsp;
-            <Tag color="green">算法S1-S4</Tag> 文本算法匹配&emsp;
-            <Tag>未知</Tag> 待确认/未命中
-          </Paragraph>
-          <Title level={5}>第二步：人工处理待确认条目</Title>
-          <Paragraph>
-            在「待确认条目」列表中，查看宝贝名称和原始品牌 → 在「指定型号」下拉框搜索并选择型号（支持品牌码、型号码、型号名搜索）→ 点「确认」；确实不属于分析范围则点「排除」。
-          </Paragraph>
-          <Title level={5}>第三步：（可选）处理未识别品牌</Title>
-          <Paragraph>
-            切换到「未识别品牌」Tab，查看品牌无法识别的条目。可直接在此处确认型号，或回到「规则管理」→「品牌写法库」补充映射后重新匹配。
-          </Paragraph>
-          <Title level={5}>第四步：发布到分析库</Title>
+          <Title level={5}>下一步：发布到分析库</Title>
           <Paragraph>
             匹配完成后，点「发布到分析库」将已匹配数据写入分析数据库，发布后可在「查询工作台」查询。
           </Paragraph>

@@ -1102,6 +1102,7 @@ export type ReviewedMatchResultOut = MatchResultOut
 export type CreateBrandPayload = {
   brand_code: string
   brand_name?: string | null
+  alias_name?: string | null
 }
 
 export type UpdateBrandPayload = {
@@ -1116,7 +1117,6 @@ export type BrandItem = {
   category_codes: string[]
   model_count: number
   alias_count: number
-  brand_alias_id: number | null
   brand_alias_name: string | null
 }
 
@@ -1155,7 +1155,6 @@ export const listBrandAliasesByCode = (brandCode: string) =>
 
 export type CreateBrandAliasPayload = {
   alias_name: string
-  source?: 'brand_form'
 }
 
 export const createBrandAliasForCode = (brandCode: string, payload: CreateBrandAliasPayload) =>

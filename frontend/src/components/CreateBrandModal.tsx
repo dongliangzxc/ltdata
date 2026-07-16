@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import { Alert, Form, Input, Modal, message } from 'antd'
 import {
   createBrand,
-  createBrandAliasForCode,
   type BrandItem,
   type CreateBrandPayload,
 } from '../services/api'
@@ -47,20 +46,14 @@ export default function CreateBrandModal({
     const values = await form.validateFields()
     setSaving(true)
     try {
+      const aliasName = trimOrUndefined(values.alias_name)
       const payload: CreateBrandPayload = {
         brand_code: values.brand_code.trim(),
         brand_name: trimOrUndefined(values.brand_name) ?? null,
+        alias_name: allowAlias ? aliasName ?? null : null,
       }
       const res = await createBrand(payload)
       const created = res.data
-      const aliasName = trimOrUndefined(values.alias_name)
-      if (allowAlias && aliasName) {
-        try {
-          await createBrandAliasForCode(created.brand_code, { alias_name: aliasName, source: 'brand_form' })
-        } catch {
-          message.warning('品牌已创建，别名创建失败，可后续在品牌管理页补充')
-        }
-      }
       message.success('品牌创建成功')
       onCreated?.(created)
       form.resetFields()

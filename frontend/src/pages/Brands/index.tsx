@@ -1,7 +1,7 @@
 // frontend/src/pages/Brands/index.tsx
 import { useMemo, useState } from 'react'
 import {
-  Card, Table, Button, Space, Popconfirm, message, Tag, Form, Modal, Input,
+  Card, Table, Button, Space, Popconfirm, message, Tag, Form, Modal, Input, Select,
 } from 'antd'
 import { PlusOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
@@ -105,6 +105,7 @@ function AliasPanel({ brandCode, onAliasChange }: { brandCode: string; onAliasCh
 export default function BrandsPage() {
   const [createOpen, setCreateOpen] = useState(false)
   const [searchText, setSearchText] = useState('')
+  const [selectedCategoryCode, setSelectedCategoryCode] = useState<string | undefined>()
   const [editOpen, setEditOpen] = useState(false)
   const [editingBrand, setEditingBrand] = useState<BrandItem | null>(null)
   const [editSaving, setEditSaving] = useState(false)
@@ -113,7 +114,7 @@ export default function BrandsPage() {
   const { data: brands, loading, refresh } = useRequest(
     () => listBrands().then(r => r.data),
   )
-  const { options: categoryOptions } = useCategoryOptions()
+  const { options: categoryOptions, loading: categoryLoading } = useCategoryOptions()
   const categoryLabelMap = useMemo(() => {
     const m = new Map<string, string>()
     for (const c of categoryOptions) m.set(c.value, c.label)
@@ -124,13 +125,16 @@ export default function BrandsPage() {
     v && v.trim() ? v : <span style={{ color: '#ccc' }}>—</span>
 
   const filteredBrands = useMemo(() => {
+    const brandList = brands || []
     const keyword = searchText.trim().toLowerCase()
-    if (!keyword) return brands || []
-    return (brands || []).filter((brand) => {
-      const fields = [brand.brand_code, brand.original_brand_name, brand.brand_name]
-      return fields.some(value => (value || '').toLowerCase().includes(keyword))
+    if (!keyword && !selectedCategoryCode) return brandList
+    return brandList.filter((brand) => {
+      const matchesKeyword = !keyword || [brand.brand_code, brand.original_brand_name, brand.brand_name]
+        .some(value => (value || '').toLowerCase().includes(keyword))
+      const matchesCategory = !selectedCategoryCode || (brand.category_codes || []).includes(selectedCategoryCode)
+      return matchesKeyword && matchesCategory
     })
-  }, [brands, searchText])
+  }, [brands, searchText, selectedCategoryCode])
 
   const openEdit = (brand: BrandItem) => {
     setEditingBrand(brand)
@@ -217,6 +221,17 @@ export default function BrandsPage() {
             value={searchText}
             onChange={e => setSearchText(e.target.value)}
             style={{ maxWidth: 420 }}
+          />
+          <Select
+            allowClear
+            loading={categoryLoading}
+            placeholder="筛选品类"
+            value={selectedCategoryCode}
+            onChange={value => setSelectedCategoryCode(value)}
+            options={categoryOptions}
+            showSearch
+            optionFilterProp="label"
+            style={{ minWidth: 180, maxWidth: 260 }}
           />
         </Space>
       )}

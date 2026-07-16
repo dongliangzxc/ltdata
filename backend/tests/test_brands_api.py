@@ -275,6 +275,63 @@ def test_delete_brand_alias(client_and_db):
     assert db.query(BrandAlias).filter(BrandAlias.id == alias.id).first() is None
 
 
+def test_update_brand_alias(client_and_db):
+    client, db = client_and_db
+    db.add(BrandRecord(brand_code="SONY", brand_name="索尼"))
+    db.add(BrandAlias(alias_name="Sony", brand_code="SONY"))
+    db.commit()
+
+    resp = client.patch("/api/brands/SONY/aliases/1", json={"alias_name": "SONY INC"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["alias_name"] == "SONY INC"
+    assert body["brand_code"] == "SONY"
+    assert db.query(BrandAlias).filter(BrandAlias.id == 1).one().alias_name == "SONY INC"
+    assert client.get("/api/brands").json()[0]["alias_count"] == 1
+
+
+def test_update_brand_alias_rejects_duplicate(client_and_db):
+    client, db = client_and_db
+    db.add(BrandRecord(brand_code="SONY", brand_name="索尼"))
+    db.add(BrandRecord(brand_code="BOSE", brand_name="博士"))
+    db.add(BrandAlias(alias_name="Sony", brand_code="SONY"))
+    db.add(BrandAlias(alias_name="BOSE", brand_code="BOSE"))
+    db.commit()
+
+    resp = client.patch("/api/brands/SONY/aliases/1", json={"alias_name": "BOSE"})
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "别名 'BOSE' 已存在"
+
+
+def test_update_brand_alias_rejects_missing_or_foreign_alias(client_and_db):
+    client, db = client_and_db
+    db.add(BrandRecord(brand_code="SONY", brand_name="索尼"))
+    db.add(BrandRecord(brand_code="BOSE", brand_name="博士"))
+    db.add(BrandAlias(alias_name="Sony", brand_code="SONY"))
+    db.add(BrandAlias(alias_name="Bose", brand_code="BOSE"))
+    db.commit()
+
+    missing = client.patch("/api/brands/SONY/aliases/999", json={"alias_name": "SONY INC"})
+    foreign = client.patch("/api/brands/SONY/aliases/2", json={"alias_name": "SONY INC"})
+
+    assert missing.status_code == 404
+    assert foreign.status_code == 404
+
+
+def test_update_brand_alias_rejects_blank_alias(client_and_db):
+    client, db = client_and_db
+    db.add(BrandRecord(brand_code="SONY", brand_name="索尼"))
+    db.add(BrandAlias(alias_name="Sony", brand_code="SONY"))
+    db.commit()
+
+    resp = client.patch("/api/brands/SONY/aliases/1", json={"alias_name": "   "})
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "别名不能为空"
+
+
 def test_update_brand_name_changes_only_edited_name(client_and_db):
     client, db = client_and_db
     brand = BrandRecord(
@@ -298,6 +355,63 @@ def test_update_brand_name_changes_only_edited_name(client_and_db):
     assert body["alias_count"] == 1
     assert db.query(BrandRecord).filter_by(brand_code="SONY").one().brand_name == "索尼新名"
     assert db.query(BrandRecord).filter_by(brand_code="SONY").one().original_brand_name == "Sony Upload"
+
+
+def test_update_brand_alias(client_and_db):
+    client, db = client_and_db
+    db.add(BrandRecord(brand_code="SONY", brand_name="索尼"))
+    db.add(BrandAlias(alias_name="Sony", brand_code="SONY"))
+    db.commit()
+
+    resp = client.patch("/api/brands/SONY/aliases/1", json={"alias_name": "SONY INC"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["alias_name"] == "SONY INC"
+    assert body["brand_code"] == "SONY"
+    assert db.query(BrandAlias).filter(BrandAlias.id == 1).one().alias_name == "SONY INC"
+    assert client.get("/api/brands").json()[0]["alias_count"] == 1
+
+
+def test_update_brand_alias_rejects_duplicate(client_and_db):
+    client, db = client_and_db
+    db.add(BrandRecord(brand_code="SONY", brand_name="索尼"))
+    db.add(BrandRecord(brand_code="BOSE", brand_name="博士"))
+    db.add(BrandAlias(alias_name="Sony", brand_code="SONY"))
+    db.add(BrandAlias(alias_name="BOSE", brand_code="BOSE"))
+    db.commit()
+
+    resp = client.patch("/api/brands/SONY/aliases/1", json={"alias_name": "BOSE"})
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "别名 'BOSE' 已存在"
+
+
+def test_update_brand_alias_rejects_missing_or_foreign_alias(client_and_db):
+    client, db = client_and_db
+    db.add(BrandRecord(brand_code="SONY", brand_name="索尼"))
+    db.add(BrandRecord(brand_code="BOSE", brand_name="博士"))
+    db.add(BrandAlias(alias_name="Sony", brand_code="SONY"))
+    db.add(BrandAlias(alias_name="Bose", brand_code="BOSE"))
+    db.commit()
+
+    missing = client.patch("/api/brands/SONY/aliases/999", json={"alias_name": "SONY INC"})
+    foreign = client.patch("/api/brands/SONY/aliases/2", json={"alias_name": "SONY INC"})
+
+    assert missing.status_code == 404
+    assert foreign.status_code == 404
+
+
+def test_update_brand_alias_rejects_blank_alias(client_and_db):
+    client, db = client_and_db
+    db.add(BrandRecord(brand_code="SONY", brand_name="索尼"))
+    db.add(BrandAlias(alias_name="Sony", brand_code="SONY"))
+    db.commit()
+
+    resp = client.patch("/api/brands/SONY/aliases/1", json={"alias_name": "   "})
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "别名不能为空"
 
 
 def test_update_brand_name_stores_blank_as_none(client_and_db):

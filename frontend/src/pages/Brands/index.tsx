@@ -7,7 +7,7 @@ import { PlusOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import {
   listBrands, listBrandAliasesByCode, createBrandAliasForCode, deleteBrandAliasById,
-  updateBrand,
+  updateBrand, updateBrandAliasForCode,
   type BrandItem, type BrandAliasItem,
 } from '../../services/api'
 import CreateBrandModal from '../../components/CreateBrandModal'
@@ -15,8 +15,11 @@ import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 
 function AliasPanel({ brandCode, onAliasChange }: { brandCode: string; onAliasChange: () => void }) {
   const [addOpen, setAddOpen] = useState(false)
+  const [editOpen, setEditOpen] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [editingAlias, setEditingAlias] = useState<BrandAliasItem | null>(null)
   const [form] = Form.useForm()
+  const [editForm] = Form.useForm()
 
   const { data: aliases, loading, refresh } = useRequest(
     () => listBrandAliasesByCode(brandCode).then(r => r.data),
@@ -26,10 +29,41 @@ function AliasPanel({ brandCode, onAliasChange }: { brandCode: string; onAliasCh
     const values = await form.validateFields()
     setSaving(true)
     try {
-      await createBrandAliasForCode(brandCode, { alias_name: values.alias_name })
+      const aliasName = values.alias_name.trim()
+      await createBrandAliasForCode(brandCode, { alias_name: aliasName })
       message.success('别名添加成功')
       form.resetFields()
       setAddOpen(false)
+      refresh()
+      onAliasChange()
+    } catch {
+      // errors shown by axios interceptor
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const openEdit = (alias: BrandAliasItem) => {
+    setEditingAlias(alias)
+    editForm.setFieldsValue({ alias_name: alias.alias_name })
+    setEditOpen(true)
+  }
+
+  const closeEdit = () => {
+    setEditOpen(false)
+    setEditingAlias(null)
+    editForm.resetFields()
+  }
+
+  const handleEdit = async () => {
+    if (!editingAlias) return
+    const values = await editForm.validateFields()
+    setSaving(true)
+    try {
+      const aliasName = values.alias_name.trim()
+      await updateBrandAliasForCode(brandCode, editingAlias.id, { alias_name: aliasName })
+      message.success('别名已更新')
+      closeEdit()
       refresh()
       onAliasChange()
     } catch {
@@ -54,16 +88,21 @@ function AliasPanel({ brandCode, onAliasChange }: { brandCode: string; onAliasCh
     { title: '写法别名', dataIndex: 'alias_name' },
     {
       title: '操作',
-      width: 80,
+      width: 132,
       render: (_: unknown, row: BrandAliasItem) => (
-        <Popconfirm
-          title="确认删除该别名？"
-          onConfirm={() => handleDelete(row)}
-          okText="删除"
-          cancelText="取消"
-        >
-          <Button size="small" danger icon={<DeleteOutlined />} />
-        </Popconfirm>
+        <Space size={4}>
+          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)}>
+            编辑
+          </Button>
+          <Popconfirm
+            title="确认删除该别名？"
+            onConfirm={() => handleDelete(row)}
+            okText="删除"
+            cancelText="取消"
+          >
+            <Button size="small" danger icon={<DeleteOutlined />} />
+          </Popconfirm>
+        </Space>
       ),
     },
   ]
@@ -93,6 +132,24 @@ function AliasPanel({ brandCode, onAliasChange }: { brandCode: string; onAliasCh
         cancelText="取消"
       >
         <Form form={form} layout="vertical">
+          <Form.Item name="alias_name" label="别名写法" rules={[{ required: true, message: '请输入别名' }]}>
+            <Input placeholder="e.g. Sony / SONY INC / 索尼" />
+          </Form.Item>
+        </Form>
+      </Modal>
+      <Modal
+        title="修改品牌别名"
+        open={editOpen}
+        onOk={handleEdit}
+        confirmLoading={saving}
+        onCancel={closeEdit}
+        okText="保存"
+        cancelText="取消"
+      >
+        <Form form={editForm} layout="vertical">
+          <Form.Item label="品牌码">
+            <Input value={brandCode} disabled />
+          </Form.Item>
           <Form.Item name="alias_name" label="别名写法" rules={[{ required: true, message: '请输入别名' }]}>
             <Input placeholder="e.g. Sony / SONY INC / 索尼" />
           </Form.Item>

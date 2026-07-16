@@ -1139,6 +1139,12 @@ export const listBrandAliasesByCode = (brandCode: string) =>
 export const createBrandAliasForCode = (brandCode: string, payload: { alias_name: string }) =>
   api.post<BrandAliasItem>(`/brands/${brandCode}/aliases`, payload)
 
+export const updateBrandAliasForCode = (
+  brandCode: string,
+  aliasId: number,
+  payload: { alias_name: string },
+) => api.patch<BrandAliasItem>(`/brands/${encodeURIComponent(brandCode)}/aliases/${aliasId}`, payload)
+
 export const deleteBrandAliasById = (brandCode: string, aliasId: number) =>
   api.delete(`/brands/${brandCode}/aliases/${aliasId}`)
 

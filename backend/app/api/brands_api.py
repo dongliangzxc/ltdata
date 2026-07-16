@@ -25,6 +25,10 @@ class BrandAliasCreate(BaseModel):
     alias_name: str
 
 
+class BrandAliasUpdate(BaseModel):
+    alias_name: str
+
+
 class BrandUpdate(BaseModel):
     brand_name: str | None = None
 
@@ -168,6 +172,25 @@ def create_brand_alias(brand_code: str, payload: BrandAliasCreate, db: Session =
         raise HTTPException(status_code=409, detail=f"别名 '{payload.alias_name}' 已存在")
     alias = BrandAlias(alias_name=payload.alias_name.strip(), brand_code=brand_code)
     db.add(alias)
+    db.commit()
+    db.refresh(alias)
+    return alias
+
+
+@router.patch("/{brand_code}/aliases/{alias_id}", response_model=BrandAliasOut)
+def update_brand_alias(brand_code: str, alias_id: int, payload: BrandAliasUpdate, db: Session = Depends(get_db)):
+    cleaned_alias_name = payload.alias_name.strip()
+    if not cleaned_alias_name:
+        raise HTTPException(status_code=400, detail="别名不能为空")
+
+    alias = db.query(BrandAlias).filter(BrandAlias.id == alias_id).first()
+    if not alias or alias.brand_code != brand_code:
+        raise HTTPException(status_code=404, detail="别名不存在")
+
+    if cleaned_alias_name != alias.alias_name and db.query(BrandAlias).filter(BrandAlias.alias_name == cleaned_alias_name).first():
+        raise HTTPException(status_code=409, detail=f"别名 '{cleaned_alias_name}' 已存在")
+
+    alias.alias_name = cleaned_alias_name
     db.commit()
     db.refresh(alias)
     return alias

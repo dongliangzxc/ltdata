@@ -212,35 +212,33 @@ export default function BrandsPage() {
 
   return (
     <Card
-      title={(
-        <Space direction="vertical" size={8} style={{ width: '100%' }}>
-          <span>品牌管理</span>
-          <Input.Search
-            allowClear
-            placeholder="搜索品牌码 / 上传时品牌名称 / 修改后名称"
-            value={searchText}
-            onChange={e => setSearchText(e.target.value)}
-            style={{ maxWidth: 420 }}
-          />
-          <Select
-            allowClear
-            loading={categoryLoading}
-            placeholder="筛选品类"
-            value={selectedCategoryCode}
-            onChange={value => setSelectedCategoryCode(value)}
-            options={categoryOptions}
-            showSearch
-            optionFilterProp="label"
-            style={{ minWidth: 180, maxWidth: 260 }}
-          />
-        </Space>
-      )}
+      title="品牌管理"
       extra={(
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
           新建品牌
         </Button>
       )}
     >
+      <Space size={12} wrap style={{ marginBottom: 16 }}>
+        <Input.Search
+          allowClear
+          placeholder="搜索品牌码 / 上传时品牌名称 / 修改后名称"
+          value={searchText}
+          onChange={e => setSearchText(e.target.value)}
+          style={{ width: 420 }}
+        />
+        <Select
+          allowClear
+          loading={categoryLoading}
+          placeholder="筛选品类"
+          value={selectedCategoryCode}
+          onChange={value => setSelectedCategoryCode(value)}
+          options={categoryOptions}
+          showSearch
+          optionFilterProp="label"
+          style={{ width: 180 }}
+        />
+      </Space>
       <Table
         dataSource={filteredBrands}
         rowKey="brand_code"

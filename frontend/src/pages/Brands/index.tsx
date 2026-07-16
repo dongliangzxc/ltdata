@@ -168,7 +168,7 @@ export default function BrandsPage() {
   const [editSaving, setEditSaving] = useState(false)
   const [editForm] = Form.useForm<{ brand_name: string; alias_name: string }>()
 
-  const { data: brands, loading, refresh } = useRequest(
+  const { data: brands, loading, refresh, mutate } = useRequest(
     () => listBrands().then(r => r.data),
   )
   const { options: categoryOptions, loading: categoryLoading } = useCategoryOptions()
@@ -215,13 +215,16 @@ export default function BrandsPage() {
     const trimmedAliasName = values.alias_name?.trim() || ''
     setEditSaving(true)
     try {
-      await updateBrand(editingBrand.brand_code, {
+      const { data: updatedBrand } = await updateBrand(editingBrand.brand_code, {
         brand_name: trimmedName || null,
         alias_name: trimmedAliasName || null,
       })
+      mutate((currentBrands = []) => currentBrands.map(brand => (
+        brand.brand_code === updatedBrand.brand_code ? updatedBrand : brand
+      )))
+      refresh()
       message.success('品牌信息已更新')
       closeEdit()
-      refresh()
     } finally {
       setEditSaving(false)
     }

@@ -1120,6 +1120,20 @@ export type BrandItem = {
   brand_alias_name: string | null
 }
 
+export type BrandListResponse = {
+  total: number
+  page: number
+  page_size: number
+  items: BrandItem[]
+}
+
+export type BrandListParams = {
+  keyword?: string
+  category_code?: string
+  page?: number
+  page_size?: number
+}
+
 export type BrandAliasItem = {
   id: number
   alias_name: string
@@ -1127,8 +1141,8 @@ export type BrandAliasItem = {
   is_active: number
 }
 
-export const listBrands = () =>
-  api.get<BrandItem[]>('/brands')
+export const listBrands = (params?: BrandListParams) =>
+  api.get<BrandListResponse>('/brands', { params })
 
 export const createBrand = (payload: CreateBrandPayload) =>
   api.post<BrandItem>('/brands', payload)

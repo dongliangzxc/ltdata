@@ -109,7 +109,7 @@ def test_list_brands_returns_model_count(client_and_db):
     r = client.get("/api/brands")
 
     assert r.status_code == 200
-    brands = r.json()
+    brands = r.json()["items"]
     sony = next(b for b in brands if b["brand_code"] == "SONY")
     jbl = next(b for b in brands if b["brand_code"] == "JBL")
     empty = next(b for b in brands if b["brand_code"] == "EMPTY")
@@ -128,9 +128,65 @@ def test_list_brands_counts_models_with_trimmed_brand_code(client_and_db):
     r = client.get("/api/brands")
 
     assert r.status_code == 200
-    brands = r.json()
+    brands = r.json()["items"]
     sony = next(b for b in brands if b["brand_code"] == "SONY")
     assert sony["model_count"] == 1
+
+
+def test_list_brands_returns_paginated_response(client_and_db):
+    client, db = client_and_db
+    db.add(BrandRecord(brand_code="A", brand_name="A name"))
+    db.add(BrandRecord(brand_code="B", brand_name="B name"))
+    db.add(BrandRecord(brand_code="C", brand_name="C name"))
+    db.commit()
+
+    r = client.get("/api/brands", params={"page": 2, "page_size": 1})
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 3
+    assert body["page"] == 2
+    assert body["page_size"] == 1
+    assert [item["brand_code"] for item in body["items"]] == ["B"]
+
+
+def test_list_brands_filters_keyword_on_backend(client_and_db):
+    client, db = client_and_db
+    db.add(BrandRecord(brand_code="SONY", brand_name="索尼", original_brand_name="Sony Upload"))
+    db.add(BrandRecord(brand_code="BOSE", brand_name="博士", original_brand_name="Bose Upload"))
+    db.add(BrandRecord(brand_code="MODEL_ONLY", brand_name=None, original_brand_name=None))
+    db.add(ModelRecord(brand_code="MODEL_ONLY", model_code="M1", brand_name="Model Brand Hit"))
+    db.commit()
+
+    r = client.get("/api/brands", params={"keyword": "sony"})
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 1
+    assert [item["brand_code"] for item in body["items"]] == ["SONY"]
+
+    r = client.get("/api/brands", params={"keyword": "model brand"})
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 1
+    assert [item["brand_code"] for item in body["items"]] == ["MODEL_ONLY"]
+
+
+def test_list_brands_filters_category_on_backend(client_and_db):
+    client, db = client_and_db
+    db.add(BrandRecord(brand_code="SONY", brand_name="索尼"))
+    db.add(BrandRecord(brand_code="BOSE", brand_name="博士"))
+    db.add(ModelRecord(brand_code="SONY", model_code="S1", category_code="HEADPHONE"))
+    db.add(ModelRecord(brand_code="BOSE", model_code="B1", category_code="SPEAKER"))
+    db.commit()
+
+    r = client.get("/api/brands", params={"category_code": "HEADPHONE"})
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 1
+    assert [item["brand_code"] for item in body["items"]] == ["SONY"]
 
 
 def test_list_brands_falls_back_original_name_from_models(client_and_db):
@@ -143,7 +199,7 @@ def test_list_brands_falls_back_original_name_from_models(client_and_db):
     r = client.get("/api/brands")
 
     assert r.status_code == 200
-    brands = r.json()
+    brands = r.json()["items"]
     dji = next(b for b in brands if b["brand_code"] == "DJI")
     assert dji["original_brand_name"] == "大疆"
     assert dji["brand_name"] == "大疆"
@@ -160,7 +216,7 @@ def test_list_brands_returns_alias_count(client_and_db):
     r = client.get("/api/brands")
 
     assert r.status_code == 200
-    brands = r.json()
+    brands = r.json()["items"]
     sony = next(b for b in brands if b["brand_code"] == "SONY")
     assert sony["alias_count"] == 2
 
@@ -197,7 +253,7 @@ def test_list_brands_returns_original_name_and_categories(client_and_db):
     r = client.get("/api/brands")
 
     assert r.status_code == 200
-    sony = next(b for b in r.json() if b["brand_code"] == "SONY")
+    sony = next(b for b in r.json()["items"] if b["brand_code"] == "SONY")
     assert sony["brand_name"] == "索尼(修改后)"
     assert sony["original_brand_name"] == "索尼"
     # 品类码按升序返回
@@ -288,7 +344,7 @@ def test_update_brand_alias(client_and_db):
     assert body["alias_name"] == "SONY INC"
     assert body["brand_code"] == "SONY"
     assert db.query(BrandAlias).filter(BrandAlias.id == 1).one().alias_name == "SONY INC"
-    assert client.get("/api/brands").json()[0]["alias_count"] == 1
+    assert client.get("/api/brands").json()["items"][0]["alias_count"] == 1
 
 
 def test_update_brand_alias_rejects_duplicate(client_and_db):
@@ -369,7 +425,7 @@ def test_list_brands_returns_only_brand_form_alias(client_and_db):
     resp = client.get("/api/brands")
 
     assert resp.status_code == 200
-    sony = next(item for item in resp.json() if item["brand_code"] == "SONY")
+    sony = next(item for item in resp.json()["items"] if item["brand_code"] == "SONY")
     assert sony["brand_alias_id"] == form_alias.id
     assert sony["brand_alias_name"] == "Sony Form"
     assert sony["alias_count"] == 2
@@ -385,7 +441,7 @@ def test_list_brands_does_not_treat_multiple_panel_aliases_as_brand_alias(client
     resp = client.get("/api/brands")
 
     assert resp.status_code == 200
-    sony = next(item for item in resp.json() if item["brand_code"] == "SONY")
+    sony = next(item for item in resp.json()["items"] if item["brand_code"] == "SONY")
     assert sony["brand_alias_id"] is None
     assert sony["brand_alias_name"] is None
     assert sony["alias_count"] == 2
@@ -466,7 +522,7 @@ def test_update_brand_alias(client_and_db):
     assert body["alias_name"] == "SONY INC"
     assert body["brand_code"] == "SONY"
     assert db.query(BrandAlias).filter(BrandAlias.id == 1).one().alias_name == "SONY INC"
-    assert client.get("/api/brands").json()[0]["alias_count"] == 1
+    assert client.get("/api/brands").json()["items"][0]["alias_count"] == 1
 
 
 def test_update_brand_alias_rejects_duplicate(client_and_db):

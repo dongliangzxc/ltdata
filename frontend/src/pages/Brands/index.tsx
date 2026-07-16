@@ -163,13 +163,21 @@ export default function BrandsPage() {
   const [createOpen, setCreateOpen] = useState(false)
   const [searchText, setSearchText] = useState('')
   const [selectedCategoryCode, setSelectedCategoryCode] = useState<string | undefined>()
+  const [currentPage, setCurrentPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
   const [editOpen, setEditOpen] = useState(false)
   const [editingBrand, setEditingBrand] = useState<BrandItem | null>(null)
   const [editSaving, setEditSaving] = useState(false)
   const [editForm] = Form.useForm<{ brand_name: string; alias_name: string }>()
 
-  const { data: brands, loading, refresh, mutate } = useRequest(
-    () => listBrands().then(r => r.data),
+  const { data: brandPage, loading, refresh, mutate } = useRequest(
+    () => listBrands({
+      keyword: searchText.trim() || undefined,
+      category_code: selectedCategoryCode,
+      page: currentPage,
+      page_size: pageSize,
+    }).then(r => r.data),
+    { refreshDeps: [searchText, selectedCategoryCode, currentPage, pageSize] },
   )
   const { options: categoryOptions, loading: categoryLoading } = useCategoryOptions()
   const categoryLabelMap = useMemo(() => {
@@ -180,18 +188,6 @@ export default function BrandsPage() {
 
   const renderOptionalText = (v: string | null | undefined) =>
     v && v.trim() ? v : <span style={{ color: '#ccc' }}>—</span>
-
-  const filteredBrands = useMemo(() => {
-    const brandList = brands || []
-    const keyword = searchText.trim().toLowerCase()
-    if (!keyword && !selectedCategoryCode) return brandList
-    return brandList.filter((brand) => {
-      const matchesKeyword = !keyword || [brand.brand_code, brand.original_brand_name, brand.brand_name]
-        .some(value => (value || '').toLowerCase().includes(keyword))
-      const matchesCategory = !selectedCategoryCode || (brand.category_codes || []).includes(selectedCategoryCode)
-      return matchesKeyword && matchesCategory
-    })
-  }, [brands, searchText, selectedCategoryCode])
 
   const openEdit = (brand: BrandItem) => {
     setEditingBrand(brand)
@@ -219,9 +215,12 @@ export default function BrandsPage() {
         brand_name: trimmedName || null,
         alias_name: trimmedAliasName || null,
       })
-      mutate((currentBrands = []) => currentBrands.map(brand => (
-        brand.brand_code === updatedBrand.brand_code ? updatedBrand : brand
-      )))
+      mutate(currentPageData => (currentPageData ? {
+        ...currentPageData,
+        items: currentPageData.items.map(brand => (
+          brand.brand_code === updatedBrand.brand_code ? updatedBrand : brand
+        )),
+      } : currentPageData))
       refresh()
       message.success('品牌信息已更新')
       closeEdit()
@@ -291,7 +290,10 @@ export default function BrandsPage() {
           allowClear
           placeholder="搜索品牌码 / 上传时品牌名称 / 修改后名称"
           value={searchText}
-          onChange={e => setSearchText(e.target.value)}
+          onChange={e => {
+            setSearchText(e.target.value)
+            setCurrentPage(1)
+          }}
           style={{ width: 420 }}
         />
         <Select
@@ -299,7 +301,10 @@ export default function BrandsPage() {
           loading={categoryLoading}
           placeholder="筛选品类"
           value={selectedCategoryCode}
-          onChange={value => setSelectedCategoryCode(value)}
+          onChange={value => {
+            setSelectedCategoryCode(value)
+            setCurrentPage(1)
+          }}
           options={categoryOptions}
           showSearch
           optionFilterProp="label"
@@ -307,11 +312,20 @@ export default function BrandsPage() {
         />
       </Space>
       <Table
-        dataSource={filteredBrands}
+        dataSource={brandPage?.items ?? []}
         rowKey="brand_code"
         columns={columns}
         loading={loading}
-        pagination={{ pageSize: 20 }}
+        pagination={{
+          current: currentPage,
+          pageSize,
+          total: brandPage?.total ?? 0,
+          showSizeChanger: true,
+          onChange: (page, size) => {
+            setCurrentPage(page)
+            setPageSize(size)
+          },
+        }}
         expandable={{
           expandedRowRender: (record: BrandItem) => (
             <AliasPanel brandCode={record.brand_code} onAliasChange={refresh} />

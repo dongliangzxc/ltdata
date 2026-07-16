@@ -41,10 +41,18 @@ const brands = [
   },
 ]
 
+const brandPage = {
+  total: brands.length,
+  page: 1,
+  page_size: 20,
+  items: brands,
+}
+
 let states = []
 let stateIndex = 0
 let currentTree = null
 let RootComponent = null
+let lastListBrandsParams = null
 
 const flatten = value => Array.isArray(value) ? value.flat(Infinity).filter(Boolean) : [value].filter(Boolean)
 
@@ -227,11 +235,19 @@ Module._load = function patchedLoad(request, parent, isMain) {
     }
   }
   if (request === 'ahooks') {
-    return { useRequest: () => ({ data: brands, loading: false, refresh() {} }) }
+    return {
+      useRequest: (service) => {
+        if (typeof service === 'function') service()
+        return { data: brandPage, loading: false, refresh() {}, mutate() {} }
+      },
+    }
   }
   if (request.endsWith('/services/api') || request.endsWith('services/api')) {
     return {
-      listBrands: async () => ({ data: brands }),
+      listBrands: async (params) => {
+        lastListBrandsParams = params
+        return { data: brandPage }
+      },
       listBrandAliasesByCode: async () => ({ data: [] }),
       createBrandAliasForCode: async () => ({ data: {} }),
       deleteBrandAliasById: async () => ({}),
@@ -266,21 +282,27 @@ try {
   assert.match(table.textContent, /BOSE/)
   assert.match(table.textContent, /EMPTY/)
 
+  assert.equal(lastListBrandsParams.page, 1)
+  assert.equal(lastListBrandsParams.page_size, 20)
+
   fireEvent.change(screen.getByLabelText('筛选品类'), { target: { value: 'HEADPHONE' } })
   table = screen.getByTestId('brand-table')
   assert.match(table.textContent, /SONY/)
-  assert.doesNotMatch(table.textContent, /BOSE/)
-  assert.doesNotMatch(table.textContent, /EMPTY/)
+  assert.match(table.textContent, /BOSE/)
+  assert.equal(lastListBrandsParams.category_code, 'HEADPHONE')
+  assert.equal(lastListBrandsParams.page, 1)
 
   fireEvent.change(screen.getByLabelText('搜索品牌码 / 上传时品牌名称 / 修改后名称'), { target: { value: 'bose' } })
   table = screen.getByTestId('brand-table')
-  assert.doesNotMatch(table.textContent, /SONY/)
-  assert.doesNotMatch(table.textContent, /BOSE/)
+  assert.match(table.textContent, /SONY/)
+  assert.match(table.textContent, /BOSE/)
+  assert.equal(lastListBrandsParams.keyword, 'bose')
+  assert.equal(lastListBrandsParams.category_code, 'HEADPHONE')
+  assert.equal(lastListBrandsParams.page, 1)
 
   fireEvent.change(screen.getByLabelText('筛选品类'), { target: { value: '' } })
-  table = screen.getByTestId('brand-table')
-  assert.match(table.textContent, /BOSE/)
-  assert.doesNotMatch(table.textContent, /SONY/)
+  assert.equal(lastListBrandsParams.category_code, undefined)
+  assert.equal(lastListBrandsParams.keyword, 'bose')
 
   console.log('Brand category filter behavior passed')
 } finally {

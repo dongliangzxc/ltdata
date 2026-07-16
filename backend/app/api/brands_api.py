@@ -1,13 +1,13 @@
 # backend/app/api/brands_api.py
 """品牌管理 API — /api/brands"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.database import get_db
-from app.models.schemas import BrandRecord, ModelRecord, BrandAlias, BrandIn, BrandOut
+from app.models.schemas import BrandRecord, ModelRecord, BrandAlias, BrandIn, BrandOut, PaginatedResponse
 
 router = APIRouter(prefix="/api/brands", tags=["brands"])
 
@@ -59,22 +59,27 @@ def _is_placeholder_brand_code(value: str) -> bool:
 
 
 def _build_brand_outs(db: Session, brands: list[BrandRecord]) -> list[BrandOut]:
+    if not brands:
+        return []
+
+    brand_codes = [brand.brand_code for brand in brands]
     normalized_brand_code = func.trim(ModelRecord.brand_code)
     model_counts: dict[str, int] = dict(
         db.query(normalized_brand_code, func.count(ModelRecord.id))
-        .filter(ModelRecord.brand_code.isnot(None))
+        .filter(ModelRecord.brand_code.isnot(None), normalized_brand_code.in_(brand_codes))
         .group_by(normalized_brand_code)
         .all()
     )
     alias_counts: dict[str, int] = dict(
         db.query(BrandAlias.brand_code, func.count(BrandAlias.id))
+        .filter(BrandAlias.brand_code.in_(brand_codes))
         .group_by(BrandAlias.brand_code)
         .all()
     )
     brand_aliases: dict[str, BrandAlias] = {}
     all_aliases = (
         db.query(BrandAlias)
-        .filter(BrandAlias.brand_code.isnot(None))
+        .filter(BrandAlias.brand_code.in_(brand_codes))
         .order_by(BrandAlias.brand_code, BrandAlias.created_at, BrandAlias.id)
         .all()
     )
@@ -88,7 +93,7 @@ def _build_brand_outs(db: Session, brands: list[BrandRecord]) -> list[BrandOut]:
     category_map: dict[str, set[str]] = {}
     for brand_code, brand_name, category_code in (
         db.query(normalized_brand_code, ModelRecord.brand_name, ModelRecord.category_code)
-        .filter(ModelRecord.brand_code.isnot(None))
+        .filter(ModelRecord.brand_code.isnot(None), normalized_brand_code.in_(brand_codes))
         .all()
     ):
         if not brand_code:
@@ -117,11 +122,61 @@ def _build_brand_outs(db: Session, brands: list[BrandRecord]) -> list[BrandOut]:
     ]
 
 
-@router.get("", response_model=list[BrandOut])
-def list_brands(db: Session = Depends(get_db)):
-    """返回品牌主数据列表，附带型号数、别名数、覆盖品类。"""
-    brands = db.query(BrandRecord).order_by(BrandRecord.brand_code).all()
-    return _build_brand_outs(db, brands)
+@router.get("", response_model=PaginatedResponse)
+def list_brands(
+    keyword: str | None = Query(None),
+    category_code: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=2000),
+    db: Session = Depends(get_db),
+):
+    """返回分页品牌主数据列表，附带型号数、别名数、覆盖品类。"""
+    normalized_model_brand_code = func.trim(ModelRecord.brand_code)
+    query = db.query(BrandRecord)
+
+    cleaned_keyword = (keyword or "").strip()
+    if cleaned_keyword:
+        pattern = f"%{cleaned_keyword}%"
+        keyword_brand_codes = (
+            db.query(normalized_model_brand_code)
+            .filter(
+                ModelRecord.brand_code.isnot(None),
+                ModelRecord.brand_name.ilike(pattern),
+            )
+            .distinct()
+        )
+        query = query.filter(
+            BrandRecord.brand_code.ilike(pattern) |
+            BrandRecord.brand_name.ilike(pattern) |
+            BrandRecord.original_brand_name.ilike(pattern) |
+            BrandRecord.brand_code.in_(keyword_brand_codes)
+        )
+
+    cleaned_category_code = (category_code or "").strip()
+    if cleaned_category_code:
+        category_brand_codes = (
+            db.query(normalized_model_brand_code)
+            .filter(
+                ModelRecord.brand_code.isnot(None),
+                ModelRecord.category_code == cleaned_category_code,
+            )
+            .distinct()
+        )
+        query = query.filter(BrandRecord.brand_code.in_(category_brand_codes))
+
+    total = query.count()
+    brands = (
+        query.order_by(BrandRecord.brand_code)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return PaginatedResponse(
+        total=total,
+        page=page,
+        page_size=page_size,
+        items=_build_brand_outs(db, brands),
+    )
 
 
 @router.post("", response_model=BrandOut, status_code=201)

@@ -87,8 +87,8 @@ export default function CreateModelModal({
   const loadBrands = async () => {
     setBrandsLoading(true)
     try {
-      const res = await listBrands()
-      setBrands(res.data)
+      const res = await listBrands({ page_size: 2000 })
+      setBrands(res.data.items)
     } finally {
       setBrandsLoading(false)
     }

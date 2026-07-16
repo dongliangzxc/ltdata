@@ -1116,8 +1116,8 @@ export type BrandItem = {
   category_codes: string[]
   model_count: number
   alias_count: number
-  primary_alias_id: number | null
-  primary_alias_name: string | null
+  brand_alias_id: number | null
+  brand_alias_name: string | null
 }
 
 export type BrandAliasItem = {
@@ -1139,7 +1139,12 @@ export const updateBrand = (brandCode: string, payload: UpdateBrandPayload) =>
 export const listBrandAliasesByCode = (brandCode: string) =>
   api.get<BrandAliasItem[]>(`/brands/${brandCode}/aliases`)
 
-export const createBrandAliasForCode = (brandCode: string, payload: { alias_name: string }) =>
+export type CreateBrandAliasPayload = {
+  alias_name: string
+  source?: 'brand_form'
+}
+
+export const createBrandAliasForCode = (brandCode: string, payload: CreateBrandAliasPayload) =>
   api.post<BrandAliasItem>(`/brands/${brandCode}/aliases`, payload)
 
 export const updateBrandAliasForCode = (

@@ -56,7 +56,7 @@ export default function CreateBrandModal({
       const aliasName = trimOrUndefined(values.alias_name)
       if (allowAlias && aliasName) {
         try {
-          await createBrandAliasForCode(created.brand_code, { alias_name: aliasName })
+          await createBrandAliasForCode(created.brand_code, { alias_name: aliasName, source: 'brand_form' })
         } catch {
           message.warning('品牌已创建，别名创建失败，可后续在品牌管理页补充')
         }

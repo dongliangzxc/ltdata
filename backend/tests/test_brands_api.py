@@ -357,28 +357,44 @@ def test_update_brand_name_changes_only_edited_name(client_and_db):
     assert db.query(BrandRecord).filter_by(brand_code="SONY").one().original_brand_name == "Sony Upload"
 
 
-def test_list_brands_returns_primary_alias(client_and_db):
+def test_list_brands_returns_only_brand_form_alias(client_and_db):
     client, db = client_and_db
     db.add(BrandRecord(brand_code="SONY", brand_name="索尼"))
-    first = BrandAlias(alias_name="Sony First", brand_code="SONY")
-    second = BrandAlias(alias_name="Sony Second", brand_code="SONY")
-    db.add(first)
-    db.add(second)
+    panel_alias = BrandAlias(alias_name="Sony Panel", brand_code="SONY")
+    form_alias = BrandAlias(alias_name="Sony Form", brand_code="SONY", created_by="brand_form")
+    db.add(panel_alias)
+    db.add(form_alias)
     db.commit()
 
     resp = client.get("/api/brands")
 
     assert resp.status_code == 200
     sony = next(item for item in resp.json() if item["brand_code"] == "SONY")
-    assert sony["primary_alias_id"] == first.id
-    assert sony["primary_alias_name"] == "Sony First"
+    assert sony["brand_alias_id"] == form_alias.id
+    assert sony["brand_alias_name"] == "Sony Form"
     assert sony["alias_count"] == 2
 
 
-def test_update_brand_saves_name_and_primary_alias(client_and_db):
+def test_list_brands_does_not_treat_multiple_panel_aliases_as_brand_alias(client_and_db):
+    client, db = client_and_db
+    db.add(BrandRecord(brand_code="SONY", brand_name="索尼"))
+    db.add(BrandAlias(alias_name="Sony First", brand_code="SONY"))
+    db.add(BrandAlias(alias_name="Sony Second", brand_code="SONY"))
+    db.commit()
+
+    resp = client.get("/api/brands")
+
+    assert resp.status_code == 200
+    sony = next(item for item in resp.json() if item["brand_code"] == "SONY")
+    assert sony["brand_alias_id"] is None
+    assert sony["brand_alias_name"] is None
+    assert sony["alias_count"] == 2
+
+
+def test_update_brand_saves_name_and_brand_alias(client_and_db):
     client, db = client_and_db
     db.add(BrandRecord(brand_code="SONY", brand_name="索尼旧名", original_brand_name="Sony Upload"))
-    db.add(BrandAlias(alias_name="Sony", brand_code="SONY"))
+    db.add(BrandAlias(alias_name="Sony", brand_code="SONY", created_by="brand_form"))
     db.commit()
 
     resp = client.patch("/api/brands/SONY", json={"brand_name": "索尼新名", "alias_name": "SONY INC"})
@@ -386,7 +402,7 @@ def test_update_brand_saves_name_and_primary_alias(client_and_db):
     assert resp.status_code == 200
     body = resp.json()
     assert body["brand_name"] == "索尼新名"
-    assert body["primary_alias_name"] == "SONY INC"
+    assert body["brand_alias_name"] == "SONY INC"
     assert db.query(BrandRecord).filter_by(brand_code="SONY").one().brand_name == "索尼新名"
     assert db.query(BrandAlias).filter_by(brand_code="SONY").one().alias_name == "SONY INC"
 
@@ -395,8 +411,8 @@ def test_update_brand_alias_conflict_rolls_back_brand_name(client_and_db):
     client, db = client_and_db
     db.add(BrandRecord(brand_code="SONY", brand_name="索尼旧名"))
     db.add(BrandRecord(brand_code="BOSE", brand_name="博士"))
-    db.add(BrandAlias(alias_name="Sony", brand_code="SONY"))
-    db.add(BrandAlias(alias_name="BOSE", brand_code="BOSE"))
+    db.add(BrandAlias(alias_name="Sony", brand_code="SONY", created_by="brand_form"))
+    db.add(BrandAlias(alias_name="BOSE", brand_code="BOSE", created_by="brand_form"))
     db.commit()
 
     resp = client.patch("/api/brands/SONY", json={"brand_name": "索尼新名", "alias_name": "BOSE"})
@@ -406,7 +422,7 @@ def test_update_brand_alias_conflict_rolls_back_brand_name(client_and_db):
     assert db.query(BrandAlias).filter_by(brand_code="SONY").one().alias_name == "Sony"
 
 
-def test_update_brand_creates_primary_alias_when_missing(client_and_db):
+def test_update_brand_creates_brand_alias_when_missing(client_and_db):
     client, db = client_and_db
     db.add(BrandRecord(brand_code="SONY", brand_name="索尼旧名"))
     db.commit()
@@ -414,8 +430,27 @@ def test_update_brand_creates_primary_alias_when_missing(client_and_db):
     resp = client.patch("/api/brands/SONY", json={"brand_name": "索尼新名", "alias_name": "SONY INC"})
 
     assert resp.status_code == 200
-    assert resp.json()["primary_alias_name"] == "SONY INC"
-    assert db.query(BrandAlias).filter_by(brand_code="SONY").one().alias_name == "SONY INC"
+    assert resp.json()["brand_alias_name"] == "SONY INC"
+    alias = db.query(BrandAlias).filter_by(brand_code="SONY").one()
+    assert alias.alias_name == "SONY INC"
+    assert alias.created_by == "brand_form"
+
+
+def test_update_brand_creates_form_alias_without_changing_panel_aliases(client_and_db):
+    client, db = client_and_db
+    db.add(BrandRecord(brand_code="SONY", brand_name="索尼旧名"))
+    db.add(BrandAlias(alias_name="Sony Panel 1", brand_code="SONY"))
+    db.add(BrandAlias(alias_name="Sony Panel 2", brand_code="SONY"))
+    db.commit()
+
+    resp = client.patch("/api/brands/SONY", json={"brand_name": "索尼新名", "alias_name": "SONY INC"})
+
+    assert resp.status_code == 200
+    assert resp.json()["brand_alias_name"] == "SONY INC"
+    aliases = db.query(BrandAlias).filter_by(brand_code="SONY").order_by(BrandAlias.alias_name).all()
+    assert [alias.alias_name for alias in aliases] == ["SONY INC", "Sony Panel 1", "Sony Panel 2"]
+    assert next(alias for alias in aliases if alias.alias_name == "SONY INC").created_by == "brand_form"
+    assert all(alias.created_by is None for alias in aliases if alias.alias_name.startswith("Sony Panel"))
 
 
 def test_update_brand_alias(client_and_db):

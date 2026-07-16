@@ -197,7 +197,7 @@ export default function BrandsPage() {
     setEditingBrand(brand)
     editForm.setFieldsValue({
       brand_name: brand.brand_name || '',
-      alias_name: brand.primary_alias_name || '',
+      alias_name: brand.brand_alias_name || '',
     })
     setEditOpen(true)
   }

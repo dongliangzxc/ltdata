@@ -11,6 +11,8 @@ from app.models.schemas import BrandRecord, ModelRecord, BrandAlias, BrandIn, Br
 
 router = APIRouter(prefix="/api/brands", tags=["brands"])
 
+BRAND_FORM_ALIAS_SOURCE = "brand_form"
+
 
 class BrandAliasOut(BaseModel):
     id:         int
@@ -23,6 +25,7 @@ class BrandAliasOut(BaseModel):
 
 class BrandAliasCreate(BaseModel):
     alias_name: str
+    source: str | None = None
 
 
 class BrandAliasUpdate(BaseModel):
@@ -68,14 +71,19 @@ def _build_brand_outs(db: Session, brands: list[BrandRecord]) -> list[BrandOut]:
         .group_by(BrandAlias.brand_code)
         .all()
     )
-    primary_aliases: dict[str, BrandAlias] = {}
-    for alias in (
+    brand_aliases: dict[str, BrandAlias] = {}
+    all_aliases = (
         db.query(BrandAlias)
         .filter(BrandAlias.brand_code.isnot(None))
         .order_by(BrandAlias.brand_code, BrandAlias.created_at, BrandAlias.id)
         .all()
-    ):
-        primary_aliases.setdefault(alias.brand_code, alias)
+    )
+    for alias in all_aliases:
+        if alias.created_by == BRAND_FORM_ALIAS_SOURCE:
+            brand_aliases.setdefault(alias.brand_code, alias)
+    for alias in all_aliases:
+        if alias.brand_code not in brand_aliases and alias_counts.get(alias.brand_code) == 1:
+            brand_aliases[alias.brand_code] = alias
     model_brand_names: dict[str, str] = {}
     category_map: dict[str, set[str]] = {}
     for brand_code, brand_name, category_code in (
@@ -102,8 +110,8 @@ def _build_brand_outs(db: Session, brands: list[BrandRecord]) -> list[BrandOut]:
             category_codes=category_codes_by_brand.get(brand.brand_code, []),
             model_count=model_counts.get(brand.brand_code, 0),
             alias_count=alias_counts.get(brand.brand_code, 0),
-            primary_alias_id=primary_aliases.get(brand.brand_code).id if primary_aliases.get(brand.brand_code) else None,
-            primary_alias_name=primary_aliases.get(brand.brand_code).alias_name if primary_aliases.get(brand.brand_code) else None,
+            brand_alias_id=brand_aliases.get(brand.brand_code).id if brand_aliases.get(brand.brand_code) else None,
+            brand_alias_name=brand_aliases.get(brand.brand_code).alias_name if brand_aliases.get(brand.brand_code) else None,
         )
         for brand in brands
     ]
@@ -158,24 +166,42 @@ def update_brand(brand_code: str, payload: BrandUpdate, db: Session = Depends(ge
 
     cleaned_name = payload.brand_name.strip() if payload.brand_name is not None else None
     cleaned_alias_name = payload.alias_name.strip() if payload.alias_name is not None else None
-    primary_alias = (
+    brand_alias = (
         db.query(BrandAlias)
-        .filter(BrandAlias.brand_code == brand_code)
+        .filter(
+            BrandAlias.brand_code == brand_code,
+            BrandAlias.created_by == BRAND_FORM_ALIAS_SOURCE,
+        )
         .order_by(BrandAlias.created_at, BrandAlias.id)
         .first()
     )
-    if primary_alias and payload.alias_name is not None and not cleaned_alias_name:
+    if not brand_alias:
+        aliases = (
+            db.query(BrandAlias)
+            .filter(BrandAlias.brand_code == brand_code)
+            .order_by(BrandAlias.created_at, BrandAlias.id)
+            .all()
+        )
+        if len(aliases) == 1:
+            brand_alias = aliases[0]
+
+    if brand_alias and payload.alias_name is not None and not cleaned_alias_name:
         raise HTTPException(status_code=400, detail="别名不能为空")
     if cleaned_alias_name:
         existing = db.query(BrandAlias).filter(BrandAlias.alias_name == cleaned_alias_name).first()
-        if existing and (not primary_alias or existing.id != primary_alias.id):
+        if existing and (not brand_alias or existing.id != brand_alias.id):
             raise HTTPException(status_code=409, detail=f"别名 '{cleaned_alias_name}' 已存在")
 
     brand.brand_name = cleaned_name or None
-    if cleaned_alias_name and primary_alias:
-        primary_alias.alias_name = cleaned_alias_name
+    if cleaned_alias_name and brand_alias:
+        brand_alias.alias_name = cleaned_alias_name
+        brand_alias.created_by = BRAND_FORM_ALIAS_SOURCE
     elif cleaned_alias_name:
-        db.add(BrandAlias(alias_name=cleaned_alias_name, brand_code=brand_code))
+        db.add(BrandAlias(
+            alias_name=cleaned_alias_name,
+            brand_code=brand_code,
+            created_by=BRAND_FORM_ALIAS_SOURCE,
+        ))
     db.commit()
     db.refresh(brand)
     # 编辑响应必须精确反映 brands.brand_name（清空后为 None），
@@ -197,9 +223,13 @@ def list_brand_aliases(brand_code: str, db: Session = Depends(get_db)):
 
 @router.post("/{brand_code}/aliases", response_model=BrandAliasOut, status_code=201)
 def create_brand_alias(brand_code: str, payload: BrandAliasCreate, db: Session = Depends(get_db)):
-    if db.query(BrandAlias).filter(BrandAlias.alias_name == payload.alias_name).first():
-        raise HTTPException(status_code=409, detail=f"别名 '{payload.alias_name}' 已存在")
-    alias = BrandAlias(alias_name=payload.alias_name.strip(), brand_code=brand_code)
+    cleaned_alias_name = payload.alias_name.strip()
+    if not cleaned_alias_name:
+        raise HTTPException(status_code=400, detail="别名不能为空")
+    if db.query(BrandAlias).filter(BrandAlias.alias_name == cleaned_alias_name).first():
+        raise HTTPException(status_code=409, detail=f"别名 '{cleaned_alias_name}' 已存在")
+    source = BRAND_FORM_ALIAS_SOURCE if payload.source == BRAND_FORM_ALIAS_SOURCE else None
+    alias = BrandAlias(alias_name=cleaned_alias_name, brand_code=brand_code, created_by=source)
     db.add(alias)
     db.commit()
     db.refresh(alias)

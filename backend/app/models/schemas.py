@@ -518,6 +518,8 @@ class BrandOut(BaseModel):
     category_codes: list[str] = []
     model_count: int = 0
     alias_count: int = 0
+    primary_alias_id: Optional[int] = None
+    primary_alias_name: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

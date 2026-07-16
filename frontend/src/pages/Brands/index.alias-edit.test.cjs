@@ -14,9 +14,11 @@ const { code } = esbuild.transformSync(source, {
 
 assert.ok(code.length > 0)
 assert.match(source, /updateBrandAliasForCode/)
-assert.match(source, /修改品牌别名/)
+assert.match(source, /修改品牌名称/)
+assert.match(source, /品牌别名/)
+assert.match(source, /primary_alias_name/)
+assert.match(source, /alias_name: trimmedAliasName/)
 assert.match(source, /编辑/)
-assert.match(source, /alias_name/)
 assert.match(source, /添加别名/)
 assert.match(source, /删除/)
 

@@ -1106,6 +1106,7 @@ export type CreateBrandPayload = {
 
 export type UpdateBrandPayload = {
   brand_name?: string | null
+  alias_name?: string | null
 }
 
 export type BrandItem = {
@@ -1115,6 +1116,8 @@ export type BrandItem = {
   category_codes: string[]
   model_count: number
   alias_count: number
+  primary_alias_id: number | null
+  primary_alias_name: string | null
 }
 
 export type BrandAliasItem = {

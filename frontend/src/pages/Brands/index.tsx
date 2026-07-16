@@ -166,7 +166,7 @@ export default function BrandsPage() {
   const [editOpen, setEditOpen] = useState(false)
   const [editingBrand, setEditingBrand] = useState<BrandItem | null>(null)
   const [editSaving, setEditSaving] = useState(false)
-  const [editForm] = Form.useForm<{ brand_name: string }>()
+  const [editForm] = Form.useForm<{ brand_name: string; alias_name: string }>()
 
   const { data: brands, loading, refresh } = useRequest(
     () => listBrands().then(r => r.data),
@@ -195,7 +195,10 @@ export default function BrandsPage() {
 
   const openEdit = (brand: BrandItem) => {
     setEditingBrand(brand)
-    editForm.setFieldsValue({ brand_name: brand.brand_name || '' })
+    editForm.setFieldsValue({
+      brand_name: brand.brand_name || '',
+      alias_name: brand.primary_alias_name || '',
+    })
     setEditOpen(true)
   }
 
@@ -209,10 +212,14 @@ export default function BrandsPage() {
     if (!editingBrand) return
     const values = await editForm.validateFields()
     const trimmedName = values.brand_name?.trim() || ''
+    const trimmedAliasName = values.alias_name?.trim() || ''
     setEditSaving(true)
     try {
-      await updateBrand(editingBrand.brand_code, { brand_name: trimmedName || null })
-      message.success('品牌名称已更新')
+      await updateBrand(editingBrand.brand_code, {
+        brand_name: trimmedName || null,
+        alias_name: trimmedAliasName || null,
+      })
+      message.success('品牌信息已更新')
       closeEdit()
       refresh()
     } finally {
@@ -331,6 +338,9 @@ export default function BrandsPage() {
           </Form.Item>
           <Form.Item name="brand_name" label="修改后名称">
             <Input placeholder="留空则恢复默认显示" />
+          </Form.Item>
+          <Form.Item name="alias_name" label="品牌别名">
+            <Input placeholder="品牌创建时录入的别名" />
           </Form.Item>
         </Form>
       </Modal>

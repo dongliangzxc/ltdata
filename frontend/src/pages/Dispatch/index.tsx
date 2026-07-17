@@ -457,13 +457,23 @@ function DispatchExportTab() {
   const [platform, setPlatform] = useState<string | undefined>()
   const [months, setMonths] = useState<number[]>([])
   const [exporting, setExporting] = useState(false)
+  const [exportJobsPage, setExportJobsPage] = useState(1)
+  const [exportJobsPageSize, setExportJobsPageSize] = useState(50)
   const { options: categoryOptions } = useCategoryOptions()
   const { data: exportJobsData, loading: exportJobsLoading, refresh: refreshExportJobs } = useRequest(
-    () => listDispatchExportJobs({ page: 1, page_size: 50 }),
-    { pollingInterval: 10000 }
+    () => listDispatchExportJobs({ page: exportJobsPage, page_size: exportJobsPageSize }),
+    { pollingInterval: 10000, refreshDeps: [exportJobsPage, exportJobsPageSize] }
   )
   const exportJobs = exportJobsData?.data.items ?? []
   const exportJobsInitialLoading = exportJobsLoading && !exportJobsData
+
+  const refreshFirstExportJobsPage = () => {
+    if (exportJobsPage === 1) {
+      refreshExportJobs()
+    } else {
+      setExportJobsPage(1)
+    }
+  }
 
   const handleExport = async () => {
     if (!categoryCode && !platform && months.length === 0) {
@@ -474,7 +484,7 @@ function DispatchExportTab() {
     try {
       await createDispatchExportJob({ category_code: categoryCode, platform, months })
       message.success('导出任务已创建，可在列表查看进度')
-      refreshExportJobs()
+      refreshFirstExportJobsPage()
     } catch {
       // API interceptor already shows the backend error message.
     } finally {
@@ -486,7 +496,7 @@ function DispatchExportTab() {
     try {
       await deleteDispatchExportJob(jobId)
       message.success('已删除')
-      refreshExportJobs()
+      refreshFirstExportJobsPage()
     } catch {
       // API interceptor already shows the backend error message.
     }
@@ -632,7 +642,17 @@ function DispatchExportTab() {
           loading={exportJobsInitialLoading}
           columns={exportJobColumns}
           dataSource={exportJobs}
-          pagination={false}
+          pagination={{
+            current: exportJobsPage,
+            pageSize: exportJobsPageSize,
+            total: exportJobsData?.data.total ?? 0,
+            showSizeChanger: true,
+            showTotal: total => `共 ${total} 条`,
+            onChange: (page, pageSize) => {
+              setExportJobsPage(page)
+              setExportJobsPageSize(pageSize)
+            },
+          }}
           scroll={{ x: 1320 }}
           locale={{ emptyText: '暂无导出任务' }}
         />

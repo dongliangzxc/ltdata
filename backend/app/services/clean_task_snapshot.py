@@ -243,6 +243,7 @@ def get_monthly_clean_pool(
     category_code: str | None = None,
     platform: str | None = None,
     month: int | None = None,
+    limit: int | None = None,
 ) -> list[dict]:
     platform_label = _platform_label_expr()
     q = (
@@ -272,11 +273,13 @@ def get_monthly_clean_pool(
     if month is not None:
         q = q.filter(RawDataRecord.month == month)
 
-    grouped = (
+    grouped_query = (
         q.group_by(DispatchItem.category_code, Category.name, platform_label, RawDataRecord.month)
         .order_by(DispatchItem.category_code, platform_label, RawDataRecord.month)
-        .all()
     )
+    if limit is not None:
+        grouped_query = grouped_query.limit(limit)
+    grouped = grouped_query.all()
     jobs_by_scope = _monthly_jobs_by_scope(db, category_code=category_code, platform=platform)
 
     result = []

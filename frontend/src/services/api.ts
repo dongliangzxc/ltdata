@@ -244,6 +244,7 @@ export const getCleanMonthlyPool = (params?: {
   category_code?: string
   platform?: string
   month?: number
+  limit?: number
 }) => api.get<CleanMonthlyPoolItem[]>('/clean/pool/monthly', { params })
 
 export const upsertMonthlyCleanTask = (payload: UpsertMonthlyCleanTaskPayload) =>
@@ -257,6 +258,8 @@ export const listCleanJobs = (params?: {
   platform?: string
   month?: number
   view?: CleanJobListView
+  limit?: number
+  offset?: number
 }) => api.get<CleanJobItem[]>('/clean/jobs', { params })
 
 export const deleteCleanJob = (jobId: number) =>
@@ -548,6 +551,8 @@ export const listReviewedMatches = (clean_job_id: number, params?: Record<string
   api.get<PaginatedResponse<ReviewedMatchResultOut>>(`/match/${clean_job_id}/reviewed`, { params })
 export const updateMatchCoefficient = (match_id: number, coefficient: number | null) =>
   api.patch<ReviewedMatchResultOut>(`/match/${match_id}/coefficient`, { coefficient })
+export const updateMatchPrice = (match_id: number, adjusted_price: number | null) =>
+  api.patch<ReviewedMatchResultOut>(`/match/${match_id}/price`, { adjusted_price })
 export const confirmMatch = (
   match_id: number,
   data: { model_id?: number; excluded?: boolean; disputed?: boolean; reason?: string }
@@ -1067,6 +1072,8 @@ export interface MatchResultOut {
   brand_identified?: number
   price_flag?: PriceFlag | null
   price_ref?: number | null
+  price?: number | null
+  adjusted_price?: number | null
   sales_coefficient?: number | null
   dispute_reason?: string | null
   review_note?: string | null

@@ -231,13 +231,14 @@ export default function CleanPage() {
   const [batchUpserting, setBatchUpserting] = useState(false)
 
   const requestParams = useMemo(() => cleanParams(filters), [filters])
+  const monthlyPoolRequestParams = useMemo(() => ({ ...requestParams, limit: 50 }), [requestParams])
   const jobRequestParams = useMemo(() => ({ ...requestParams, view: jobView }), [requestParams, jobView])
 
   const {
     data: monthlyPoolData,
     loading: monthlyPoolLoading,
     refresh: refreshMonthlyPool,
-  } = useRequest(() => getCleanMonthlyPool(requestParams).then(r => r.data), { refreshDeps: [requestParams] })
+  } = useRequest(() => getCleanMonthlyPool(monthlyPoolRequestParams).then(r => r.data), { refreshDeps: [monthlyPoolRequestParams] })
 
   const { data: jobsData, loading: jobsLoading, refresh: refreshJobs } = useRequest(
     () => listCleanJobs(jobRequestParams).then(r => r.data as CleanJobItem[]),

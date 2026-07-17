@@ -44,7 +44,11 @@ from app.utils.time_utils import format_beijing_datetime
 router = APIRouter(prefix="/api/clean", tags=["clean"])
 
 
-def _build_clean_scope_desc(db: Session, job: CleanJobRecord) -> str:
+def _build_clean_scope_desc(
+    db: Session,
+    job: CleanJobRecord,
+    category_names: dict[str, str] | None = None,
+) -> str:
     files = []
     if job.file_ids:
         files = db.query(UploadFileRecord).filter(UploadFileRecord.id.in_(job.file_ids)).all()
@@ -60,8 +64,11 @@ def _build_clean_scope_desc(db: Session, job: CleanJobRecord) -> str:
             parts.append(job.task_name)
         category_code = job.category_code or job.dispatch_category_code
         if category_code:
-            category = db.query(Category).filter(Category.code == category_code).first()
-            category_label = f"{category.name}（{category.code}）" if category else category_code
+            category_name = category_names.get(category_code) if category_names else None
+            if category_name is None and category_names is None:
+                category = db.query(Category).filter(Category.code == category_code).first()
+                category_name = category.name if category else None
+            category_label = f"{category_name}（{category_code}）" if category_name else category_code
             parts.append(f"品类：{category_label}")
         if job.platform:
             parts.append(f"平台：{job.platform}")
@@ -69,8 +76,15 @@ def _build_clean_scope_desc(db: Session, job: CleanJobRecord) -> str:
         if job.dispatch_batch_id:
             parts.append(f"分发批次#{job.dispatch_batch_id}")
         if job.dispatch_category_code:
-            category = db.query(Category).filter(Category.code == job.dispatch_category_code).first()
-            category_label = f"{category.name}（{category.code}）" if category else job.dispatch_category_code
+            category_name = category_names.get(job.dispatch_category_code) if category_names else None
+            if category_name is None and category_names is None:
+                category = db.query(Category).filter(Category.code == job.dispatch_category_code).first()
+                category_name = category.name if category else None
+            category_label = (
+                f"{category_name}（{job.dispatch_category_code}）"
+                if category_name
+                else job.dispatch_category_code
+            )
             parts.append(f"品类：{category_label}")
         if platforms:
             parts.append(f"平台：{'、'.join(platforms)}")
@@ -108,7 +122,12 @@ def _job_month(job: CleanJobRecord) -> int | None:
         return None
 
 
-def _clean_job_to_dict(db: Session, job: CleanJobRecord, match_counts: dict[str, int] | None = None) -> dict:
+def _clean_job_to_dict(
+    db: Session,
+    job: CleanJobRecord,
+    match_counts: dict[str, int] | None = None,
+    category_names: dict[str, str] | None = None,
+) -> dict:
     counts = match_counts if match_counts is not None else _match_status_counts(db, job.id)
     pending_count = counts.get("pending", 0) + counts.get("text_only", 0)
     disputed_count = counts.get("disputed", 0)
@@ -138,7 +157,7 @@ def _clean_job_to_dict(db: Session, job: CleanJobRecord, match_counts: dict[str,
         "confirmed_count": confirmed_count,
         "publishable_count": publishable_count,
         "created_at": format_beijing_datetime(job.created_at),
-        "scope_desc": _build_clean_scope_desc(db, job),
+        "scope_desc": _build_clean_scope_desc(db, job, category_names),
     }
 
 
@@ -357,6 +376,7 @@ def get_monthly_clean_pool_endpoint(
     category_code: Optional[str] = Query(None),
     platform: Optional[str] = Query(None),
     month: Optional[int] = Query(None),
+    limit: int = Query(50, ge=1, le=500),
     db: Session = Depends(get_db),
 ):
     return get_monthly_clean_pool(
@@ -364,6 +384,7 @@ def get_monthly_clean_pool_endpoint(
         category_code=category_code,
         platform=platform,
         month=month,
+        limit=limit,
     )
 
 
@@ -603,6 +624,8 @@ def list_clean_jobs(
     platform: Optional[str] = Query(None),
     month: Optional[int] = Query(None),
     view: str = Query("active", pattern="^(active|archived|all)$"),
+    limit: Optional[int] = Query(None, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
     q = db.query(CleanJobRecord)
@@ -614,9 +637,30 @@ def list_clean_jobs(
         q = q.filter(CleanJobRecord.category_code == category_code)
     if platform:
         q = q.filter(func.lower(CleanJobRecord.platform) == platform.lower())
-    jobs = q.order_by(CleanJobRecord.created_at.desc()).all()
-    if month is not None:
-        jobs = [job for job in jobs if _job_month(job) == month]
+    q = q.order_by(CleanJobRecord.created_at.desc())
+    if month is None:
+        if offset:
+            q = q.offset(offset)
+        if limit is not None:
+            q = q.limit(limit)
+        jobs = q.all()
+    else:
+        jobs = [job for job in q.all() if _job_month(job) == month]
+        if offset:
+            jobs = jobs[offset:]
+        if limit is not None:
+            jobs = jobs[:limit]
+
+    category_codes = {
+        code
+        for job in jobs
+        for code in (job.category_code, job.dispatch_category_code)
+        if code
+    }
+    category_names = {
+        category.code: category.name
+        for category in db.query(Category).filter(Category.code.in_(category_codes)).all()
+    } if category_codes else {}
 
     job_ids = [job.id for job in jobs]
     counts_by_job: dict[int, dict[str, int]] = {job_id: {} for job_id in job_ids}
@@ -630,7 +674,10 @@ def list_clean_jobs(
         for job_id, status, count in rows:
             counts_by_job.setdefault(job_id, {})[status] = count
 
-    return [_clean_job_to_dict(db, job, counts_by_job.get(job.id, {})) for job in jobs]
+    return [
+        _clean_job_to_dict(db, job, counts_by_job.get(job.id, {}), category_names)
+        for job in jobs
+    ]
 
 
 @router.delete("/jobs/{job_id}")

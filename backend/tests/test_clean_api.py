@@ -1,6 +1,8 @@
 from datetime import datetime
 
 import pytest
+from sqlalchemy import event
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -164,6 +166,69 @@ def test_list_clean_jobs_uses_legacy_scope_when_category_code_without_snapshot_m
         f"分发批次#{batch.id} / 品类：路由器（router） / 平台：jd / "
         "月份：202605 / 文件：jd-router-202605.xlsx"
     )
+
+
+def test_list_clean_jobs_batches_category_lookup_for_same_category(db):
+    client = _make_client(db)
+    category = Category(code="soundbar", name="回音壁")
+    db.add(category)
+    db.flush()
+    db.add_all([
+        CleanJobRecord(
+            file_ids=[],
+            rules={"dedup": True},
+            status="done",
+            task_name=f"回音壁 / jd / {index}",
+            category_code="soundbar",
+            platform="jd",
+            source_scope={"months": [202605]},
+        )
+        for index in range(3)
+    ])
+    db.commit()
+
+    category_selects = 0
+
+    def count_category_selects(conn, cursor, statement, parameters, context, executemany):
+        nonlocal category_selects
+        normalized = " ".join(statement.lower().split())
+        if normalized.startswith("select") and " from categories " in normalized:
+            category_selects += 1
+
+    event.listen(db.bind, "before_cursor_execute", count_category_selects)
+    try:
+        response = client.get("/api/clean/jobs")
+    finally:
+        event.remove(db.bind, "before_cursor_execute", count_category_selects)
+
+    assert response.status_code == 200
+    assert len(response.json()) == 3
+    assert category_selects == 1
+
+
+def test_list_clean_jobs_applies_limit_before_serializing_jobs(db):
+    client = _make_client(db)
+    db.add_all([
+        CleanJobRecord(
+            file_ids=[],
+            rules={"dedup": True},
+            status="done",
+            task_name=f"任务{index}",
+            category_code="soundbar",
+            platform="jd",
+            source_scope={"months": [202605]},
+            created_at=datetime(2026, 1, index + 1),
+        )
+        for index in range(3)
+    ])
+    db.commit()
+
+    response = client.get("/api/clean/jobs", params={"limit": 2})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 2
+    assert [item["task_name"] for item in payload] == ["任务2", "任务1"]
 
 
 def test_list_clean_jobs_returns_match_summary_counts(db):
@@ -340,6 +405,42 @@ def test_get_clean_pool_summary_endpoint_returns_pending_counts(db):
         "pending_count": 1,
         "active_job_count": 0,
     }]
+
+
+def test_get_monthly_clean_pool_applies_limit_before_returning_all_groups(db):
+    client = _make_client(db)
+    categories = [Category(code=f"cat{index}", name=f"品类{index}") for index in range(3)]
+    upload = UploadFileRecord(filename="monthly-limit.xlsx", platform="jd", row_count=3, status="done")
+    db.add_all([*categories, upload])
+    db.flush()
+
+    rows = [
+        RawDataRecord(
+            file_id=upload.id,
+            platform="jd",
+            month=202605 + index,
+            item_id=f"item-{index}",
+            item_name=f"商品{index}",
+        )
+        for index in range(3)
+    ]
+    db.add_all(rows)
+    db.flush()
+    batch = DispatchBatch(file_id=upload.id, status="done", total_rows=3, dispatched_rows=3, unmatched_rows=0)
+    db.add(batch)
+    db.flush()
+    db.add_all([
+        DispatchItem(batch_id=batch.id, raw_data_id=row.id, category_code=category.code)
+        for row, category in zip(rows, categories)
+    ])
+    db.commit()
+
+    response = client.get("/api/clean/pool/monthly", params={"limit": 2})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 2
+    assert [item["category_code"] for item in payload] == ["cat0", "cat1"]
 
 
 def test_get_monthly_clean_pool_groups_pending_by_category_platform_month(db):

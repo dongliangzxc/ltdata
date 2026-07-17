@@ -4,13 +4,13 @@ import {
 } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
-import { listCleanJobs, updateMatchCoefficient, type CleanJobItem, type ReviewedMatchResultOut,
+import { listCleanJobs, updateMatchCoefficient, updateMatchPrice, type CleanJobItem, type ReviewedMatchResultOut,
          type MatchResultsTab } from '../../services/api'
 import { buildMatchResultsColumns } from './columns'
 import { useMatchResultsQuery } from './useMatchResultsQuery'
 import ReselectModal from '../Match/components/ReselectModal'
 
-const { Text } = Typography
+const { Title, Text } = Typography
 
 const MATCH_SOURCE_OPTIONS = [
   { value: 's0',         label: 'URL映射命中' },
@@ -39,6 +39,9 @@ export default function MatchResultsPage() {
   const [coefficientDrafts, setCoefficientDrafts] = useState<Record<number, number | null>>({})
   const [editedCoefficientIds, setEditedCoefficientIds] = useState<Set<number>>(new Set())
   const [savingCoefficientIds, setSavingCoefficientIds] = useState<Set<number>>(new Set())
+  const [priceDrafts, setPriceDrafts] = useState<Record<number, number | null>>({})
+  const [editedPriceIds, setEditedPriceIds] = useState<Set<number>>(new Set())
+  const [savingPriceIds, setSavingPriceIds] = useState<Set<number>>(new Set())
 
   useEffect(() => {
     setKeywordInput(state.keyword ?? '')
@@ -49,6 +52,13 @@ export default function MatchResultsPage() {
       const next = { ...prev }
       for (const item of data?.items ?? []) {
         if (!(item.id in next)) next[item.id] = item.sales_coefficient ?? null
+      }
+      return next
+    })
+    setPriceDrafts(prev => {
+      const next = { ...prev }
+      for (const item of data?.items ?? []) {
+        if (!(item.id in next)) next[item.id] = item.adjusted_price ?? item.price ?? null
       }
       return next
     })
@@ -76,6 +86,28 @@ export default function MatchResultsPage() {
     }
   }
 
+  const handlePriceChange = (matchId: number, value: number | null) => {
+    setPriceDrafts(prev => ({ ...prev, [matchId]: value }))
+    setEditedPriceIds(prev => new Set(prev).add(matchId))
+  }
+
+  const handleSavePrice = async (matchId: number) => {
+    const adjustedPrice = priceDrafts[matchId] ?? null
+    setSavingPriceIds(prev => new Set(prev).add(matchId))
+    try {
+      const res = await updateMatchPrice(matchId, adjustedPrice)
+      setPriceDrafts(prev => ({ ...prev, [matchId]: res.data.adjusted_price ?? res.data.price ?? null }))
+      setEditedPriceIds(prev => { const next = new Set(prev); next.delete(matchId); return next })
+      message.success(adjustedPrice == null ? '已清除现价格' : '已保存现价格')
+      refresh()
+    } catch (error) {
+      console.error(error)
+      message.error('保存现价格失败')
+    } finally {
+      setSavingPriceIds(prev => { const next = new Set(prev); next.delete(matchId); return next })
+    }
+  }
+
   const { data: jobsData } = useRequest(() => listCleanJobs().then(r => r.data))
   const jobOptions = useMemo(
     () => (jobsData ?? []).map((j: CleanJobItem) => ({
@@ -90,14 +122,22 @@ export default function MatchResultsPage() {
       coefficientDrafts,
       editedCoefficientIds,
       savingCoefficientIds,
+      priceDrafts,
+      editedPriceIds,
+      savingPriceIds,
       onCoefficientChange: handleCoefficientChange,
       onSaveCoefficient: handleSaveCoefficient,
+      onPriceChange: handlePriceChange,
+      onSavePrice: handleSavePrice,
       onReselect: (row: ReviewedMatchResultOut) => {
         setReselectMatchId(row.id)
         setReselectOpen(true)
       },
     }),
-    [coefficientDrafts, editedCoefficientIds, savingCoefficientIds],
+    [
+      coefficientDrafts, editedCoefficientIds, savingCoefficientIds,
+      priceDrafts, editedPriceIds, savingPriceIds,
+    ],
   )
 
   const counts = data?.counts ?? { all: 0, pending_review: 0, confirmed: 0 }
@@ -112,6 +152,7 @@ export default function MatchResultsPage() {
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+      <Title level={3} style={{ margin: 0 }}>数据调整</Title>
       <Card>
         <Row gutter={[12, 12]} align="middle">
           <Col>

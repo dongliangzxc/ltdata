@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { Key } from 'react'
 import {
-  Card, Button, Table, Tag, Row, Col,
+  Card, Button, Table, Tag, Modal, Row, Col,
   Space, Statistic, Select, message, Tabs, Popconfirm
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
@@ -12,12 +12,33 @@ import {
   deleteCleanJob,
   getCleanMonthlyPool,
   listCleanJobs,
+  previewCleanJob,
   upsertMonthlyCleanTask,
 } from '../../services/api'
 import type { CleanJobItem, CleanMonthlyPoolItem, CleanJobListView } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 
 type CleanJobStatus = 'created' | 'cleaning' | 'matching' | 'processing' | 'reviewing' | 'published' | 'failed' | 'done' | 'error' | 'archived'
+
+type CleanPreviewRow = {
+  id?: number
+  platform?: string | null
+  month?: string | number | null
+  brand_std?: string | null
+  brand?: string | null
+  item_name?: string | null
+  sales_qty?: number | null
+  sales_amount?: number | null
+}
+
+type CleanPreviewResponse = {
+  total: number
+  items: CleanPreviewRow[]
+}
+
+type TaggedCleanPreviewResponse = CleanPreviewResponse & {
+  jobId: number
+}
 
 type FilterState = {
   category_code?: string
@@ -221,11 +242,40 @@ const monthlyQueueColumns = (
   },
 ]
 
+const previewCols: ColumnsType<CleanPreviewRow> = [
+  {
+    title: '平台', dataIndex: 'platform', width: 90,
+    render: formatText,
+  },
+  {
+    title: '月份', dataIndex: 'month', width: 90,
+    render: formatText,
+  },
+  {
+    title: '品牌', dataIndex: 'brand_std', width: 110,
+    render: (_: string | null | undefined, row) => row.brand_std || row.brand || '-',
+  },
+  {
+    title: '宝贝名称', dataIndex: 'item_name', ellipsis: true,
+    render: formatText,
+  },
+  {
+    title: '销量', dataIndex: 'sales_qty', width: 80,
+    render: formatNumber,
+  },
+  {
+    title: '销售额', dataIndex: 'sales_amount', width: 110,
+    render: (v: number | null | undefined) => v != null ? `¥${Number(v).toLocaleString()}` : '-',
+  },
+]
+
 export default function CleanPage() {
   const navigate = useNavigate()
   const { options: categoryOptions, loading: categoryLoading } = useCategoryOptions()
   const [filters, setFilters] = useState<FilterState>({})
   const [jobView, setJobView] = useState<CleanJobListView>('active')
+  const [previewJobId, setPreviewJobId] = useState<number | null>(null)
+  const [previewPage, setPreviewPage] = useState(1)
   const [upsertingRowKey, setUpsertingRowKey] = useState<string | null>(null)
   const [selectedMonthlyRowKeys, setSelectedMonthlyRowKeys] = useState<Key[]>([])
   const [batchUpserting, setBatchUpserting] = useState(false)
@@ -350,6 +400,16 @@ export default function CleanPage() {
     }),
   }
 
+  const { data: previewData, loading: previewLoading } = useRequest(
+    async () => {
+      const jobId = previewJobId!
+      const response = await previewCleanJob(jobId, { page: previewPage, page_size: 20 })
+      return { ...(response.data as CleanPreviewResponse), jobId }
+    },
+    { ready: previewJobId != null, refreshDeps: [previewJobId, previewPage] }
+  )
+  const currentPreviewData: TaggedCleanPreviewResponse | undefined = previewData?.jobId === previewJobId ? previewData : undefined
+
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <Card title="待入清洗队列">
@@ -431,7 +491,7 @@ export default function CleanPage() {
         <Table
           dataSource={jobs}
           columns={jobColumns(
-            id => navigate(`/data-adjustment?clean_job_id=${id}`),
+            id => { setPreviewJobId(id); setPreviewPage(1) },
             id => navigate(`/match?job_id=${id}`),
             handleDeleteJob,
             jobView,
@@ -443,6 +503,31 @@ export default function CleanPage() {
           pagination={{ pageSize: 10 }}
         />
       </Card>
+
+      <Modal
+        title={`清洗结果预览（任务 #${previewJobId}）`}
+        open={previewJobId != null}
+        onCancel={() => setPreviewJobId(null)}
+        footer={null}
+        width={1000}
+      >
+        <Table
+          dataSource={currentPreviewData?.items ?? []}
+          columns={previewCols}
+          rowKey={(row, index) => String(row.id ?? index)}
+          size="small"
+          loading={previewLoading}
+          scroll={{ x: 800 }}
+          pagination={{
+            current: previewPage,
+            pageSize: 20,
+            total: currentPreviewData?.total ?? 0,
+            onChange: setPreviewPage,
+            showSizeChanger: false,
+            showTotal: t => `共 ${t} 条`,
+          }}
+        />
+      </Modal>
     </Space>
   )
 }

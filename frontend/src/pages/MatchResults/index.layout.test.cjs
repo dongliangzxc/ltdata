@@ -28,8 +28,8 @@ const columnsReturnIndex = cols.indexOf('return [')
 assert.notEqual(columnsReturnIndex, -1, 'columns should return table column definitions')
 const columnDefinition = cols.slice(columnsReturnIndex)
 const sharedColumnLabels = [
-  '宝贝名称', '品牌', '匹配型号', '价格预警', '参考均价', '原销量',
-  '修正销量', '调整系数', '调整后销量', '状态', '来源', '重新选择',
+  '商品名称', '入库品牌', '匹配型号', '价格预警', '原价格', '现价格',
+  '原销量', '调整系数', '调整后销量', '重新选择', 'URL',
 ]
 let previousIndex = -1
 for (const label of sharedColumnLabels) {
@@ -38,8 +38,12 @@ for (const label of sharedColumnLabels) {
   assert.ok(currentIndex > previousIndex, `${label} should appear after previous shared column`)
   previousIndex = currentIndex
 }
-assert.notEqual(cols.indexOf('renderMatchStatus'), -1, 'columns should render Chinese match status labels')
-assert.notEqual(cols.indexOf('renderMatchSource'), -1, 'columns should render match source labels')
+for (const removedLabel of ['宝贝名称', '参考均价', '修正销量']) {
+  assert.equal(columnDefinition.indexOf(removedLabel), -1, `columns should not include old label ${removedLabel}`)
+}
+assert.notEqual(cols.indexOf('onPriceChange'), -1, 'columns should expose an editable current price input')
+assert.notEqual(cols.indexOf('onSavePrice'), -1, 'columns should save current price edits')
+assert.notEqual(cols.indexOf('adjusted_price'), -1, 'columns should bind current price to adjusted_price')
 // URL query 双向同步 key
 assert.notEqual(hook.indexOf("params.get('tab')"), -1)
 assert.notEqual(hook.indexOf("params.getAll('match_source')"), -1)
@@ -48,3 +52,12 @@ assert.notEqual(hook.indexOf("params.get('job_id')"), -1)
 assert.notEqual(hook.indexOf('nonPageChanged'), -1, 'non-page changes should reset page')
 
 console.log('MatchResults layout tests passed')
+
+const app = fs.readFileSync(path.resolve(dir, '../../App.tsx'), 'utf8')
+const layout = fs.readFileSync(path.resolve(dir, '../../components/Layout/index.tsx'), 'utf8')
+
+assert.match(app, /path="\/data-adjustment"[^\n]*<MatchResultsPage/, 'data adjustment route should render MatchResultsPage')
+assert.match(app, /path="\/match-results"[^\n]*<MatchResultsPage/, 'legacy match-results route should keep rendering MatchResultsPage')
+assert.match(layout, /key: '\/data-adjustment'[^\n]*label: '数据调整'/, 'sidebar should expose 数据调整')
+assert.equal(layout.includes("key: '/match-results'"), false, 'sidebar should not expose 匹配结果 as a separate menu item')
+assert.match(idx, /数据调整/, 'match results page should render 数据调整 title')

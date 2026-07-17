@@ -602,9 +602,14 @@ def list_clean_jobs(
     category_code: Optional[str] = Query(None),
     platform: Optional[str] = Query(None),
     month: Optional[int] = Query(None),
+    view: str = Query("active", pattern="^(active|archived|all)$"),
     db: Session = Depends(get_db),
 ):
     q = db.query(CleanJobRecord)
+    if view == "active":
+        q = q.filter(CleanJobRecord.status != "archived")
+    elif view == "archived":
+        q = q.filter(CleanJobRecord.status == "archived")
     if category_code:
         q = q.filter(CleanJobRecord.category_code == category_code)
     if platform:
@@ -626,6 +631,17 @@ def list_clean_jobs(
             counts_by_job.setdefault(job_id, {})[status] = count
 
     return [_clean_job_to_dict(db, job, counts_by_job.get(job.id, {})) for job in jobs]
+
+
+@router.delete("/jobs/{job_id}")
+def delete_clean_job(job_id: int, db: Session = Depends(get_db)):
+    job = db.get(CleanJobRecord, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="清洗任务不存在")
+    job.status = "archived"
+    db.commit()
+    db.refresh(job)
+    return _clean_job_to_dict(db, job)
 
 
 @router.get("/jobs/{job_id}/preview")

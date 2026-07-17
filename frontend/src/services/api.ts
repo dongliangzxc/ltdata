@@ -163,6 +163,8 @@ export interface CleanJobItem {
   created_at: string
 }
 
+export type CleanJobListView = 'active' | 'archived' | 'all'
+
 export interface CleanPoolCategoryItem {
   category_code: string
   category_name: string | null
@@ -254,7 +256,11 @@ export const listCleanJobs = (params?: {
   category_code?: string
   platform?: string
   month?: number
+  view?: CleanJobListView
 }) => api.get<CleanJobItem[]>('/clean/jobs', { params })
+
+export const deleteCleanJob = (jobId: number) =>
+  api.delete<CleanJobItem>(`/clean/jobs/${jobId}`)
 
 export const previewCleanJob = (jobId: number, params?: Record<string, unknown>) =>
   api.get(`/clean/jobs/${jobId}/preview`, { params })

@@ -246,6 +246,72 @@ def test_list_clean_jobs_returns_no_month_for_malformed_source_scope(db, source_
     assert jobs_by_id[job.id]["month"] is None
 
 
+def test_list_clean_jobs_filters_active_and_archived_views(db):
+    client = _make_client(db)
+    active_job = CleanJobRecord(
+        file_ids=[],
+        rules={"dedup": True},
+        status="done",
+        task_name="活跃任务",
+        category_code="camera",
+        platform="jd",
+        source_scope={"months": [202605]},
+    )
+    archived_job = CleanJobRecord(
+        file_ids=[],
+        rules={"dedup": True},
+        status="archived",
+        task_name="已删除任务",
+        category_code="camera",
+        platform="jd",
+        source_scope={"months": [202605]},
+    )
+    db.add_all([active_job, archived_job])
+    db.commit()
+
+    active_response = client.get("/api/clean/jobs")
+    assert active_response.status_code == 200
+    assert [item["id"] for item in active_response.json()] == [active_job.id]
+
+    archived_response = client.get("/api/clean/jobs", params={"view": "archived"})
+    assert archived_response.status_code == 200
+    archived_payload = archived_response.json()
+    assert [item["id"] for item in archived_payload] == [archived_job.id]
+    assert archived_payload[0]["status"] == "archived"
+
+    all_response = client.get("/api/clean/jobs", params={"view": "all"})
+    assert all_response.status_code == 200
+    assert {item["id"] for item in all_response.json()} == {active_job.id, archived_job.id}
+
+
+def test_delete_clean_job_archives_task_and_hides_from_default_list(db):
+    client = _make_client(db)
+    job = CleanJobRecord(
+        file_ids=[],
+        rules={"dedup": True},
+        status="done",
+        task_name="待删除任务",
+        category_code="camera",
+        platform="jd",
+        source_scope={"months": [202605]},
+    )
+    db.add(job)
+    db.commit()
+
+    response = client.delete(f"/api/clean/jobs/{job.id}")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "archived"
+    db.refresh(job)
+    assert job.status == "archived"
+
+    active_response = client.get("/api/clean/jobs")
+    assert [item["id"] for item in active_response.json()] == []
+
+    archived_response = client.get("/api/clean/jobs", params={"view": "archived"})
+    assert [item["id"] for item in archived_response.json()] == [job.id]
+
+
 def test_get_clean_pool_summary_endpoint_returns_pending_counts(db):
     client = _make_client(db)
     category = Category(code="router", name="路由器")

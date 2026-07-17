@@ -2,19 +2,23 @@ import { useMemo, useState } from 'react'
 import type { Key } from 'react'
 import {
   Card, Button, Table, Tag, Modal, Row, Col,
-  Space, Statistic, Select, message
+  Space, Statistic, Select, message, Tabs, Popconfirm
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { EyeOutlined, AimOutlined, CheckCircleFilled } from '@ant-design/icons'
+import { EyeOutlined, AimOutlined, CheckCircleFilled, DeleteOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import { useNavigate } from 'react-router-dom'
 import {
-  getCleanMonthlyPool, listCleanJobs, previewCleanJob, upsertMonthlyCleanTask,
+  deleteCleanJob,
+  getCleanMonthlyPool,
+  listCleanJobs,
+  previewCleanJob,
+  upsertMonthlyCleanTask,
 } from '../../services/api'
-import type { CleanJobItem, CleanMonthlyPoolItem } from '../../services/api'
+import type { CleanJobItem, CleanMonthlyPoolItem, CleanJobListView } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 
-type CleanJobStatus = 'created' | 'cleaning' | 'matching' | 'processing' | 'reviewing' | 'published' | 'failed' | 'done' | 'error'
+type CleanJobStatus = 'created' | 'cleaning' | 'matching' | 'processing' | 'reviewing' | 'published' | 'failed' | 'done' | 'error' | 'archived'
 
 type CleanPreviewRow = {
   id?: number
@@ -67,6 +71,7 @@ const statusMap: Record<CleanJobStatus, { label: string; color: string }> = {
   failed: { label: '失败', color: 'red' },
   done: { label: '待处理', color: 'orange' },
   error: { label: '失败', color: 'red' },
+  archived: { label: '已删除', color: 'default' },
 }
 
 const formatNumber = (value?: number | null) => value ?? 0
@@ -98,7 +103,12 @@ const renderStatus = (status: string) => {
   return <Tag color={statusInfo.color}>{statusInfo.label}</Tag>
 }
 
-const jobColumns = (onPreview: (id: number) => void, onEnter: (id: number) => void): ColumnsType<CleanJobItem> => [
+const jobColumns = (
+  onPreview: (id: number) => void,
+  onEnter: (id: number) => void,
+  onDelete: (id: number) => void,
+  view: CleanJobListView,
+): ColumnsType<CleanJobItem> => [
   {
     title: '任务名称', dataIndex: 'task_name', width: 180,
     render: (_: string | null | undefined, row) => row.task_name || row.scope_desc || `任务 #${row.id}`,
@@ -146,11 +156,23 @@ const jobColumns = (onPreview: (id: number) => void, onEnter: (id: number) => vo
     render: formatText,
   },
   {
-    title: '操作', width: 160, fixed: 'right',
+    title: '操作', width: 220, fixed: 'right',
     render: (_: unknown, row) => (
       <Space size={4}>
-        <Button type="link" icon={<AimOutlined />} size="small" onClick={() => onEnter(row.id)}>进入处理</Button>
+        {view === 'active' && (
+          <Button type="link" icon={<AimOutlined />} size="small" onClick={() => onEnter(row.id)}>进入处理</Button>
+        )}
         <Button type="link" icon={<EyeOutlined />} size="small" onClick={() => onPreview(row.id)}>预览</Button>
+        {view === 'active' && (
+          <Popconfirm
+            title="确认删除该清洗任务？"
+            okText="删除"
+            cancelText="取消"
+            onConfirm={() => onDelete(row.id)}
+          >
+            <Button type="link" danger icon={<DeleteOutlined />} size="small">删除</Button>
+          </Popconfirm>
+        )}
       </Space>
     ),
   },
@@ -251,6 +273,7 @@ export default function CleanPage() {
   const navigate = useNavigate()
   const { options: categoryOptions, loading: categoryLoading } = useCategoryOptions()
   const [filters, setFilters] = useState<FilterState>({})
+  const [jobView, setJobView] = useState<CleanJobListView>('active')
   const [previewJobId, setPreviewJobId] = useState<number | null>(null)
   const [previewPage, setPreviewPage] = useState(1)
   const [upsertingRowKey, setUpsertingRowKey] = useState<string | null>(null)
@@ -258,6 +281,7 @@ export default function CleanPage() {
   const [batchUpserting, setBatchUpserting] = useState(false)
 
   const requestParams = useMemo(() => cleanParams(filters), [filters])
+  const jobRequestParams = useMemo(() => ({ ...requestParams, view: jobView }), [requestParams, jobView])
 
   const {
     data: monthlyPoolData,
@@ -266,8 +290,8 @@ export default function CleanPage() {
   } = useRequest(() => getCleanMonthlyPool(requestParams).then(r => r.data), { refreshDeps: [requestParams] })
 
   const { data: jobsData, loading: jobsLoading, refresh: refreshJobs } = useRequest(
-    () => listCleanJobs(requestParams).then(r => r.data as CleanJobItem[]),
-    { refreshDeps: [requestParams] }
+    () => listCleanJobs(jobRequestParams).then(r => r.data as CleanJobItem[]),
+    { refreshDeps: [jobRequestParams] }
   )
 
   const jobs = jobsData ?? []
@@ -307,6 +331,16 @@ export default function CleanPage() {
       } finally {
         setUpsertingRowKey(null)
       }
+    },
+    { manual: true }
+  )
+
+  const { run: handleDeleteJob } = useRequest(
+    async (jobId: number) => {
+      await deleteCleanJob(jobId)
+      message.success('清洗任务已删除')
+      refreshMonthlyPool()
+      refreshJobs()
     },
     { manual: true }
   )
@@ -445,11 +479,21 @@ export default function CleanPage() {
           <Col span={6}><Statistic title="可发布记录" value={summary.publishableRecords} valueStyle={{ color: '#3f8600' }} /></Col>
           <Col span={6}><Statistic title="任务总数" value={summary.totalTasks} /></Col>
         </Row>
+        <Tabs
+          activeKey={jobView}
+          onChange={key => setJobView(key as CleanJobListView)}
+          items={[
+            { key: 'active', label: '清洗任务' },
+            { key: 'archived', label: '已删除' },
+          ]}
+        />
         <Table
           dataSource={jobs}
           columns={jobColumns(
             id => { setPreviewJobId(id); setPreviewPage(1) },
-            id => navigate(`/match?job_id=${id}`)
+            id => navigate(`/match?job_id=${id}`),
+            handleDeleteJob,
+            jobView,
           )}
           rowKey="id"
           size="small"

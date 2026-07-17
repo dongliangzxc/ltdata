@@ -22,6 +22,7 @@ import {
   ToolOutlined,
   ContainerOutlined,
   CheckSquareOutlined,
+  PartitionOutlined,
   TeamOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
@@ -63,9 +64,10 @@ const menuItems: AppMenuItem[] = [
       { key: '/models',       icon: <AppstoreAddOutlined />, label: '产品属性管理' },
       { key: '/brands',       icon: <ShopOutlined />,        label: '品牌管理' },
       { key: '/url-mappings', icon: <LinkOutlined />,        label: '映射管理' },
-      { key: '/historical',   icon: <HistoryOutlined />,     label: '历史库' },
-      { key: '/clean',         icon: <ClearOutlined />,       label: '清洗任务' },
-      { key: '/match-results', icon: <CheckSquareOutlined />, label: '匹配结果' },
+      { key: '/historical',       icon: <HistoryOutlined />,     label: '历史库' },
+      { key: '/clean',            icon: <ClearOutlined />,       label: '清洗任务' },
+      { key: '/data-adjustment',  icon: <PartitionOutlined />,   label: '数据调整' },
+      { key: '/match-results',    icon: <CheckSquareOutlined />, label: '匹配结果' },
       { key: '/rules',         icon: <FilterOutlined />,      label: '规则管理' },
     ],
   },

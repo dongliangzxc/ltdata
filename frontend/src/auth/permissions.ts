@@ -19,6 +19,7 @@ const PATH_PERMISSION_PREFIXES: Array<[string, PermissionKey]> = [
   ['/url-mappings', 'processing_workbench'],
   ['/historical', 'processing_workbench'],
   ['/clean', 'processing_workbench'],
+  ['/data-adjustment', 'processing_workbench'],
   ['/rules', 'processing_workbench'],
   ['/match', 'processing_workbench'],
   ['/match-results', 'processing_workbench'],

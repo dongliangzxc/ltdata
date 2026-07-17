@@ -16,11 +16,13 @@ import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 function AliasPanel({
   brandCode,
   onAliasChange,
-  refreshKey,
+  refreshKey = 0,
+  embedded = false,
 }: {
   brandCode: string
   onAliasChange: () => void
-  refreshKey: number
+  refreshKey?: number
+  embedded?: boolean
 }) {
   const [addOpen, setAddOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
@@ -117,7 +119,7 @@ function AliasPanel({
   ]
 
   return (
-    <div style={{ padding: '8px 0 8px 48px' }}>
+    <div style={embedded ? undefined : { padding: '8px 0 8px 48px' }}>
       <Space style={{ marginBottom: 8 }}>
         <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => setAddOpen(true)}>
           添加别名
@@ -177,8 +179,7 @@ export default function BrandsPage() {
   const [editOpen, setEditOpen] = useState(false)
   const [editingBrand, setEditingBrand] = useState<BrandItem | null>(null)
   const [editSaving, setEditSaving] = useState(false)
-  const [aliasRefreshKey, setAliasRefreshKey] = useState(0)
-  const [editForm] = Form.useForm<{ brand_name: string; alias_name: string }>()
+  const [editForm] = Form.useForm<{ brand_name: string }>()
 
   const { data: brandPage, loading, refresh, mutate } = useRequest(
     () => listBrands({
@@ -203,7 +204,6 @@ export default function BrandsPage() {
     setEditingBrand(brand)
     editForm.setFieldsValue({
       brand_name: brand.brand_name || '',
-      alias_name: brand.brand_alias_name || '',
     })
     setEditOpen(true)
   }
@@ -218,12 +218,10 @@ export default function BrandsPage() {
     if (!editingBrand) return
     const values = await editForm.validateFields()
     const trimmedName = values.brand_name?.trim() || ''
-    const trimmedAliasName = values.alias_name?.trim() || ''
     setEditSaving(true)
     try {
       const { data: updatedBrand } = await updateBrand(editingBrand.brand_code, {
         brand_name: trimmedName || null,
-        alias_name: trimmedAliasName || null,
       })
       mutate(currentPageData => (currentPageData ? {
         ...currentPageData,
@@ -231,7 +229,6 @@ export default function BrandsPage() {
           brand.brand_code === updatedBrand.brand_code ? updatedBrand : brand
         )),
       } : currentPageData))
-      setAliasRefreshKey(key => key + 1)
       refresh()
       message.success('品牌信息已更新')
       closeEdit()
@@ -337,11 +334,6 @@ export default function BrandsPage() {
             setPageSize(size)
           },
         }}
-        expandable={{
-          expandedRowRender: (record: BrandItem) => (
-            <AliasPanel brandCode={record.brand_code} onAliasChange={refresh} refreshKey={aliasRefreshKey} />
-          ),
-        }}
       />
       <CreateBrandModal
         open={createOpen}
@@ -367,10 +359,10 @@ export default function BrandsPage() {
           <Form.Item name="brand_name" label="修改后名称">
             <Input placeholder="留空则恢复默认显示" />
           </Form.Item>
-          <Form.Item name="alias_name" label="写法别名">
-            <Input placeholder="如 Sony / SONY INC / 索尼" />
-          </Form.Item>
         </Form>
+        {editingBrand && (
+          <AliasPanel brandCode={editingBrand.brand_code} onAliasChange={refresh} embedded />
+        )}
       </Modal>
     </Card>
   )

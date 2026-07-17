@@ -850,6 +850,12 @@ def _dispatch_export_job_out(job: WorkbenchExportJob) -> dict:
     }
 
 
+def _dispatch_export_file_path(job: WorkbenchExportJob) -> Path | None:
+    if not job.file_token or not job.filename:
+        return None
+    return DISPATCH_EXPORT_DIR / f"{job.file_token}_{job.filename}"
+
+
 @router.get("/export/jobs")
 def list_dispatch_export_jobs(
     page: int = Query(1, ge=1),
@@ -865,6 +871,25 @@ def list_dispatch_export_jobs(
         .all()
     )
     return {"total": total, "items": [_dispatch_export_job_out(job) for job in jobs]}
+
+
+@router.delete("/export/jobs/{job_id}")
+def delete_dispatch_export_job(job_id: int, db: Session = Depends(get_db)):
+    job = db.query(WorkbenchExportJob).filter(WorkbenchExportJob.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="导出任务不存在")
+
+    file_path = _dispatch_export_file_path(job)
+    if file_path and file_path.exists():
+        try:
+            file_path.unlink()
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"删除导出文件失败：{exc}") from exc
+
+    _dispatch_export_progress.pop(job_id, None)
+    db.delete(job)
+    db.commit()
+    return {"ok": True}
 
 
 @router.get("/export/jobs/{job_id}")

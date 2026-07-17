@@ -145,3 +145,57 @@ def test_dispatch_export_job_out_includes_months_for_new_and_legacy_jobs(db):
 
     assert dispatch_api._dispatch_export_job_out(new_job)["months"] == [202601, 202602]
     assert dispatch_api._dispatch_export_job_out(legacy_job)["months"] == [202603]
+
+
+def test_delete_dispatch_export_job_removes_record_and_file(db, tmp_path, monkeypatch):
+    monkeypatch.setattr(dispatch_api, "DISPATCH_EXPORT_DIR", tmp_path)
+    job = WorkbenchExportJob(
+        status="done",
+        progress=100,
+        category_code="camera",
+        platform="jd",
+        month=202606,
+        file_token="delete-token",
+        filename="分发结果_camera_jd_202606.xlsx",
+        created_at=datetime.utcnow(),
+        finished_at=datetime.utcnow(),
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    export_file = tmp_path / f"{job.file_token}_{job.filename}"
+    export_file.write_bytes(b"export")
+
+    response = dispatch_api.delete_dispatch_export_job(job.id, db)
+
+    assert response == {"ok": True}
+    assert db.query(WorkbenchExportJob).filter(WorkbenchExportJob.id == job.id).first() is None
+    assert not export_file.exists()
+
+
+def test_delete_dispatch_export_job_allows_missing_file(db, tmp_path, monkeypatch):
+    monkeypatch.setattr(dispatch_api, "DISPATCH_EXPORT_DIR", tmp_path)
+    job = WorkbenchExportJob(
+        status="done",
+        progress=100,
+        file_token="missing-token",
+        filename="missing.xlsx",
+        created_at=datetime.utcnow(),
+        finished_at=datetime.utcnow(),
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    response = dispatch_api.delete_dispatch_export_job(job.id, db)
+
+    assert response == {"ok": True}
+    assert db.query(WorkbenchExportJob).filter(WorkbenchExportJob.id == job.id).first() is None
+
+
+def test_delete_dispatch_export_job_returns_404_for_missing_job(db):
+    with pytest.raises(dispatch_api.HTTPException) as exc_info:
+        dispatch_api.delete_dispatch_export_job(999999, db)
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "导出任务不存在"

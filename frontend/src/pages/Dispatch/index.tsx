@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import {
   Tabs, Table, Button, Tag, Space, Modal, Form, Select,
   Input, InputNumber, Switch, message, Descriptions, Typography,
-  Alert, Drawer, Progress
+  Alert, Drawer, Progress, Popconfirm
 } from 'antd'
 import {
   PlayCircleOutlined, PlusOutlined, EditOutlined, DeleteOutlined, DownloadOutlined
@@ -13,7 +13,7 @@ import {
   listUploadFiles, listDispatchBatches, runDispatch,
   getDispatchBatchStats, listDispatchUnmatched, listDispatchRules,
   createDispatchRule, updateDispatchRule, deleteDispatchRule,
-  createDispatchExportJob, listDispatchExportJobs,
+  createDispatchExportJob, listDispatchExportJobs, deleteDispatchExportJob,
   type DispatchBatchStatsResponse, type DispatchCategoryStat, type DispatchRuleStat,
   type DispatchExportJob, type DispatchUnmatchedRow
 } from '../../services/api'
@@ -482,6 +482,16 @@ function DispatchExportTab() {
     }
   }
 
+  const handleDeleteExportJob = async (jobId: number) => {
+    try {
+      await deleteDispatchExportJob(jobId)
+      message.success('已删除')
+      refreshExportJobs()
+    } catch {
+      // API interceptor already shows the backend error message.
+    }
+  }
+
   const statusMeta: Record<DispatchExportJob['status'], { label: string; color: string }> = {
     pending: { label: '等待中', color: 'default' },
     running: { label: '导出中', color: 'processing' },
@@ -532,7 +542,7 @@ function DispatchExportTab() {
       render: (value: string | null) => value || <Text type="secondary">生成中</Text>
     },
     {
-      title: '操作', key: 'action', width: 150, fixed: 'right' as const,
+      title: '操作', key: 'action', width: 220, fixed: 'right' as const,
       render: (_: unknown, row: DispatchExportJob) => (
         <Space>
           <Button size="small" onClick={refreshExportJobs}>刷新</Button>
@@ -542,6 +552,15 @@ function DispatchExportTab() {
           {row.status === 'error' && row.error_msg && (
             <Button size="small" type="link" danger onClick={() => Modal.error({ title: '导出失败', content: row.error_msg })}>原因</Button>
           )}
+          <Popconfirm
+            title="确认删除该下载记录？"
+            description="将同步删除已生成的导出文件，旧下载链接将不可用。"
+            okText="删除"
+            cancelText="取消"
+            onConfirm={() => handleDeleteExportJob(row.job_id)}
+          >
+            <Button size="small" type="link" danger icon={<DeleteOutlined />}>删除</Button>
+          </Popconfirm>
         </Space>
       )
     },

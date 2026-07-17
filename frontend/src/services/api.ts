@@ -413,6 +413,9 @@ export const listDispatchExportJobs = (params?: { page?: number; page_size?: num
 export const getDispatchExportJob = (jobId: number) =>
   api.get<DispatchExportJob>(`/dispatch/export/jobs/${jobId}`)
 
+export const deleteDispatchExportJob = (jobId: number) =>
+  api.delete(`/dispatch/export/jobs/${jobId}`)
+
 export const listDispatchRules = (params?: Record<string, unknown>) =>
   api.get('/dispatch/rules', { params })
 

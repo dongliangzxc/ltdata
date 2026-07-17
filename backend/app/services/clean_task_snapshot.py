@@ -246,40 +246,59 @@ def get_monthly_clean_pool(
     limit: int | None = None,
 ) -> list[dict]:
     platform_label = _platform_label_expr()
-    q = (
-        db.query(
-            DispatchItem.category_code.label("category_code"),
-            Category.name.label("category_name"),
-            platform_label.label("platform"),
-            RawDataRecord.month.label("month"),
-            func.count(func.distinct(DispatchItem.raw_data_id)).label("pending_count"),
-        )
-        .join(RawDataRecord, RawDataRecord.id == DispatchItem.raw_data_id)
-        .join(Category, Category.code == DispatchItem.category_code)
-        .outerjoin(
-            CleanJobItemRecord,
-            and_(
-                CleanJobItemRecord.raw_data_id == DispatchItem.raw_data_id,
-                CleanJobItemRecord.category_code == DispatchItem.category_code,
-            ),
-        )
-        .filter(CleanJobItemRecord.id.is_(None), RawDataRecord.month.isnot(None))
-    )
-    if category_code:
-        q = q.filter(DispatchItem.category_code == category_code)
     normalized_filter_platform = normalize_platform(platform)
-    if normalized_filter_platform:
-        q = q.filter(func.lower(RawDataRecord.platform).in_(platform_aliases_for(normalized_filter_platform)))
-    if month is not None:
-        q = q.filter(RawDataRecord.month == month)
 
-    grouped_query = (
-        q.group_by(DispatchItem.category_code, Category.name, platform_label, RawDataRecord.month)
-        .order_by(DispatchItem.category_code, platform_label, RawDataRecord.month)
-    )
-    if limit is not None:
-        grouped_query = grouped_query.limit(limit)
-    grouped = grouped_query.all()
+    def build_grouped_query(scoped_category_code: str | None = None):
+        q = (
+            db.query(
+                DispatchItem.category_code.label("category_code"),
+                Category.name.label("category_name"),
+                platform_label.label("platform"),
+                RawDataRecord.month.label("month"),
+                func.count(func.distinct(DispatchItem.raw_data_id)).label("pending_count"),
+            )
+            .join(RawDataRecord, RawDataRecord.id == DispatchItem.raw_data_id)
+            .join(Category, Category.code == DispatchItem.category_code)
+            .outerjoin(
+                CleanJobItemRecord,
+                and_(
+                    CleanJobItemRecord.raw_data_id == DispatchItem.raw_data_id,
+                    CleanJobItemRecord.category_code == DispatchItem.category_code,
+                ),
+            )
+            .filter(CleanJobItemRecord.id.is_(None), RawDataRecord.month.isnot(None))
+        )
+        effective_category_code = scoped_category_code or category_code
+        if effective_category_code:
+            q = q.filter(DispatchItem.category_code == effective_category_code)
+        if normalized_filter_platform:
+            q = q.filter(func.lower(RawDataRecord.platform).in_(platform_aliases_for(normalized_filter_platform)))
+        if month is not None:
+            q = q.filter(RawDataRecord.month == month)
+        return q.group_by(DispatchItem.category_code, Category.name, platform_label, RawDataRecord.month)
+
+    if limit is not None and not category_code:
+        grouped = []
+        category_codes = [
+            row[0]
+            for row in db.query(Category.code).order_by(Category.code).all()
+        ]
+        for scoped_category_code in category_codes:
+            remaining = limit - len(grouped)
+            if remaining <= 0:
+                break
+            rows = (
+                build_grouped_query(scoped_category_code)
+                .order_by(platform_label, RawDataRecord.month)
+                .limit(remaining)
+                .all()
+            )
+            grouped.extend(rows)
+    else:
+        grouped_query = build_grouped_query().order_by(DispatchItem.category_code, platform_label, RawDataRecord.month)
+        if limit is not None:
+            grouped_query = grouped_query.limit(limit)
+        grouped = grouped_query.all()
     jobs_by_scope = _monthly_jobs_by_scope(db, category_code=category_code, platform=platform)
 
     result = []

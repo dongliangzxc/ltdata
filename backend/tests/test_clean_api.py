@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.clean import router
+from app.services.clean_task_snapshot import get_monthly_clean_pool
 from app.models.database import get_db
 from app.models.schemas import (
     Category,
@@ -405,6 +406,53 @@ def test_get_clean_pool_summary_endpoint_returns_pending_counts(db):
         "pending_count": 1,
         "active_job_count": 0,
     }]
+
+
+def test_get_monthly_clean_pool_uses_category_scoped_query_when_limited(db):
+    categories = [
+        Category(code="action_cameras", name="运动相机"),
+        Category(code="router", name="路由器"),
+    ]
+    upload = UploadFileRecord(filename="monthly-scoped-limit.xlsx", platform="jd", row_count=4, status="done")
+    db.add_all([*categories, upload])
+    db.flush()
+
+    rows = [
+        RawDataRecord(file_id=upload.id, platform="jd", month=202601, item_id="cam-1", item_name="相机1"),
+        RawDataRecord(file_id=upload.id, platform="jd", month=202602, item_id="cam-2", item_name="相机2"),
+        RawDataRecord(file_id=upload.id, platform="jd", month=202601, item_id="router-1", item_name="路由1"),
+        RawDataRecord(file_id=upload.id, platform="jd", month=202602, item_id="router-2", item_name="路由2"),
+    ]
+    db.add_all(rows)
+    db.flush()
+    batch = DispatchBatch(file_id=upload.id, status="done", total_rows=4, dispatched_rows=4, unmatched_rows=0)
+    db.add(batch)
+    db.flush()
+    db.add_all([
+        DispatchItem(batch_id=batch.id, raw_data_id=rows[0].id, category_code="action_cameras"),
+        DispatchItem(batch_id=batch.id, raw_data_id=rows[1].id, category_code="action_cameras"),
+        DispatchItem(batch_id=batch.id, raw_data_id=rows[2].id, category_code="router"),
+        DispatchItem(batch_id=batch.id, raw_data_id=rows[3].id, category_code="router"),
+    ])
+    db.commit()
+
+    grouped_dispatch_queries = []
+
+    def collect_grouped_queries(conn, cursor, statement, parameters, context, executemany):
+        normalized = " ".join(statement.lower().split())
+        if " from dispatch_items " in normalized and " group by " in normalized:
+            grouped_dispatch_queries.append(normalized)
+
+    event.listen(db.bind, "before_cursor_execute", collect_grouped_queries)
+    try:
+        result = get_monthly_clean_pool(db, limit=1)
+    finally:
+        event.remove(db.bind, "before_cursor_execute", collect_grouped_queries)
+
+    assert [row["category_code"] for row in result] == ["action_cameras"]
+    assert len(grouped_dispatch_queries) == 1
+    assert "dispatch_items.category_code =" in grouped_dispatch_queries[0]
+
 
 
 def test_get_monthly_clean_pool_applies_limit_before_returning_all_groups(db):

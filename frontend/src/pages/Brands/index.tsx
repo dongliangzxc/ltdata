@@ -13,7 +13,15 @@ import {
 import CreateBrandModal from '../../components/CreateBrandModal'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 
-function AliasPanel({ brandCode, onAliasChange }: { brandCode: string; onAliasChange: () => void }) {
+function AliasPanel({
+  brandCode,
+  onAliasChange,
+  refreshKey,
+}: {
+  brandCode: string
+  onAliasChange: () => void
+  refreshKey: number
+}) {
   const [addOpen, setAddOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -23,6 +31,7 @@ function AliasPanel({ brandCode, onAliasChange }: { brandCode: string; onAliasCh
 
   const { data: aliases, loading, refresh } = useRequest(
     () => listBrandAliasesByCode(brandCode).then(r => r.data),
+    { refreshDeps: [brandCode, refreshKey] },
   )
 
   const handleAdd = async () => {
@@ -168,6 +177,7 @@ export default function BrandsPage() {
   const [editOpen, setEditOpen] = useState(false)
   const [editingBrand, setEditingBrand] = useState<BrandItem | null>(null)
   const [editSaving, setEditSaving] = useState(false)
+  const [aliasRefreshKey, setAliasRefreshKey] = useState(0)
   const [editForm] = Form.useForm<{ brand_name: string; alias_name: string }>()
 
   const { data: brandPage, loading, refresh, mutate } = useRequest(
@@ -221,6 +231,7 @@ export default function BrandsPage() {
           brand.brand_code === updatedBrand.brand_code ? updatedBrand : brand
         )),
       } : currentPageData))
+      setAliasRefreshKey(key => key + 1)
       refresh()
       message.success('品牌信息已更新')
       closeEdit()
@@ -328,7 +339,7 @@ export default function BrandsPage() {
         }}
         expandable={{
           expandedRowRender: (record: BrandItem) => (
-            <AliasPanel brandCode={record.brand_code} onAliasChange={refresh} />
+            <AliasPanel brandCode={record.brand_code} onAliasChange={refresh} refreshKey={aliasRefreshKey} />
           ),
         }}
       />

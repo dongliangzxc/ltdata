@@ -688,7 +688,7 @@ class BrandAlias(Base):
     __tablename__ = "brand_aliases"
 
     id          = Column(Integer, primary_key=True, index=True)
-    alias_name  = Column(String(200), nullable=False, unique=True)
+    alias_name  = Column(String(200), nullable=False)
     brand_code  = Column(String(100), nullable=False)
     is_active   = Column(SmallInteger, default=1)
     created_by  = Column(String(50))

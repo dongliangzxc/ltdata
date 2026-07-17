@@ -235,12 +235,13 @@ def test_create_brand(client_and_db):
     assert body["brand_alias_name"] == "DJI Alias"
     assert body["category_codes"] == []
     assert body["model_count"] == 0
-    assert body["alias_count"] == 0
+    assert body["alias_count"] == 1
     saved = db.query(BrandRecord).filter_by(brand_code="DJI").one()
     assert saved.brand_name == "大疆"
     assert saved.original_brand_name == "大疆"
     assert saved.brand_alias_name == "DJI Alias"
-    assert db.query(BrandAlias).filter_by(brand_code="DJI").count() == 0
+    saved_alias = db.query(BrandAlias).filter_by(brand_code="DJI").one()
+    assert saved_alias.alias_name == "DJI Alias"
 
 
 def test_list_brands_returns_original_name_and_categories(client_and_db):
@@ -323,15 +324,17 @@ def test_create_brand_alias(client_and_db):
     assert body["brand_code"] == "SONY"
 
 
-def test_delete_brand_alias(client_and_db):
+def test_delete_brand_alias_clears_linked_brand_alias_name(client_and_db):
     """DELETE /brands/{brand_code}/aliases/{alias_id} removes the alias."""
     client, db = client_and_db
+    db.add(BrandRecord(brand_code="SONY", brand_name="索尼", brand_alias_name="Sony"))
     alias = BrandAlias(alias_name="Sony", brand_code="SONY")
     db.add(alias)
     db.commit()
     r = client.delete(f"/api/brands/SONY/aliases/{alias.id}")
     assert r.status_code == 204
     assert db.query(BrandAlias).filter(BrandAlias.id == alias.id).first() is None
+    assert db.query(BrandRecord).filter_by(brand_code="SONY").one().brand_alias_name is None
 
 
 def test_update_brand_alias(client_and_db):
@@ -353,18 +356,17 @@ def test_update_brand_alias(client_and_db):
 def test_update_brand_alias_rejects_duplicate(client_and_db):
     client, db = client_and_db
     db.add(BrandRecord(brand_code="SONY", brand_name="索尼"))
-    db.add(BrandRecord(brand_code="BOSE", brand_name="博士"))
     db.add(BrandAlias(alias_name="Sony", brand_code="SONY"))
-    db.add(BrandAlias(alias_name="BOSE", brand_code="BOSE"))
+    db.add(BrandAlias(alias_name="Sony Taken", brand_code="SONY"))
     db.commit()
 
-    resp = client.patch("/api/brands/SONY/aliases/1", json={"alias_name": "BOSE"})
+    resp = client.patch("/api/brands/SONY/aliases/1", json={"alias_name": "Sony Taken"})
 
     assert resp.status_code == 409
-    assert resp.json()["detail"] == "别名 'BOSE' 已存在"
+    assert resp.json()["detail"] == "别名 'Sony Taken' 已存在"
 
 
-def test_update_brand_alias_rejects_missing_or_foreign_alias(client_and_db):
+def test_update_brand_alias_rejects_missing_or_foreign_alias_basic(client_and_db):
     client, db = client_and_db
     db.add(BrandRecord(brand_code="SONY", brand_name="索尼"))
     db.add(BrandRecord(brand_code="BOSE", brand_name="博士"))
@@ -379,7 +381,7 @@ def test_update_brand_alias_rejects_missing_or_foreign_alias(client_and_db):
     assert foreign.status_code == 404
 
 
-def test_update_brand_alias_rejects_blank_alias(client_and_db):
+def test_update_brand_alias_rejects_blank_alias_basic(client_and_db):
     client, db = client_and_db
     db.add(BrandRecord(brand_code="SONY", brand_name="索尼"))
     db.add(BrandAlias(alias_name="Sony", brand_code="SONY"))
@@ -461,7 +463,8 @@ def test_update_brand_saves_name_and_brand_alias(client_and_db):
     brand = db.query(BrandRecord).filter_by(brand_code="SONY").one()
     assert brand.brand_name == "索尼新名"
     assert brand.brand_alias_name == "SONY INC"
-    assert db.query(BrandAlias).filter_by(brand_code="SONY").one().alias_name == "Sony Write Alias"
+    aliases = db.query(BrandAlias).filter_by(brand_code="SONY").order_by(BrandAlias.alias_name).all()
+    assert [alias.alias_name for alias in aliases] == ["SONY INC", "Sony Write Alias"]
 
 
 def test_update_brand_alias_allows_duplicate_alias_text(client_and_db):
@@ -477,7 +480,7 @@ def test_update_brand_alias_allows_duplicate_alias_text(client_and_db):
     brand = db.query(BrandRecord).filter_by(brand_code="SONY").one()
     assert brand.brand_name == "索尼新名"
     assert brand.brand_alias_name == "BOSE"
-    assert db.query(BrandAlias).filter_by(brand_code="SONY").count() == 0
+    assert db.query(BrandAlias).filter_by(brand_code="SONY").one().alias_name == "BOSE"
 
 
 def test_update_brand_saves_brand_alias_on_brand_record_when_missing(client_and_db):
@@ -491,10 +494,10 @@ def test_update_brand_saves_brand_alias_on_brand_record_when_missing(client_and_
     assert resp.json()["brand_alias_name"] == "SONY INC"
     brand = db.query(BrandRecord).filter_by(brand_code="SONY").one()
     assert brand.brand_alias_name == "SONY INC"
-    assert db.query(BrandAlias).filter_by(brand_code="SONY").count() == 0
+    assert db.query(BrandAlias).filter_by(brand_code="SONY").one().alias_name == "SONY INC"
 
 
-def test_update_brand_alias_does_not_change_write_aliases(client_and_db):
+def test_update_brand_alias_adds_linked_write_alias_without_removing_extra_aliases(client_and_db):
     client, db = client_and_db
     db.add(BrandRecord(brand_code="SONY", brand_name="索尼旧名"))
     db.add(BrandAlias(alias_name="Sony Panel 1", brand_code="SONY"))
@@ -508,12 +511,29 @@ def test_update_brand_alias_does_not_change_write_aliases(client_and_db):
     brand = db.query(BrandRecord).filter_by(brand_code="SONY").one()
     assert brand.brand_alias_name == "SONY INC"
     aliases = db.query(BrandAlias).filter_by(brand_code="SONY").order_by(BrandAlias.alias_name).all()
-    assert [alias.alias_name for alias in aliases] == ["Sony Panel 1", "Sony Panel 2"]
+    assert [alias.alias_name for alias in aliases] == ["SONY INC", "Sony Panel 1", "Sony Panel 2"]
 
 
-def test_update_brand_alias(client_and_db):
+def test_update_brand_alias_reuses_existing_same_brand_alias(client_and_db):
     client, db = client_and_db
-    db.add(BrandRecord(brand_code="SONY", brand_name="索尼"))
+    db.add(BrandRecord(brand_code="SONY", brand_name="索尼旧名", brand_alias_name="Sony Form"))
+    db.add(BrandAlias(alias_name="Sony Form", brand_code="SONY"))
+    db.add(BrandAlias(alias_name="Sony Existing", brand_code="SONY"))
+    db.commit()
+
+    resp = client.patch("/api/brands/SONY", json={"brand_name": "索尼新名", "alias_name": "Sony Existing"})
+
+    assert resp.status_code == 200
+    assert resp.json()["brand_alias_name"] == "Sony Existing"
+    brand = db.query(BrandRecord).filter_by(brand_code="SONY").one()
+    assert brand.brand_alias_name == "Sony Existing"
+    aliases = db.query(BrandAlias).filter_by(brand_code="SONY").order_by(BrandAlias.alias_name).all()
+    assert [alias.alias_name for alias in aliases] == ["Sony Existing"]
+
+
+def test_update_brand_alias_syncs_linked_brand_alias_name(client_and_db):
+    client, db = client_and_db
+    db.add(BrandRecord(brand_code="SONY", brand_name="索尼", brand_alias_name="Sony"))
     db.add(BrandAlias(alias_name="Sony", brand_code="SONY"))
     db.commit()
 
@@ -524,24 +544,26 @@ def test_update_brand_alias(client_and_db):
     assert body["alias_name"] == "SONY INC"
     assert body["brand_code"] == "SONY"
     assert db.query(BrandAlias).filter(BrandAlias.id == 1).one().alias_name == "SONY INC"
-    assert client.get("/api/brands").json()["items"][0]["alias_count"] == 1
+    assert db.query(BrandRecord).filter_by(brand_code="SONY").one().brand_alias_name == "SONY INC"
+    sony = client.get("/api/brands").json()["items"][0]
+    assert sony["brand_alias_name"] == "SONY INC"
+    assert sony["alias_count"] == 1
 
 
-def test_update_brand_alias_rejects_duplicate(client_and_db):
+def test_update_brand_alias_rejects_duplicate_in_linked_context(client_and_db):
     client, db = client_and_db
-    db.add(BrandRecord(brand_code="SONY", brand_name="索尼"))
-    db.add(BrandRecord(brand_code="BOSE", brand_name="博士"))
+    db.add(BrandRecord(brand_code="SONY", brand_name="索尼", brand_alias_name="Sony"))
     db.add(BrandAlias(alias_name="Sony", brand_code="SONY"))
-    db.add(BrandAlias(alias_name="BOSE", brand_code="BOSE"))
+    db.add(BrandAlias(alias_name="Sony Taken", brand_code="SONY"))
     db.commit()
 
-    resp = client.patch("/api/brands/SONY/aliases/1", json={"alias_name": "BOSE"})
+    resp = client.patch("/api/brands/SONY/aliases/1", json={"alias_name": "Sony Taken"})
 
     assert resp.status_code == 409
-    assert resp.json()["detail"] == "别名 'BOSE' 已存在"
+    assert resp.json()["detail"] == "别名 'Sony Taken' 已存在"
 
 
-def test_update_brand_alias_rejects_missing_or_foreign_alias(client_and_db):
+def test_update_brand_alias_rejects_missing_or_foreign_alias_in_linked_context(client_and_db):
     client, db = client_and_db
     db.add(BrandRecord(brand_code="SONY", brand_name="索尼"))
     db.add(BrandRecord(brand_code="BOSE", brand_name="博士"))
@@ -556,7 +578,7 @@ def test_update_brand_alias_rejects_missing_or_foreign_alias(client_and_db):
     assert foreign.status_code == 404
 
 
-def test_update_brand_alias_rejects_blank_alias(client_and_db):
+def test_update_brand_alias_rejects_blank_alias_in_linked_context(client_and_db):
     client, db = client_and_db
     db.add(BrandRecord(brand_code="SONY", brand_name="索尼"))
     db.add(BrandAlias(alias_name="Sony", brand_code="SONY"))

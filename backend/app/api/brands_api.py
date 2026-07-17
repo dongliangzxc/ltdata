@@ -51,6 +51,36 @@ def _first_text(*values: str | None) -> str | None:
     return None
 
 
+def _sync_brand_form_alias(db: Session, brand: BrandRecord, alias_name: str | None) -> None:
+    current_alias_name = _clean_optional_text(brand.brand_alias_name)
+    cleaned_alias_name = _clean_optional_text(alias_name)
+    alias = None
+    if current_alias_name:
+        alias = db.query(BrandAlias).filter(
+            BrandAlias.brand_code == brand.brand_code,
+            BrandAlias.alias_name == current_alias_name,
+        ).first()
+
+    if not cleaned_alias_name:
+        if alias:
+            db.delete(alias)
+        brand.brand_alias_name = None
+        return
+
+    existing_alias = db.query(BrandAlias).filter(
+        BrandAlias.brand_code == brand.brand_code,
+        BrandAlias.alias_name == cleaned_alias_name,
+    ).first()
+    if existing_alias and (not alias or existing_alias.id != alias.id):
+        if alias:
+            db.delete(alias)
+    elif alias:
+        alias.alias_name = cleaned_alias_name
+    else:
+        db.add(BrandAlias(alias_name=cleaned_alias_name, brand_code=brand.brand_code))
+    brand.brand_alias_name = cleaned_alias_name
+
+
 def _is_placeholder_brand_code(value: str) -> bool:
     return not value or set(value) == {"-"}
 
@@ -177,25 +207,17 @@ def create_brand(payload: BrandIn, db: Session = Depends(get_db)):
         brand_name=brand_name,
         # 首次创建时锁定为原始上传名，后续修改 brand_name 不会覆盖它。
         original_brand_name=brand_name,
-        brand_alias_name=_clean_optional_text(payload.alias_name),
         status="active",
     )
     db.add(brand)
+    _sync_brand_form_alias(db, brand, payload.alias_name)
     try:
         db.commit()
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail="品牌已存在，可直接选择")
     db.refresh(brand)
-    return BrandOut(
-        brand_code=brand.brand_code,
-        brand_name=brand.brand_name,
-        original_brand_name=brand.original_brand_name,
-        brand_alias_name=brand.brand_alias_name,
-        category_codes=[],
-        model_count=0,
-        alias_count=0,
-    )
+    return _build_brand_outs(db, [brand])[0]
 
 
 @router.patch("/{brand_code}", response_model=BrandOut)
@@ -209,7 +231,7 @@ def update_brand(brand_code: str, payload: BrandUpdate, db: Session = Depends(ge
 
     brand.brand_name = cleaned_name or None
     if payload.alias_name is not None:
-        brand.brand_alias_name = cleaned_alias_name or None
+        _sync_brand_form_alias(db, brand, cleaned_alias_name)
     db.commit()
     db.refresh(brand)
     # 编辑响应必须精确反映 brands.brand_name（清空后为 None），
@@ -234,7 +256,10 @@ def create_brand_alias(brand_code: str, payload: BrandAliasCreate, db: Session =
     cleaned_alias_name = payload.alias_name.strip()
     if not cleaned_alias_name:
         raise HTTPException(status_code=400, detail="别名不能为空")
-    if db.query(BrandAlias).filter(BrandAlias.alias_name == cleaned_alias_name).first():
+    if db.query(BrandAlias).filter(
+        BrandAlias.brand_code == brand_code,
+        BrandAlias.alias_name == cleaned_alias_name,
+    ).first():
         raise HTTPException(status_code=409, detail=f"别名 '{cleaned_alias_name}' 已存在")
     alias = BrandAlias(alias_name=cleaned_alias_name, brand_code=brand_code)
     db.add(alias)
@@ -253,10 +278,17 @@ def update_brand_alias(brand_code: str, alias_id: int, payload: BrandAliasUpdate
     if not alias or alias.brand_code != brand_code:
         raise HTTPException(status_code=404, detail="别名不存在")
 
-    if cleaned_alias_name != alias.alias_name and db.query(BrandAlias).filter(BrandAlias.alias_name == cleaned_alias_name).first():
+    if cleaned_alias_name != alias.alias_name and db.query(BrandAlias).filter(
+        BrandAlias.brand_code == brand_code,
+        BrandAlias.alias_name == cleaned_alias_name,
+    ).first():
         raise HTTPException(status_code=409, detail=f"别名 '{cleaned_alias_name}' 已存在")
 
+    old_alias_name = alias.alias_name
     alias.alias_name = cleaned_alias_name
+    brand = db.query(BrandRecord).filter(BrandRecord.brand_code == brand_code).first()
+    if brand and _clean_optional_text(brand.brand_alias_name) == old_alias_name:
+        brand.brand_alias_name = cleaned_alias_name
     db.commit()
     db.refresh(alias)
     return alias
@@ -270,5 +302,8 @@ def delete_brand_alias(brand_code: str, alias_id: int, db: Session = Depends(get
     ).first()
     if not alias:
         raise HTTPException(status_code=404, detail="别名不存在")
+    brand = db.query(BrandRecord).filter(BrandRecord.brand_code == brand_code).first()
+    if brand and _clean_optional_text(brand.brand_alias_name) == alias.alias_name:
+        brand.brand_alias_name = None
     db.delete(alias)
     db.commit()

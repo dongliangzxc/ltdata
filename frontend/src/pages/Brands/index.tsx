@@ -147,7 +147,7 @@ function AliasPanel({
         </Form>
       </Modal>
       <Modal
-        title="修改品牌别名"
+        title="修改写法别名"
         open={editOpen}
         onOk={handleEdit}
         confirmLoading={saving}
@@ -367,8 +367,8 @@ export default function BrandsPage() {
           <Form.Item name="brand_name" label="修改后名称">
             <Input placeholder="留空则恢复默认显示" />
           </Form.Item>
-          <Form.Item name="alias_name" label="品牌别名">
-            <Input placeholder="品牌创建时录入的别名" />
+          <Form.Item name="alias_name" label="写法别名">
+            <Input placeholder="如 Sony / SONY INC / 索尼" />
           </Form.Item>
         </Form>
       </Modal>

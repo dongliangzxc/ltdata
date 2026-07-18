@@ -98,6 +98,50 @@ def test_run_dispatch_processes_raw_data_in_pages(client_and_db):
     assert [item.category_code for item in items] == ["headphone", "headphone", "speaker", "headphone"]
 
 
+def test_run_dispatch_with_category_scope_ignores_unrelated_rows(client_and_db):
+    client, db = client_and_db
+    file_record = UploadFileRecord(filename="scoped.xlsx", platform="JD", row_count=4, status="done")
+    db.add(file_record)
+    db.flush()
+    db.add(DispatchRule(
+        category_code="headphone",
+        platform="jd",
+        field="item_name",
+        match_type="contains",
+        value="耳机",
+        priority=1,
+        is_active=1,
+    ))
+    db.add(DispatchRule(
+        category_code="speaker",
+        platform="jd",
+        field="item_name",
+        match_type="contains",
+        value="音箱",
+        priority=1,
+        is_active=1,
+    ))
+    db.flush()
+    rows = [
+        RawDataRecord(file_id=file_record.id, platform="JD", item_name="降噪耳机", category_lv1="耳机"),
+        RawDataRecord(file_id=file_record.id, platform="JD", item_name="耳机收纳包", category_lv1="耳机"),
+        RawDataRecord(file_id=file_record.id, platform="JD", item_name="蓝牙音箱", category_lv1="音箱"),
+        RawDataRecord(file_id=file_record.id, platform="JD", item_name="智能门锁", category_lv1="门锁"),
+    ]
+    db.add_all(rows)
+    db.commit()
+
+    response = client.post("/api/dispatch/run", json={"file_id": file_record.id, "category_code": "headphone"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_rows"] == 2
+    assert payload["dispatched_rows"] == 2
+    assert payload["unmatched_rows"] == 0
+    items = db.query(DispatchItem).all()
+    assert [item.category_code for item in items] == ["headphone", "headphone"]
+
+
 def test_run_dispatch_allows_one_raw_row_to_enter_multiple_categories(client_and_db):
     client, db = client_and_db
     file_record = UploadFileRecord(filename="multi-category.xlsx", platform="JD", row_count=1, status="done")
@@ -186,9 +230,9 @@ def test_run_dispatch_with_category_code_only_dispatches_target_category(client_
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "done"
-    assert payload["total_rows"] == 3
+    assert payload["total_rows"] == 2
     assert payload["dispatched_rows"] == 2
-    assert payload["unmatched_rows"] == 1
+    assert payload["unmatched_rows"] == 0
     items = db.query(DispatchItem).filter_by(batch_id=payload["id"]).order_by(DispatchItem.raw_data_id).all()
     assert [item.category_code for item in items] == ["headphone", "headphone"]
     assert {item.raw_data_id for item in items} == {

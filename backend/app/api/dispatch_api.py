@@ -435,7 +435,7 @@ def run_dispatch(payload: dict, db: Session = Depends(get_db)):
     batch_id = batch.id
 
     try:
-        total_rows = (
+        total_rows = 0 if category_code else (
             db.query(func.count(RawDataRecord.id))
             .filter(RawDataRecord.file_id == file_id)
             .scalar()
@@ -477,15 +477,17 @@ def run_dispatch(payload: dict, db: Session = Depends(get_db)):
                         matched_by_category[rule.category_code] = rule
 
                 if matched_by_category:
-                    for category_code, rule in matched_by_category.items():
+                    if category_code:
+                        total_rows += 1
+                    for matched_category_code, rule in matched_by_category.items():
                         insert_rows.append({
                             "batch_id": batch_id,
                             "raw_data_id": row.id,
-                            "category_code": category_code,
+                            "category_code": matched_category_code,
                             "matched_rule_id": rule.id,
                         })
                     dispatched_rows += len(matched_by_category)
-                else:
+                elif not category_code:
                     unmatched_rows += 1
 
             if insert_rows:

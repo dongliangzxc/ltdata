@@ -149,6 +149,68 @@ def test_run_dispatch_allows_one_raw_row_to_enter_multiple_categories(client_and
     ]
 
 
+def test_run_dispatch_with_category_code_only_dispatches_target_category(client_and_db):
+    client, db = client_and_db
+    file_record = UploadFileRecord(filename="category-rerun.xlsx", platform="JD", row_count=3, status="done")
+    db.add(file_record)
+    db.flush()
+    db.add_all([
+        DispatchRule(
+            category_code="headphone",
+            platform="jd",
+            field="category_lv1",
+            match_type="contains",
+            value="耳机",
+            priority=1,
+            is_active=1,
+        ),
+        DispatchRule(
+            category_code="speaker",
+            platform="jd",
+            field="item_name",
+            match_type="contains",
+            value="音箱",
+            priority=1,
+            is_active=1,
+        ),
+    ])
+    db.add_all([
+        RawDataRecord(file_id=file_record.id, platform="jd", item_id="raw-1", category_lv1="耳机", item_name="旗舰耳机"),
+        RawDataRecord(file_id=file_record.id, platform="jd", item_id="raw-2", category_lv1="音频", item_name="蓝牙音箱"),
+        RawDataRecord(file_id=file_record.id, platform="jd", item_id="raw-3", category_lv1="耳机", item_name="耳机音箱套装"),
+    ])
+    db.commit()
+
+    response = client.post("/api/dispatch/run", json={"file_id": file_record.id, "category_code": "headphone"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "done"
+    assert payload["total_rows"] == 3
+    assert payload["dispatched_rows"] == 2
+    assert payload["unmatched_rows"] == 1
+    items = db.query(DispatchItem).filter_by(batch_id=payload["id"]).order_by(DispatchItem.raw_data_id).all()
+    assert [item.category_code for item in items] == ["headphone", "headphone"]
+    assert {item.raw_data_id for item in items} == {
+        db.query(RawDataRecord).filter_by(item_id="raw-1").one().id,
+        db.query(RawDataRecord).filter_by(item_id="raw-3").one().id,
+    }
+
+
+def test_run_dispatch_with_category_code_requires_active_rule(client_and_db):
+    client, db = client_and_db
+    file_record = UploadFileRecord(filename="no-rule.xlsx", platform="JD", row_count=1, status="done")
+    db.add(file_record)
+    db.flush()
+    db.add(RawDataRecord(file_id=file_record.id, platform="jd", item_id="raw-1", category_lv1="耳机", item_name="旗舰耳机"))
+    db.commit()
+
+    response = client.post("/api/dispatch/run", json={"file_id": file_record.id, "category_code": "headphone"})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "该品类没有可用分发规则"
+    assert db.query(DispatchBatch).count() == 0
+
 
 def test_run_dispatch_deduplicates_same_category_by_priority_then_id(client_and_db):
     client, db = client_and_db

@@ -376,8 +376,8 @@ export interface DispatchUnmatchedResponse {
   items: DispatchUnmatchedRow[]
 }
 
-export const runDispatch = (fileId: number) =>
-  api.post('/dispatch/run', { file_id: fileId })
+export const runDispatch = (fileId: number, categoryCode?: string) =>
+  api.post('/dispatch/run', categoryCode ? { file_id: fileId, category_code: categoryCode } : { file_id: fileId })
 
 export const listDispatchBatches = (params?: Record<string, unknown>) =>
   api.get('/dispatch/batches', { params })

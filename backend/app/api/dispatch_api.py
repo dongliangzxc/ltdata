@@ -401,6 +401,7 @@ def _count_rule_matches_for_batch(db: Session, batch: DispatchBatch, rule_ids: l
 def run_dispatch(payload: dict, db: Session = Depends(get_db)):
     """对指定 file_id 执行分发，返回新建的 batch"""
     file_id: int = payload.get("file_id")
+    category_code = (payload.get("category_code") or "").strip() or None
     if not file_id:
         raise HTTPException(status_code=400, detail="file_id 不能为空")
 
@@ -409,6 +410,22 @@ def run_dispatch(payload: dict, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="文件不存在")
 
     platform = (file_record.platform or "").lower()
+    rule_filters = [
+        DispatchRule.is_active == 1,
+        (DispatchRule.platform == None) | (DispatchRule.platform == platform),
+    ]
+    if category_code:
+        rule_filters.append(DispatchRule.category_code == category_code)
+
+    # 取匹配平台（或 platform IS NULL）的 active 规则，按 priority ASC
+    rules = (
+        db.query(DispatchRule)
+        .filter(*rule_filters)
+        .order_by(DispatchRule.priority, DispatchRule.id)
+        .all()
+    )
+    if category_code and not rules:
+        raise HTTPException(status_code=400, detail="该品类没有可用分发规则")
 
     # 1. 创建 batch
     batch = DispatchBatch(file_id=file_id, status="running")
@@ -423,17 +440,6 @@ def run_dispatch(payload: dict, db: Session = Depends(get_db)):
             .filter(RawDataRecord.file_id == file_id)
             .scalar()
             or 0
-        )
-
-        # 2. 取匹配平台（或 platform IS NULL）的 active 规则，按 priority ASC
-        rules = (
-            db.query(DispatchRule)
-            .filter(
-                DispatchRule.is_active == 1,
-                (DispatchRule.platform == None) | (DispatchRule.platform == platform),
-            )
-            .order_by(DispatchRule.priority, DispatchRule.id)
-            .all()
         )
 
         # 3. 分页读取 raw_data 少量字段并批量插入，避免大文件分发时占满内存

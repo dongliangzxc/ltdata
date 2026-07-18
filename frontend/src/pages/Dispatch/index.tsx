@@ -127,6 +127,7 @@ const RuleFormItems = ({ categoryOptions }: { categoryOptions: { value: string; 
 // ─── Tab 1: 分发管理 ──────────────────────────────────────────
 function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void }) {
   const [runningIds, setRunningIds] = useState<Set<number>>(new Set())
+  const [runningCategoryKeys, setRunningCategoryKeys] = useState<Set<string>>(new Set())
   const [statsVisible, setStatsVisible] = useState(false)
   const [statsData, setStatsData] = useState<DispatchBatchStatsResponse | null>(null)
   const [currentStatsBatch, setCurrentStatsBatch] = useState<DispatchBatch | null>(null)
@@ -182,6 +183,21 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
   const refreshStats = async (batchId: number) => {
     const res = await getDispatchBatchStats(batchId)
     setStatsData(res.data)
+  }
+
+  const handleRunCategory = async (category: DispatchCategoryStat) => {
+    if (!currentStatsBatch) return
+    const key = `${currentStatsBatch.id}-${category.category_code}`
+    setRunningCategoryKeys(prev => new Set(prev).add(key))
+    try {
+      const res = await runDispatch(currentStatsBatch.file_id, category.category_code)
+      message.success(`${category.category_name || category.category_code} 分发完成`)
+      refreshBatches()
+      setCurrentStatsBatch(res.data)
+      await refreshStats(res.data.id)
+    } finally {
+      setRunningCategoryKeys(prev => { const s = new Set(prev); s.delete(key); return s })
+    }
   }
 
   const handleShowStats = async (batch: DispatchBatch) => {
@@ -376,6 +392,25 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
                       </Space>
                     )
                   }
+                },
+                {
+                  title: '操作', width: 120,
+                  render: (_: unknown, row: DispatchCategoryStat) => {
+                    const key = currentStatsBatch ? `${currentStatsBatch.id}-${row.category_code}` : row.category_code
+                    return (
+                      <Popconfirm
+                        title="按品类分发"
+                        description={`只重新分发当前文件下的 ${row.category_name || row.category_code} 数据？`}
+                        okText="确认"
+                        cancelText="取消"
+                        onConfirm={() => handleRunCategory(row)}
+                      >
+                        <Button type="link" size="small" loading={runningCategoryKeys.has(key)}>
+                          分发
+                        </Button>
+                      </Popconfirm>
+                    )
+                  },
                 },
               ]}
             />

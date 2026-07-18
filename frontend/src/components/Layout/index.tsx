@@ -21,7 +21,7 @@ import {
   FolderOutlined,
   ToolOutlined,
   ContainerOutlined,
-  PartitionOutlined,
+  CheckSquareOutlined,
   TeamOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
@@ -65,7 +65,7 @@ const menuItems: AppMenuItem[] = [
       { key: '/url-mappings', icon: <LinkOutlined />,        label: '映射管理' },
       { key: '/historical',       icon: <HistoryOutlined />,     label: '历史库' },
       { key: '/clean',            icon: <ClearOutlined />,       label: '清洗任务' },
-      { key: '/data-adjustment',  icon: <PartitionOutlined />,   label: '数据调整' },
+      { key: '/match-results',    icon: <CheckSquareOutlined />, label: '匹配结果' },
       { key: '/rules',         icon: <FilterOutlined />,      label: '规则管理' },
     ],
   },

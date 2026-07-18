@@ -51,13 +51,13 @@ assert.notEqual(hook.indexOf("params.get('job_id')"), -1)
 // 筛选变化时 page 复位
 assert.notEqual(hook.indexOf('nonPageChanged'), -1, 'non-page changes should reset page')
 
-console.log('MatchResults layout tests passed')
-
 const app = fs.readFileSync(path.resolve(dir, '../../App.tsx'), 'utf8')
 const layout = fs.readFileSync(path.resolve(dir, '../../components/Layout/index.tsx'), 'utf8')
 
-assert.match(app, /path="\/data-adjustment"[^\n]*<MatchResultsPage/, 'data adjustment route should render MatchResultsPage')
-assert.match(app, /path="\/match-results"[^\n]*<MatchResultsPage/, 'legacy match-results route should keep rendering MatchResultsPage')
-assert.match(layout, /key: '\/data-adjustment'[^\n]*label: '数据调整'/, 'sidebar should expose 数据调整')
-assert.equal(layout.includes("key: '/match-results'"), false, 'sidebar should not expose 匹配结果 as a separate menu item')
-assert.match(idx, /数据调整/, 'match results page should render 数据调整 title')
+assert.match(app, /path="\/data-adjustment"[^\n]*<Navigate to="\/match-results" replace/, 'data adjustment route should redirect to match results')
+assert.match(app, /path="\/match-results"[^\n]*<MatchResultsPage/, 'match-results route should render MatchResultsPage')
+assert.match(layout, /key: '\/match-results'[^\n]*label: '匹配结果'/, 'sidebar should expose 匹配结果')
+assert.equal(layout.includes("key: '/data-adjustment'"), false, 'sidebar should not expose 数据调整 as a separate menu item')
+assert.match(idx, /匹配结果/, 'match results page should render 匹配结果 title')
+
+console.log('MatchResults layout tests passed')

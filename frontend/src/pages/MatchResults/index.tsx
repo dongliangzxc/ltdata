@@ -152,7 +152,7 @@ export default function MatchResultsPage() {
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-      <Title level={3} style={{ margin: 0 }}>数据调整</Title>
+      <Title level={3} style={{ margin: 0 }}>匹配结果</Title>
       <Card>
         <Row gutter={[12, 12]} align="middle">
           <Col>

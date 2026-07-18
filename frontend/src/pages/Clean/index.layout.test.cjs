@@ -12,7 +12,7 @@ assert.match(source, /Popconfirm/, 'delete action should require confirmation')
 assert.match(source, /view === 'active'|view === "active"/, 'delete action should only be available in the active tab')
 assert.match(source, /activeKey=\{jobView\}/, 'tabs should be controlled by the current clean job view')
 
-assert.doesNotMatch(source, /setPreviewJobId\(row\.id\)/, 'clean page should no longer open an inline preview modal from the view action')
+assert.doesNotMatch(source, /navigate\(`\/data-adjustment/, 'clean page preview action should not navigate to data adjustment')
 
 assert.match(source, /previewCleanJob/, 'clean page should call previewCleanJob for task preview modal')
 assert.match(source, /Modal/, 'clean page should render a preview modal')

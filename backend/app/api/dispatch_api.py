@@ -444,40 +444,42 @@ def run_dispatch(payload: dict, db: Session = Depends(get_db)):
 
         copied_rows = 0
         if category_code:
-            previous_batch = (
-                db.query(DispatchBatch)
+            latest_non_target_items = (
+                db.query(
+                    DispatchItem.raw_data_id.label("raw_data_id"),
+                    DispatchItem.category_code.label("category_code"),
+                    func.max(DispatchItem.id).label("dispatch_item_id"),
+                )
+                .join(DispatchBatch, DispatchItem.batch_id == DispatchBatch.id)
                 .filter(
                     DispatchBatch.file_id == file_id,
                     DispatchBatch.status == "done",
                     DispatchBatch.id != batch_id,
+                    DispatchItem.category_code != category_code,
                 )
-                .order_by(DispatchBatch.created_at.desc(), DispatchBatch.id.desc())
-                .first()
+                .group_by(DispatchItem.raw_data_id, DispatchItem.category_code)
+                .subquery()
             )
-            if previous_batch:
-                previous_items = (
-                    db.query(DispatchItem.raw_data_id, DispatchItem.category_code, DispatchItem.matched_rule_id)
-                    .filter(
-                        DispatchItem.batch_id == previous_batch.id,
-                        DispatchItem.category_code != category_code,
-                    )
-                    .all()
+            previous_items = (
+                db.query(DispatchItem.raw_data_id, DispatchItem.category_code, DispatchItem.matched_rule_id)
+                .join(latest_non_target_items, DispatchItem.id == latest_non_target_items.c.dispatch_item_id)
+                .all()
+            )
+            if previous_items:
+                db.execute(
+                    DispatchItem.__table__.insert(),
+                    [
+                        {
+                            "batch_id": batch_id,
+                            "raw_data_id": item.raw_data_id,
+                            "category_code": item.category_code,
+                            "matched_rule_id": item.matched_rule_id,
+                        }
+                        for item in previous_items
+                    ],
                 )
-                if previous_items:
-                    db.execute(
-                        DispatchItem.__table__.insert(),
-                        [
-                            {
-                                "batch_id": batch_id,
-                                "raw_data_id": item.raw_data_id,
-                                "category_code": item.category_code,
-                                "matched_rule_id": item.matched_rule_id,
-                            }
-                            for item in previous_items
-                        ],
-                    )
-                    copied_rows = len(previous_items)
-                    db.flush()
+                copied_rows = len(previous_items)
+                db.flush()
 
         # 3. 分页读取 raw_data 少量字段并批量插入，避免大文件分发时占满内存
         dispatched_rows = copied_rows

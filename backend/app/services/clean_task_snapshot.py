@@ -287,7 +287,7 @@ def get_monthly_clean_pool(
                     CleanJobItemRecord.category_code == DispatchItem.category_code,
                 ),
             )
-            .filter(CleanJobItemRecord.id.is_(None), RawDataRecord.month.isnot(None))
+            .filter(RawDataRecord.month.isnot(None))
         )
         effective_category_code = scoped_category_code or category_code
         if effective_category_code:
@@ -332,7 +332,9 @@ def get_monthly_clean_pool(
             "category_name": row.category_name,
             "platform": normalized_platform,
             "month": row_month,
+            "dispatched_count": row.dispatched_count,
             "pending_count": row.pending_count,
+            "queued_count": row.queued_count,
             "existing_job_id": job.id if job else None,
             "existing_job_name": job.task_name if job else None,
             "existing_job_status": job.status if job else None,

@@ -523,7 +523,9 @@ def test_get_monthly_clean_pool_groups_pending_by_category_platform_month(db):
             "category_name": "回音壁",
             "platform": "jd",
             "month": 202605,
+            "dispatched_count": 2,
             "pending_count": 2,
+            "queued_count": 0,
             "existing_job_id": None,
             "existing_job_name": None,
             "existing_job_status": None,
@@ -533,6 +535,7 @@ def test_get_monthly_clean_pool_groups_pending_by_category_platform_month(db):
             "category_name": "回音壁",
             "platform": "jd",
             "month": 202606,
+            "dispatched_count": 1,
             "pending_count": 1,
             "existing_job_id": None,
             "existing_job_name": None,
@@ -652,6 +655,49 @@ def test_get_monthly_clean_pool_reports_existing_monthly_job_stored_with_platfor
     assert response.json()[0]["existing_job_id"] == job.id
     assert response.json()[0]["existing_job_name"] == "回音壁 / 京东 / 202605"
     assert response.json()[0]["existing_job_status"] == "reviewing"
+
+
+def test_get_monthly_clean_pool_includes_rows_already_queued_for_cleaning(db):
+    client = _make_client(db)
+    raw, batch, _upload = _create_monthly_pending_row(db, item_id="sb-1", month=202605)
+
+    job = CleanJobRecord(
+        file_ids=[],
+        rules={"dedup": True},
+        status="reviewing",
+        task_name="回音壁 / 京东 / 202605",
+        category_code="soundbar",
+        platform="jd",
+        source_scope={"months": [202605], "platforms": ["jd"], "dispatch_batch_ids": [], "file_ids": []},
+    )
+    db.add(job)
+    db.flush()
+    db.add(CleanJobItemRecord(
+        clean_job_id=job.id,
+        raw_data_id=raw.id,
+        category_code="soundbar",
+        platform="jd",
+        dispatch_batch_id=batch.id,
+    ))
+    db.commit()
+
+    response = client.get("/api/clean/pool/monthly?category_code=soundbar&platform=jd&month=202605")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "category_code": "soundbar",
+            "category_name": "回音壁",
+            "platform": "jd",
+            "month": 202605,
+            "dispatched_count": 1,
+            "pending_count": 0,
+            "queued_count": 1,
+            "existing_job_id": job.id,
+            "existing_job_name": "回音壁 / 京东 / 202605",
+            "existing_job_status": "reviewing",
+        }
+    ]
 
 
 def _create_monthly_pending_row(db, *, category_code="soundbar", category_name="回音壁", platform="jd", month=202605, item_id="sb-1"):

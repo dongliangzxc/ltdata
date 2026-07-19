@@ -210,8 +210,21 @@ const monthlyQueueColumns = (
     render: formatText,
   },
   {
-    title: '待入队数量', dataIndex: 'pending_count', width: 120,
+    title: '分发数量', dataIndex: 'dispatched_count', width: 110,
     render: formatNumber,
+  },
+  {
+    title: '待入队数量', dataIndex: 'pending_count', width: 130,
+    render: (value: number, row) => (
+      <Space size={6}>
+        <span>{formatNumber(value)}</span>
+        {value === 0 && row.queued_count > 0 ? <Tag color="blue">已入任务</Tag> : null}
+      </Space>
+    ),
+  },
+  {
+    title: '已入任务', dataIndex: 'queued_count', width: 110,
+    render: (value: number) => value > 0 ? <Tag color="green">{formatNumber(value)}</Tag> : '-',
   },
   {
     title: '已有任务', dataIndex: 'existing_job_name', width: 180,

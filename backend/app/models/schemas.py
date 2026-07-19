@@ -220,7 +220,9 @@ class CleanMonthlyPoolOut(BaseModel):
     category_name: Optional[str] = None
     platform: Optional[str] = None
     month: int
+    dispatched_count: int = 0
     pending_count: int = 0
+    queued_count: int = 0
     existing_job_id: Optional[int] = None
     existing_job_name: Optional[str] = None
     existing_job_status: Optional[str] = None
@@ -750,6 +752,7 @@ class MatchResult(Base):
     brand_identified = Column(SmallInteger, default=1)
     price_flag = Column(String(20), nullable=True)
     price_ref = Column(Numeric(10, 2), nullable=True)
+    adjusted_price = Column(Numeric(10, 2), nullable=True)
     sales_coefficient = Column(Numeric(7, 4), nullable=True)
     dispute_reason = Column(String(500), nullable=True)
     review_note = Column(String(500), nullable=True)
@@ -833,6 +836,8 @@ class MatchResultOut(BaseModel):
     brand_identified: int = 1
     price_flag: Optional[str] = None
     price_ref: Optional[float] = None
+    price: Optional[float] = None
+    adjusted_price: Optional[float] = None
     sales_coefficient: Optional[float] = None
     dispute_reason: Optional[str] = None
     review_note: Optional[str] = None

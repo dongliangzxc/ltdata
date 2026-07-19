@@ -179,7 +179,9 @@ export interface CleanMonthlyPoolItem {
   category_name: string | null
   platform: string | null
   month: number
+  dispatched_count: number
   pending_count: number
+  queued_count: number
   existing_job_id: number | null
   existing_job_name: string | null
   existing_job_status: string | null

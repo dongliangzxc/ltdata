@@ -255,7 +255,9 @@ def get_monthly_clean_pool(
                 Category.name.label("category_name"),
                 platform_label.label("platform"),
                 RawDataRecord.month.label("month"),
-                func.count(func.distinct(DispatchItem.raw_data_id)).label("pending_count"),
+                func.count(func.distinct(DispatchItem.raw_data_id)).label("dispatched_count"),
+                func.count(func.distinct(case((CleanJobItemRecord.id.is_(None), DispatchItem.raw_data_id)))).label("pending_count"),
+                func.count(func.distinct(case((CleanJobItemRecord.id.isnot(None), DispatchItem.raw_data_id)))).label("queued_count"),
             )
             .join(RawDataRecord, RawDataRecord.id == DispatchItem.raw_data_id)
             .join(Category, Category.code == DispatchItem.category_code)

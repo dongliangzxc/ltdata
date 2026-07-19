@@ -98,7 +98,7 @@ def test_run_dispatch_processes_raw_data_in_pages(client_and_db):
     assert [item.category_code for item in items] == ["headphone", "headphone", "speaker", "headphone"]
 
 
-def test_run_dispatch_with_category_scope_ignores_unrelated_rows(client_and_db):
+def test_run_dispatch_with_category_scope_keeps_full_batch_counts(client_and_db):
     client, db = client_and_db
     file_record = UploadFileRecord(filename="scoped.xlsx", platform="JD", row_count=4, status="done")
     db.add(file_record)
@@ -135,9 +135,9 @@ def test_run_dispatch_with_category_scope_ignores_unrelated_rows(client_and_db):
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["total_rows"] == 2
+    assert payload["total_rows"] == 4
     assert payload["dispatched_rows"] == 2
-    assert payload["unmatched_rows"] == 0
+    assert payload["unmatched_rows"] == 2
     items = db.query(DispatchItem).all()
     assert [item.category_code for item in items] == ["headphone", "headphone"]
 
@@ -230,15 +230,69 @@ def test_run_dispatch_with_category_code_only_dispatches_target_category(client_
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "done"
-    assert payload["total_rows"] == 2
+    assert payload["total_rows"] == 3
     assert payload["dispatched_rows"] == 2
-    assert payload["unmatched_rows"] == 0
+    assert payload["unmatched_rows"] == 1
     items = db.query(DispatchItem).filter_by(batch_id=payload["id"]).order_by(DispatchItem.raw_data_id).all()
     assert [item.category_code for item in items] == ["headphone", "headphone"]
     assert {item.raw_data_id for item in items} == {
         db.query(RawDataRecord).filter_by(item_id="raw-1").one().id,
         db.query(RawDataRecord).filter_by(item_id="raw-3").one().id,
     }
+
+
+def test_run_dispatch_with_category_code_preserves_other_categories_from_latest_batch(client_and_db):
+    client, db = client_and_db
+    file_record = UploadFileRecord(filename="category-merge.xlsx", platform="JD", row_count=3, status="done")
+    db.add(file_record)
+    db.flush()
+    db.add_all([
+        DispatchRule(
+            category_code="headphone",
+            platform="jd",
+            field="item_name",
+            match_type="contains",
+            value="耳机",
+            priority=1,
+            is_active=1,
+        ),
+        DispatchRule(
+            category_code="speaker",
+            platform="jd",
+            field="item_name",
+            match_type="contains",
+            value="音箱",
+            priority=1,
+            is_active=1,
+        ),
+    ])
+    db.flush()
+    rows = [
+        RawDataRecord(file_id=file_record.id, platform="JD", item_id="raw-1", item_name="降噪耳机"),
+        RawDataRecord(file_id=file_record.id, platform="JD", item_id="raw-2", item_name="蓝牙音箱"),
+        RawDataRecord(file_id=file_record.id, platform="JD", item_id="raw-3", item_name="普通商品"),
+    ]
+    db.add_all(rows)
+    db.commit()
+
+    full_response = client.post("/api/dispatch/run", json={"file_id": file_record.id})
+    assert full_response.status_code == 200
+    full_batch_id = full_response.json()["id"]
+    speaker_row_id = db.query(RawDataRecord).filter_by(item_id="raw-2").one().id
+    assert db.query(DispatchItem).filter_by(batch_id=full_batch_id, category_code="speaker", raw_data_id=speaker_row_id).count() == 1
+
+    scoped_response = client.post("/api/dispatch/run", json={"file_id": file_record.id, "category_code": "headphone"})
+
+    assert scoped_response.status_code == 200
+    payload = scoped_response.json()
+    assert payload["total_rows"] == 3
+    assert payload["dispatched_rows"] == 2
+    assert payload["unmatched_rows"] == 1
+    items = db.query(DispatchItem).filter_by(batch_id=payload["id"]).order_by(DispatchItem.category_code).all()
+    assert [(item.category_code, item.raw_data_id) for item in items] == [
+        ("headphone", db.query(RawDataRecord).filter_by(item_id="raw-1").one().id),
+        ("speaker", speaker_row_id),
+    ]
 
 
 def test_run_dispatch_with_category_code_requires_active_rule(client_and_db):

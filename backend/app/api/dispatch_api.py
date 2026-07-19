@@ -435,15 +435,52 @@ def run_dispatch(payload: dict, db: Session = Depends(get_db)):
     batch_id = batch.id
 
     try:
-        total_rows = 0 if category_code else (
+        total_rows = (
             db.query(func.count(RawDataRecord.id))
             .filter(RawDataRecord.file_id == file_id)
             .scalar()
             or 0
         )
 
+        copied_rows = 0
+        if category_code:
+            previous_batch = (
+                db.query(DispatchBatch)
+                .filter(
+                    DispatchBatch.file_id == file_id,
+                    DispatchBatch.status == "done",
+                    DispatchBatch.id != batch_id,
+                )
+                .order_by(DispatchBatch.created_at.desc(), DispatchBatch.id.desc())
+                .first()
+            )
+            if previous_batch:
+                previous_items = (
+                    db.query(DispatchItem.raw_data_id, DispatchItem.category_code, DispatchItem.matched_rule_id)
+                    .filter(
+                        DispatchItem.batch_id == previous_batch.id,
+                        DispatchItem.category_code != category_code,
+                    )
+                    .all()
+                )
+                if previous_items:
+                    db.execute(
+                        DispatchItem.__table__.insert(),
+                        [
+                            {
+                                "batch_id": batch_id,
+                                "raw_data_id": item.raw_data_id,
+                                "category_code": item.category_code,
+                                "matched_rule_id": item.matched_rule_id,
+                            }
+                            for item in previous_items
+                        ],
+                    )
+                    copied_rows = len(previous_items)
+                    db.flush()
+
         # 3. 分页读取 raw_data 少量字段并批量插入，避免大文件分发时占满内存
-        dispatched_rows = 0
+        dispatched_rows = copied_rows
         unmatched_rows = 0
         last_id = 0
 
@@ -477,8 +514,6 @@ def run_dispatch(payload: dict, db: Session = Depends(get_db)):
                         matched_by_category[rule.category_code] = rule
 
                 if matched_by_category:
-                    if category_code:
-                        total_rows += 1
                     for matched_category_code, rule in matched_by_category.items():
                         insert_rows.append({
                             "batch_id": batch_id,
@@ -500,7 +535,7 @@ def run_dispatch(payload: dict, db: Session = Depends(get_db)):
         batch.status = "done"
         batch.total_rows = total_rows
         batch.dispatched_rows = dispatched_rows
-        batch.unmatched_rows = unmatched_rows
+        batch.unmatched_rows = max(total_rows - dispatched_rows, 0) if category_code else unmatched_rows
         batch.finished_at = datetime.utcnow()
         db.commit()
         db.refresh(batch)

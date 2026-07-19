@@ -379,6 +379,11 @@ export interface DispatchUnmatchedResponse {
 export const runDispatch = (fileId: number, categoryCode?: string) =>
   api.post('/dispatch/run', categoryCode ? { file_id: fileId, category_code: categoryCode } : { file_id: fileId })
 
+export const enqueueDispatchCategoryForClean = (batchId: number, categoryCode: string) =>
+  api.post<{ dispatch_batch_id: number; category_code: string; pending_count: number }>(
+    `/dispatch/batches/${batchId}/categories/${categoryCode}/enqueue-clean`
+  )
+
 export const listDispatchBatches = (params?: Record<string, unknown>) =>
   api.get('/dispatch/batches', { params })
 

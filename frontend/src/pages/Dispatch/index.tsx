@@ -10,7 +10,7 @@ import {
 import { useRequest } from 'ahooks'
 import dayjs from 'dayjs'
 import {
-  listUploadFiles, listDispatchBatches, runDispatch,
+  listUploadFiles, listDispatchBatches, runDispatch, enqueueDispatchCategoryForClean,
   getDispatchBatchStats, listDispatchUnmatched, listDispatchRules,
   createDispatchRule, updateDispatchRule, deleteDispatchRule,
   createDispatchExportJob, listDispatchExportJobs, deleteDispatchExportJob,
@@ -190,11 +190,8 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
     const key = `${currentStatsBatch.id}-${category.category_code}`
     setRunningCategoryKeys(prev => new Set(prev).add(key))
     try {
-      const res = await runDispatch(currentStatsBatch.file_id, category.category_code)
-      message.success(`${category.category_name || category.category_code} 分发完成`)
-      refreshBatches()
-      setCurrentStatsBatch(res.data)
-      await refreshStats(res.data.id)
+      const res = await enqueueDispatchCategoryForClean(currentStatsBatch.id, category.category_code)
+      message.success(`${category.category_name || category.category_code} 已进入待入清洗队列：${res.data.pending_count} 条`)
     } finally {
       setRunningCategoryKeys(prev => { const s = new Set(prev); s.delete(key); return s })
     }
@@ -399,8 +396,8 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
                     const key = currentStatsBatch ? `${currentStatsBatch.id}-${row.category_code}` : row.category_code
                     return (
                       <Popconfirm
-                        title="按品类分发"
-                        description={`只重新分发当前文件下的 ${row.category_name || row.category_code} 数据？`}
+                        title="加入待入清洗队列"
+                        description={`将当前批次下的 ${row.category_name || row.category_code} 数据加入待入清洗队列？不会改变当前分发明细。`}
                         okText="确认"
                         cancelText="取消"
                         onConfirm={() => handleRunCategory(row)}

@@ -759,18 +759,33 @@ def test_monthly_pool_ignores_existing_job_with_malformed_month_scope(db):
 def test_upsert_monthly_clean_task_creates_new_monthly_task(db, monkeypatch):
     client = _make_client(db)
     _create_monthly_pending_row(db, item_id="sb-1")
-    run_match_calls = []
+    snapshot_calls = []
 
-    def fake_run_match(match_db, clean_job_id, **kwargs):
-        run_match_calls.append(clean_job_id)
-        return {"total": 1, "matched": 0}
+    def fake_upsert_monthly_task_snapshot(db_session, **kwargs):
+        snapshot_calls.append(kwargs)
+        job = CleanJobRecord(
+            file_ids=[],
+            rules={"dedup": True},
+            status="reviewing",
+            row_in=1,
+            row_out=1,
+            task_name="回音壁 / jd / 202605",
+            category_code="soundbar",
+            platform="jd",
+            source_scope={"months": [202605], "platforms": ["jd"], "dispatch_batch_ids": [], "file_ids": []},
+        )
+        db_session.add(job)
+        db_session.flush()
+        return job, 1, "created", []
 
-    monkeypatch.setattr("app.api.clean.run_match", fake_run_match)
+    monkeypatch.setattr("app.api.clean._run_clean_and_match_for_job", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.api.clean.upsert_monthly_task_snapshot", fake_upsert_monthly_task_snapshot)
 
     response = client.post("/api/clean/tasks/upsert-monthly", json={
         "category_code": "soundbar",
         "platform": "jd",
         "month": 202605,
+        "force_reclean": True,
     })
 
     assert response.status_code == 200
@@ -782,7 +797,7 @@ def test_upsert_monthly_clean_task_creates_new_monthly_task(db, monkeypatch):
     assert payload["job"]["category_code"] == "soundbar"
     assert payload["job"]["platform"] == "jd"
     assert payload["job"]["source_scope"]["months"] == [202605]
-    assert run_match_calls == [payload["job"]["id"]]
+    assert snapshot_calls and snapshot_calls[0]["force_reclean"] is True
 
 
 def test_upsert_monthly_clean_task_appends_with_malformed_existing_scope_lists(db, monkeypatch):

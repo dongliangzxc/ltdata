@@ -453,6 +453,7 @@ def upsert_monthly_clean_task(payload: UpsertMonthlyCleanTaskIn, db: Session = D
             platform=payload.platform,
             month=payload.month,
             rules=payload.rules,
+            force_reclean=payload.force_reclean,
         )
         _run_clean_and_match_for_job(db, job, commit=False)
         db.commit()

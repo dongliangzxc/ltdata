@@ -885,6 +885,37 @@ def test_upsert_monthly_clean_task_appends_skips_malformed_existing_scope_values
 
 
 
+def test_upsert_monthly_clean_task_restores_archived_monthly_task(db, monkeypatch):
+    client = _make_client(db)
+    _create_monthly_pending_row(db, item_id="sb-1")
+    job = CleanJobRecord(
+        file_ids=[],
+        rules={"dedup": True},
+        status="archived",
+        task_name="回音壁 / jd / 202605",
+        category_code="soundbar",
+        platform="jd",
+        source_scope={"months": [202605], "platforms": ["jd"], "dispatch_batch_ids": [], "file_ids": []},
+    )
+    db.add(job)
+    db.commit()
+
+    monkeypatch.setattr("app.api.clean.run_clean", lambda *args, **kwargs: 1)
+    monkeypatch.setattr("app.api.clean.run_match", lambda match_db, clean_job_id, **kwargs: {"total": 1, "matched": 0})
+
+    response = client.post("/api/clean/tasks/upsert-monthly", json={
+        "category_code": "soundbar",
+        "platform": "jd",
+        "month": 202605,
+    })
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["action"] == "appended"
+    assert payload["job"]["id"] == job.id
+    assert payload["job"]["status"] == "reviewing"
+
+
 def test_upsert_monthly_clean_task_appends_to_existing_task_and_reruns(db, monkeypatch):
     client = _make_client(db)
     first_raw, first_batch, first_upload = _create_monthly_pending_row(db, item_id="sb-1")

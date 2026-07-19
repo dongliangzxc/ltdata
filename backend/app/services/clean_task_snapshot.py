@@ -505,6 +505,8 @@ def upsert_monthly_task_snapshot(
         month=month,
     )
     action = "appended" if job else "created"
+    if job and job.status == "archived":
+        job.status = "reviewing"
     if job and job.status not in APPENDABLE_TASK_STATUSES:
         raise ValueError(f"任务状态为 {job.status}，不能追加数据")
     if job and _has_reviewed_or_published_state(db, job.id):

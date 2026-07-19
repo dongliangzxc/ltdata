@@ -324,6 +324,7 @@ export default function CleanPage() {
           platform: row.platform!,
           month: row.month,
           rules: { dedup: true },
+          force_reclean: action === 'recleaned',
         })
         message.success(action === 'appended' || response.data.action === 'appended' ? '已追加到清洗任务' : '已创建清洗任务')
         refreshMonthlyPool()

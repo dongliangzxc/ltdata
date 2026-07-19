@@ -589,7 +589,7 @@ def test_get_monthly_clean_pool_excludes_existing_snapshot_items_from_pending_co
     assert response.json()[0]["pending_count"] == 1
 
 
-def test_get_monthly_clean_pool_reports_existing_monthly_job(db):
+def test_get_monthly_clean_pool_hides_scope_with_active_monthly_job(db):
     client = _make_client(db)
     category = Category(code="soundbar", name="回音壁")
     upload = UploadFileRecord(filename="monthly-existing.xlsx", platform="jd", row_count=1, status="done")
@@ -618,12 +618,10 @@ def test_get_monthly_clean_pool_reports_existing_monthly_job(db):
     response = client.get("/api/clean/pool/monthly?category_code=soundbar&platform=jd&month=202605")
 
     assert response.status_code == 200
-    assert response.json()[0]["existing_job_id"] == job.id
-    assert response.json()[0]["existing_job_name"] == "回音壁 / 京东 / 202605"
-    assert response.json()[0]["existing_job_status"] == "reviewing"
+    assert response.json() == []
 
 
-def test_get_monthly_clean_pool_reports_existing_monthly_job_stored_with_platform_alias(db):
+def test_get_monthly_clean_pool_shows_scope_with_archived_monthly_job(db):
     client = _make_client(db)
     category = Category(code="soundbar", name="回音壁")
     upload = UploadFileRecord(filename="monthly-existing-alias.xlsx", platform="jd", row_count=1, status="done")
@@ -640,31 +638,7 @@ def test_get_monthly_clean_pool_reports_existing_monthly_job_stored_with_platfor
     job = CleanJobRecord(
         file_ids=[],
         rules={"dedup": True},
-        status="reviewing",
-        task_name="回音壁 / 京东 / 202605",
-        category_code="soundbar",
-        platform="京东",
-        source_scope={"months": [202605], "platforms": ["京东"], "dispatch_batch_ids": [], "file_ids": []},
-    )
-    db.add(job)
-    db.commit()
-
-    response = client.get("/api/clean/pool/monthly?category_code=soundbar&platform=jd&month=202605")
-
-    assert response.status_code == 200
-    assert response.json()[0]["existing_job_id"] == job.id
-    assert response.json()[0]["existing_job_name"] == "回音壁 / 京东 / 202605"
-    assert response.json()[0]["existing_job_status"] == "reviewing"
-
-
-def test_get_monthly_clean_pool_includes_rows_already_queued_for_cleaning(db):
-    client = _make_client(db)
-    raw, batch, _upload = _create_monthly_pending_row(db, item_id="sb-1", month=202605)
-
-    job = CleanJobRecord(
-        file_ids=[],
-        rules={"dedup": True},
-        status="reviewing",
+        status="archived",
         task_name="回音壁 / 京东 / 202605",
         category_code="soundbar",
         platform="jd",
@@ -693,31 +667,11 @@ def test_get_monthly_clean_pool_includes_rows_already_queued_for_cleaning(db):
             "dispatched_count": 1,
             "pending_count": 0,
             "queued_count": 1,
-            "existing_job_id": job.id,
-            "existing_job_name": "回音壁 / 京东 / 202605",
-            "existing_job_status": "reviewing",
+            "existing_job_id": None,
+            "existing_job_name": None,
+            "existing_job_status": None,
         }
     ]
-
-
-def _create_monthly_pending_row(db, *, category_code="soundbar", category_name="回音壁", platform="jd", month=202605, item_id="sb-1"):
-    category = db.query(Category).filter_by(code=category_code).first()
-    if not category:
-        category = Category(code=category_code, name=category_name)
-        db.add(category)
-        db.flush()
-    upload = UploadFileRecord(filename=f"{category_code}-{month}-{item_id}.xlsx", platform=platform, row_count=1, status="done")
-    db.add(upload)
-    db.flush()
-    raw = RawDataRecord(file_id=upload.id, platform=platform, month=month, item_id=item_id, item_name=f"{category_name}{item_id}")
-    db.add(raw)
-    db.flush()
-    batch = DispatchBatch(file_id=upload.id, status="done", total_rows=1, dispatched_rows=1, unmatched_rows=0)
-    db.add(batch)
-    db.flush()
-    db.add(DispatchItem(batch_id=batch.id, raw_data_id=raw.id, category_code=category_code))
-    db.commit()
-    return raw, batch, upload
 
 
 def test_monthly_pool_filter_supports_publish_warning_scope(db):

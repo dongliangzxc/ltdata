@@ -249,7 +249,7 @@ def _monthly_jobs_by_scope(
     jobs_by_scope: dict[tuple[str, str, int], CleanJobRecord] = {}
     for job in q.order_by(CleanJobRecord.id.desc()).all():
         job_platform = normalize_platform(job.platform)
-        if not job.category_code or not job_platform:
+        if not job.category_code or not job_platform or job.status == "archived":
             continue
         for job_month in _job_months(job):
             jobs_by_scope.setdefault((job.category_code, job_platform, job_month), job)
@@ -327,6 +327,8 @@ def get_monthly_clean_pool(
         normalized_platform = normalize_platform(row.platform)
         row_month = int(row.month)
         job = jobs_by_scope.get((row.category_code, normalized_platform, row_month))
+        if job:
+            continue
         result.append({
             "category_code": row.category_code,
             "category_name": row.category_name,
@@ -335,9 +337,9 @@ def get_monthly_clean_pool(
             "dispatched_count": row.dispatched_count,
             "pending_count": row.pending_count,
             "queued_count": row.queued_count,
-            "existing_job_id": job.id if job else None,
-            "existing_job_name": job.task_name if job else None,
-            "existing_job_status": job.status if job else None,
+            "existing_job_id": None,
+            "existing_job_name": None,
+            "existing_job_status": None,
         })
     return result
 

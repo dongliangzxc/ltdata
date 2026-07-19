@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.database import get_db, SessionLocal
 from app.models.schemas import (
-    Category, DispatchRule, DispatchBatch, DispatchItem,
+    Category, CleanJobItemRecord, DispatchRule, DispatchBatch, DispatchItem,
     DispatchRuleIn, DispatchRuleOut, DispatchBatchOut,
     RawDataRecord, UploadFileRecord, ColumnTemplate, WorkbenchExportJob,
 )
@@ -561,6 +561,34 @@ def list_batches(
     if file_id:
         q = q.filter(DispatchBatch.file_id == file_id)
     return q.order_by(DispatchBatch.created_at.desc()).all()
+
+
+
+@router.post("/batches/{batch_id}/categories/{category_code}/enqueue-clean")
+def enqueue_dispatch_category_for_clean(batch_id: int, category_code: str, db: Session = Depends(get_db)):
+    """将当前批次当前品类暴露给待入清洗队列，不生成新的分发批次。"""
+    batch = db.query(DispatchBatch).filter(DispatchBatch.id == batch_id).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="分发批次不存在")
+    if batch.status != "done":
+        raise HTTPException(status_code=400, detail="只能处理已完成的分发批次")
+
+    pending_count = (
+        db.query(func.count(DispatchItem.id))
+        .outerjoin(
+            CleanJobItemRecord,
+            (CleanJobItemRecord.raw_data_id == DispatchItem.raw_data_id)
+            & (CleanJobItemRecord.category_code == DispatchItem.category_code),
+        )
+        .filter(
+            DispatchItem.batch_id == batch_id,
+            DispatchItem.category_code == category_code,
+            CleanJobItemRecord.id.is_(None),
+        )
+        .scalar()
+        or 0
+    )
+    return {"dispatch_batch_id": batch_id, "category_code": category_code, "pending_count": pending_count}
 
 
 @router.get("/batches/{batch_id}/unmatched")

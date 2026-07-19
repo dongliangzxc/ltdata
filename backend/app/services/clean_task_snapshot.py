@@ -75,6 +75,24 @@ def _deduped_dispatch_item_ids(
     ).subquery()
 
 
+def _dispatch_query(
+    db: Session,
+    category_code: str | None = None,
+    platform: str | None = None,
+    dispatch_batch_id: int | None = None,
+):
+    deduped_dispatch_item_ids = _deduped_dispatch_item_ids(db, category_code, dispatch_batch_id)
+    q = (
+        db.query(DispatchItem, RawDataRecord)
+        .join(deduped_dispatch_item_ids, DispatchItem.id == deduped_dispatch_item_ids.c.dispatch_item_id)
+        .join(RawDataRecord, RawDataRecord.id == DispatchItem.raw_data_id)
+    )
+    normalized_platform = normalize_platform(platform)
+    if normalized_platform:
+        q = q.filter(func.lower(RawDataRecord.platform).in_(platform_aliases_for(normalized_platform)))
+    return q
+
+
 def _pending_dispatch_query(
     db: Session,
     category_code: str | None = None,
@@ -152,8 +170,9 @@ def _monthly_pending_rows(
     category_code: str | None = None,
     platform: str | None = None,
     month: int | None = None,
+    include_queued: bool = False,
 ):
-    q = _pending_dispatch_query(db, category_code=category_code, platform=platform)
+    q = _dispatch_query(db, category_code=category_code, platform=platform) if include_queued else _pending_dispatch_query(db, category_code=category_code, platform=platform)
     if month is not None:
         q = q.filter(RawDataRecord.month == month)
     return q
@@ -460,6 +479,7 @@ def upsert_monthly_task_snapshot(
     platform: str,
     month: int,
     rules: dict | None,
+    force_reclean: bool = False,
 ):
     normalized_platform = normalize_platform(platform)
     rows = (
@@ -468,12 +488,13 @@ def upsert_monthly_task_snapshot(
             category_code=category_code,
             platform=normalized_platform,
             month=month,
+            include_queued=force_reclean,
         )
         .order_by(DispatchItem.id)
         .all()
     )
     if not rows:
-        raise ValueError("该任务范围没有待入清洗队列的数据")
+        raise ValueError("该任务范围没有可清洗的数据")
 
     job = _find_monthly_job(
         db,

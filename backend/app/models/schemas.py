@@ -233,6 +233,7 @@ class UpsertMonthlyCleanTaskIn(BaseModel):
     platform: str
     month: int
     rules: Optional[dict] = None
+    force_reclean: bool = False
 
     @field_validator("category_code", "platform")
     @classmethod

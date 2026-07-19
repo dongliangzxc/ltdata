@@ -192,6 +192,7 @@ export interface UpsertMonthlyCleanTaskPayload {
   platform: string
   month: number
   rules?: Record<string, unknown>
+  force_reclean?: boolean
 }
 
 export interface UpsertMonthlyCleanTaskResponse {
@@ -382,9 +383,13 @@ export const runDispatch = (fileId: number, categoryCode?: string) =>
   api.post('/dispatch/run', categoryCode ? { file_id: fileId, category_code: categoryCode } : { file_id: fileId })
 
 export const enqueueDispatchCategoryForClean = (batchId: number, categoryCode: string) =>
-  api.post<{ dispatch_batch_id: number; category_code: string; pending_count: number }>(
-    `/dispatch/batches/${batchId}/categories/${categoryCode}/enqueue-clean`
-  )
+  api.post<{
+    dispatch_batch_id: number
+    category_code: string
+    dispatch_count: number
+    pending_count: number
+    queued_count: number
+  }>(`/dispatch/batches/${batchId}/categories/${categoryCode}/enqueue-clean`)
 
 export const listDispatchBatches = (params?: Record<string, unknown>) =>
   api.get('/dispatch/batches', { params })

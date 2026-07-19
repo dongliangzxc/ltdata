@@ -573,8 +573,12 @@ def enqueue_dispatch_category_for_clean(batch_id: int, category_code: str, db: S
     if batch.status != "done":
         raise HTTPException(status_code=400, detail="只能处理已完成的分发批次")
 
-    pending_count = (
-        db.query(func.count(DispatchItem.id))
+    counts = (
+        db.query(
+            func.count(func.distinct(DispatchItem.raw_data_id)).label("dispatch_count"),
+            func.count(func.distinct(case((CleanJobItemRecord.id.is_(None), DispatchItem.raw_data_id)))).label("pending_count"),
+            func.count(func.distinct(case((CleanJobItemRecord.id.isnot(None), DispatchItem.raw_data_id)))).label("queued_count"),
+        )
         .outerjoin(
             CleanJobItemRecord,
             (CleanJobItemRecord.raw_data_id == DispatchItem.raw_data_id)
@@ -583,12 +587,16 @@ def enqueue_dispatch_category_for_clean(batch_id: int, category_code: str, db: S
         .filter(
             DispatchItem.batch_id == batch_id,
             DispatchItem.category_code == category_code,
-            CleanJobItemRecord.id.is_(None),
         )
-        .scalar()
-        or 0
+        .one()
     )
-    return {"dispatch_batch_id": batch_id, "category_code": category_code, "pending_count": pending_count}
+    return {
+        "dispatch_batch_id": batch_id,
+        "category_code": category_code,
+        "dispatch_count": int(counts.dispatch_count or 0),
+        "pending_count": int(counts.pending_count or 0),
+        "queued_count": int(counts.queued_count or 0),
+    }
 
 
 @router.get("/batches/{batch_id}/unmatched")

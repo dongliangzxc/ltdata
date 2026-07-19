@@ -182,6 +182,9 @@ const getMonthlyQueueRowKey = (row: CleanMonthlyPoolItem) => `${row.category_cod
 
 const getQueueAction = (row: CleanMonthlyPoolItem) => {
   if (!row.platform) return { label: '缺少平台', disabled: true, action: 'blocked' as const }
+  if ((row.pending_count ?? 0) === 0 && (row.queued_count ?? 0) > 0) {
+    return { label: '重新清洗', disabled: false, action: 'recleaned' as const }
+  }
   if (!row.existing_job_id) return { label: '创建任务', disabled: false, action: 'created' as const }
   if (row.existing_job_status && appendableStatuses.has(row.existing_job_status)) {
     return { label: '追加到任务', disabled: false, action: 'appended' as const }
@@ -215,24 +218,7 @@ const monthlyQueueColumns = (
   },
   {
     title: '待入队数量', dataIndex: 'pending_count', width: 130,
-    render: (value: number, row) => (
-      <Space size={6}>
-        <span>{formatNumber(value)}</span>
-        {value === 0 && row.queued_count > 0 ? <Tag color="blue">已入任务</Tag> : null}
-      </Space>
-    ),
-  },
-  {
-    title: '已入任务', dataIndex: 'queued_count', width: 110,
-    render: (value: number) => value > 0 ? <Tag color="green">{formatNumber(value)}</Tag> : '-',
-  },
-  {
-    title: '已有任务', dataIndex: 'existing_job_name', width: 180,
-    render: (_: string | null | undefined, row) => row.existing_job_name || (row.existing_job_id ? `任务 #${row.existing_job_id}` : '-'),
-  },
-  {
-    title: '任务状态', dataIndex: 'existing_job_status', width: 110,
-    render: (status?: string | null) => status ? renderStatus(status) : '-',
+    render: formatNumber,
   },
   {
     title: '操作', width: 120, fixed: 'right',

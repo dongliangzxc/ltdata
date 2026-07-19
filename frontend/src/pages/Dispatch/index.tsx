@@ -191,7 +191,8 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
     setRunningCategoryKeys(prev => new Set(prev).add(key))
     try {
       const res = await enqueueDispatchCategoryForClean(currentStatsBatch.id, category.category_code)
-      message.success(`${category.category_name || category.category_code} 已进入待入清洗队列：${res.data.pending_count} 条`)
+      const queuedText = res.data.queued_count > 0 ? `，已入任务 ${res.data.queued_count} 条` : ''
+      message.success(`${category.category_name || category.category_code} 分发成功：分发结果 ${res.data.dispatch_count} 条，新增待入队 ${res.data.pending_count} 条${queuedText}`)
     } finally {
       setRunningCategoryKeys(prev => { const s = new Set(prev); s.delete(key); return s })
     }

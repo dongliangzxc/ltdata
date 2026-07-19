@@ -398,6 +398,7 @@ def create_clean_task(payload: CreateCleanTaskIn, db: Session = Depends(get_db))
             dispatch_batch_id=payload.dispatch_batch_id,
             task_name=payload.task_name,
             rules=payload.rules,
+            force_reclean=payload.force_reclean,
         )
         db.commit()
         db.refresh(job)

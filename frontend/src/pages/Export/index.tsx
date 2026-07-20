@@ -5,7 +5,7 @@ import {
 } from 'antd'
 import { ExportOutlined, DownloadOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
-import { getDownloadUrl, listExportJobs, triggerExport } from '../../services/api'
+import { getDownloadUrl, getExportFilters, listExportJobs, triggerExport, type ExportFilterOption } from '../../services/api'
 
 const { Text } = Typography
 
@@ -34,9 +34,9 @@ export default function ExportPage() {
   const [exportJobs, setExportJobs] = useState<ExportJobItem[]>([])
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const { data: filterData } = useRequest(() => getExportFilters().then(r => r.data))
+  const { data: filterData } = useRequest<ExportFilterOption>(() => getExportFilters().then(r => r.data))
 
-  const filterOptions = filterData ?? { months: [], platforms: [], categories: [] }
+  const filterOptions: ExportFilterOption = filterData ?? { months: [], platforms: [], categories: [] }
 
   const loadExportJobs = () => {
     listExportJobs().then(r => setExportJobs(r.data.data ?? [])).catch(() => {})

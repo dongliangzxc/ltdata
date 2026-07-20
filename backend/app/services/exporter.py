@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.models.schemas import (
     MatchResult, RawDataRecord, ModelRecord,
     ModelSpec, MetadataSpec,
-    Category, FilteredItem,
+    Category, CleanJobRecord, FilteredItem,
 )
 from app.core.config import settings
 
@@ -90,9 +90,85 @@ def _spec_map_for_models(db: Session, model_ids: list[int]) -> dict[int, dict[st
     return spec_map
 
 
+
+def _job_months(job: CleanJobRecord) -> set[int]:
+    scope = job.source_scope
+    months = []
+    if isinstance(scope, dict):
+        scope_months = scope.get("months")
+        if isinstance(scope_months, list):
+            months = scope_months
+    if not months:
+        month = getattr(job, "month", None)
+        if month is not None:
+            months = [month]
+    parsed: set[int] = set()
+    for month in months:
+        try:
+            parsed.add(int(month))
+        except (TypeError, ValueError):
+            continue
+    return parsed
+
+
+def _filter_clean_job_ids(
+    db: Session,
+    *,
+    months: list[int],
+    category_code: str,
+    platforms: list[str],
+) -> list[int]:
+    month_set = {int(month) for month in months}
+    category_code = str(category_code).strip()
+    platform_set = {str(platform).strip() for platform in platforms if str(platform).strip()}
+    jobs = (
+        db.query(CleanJobRecord)
+        .filter(
+            CleanJobRecord.status == "done",
+            CleanJobRecord.category_code.isnot(None),
+            CleanJobRecord.platform.isnot(None),
+        )
+        .order_by(CleanJobRecord.id)
+        .all()
+    )
+    return [
+        job.id
+        for job in jobs
+        if str(job.category_code or "").strip() == category_code
+        and str(job.platform or "").strip() in platform_set
+        and _job_months(job).intersection(month_set)
+    ]
+
+
 def export_match_job(
     db: Session,
     clean_job_id: int,
+    filename_prefix: str = "已处理数据",
+) -> list[dict]:
+    return _export_match_jobs(db, [clean_job_id], filename_prefix)
+
+
+def export_match_filters(
+    db: Session,
+    months: list[int],
+    category_code: str,
+    platforms: list[str],
+    filename_prefix: str = "已处理数据",
+) -> list[dict]:
+    clean_job_ids = _filter_clean_job_ids(
+        db,
+        months=months,
+        category_code=category_code,
+        platforms=platforms,
+    )
+    if not clean_job_ids:
+        return []
+    return _export_match_jobs(db, clean_job_ids, filename_prefix)
+
+
+def _export_match_jobs(
+    db: Session,
+    clean_job_ids: list[int],
     filename_prefix: str = "已处理数据",
 ) -> list[dict]:
     """
@@ -113,7 +189,7 @@ def export_match_job(
         .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
         .join(ModelRecord, MatchResult.model_id == ModelRecord.id)
         .filter(
-            MatchResult.clean_job_id == clean_job_id,
+            MatchResult.clean_job_id.in_(clean_job_ids),
             MatchResult.match_status.in_(["url_matched", "matched", "confirmed"]),
             MatchResult.is_disabled == 0,
         )
@@ -123,7 +199,7 @@ def export_match_job(
         db.query(MatchResult, RawDataRecord)
         .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
         .filter(
-            MatchResult.clean_job_id == clean_job_id,
+            MatchResult.clean_job_id.in_(clean_job_ids),
             MatchResult.match_status == "pending",
             MatchResult.is_disabled == 0,
         )
@@ -134,7 +210,7 @@ def export_match_job(
         .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
         .join(ModelRecord, MatchResult.model_id == ModelRecord.id)
         .filter(
-            MatchResult.clean_job_id == clean_job_id,
+            MatchResult.clean_job_id.in_(clean_job_ids),
             MatchResult.match_status == "text_only",
             MatchResult.is_disabled == 0,
         )
@@ -146,7 +222,7 @@ def export_match_job(
         .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
         .outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
         .filter(
-            MatchResult.clean_job_id == clean_job_id,
+            MatchResult.clean_job_id.in_(clean_job_ids),
             MatchResult.match_status == "disputed",
             MatchResult.is_disabled == 0,
         )
@@ -157,7 +233,7 @@ def export_match_job(
         .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
         .outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
         .filter(
-            MatchResult.clean_job_id == clean_job_id,
+            MatchResult.clean_job_id.in_(clean_job_ids),
             MatchResult.match_status == "excluded",
             MatchResult.is_disabled == 0,
         )
@@ -168,7 +244,7 @@ def export_match_job(
         db.query(FilteredItem, RawDataRecord)
         .join(RawDataRecord, FilteredItem.raw_data_id == RawDataRecord.id)
         .filter(
-            FilteredItem.clean_job_id == clean_job_id,
+            FilteredItem.clean_job_id.in_(clean_job_ids),
             FilteredItem.is_recovered == 0,
         )
         .order_by(FilteredItem.id)

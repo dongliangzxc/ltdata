@@ -994,7 +994,10 @@ class ExportJob(Base):
     __tablename__ = "export_jobs"
 
     id               = Column(Integer, primary_key=True, index=True)
-    clean_job_id     = Column(Integer, nullable=False)
+    clean_job_id     = Column(Integer, nullable=True)
+    months           = Column(JSON, nullable=True)
+    category_code    = Column(String(100), nullable=True)
+    platforms        = Column(JSON, nullable=True)
     filename_prefix  = Column(String(255), nullable=False, default="已处理数据")
     status           = Column(String(20), default="pending")   # pending/running/done/error
     filename         = Column(String(500))
@@ -1008,7 +1011,10 @@ class ExportJob(Base):
 
 class ExportJobOut(BaseModel):
     id:              int
-    clean_job_id:    int
+    clean_job_id:    Optional[int] = None
+    months:          Optional[list[int]] = None
+    category_code:   Optional[str] = None
+    platforms:       Optional[list[str]] = None
     filename_prefix: str
     status:          str
     filename:        Optional[str]

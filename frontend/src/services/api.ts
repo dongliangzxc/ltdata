@@ -450,16 +450,42 @@ export const deleteDispatchRule = (id: number) =>
   api.delete(`/dispatch/rules/${id}`)
 
 // ─── Export ────────────────────────────────────────────────
-export const triggerExport = (payload: {
-  clean_job_id: number
+export type TriggerExportPayload =
+  | { clean_job_id: number; filename_prefix: string }
+  | { months: number[]; category_code: string; platforms: string[]; filename_prefix: string }
+
+export interface ExportJobItem {
+  id: number
+  clean_job_id: number | null
+  months: number[] | null
+  category_code: string | null
+  platforms: string[] | null
   filename_prefix: string
-}) => api.post('/export', payload)
+  status: 'pending' | 'running' | 'done' | 'error'
+  filename: string | null
+  token: string | null
+  rows: number | null
+  pending_rows: number | null
+  error_msg: string | null
+  created_at: string
+}
+
+export interface ExportFilterOption {
+  months: number[]
+  platforms: string[]
+  categories: { code: string; name: string }[]
+}
+
+export const triggerExport = (payload: TriggerExportPayload) => api.post('/export', payload)
 
 export const listExportJobs = (clean_job_id?: number) =>
-  api.get('/export/jobs', { params: clean_job_id != null ? { clean_job_id } : {} })
+  api.get<{ data: ExportJobItem[] }>('/export/jobs', { params: clean_job_id != null ? { clean_job_id } : {} })
 
 export const getExportJob = (job_id: number) =>
   api.get(`/export/jobs/${job_id}`)
+
+export const getExportFilters = () =>
+  api.get<ExportFilterOption>('/export/filters')
 
 export const getDownloadUrl = (token: string) => `/api/export/download/${token}`
 

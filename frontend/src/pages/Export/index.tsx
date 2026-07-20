@@ -1,17 +1,20 @@
-import { useState, useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Card, Select, Input, Button, Table, Space, Typography, message,
-  Row, Col, Alert, Statistic, Tag, Tooltip
+  Row, Col, Tag, Tooltip
 } from 'antd'
 import { ExportOutlined, DownloadOutlined, ReloadOutlined, LoadingOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
-import { listCleanJobs, triggerExport, getDownloadUrl, getMatchSummary, listExportJobs } from '../../services/api'
+import { getDownloadUrl, listCleanJobs, listExportJobs, triggerExport, type CleanJobItem } from '../../services/api'
 
 const { Text } = Typography
 
 type ExportJobItem = {
   id: number
-  clean_job_id: number
+  clean_job_id: number | null
+  months: number[] | null
+  category_code: string | null
+  platforms: string[] | null
   filename_prefix: string
   status: 'pending' | 'running' | 'done' | 'error'
   filename: string | null
@@ -22,36 +25,19 @@ type ExportJobItem = {
   created_at: string
 }
 
-type MatchSummary = {
-  total: number
-  url_matched: number
-  matched: number
-  text_only: number
-  pending: number
-  confirmed: number
-  excluded: number
-  disabled: number
-}
-
-type CleanJobOption = {
-  id: number
-  row_out: number
-  created_at: string
-  scope_desc?: string | null
-  status: string
-}
-
 export default function ExportPage() {
-  const [selectedJobId, setSelectedJobId] = useState<number | null>(null)
+  const [selectedMonths, setSelectedMonths] = useState<number[]>([])
+  const [selectedCategoryCode, setSelectedCategoryCode] = useState<string | undefined>(undefined)
+  const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([])
   const [filenamePrefix, setFilenamePrefix] = useState('已处理数据')
   const [triggering, setTriggering] = useState(false)
-  const [matchSummary, setMatchSummary] = useState<MatchSummary | null>(null)
   const [exportJobs, setExportJobs] = useState<ExportJobItem[]>([])
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const { data: jobsData } = useRequest(() => listCleanJobs().then(r => r.data))
+  const { data: filterData } = useRequest(() => getExportFilters().then(r => r.data))
 
-  // 加载导出历史（全部）
+  const filterOptions = filterData ?? { months: [], platforms: [], categories: [] }
+
   const loadExportJobs = () => {
     listExportJobs().then(r => setExportJobs(r.data.data ?? [])).catch(() => {})
   }
@@ -60,18 +46,15 @@ export default function ExportPage() {
     loadExportJobs()
   }, [])
 
-  // 有 pending/running 的任务时自动轮询
   useEffect(() => {
     const hasPending = exportJobs.some(j => j.status === 'pending' || j.status === 'running')
     if (hasPending) {
       if (!pollTimerRef.current) {
         pollTimerRef.current = setInterval(loadExportJobs, 2000)
       }
-    } else {
-      if (pollTimerRef.current) {
-        clearInterval(pollTimerRef.current)
-        pollTimerRef.current = null
-      }
+    } else if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current)
+      pollTimerRef.current = null
     }
     return () => {
       if (pollTimerRef.current) {
@@ -81,19 +64,18 @@ export default function ExportPage() {
     }
   }, [exportJobs])
 
-  useEffect(() => {
-    if (!selectedJobId) { setMatchSummary(null); return }
-    getMatchSummary(selectedJobId)
-      .then(r => setMatchSummary(r.data))
-      .catch(() => setMatchSummary(null))
-  }, [selectedJobId])
-
   const handleTrigger = async () => {
-    if (!selectedJobId) { message.warning('请选择清洗任务'); return }
-    if (!matchSummary) { message.warning('请先执行型号匹配'); return }
+    if (selectedMonths.length === 0) { message.warning('请选择月度'); return }
+    if (!selectedCategoryCode) { message.warning('请选择品类'); return }
+    if (selectedPlatforms.length === 0) { message.warning('请选择平台'); return }
     setTriggering(true)
     try {
-      await triggerExport({ clean_job_id: selectedJobId, filename_prefix: filenamePrefix })
+      await triggerExport({
+        months: selectedMonths,
+        category_code: selectedCategoryCode,
+        platforms: selectedPlatforms,
+        filename_prefix: filenamePrefix,
+      })
       message.success('导出任务已提交，文件生成后可在下方下载')
       loadExportJobs()
     } finally {
@@ -101,155 +83,45 @@ export default function ExportPage() {
     }
   }
 
-  const statusTag = (status: ExportJobItem['status']) => {
-    const map: Record<string, { color: string; label: string }> = {
-      pending: { color: 'default', label: '排队中' },
-      running: { color: 'processing', label: '生成中' },
-      done:    { color: 'success',    label: '已完成' },
-      error:   { color: 'error',      label: '失败' },
-    }
-    const { color, label } = map[status] ?? { color: 'default', label: status }
-    return <Tag color={color}>{status === 'running' ? <><LoadingOutlined /> {label}</> : label}</Tag>
-  }
-
-  const exportCols = [
-    {
-      title: '清洗任务', dataIndex: 'clean_job_id', width: 90,
-      render: (v: number) => `#${v}`
-    },
-    { title: '文件名前缀', dataIndex: 'filename_prefix', width: 150, ellipsis: true },
-    {
-      title: '状态', dataIndex: 'status', width: 90,
-      render: (v: ExportJobItem['status']) => statusTag(v)
-    },
-    { title: '已匹配行', dataIndex: 'rows', width: 90, render: (v: number | null) => v ?? '-' },
-    { title: '待确认行', dataIndex: 'pending_rows', width: 90, render: (v: number | null) => v ?? '-' },
-    {
-      title: '提交时间', dataIndex: 'created_at', width: 160,
-      render: (v: string) => v || '-'
-    },
-    {
-      title: '操作', width: 100, fixed: 'right' as const,
-      render: (_: unknown, row: ExportJobItem) => {
-        if (row.status === 'done' && row.token) {
-          return (
-            <Button
-              type="primary"
-              size="small"
-              icon={<DownloadOutlined />}
-              href={getDownloadUrl(row.token)}
-              target="_blank"
-            >
-              下载
-            </Button>
-          )
-        }
-        if (row.status === 'error') {
-          return (
-            <Tooltip title={row.error_msg}>
-              <Text type="danger" style={{ fontSize: 12 }}>查看错误</Text>
-            </Tooltip>
-          )
-        }
-        return <Text type="secondary" style={{ fontSize: 12 }}>等待中…</Text>
-      }
-    },
+  const columns = [
+    { title: '月度', dataIndex: 'months', key: 'months', render: (months: number[] | null) => months?.length ? months.join('、') : '-' },
+    { title: '品类', dataIndex: 'category_code', key: 'category_code', render: (value: string | null) => value || '-' },
+    { title: '平台', dataIndex: 'platforms', key: 'platforms', render: (value: string[] | null) => value?.length ? value.join('、') : '-' },
+    { title: '文件名前缀', dataIndex: 'filename_prefix', key: 'filename_prefix' },
+    { title: '状态', dataIndex: 'status', key: 'status', render: (_: string, record: ExportJobItem) => <Tag color={record.status === 'done' ? 'success' : record.status === 'error' ? 'error' : record.status === 'running' ? 'processing' : 'default'}>{record.status === 'done' ? '已完成' : record.status === 'error' ? '失败' : record.status === 'running' ? '生成中' : '排队中'}</Tag> },
+    { title: '已匹配行', dataIndex: 'rows', key: 'rows', render: (value: number | null) => value ?? '-' },
+    { title: '待确认行', dataIndex: 'pending_rows', key: 'pending_rows', render: (value: number | null) => value ?? '-' },
+    { title: '提交时间', dataIndex: 'created_at', key: 'created_at', render: (value: string) => value?.slice(0, 19).replace('T', ' ') ?? '-' },
+    { title: '操作', key: 'action', render: (_: unknown, record: ExportJobItem) => record.status === 'done' && record.token ? <Button type="link" icon={<DownloadOutlined />} href={getDownloadUrl(record.token)}>下载</Button> : <span>{record.error_msg || '—'}</span> },
   ]
 
-  const doneJobs = (jobsData ?? []).filter((j: CleanJobOption) => j.status === 'done')
-  const readyMatched = matchSummary ? matchSummary.url_matched + matchSummary.matched + matchSummary.confirmed : 0
-
   return (
-    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+    <div className="space-y-4">
       <Card title="导出配置">
-        <Row gutter={24}>
-          <Col span={12}>
-            <Space direction="vertical" size={16} style={{ width: '100%' }}>
-              <div>
-                <Text strong>选择清洗任务</Text>
-                <Select
-                  style={{ width: '100%', marginTop: 8 }}
-                  placeholder="选择已完成的清洗任务"
-                  value={selectedJobId}
-                  onChange={v => { setSelectedJobId(v); setMatchSummary(null) }}
-                >
-                  {doneJobs.map((j: CleanJobOption) => (
-                    <Select.Option key={j.id} value={j.id}>
-                      任务 #{j.id}｜{j.scope_desc || '未标识范围'}｜输出 {j.row_out} 条｜
-                      <Text type="secondary" style={{ marginLeft: 4 }}>
-                        {j.created_at?.slice(0, 10) || '-'}
-                      </Text>
-                    </Select.Option>
-                  ))}
-                </Select>
-              </div>
-              <div>
-                <Text strong>文件名前缀</Text>
-                <Input
-                  style={{ marginTop: 8 }}
-                  value={filenamePrefix}
-                  onChange={e => setFilenamePrefix(e.target.value)}
-                  placeholder="如：Soundbar 7-8月已处理"
-                />
-              </div>
-              <Button
-                type="primary"
-                icon={<ExportOutlined />}
-                onClick={handleTrigger}
-                loading={triggering}
-                size="large"
-                disabled={!matchSummary || readyMatched === 0}
-              >
-                提交导出任务
-              </Button>
-            </Space>
+        <Row gutter={16}>
+          <Col span={8}>
+            <Text strong>月度</Text>
+            <Select mode="multiple" style={{ width: '100%', marginTop: 8 }} placeholder="选择月度" value={selectedMonths} onChange={setSelectedMonths} options={filterOptions.months.map(month => ({ value: month, label: String(month) }))} />
           </Col>
-          <Col span={12}>
-            {selectedJobId && matchSummary && (
-              <Card size="small" title="匹配状态">
-                <Row gutter={12}>
-                  <Col span={6}><Statistic title="URL匹配" value={matchSummary.url_matched} valueStyle={{ color: '#7c3aed', fontSize: 18 }} /></Col>
-                  <Col span={6}><Statistic title="已匹配" value={matchSummary.matched} valueStyle={{ color: '#3f8600', fontSize: 18 }} /></Col>
-                  <Col span={6}><Statistic title="已确认" value={matchSummary.confirmed} valueStyle={{ color: '#1677ff', fontSize: 18 }} /></Col>
-                  <Col span={6}><Statistic title="待确认" value={matchSummary.pending} valueStyle={{ color: '#d46b08', fontSize: 18 }} /></Col>
-                </Row>
-                {matchSummary.pending > 0 && (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    style={{ marginTop: 12 }}
-                    message={`还有 ${matchSummary.pending} 条待确认，可先导出已匹配部分，未确认的会进入"待确认" Sheet`}
-                  />
-                )}
-              </Card>
-            )}
-            {selectedJobId && !matchSummary && (
-              <Alert type="info" showIcon message="该任务尚未执行型号匹配，请先前往「匹配确认」页面完成匹配" />
-            )}
+          <Col span={8}>
+            <Text strong>品类</Text>
+            <Select showSearch style={{ width: '100%', marginTop: 8 }} placeholder="选择品类" value={selectedCategoryCode} onChange={setSelectedCategoryCode} options={filterOptions.categories} />
+          </Col>
+          <Col span={8}>
+            <Text strong>平台</Text>
+            <Select mode="multiple" style={{ width: '100%', marginTop: 8 }} placeholder="选择平台" value={selectedPlatforms} onChange={setSelectedPlatforms} options={filterOptions.platforms.map(platform => ({ value: platform, label: platform }))} />
           </Col>
         </Row>
+        <div style={{ marginTop: 16 }}>
+          <Text strong>文件名前缀</Text>
+          <Input style={{ marginTop: 8, maxWidth: 360 }} value={filenamePrefix} onChange={e => setFilenamePrefix(e.target.value)} placeholder="如：202507匹配结果" />
+        </div>
+        <Button style={{ marginTop: 16 }} type="primary" icon={<ExportOutlined />} onClick={handleTrigger} loading={triggering} disabled={selectedMonths.length === 0 || !selectedCategoryCode || selectedPlatforms.length === 0}>提交导出任务</Button>
       </Card>
 
-      <Card
-        title="导出历史"
-        extra={
-          <Button size="small" icon={<ReloadOutlined />} onClick={loadExportJobs}>刷新</Button>
-        }
-      >
-        {exportJobs.length === 0
-          ? <Text type="secondary">暂无导出记录</Text>
-          : (
-            <Table
-              dataSource={exportJobs}
-              columns={exportCols}
-              rowKey="id"
-              size="small"
-              pagination={false}
-              scroll={{ x: 750 }}
-            />
-          )
-        }
+      <Card title="导出历史" extra={<Button icon={<ReloadOutlined />} onClick={loadExportJobs}>刷新</Button>}>
+        <Table rowKey="id" columns={columns as never} dataSource={exportJobs} pagination={false} />
       </Card>
-    </Space>
+    </div>
   )
 }

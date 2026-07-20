@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
-  Card, Select, Input, Button, Table, Space, Typography, message,
-  Row, Col, Tag, Tooltip
+  Card, Select, Input, Button, Table,
+  Row, Col, Tag, Typography, message,
 } from 'antd'
-import { ExportOutlined, DownloadOutlined, ReloadOutlined, LoadingOutlined } from '@ant-design/icons'
+import { ExportOutlined, DownloadOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
-import { getDownloadUrl, listCleanJobs, listExportJobs, triggerExport, type CleanJobItem } from '../../services/api'
+import { getDownloadUrl, listExportJobs, triggerExport } from '../../services/api'
 
 const { Text } = Typography
 

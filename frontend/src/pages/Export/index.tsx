@@ -34,7 +34,7 @@ export default function ExportPage() {
   const [exportJobs, setExportJobs] = useState<ExportJobItem[]>([])
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const { data: filterData } = useRequest<ExportFilterOption>(() => getExportFilters().then(r => r.data))
+  const { data: filterData } = useRequest<[], ExportFilterOption>(() => getExportFilters().then(r => r.data))
 
   const filterOptions: ExportFilterOption = filterData ?? { months: [], platforms: [], categories: [] }
 

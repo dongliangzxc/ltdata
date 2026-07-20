@@ -1318,3 +1318,21 @@ def test_batch_stats_uses_assigned_rule_counts_without_raw_recount(client_and_db
             "assigned_count": 1,
         }
     ]
+
+
+def test_enqueue_dispatch_category_for_clean_returns_counts(client_and_db):
+    client, db = client_and_db
+    batch = DispatchBatch(status="done", total_rows=0, dispatched_rows=0, unmatched_rows=0)
+    db.add(batch)
+    db.commit()
+
+    response = client.post(f"/api/dispatch/batches/{batch.id}/categories/headphone/enqueue-clean")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "dispatch_batch_id": batch.id,
+        "category_code": "headphone",
+        "dispatch_count": 0,
+        "pending_count": 0,
+        "queued_count": 0,
+    }

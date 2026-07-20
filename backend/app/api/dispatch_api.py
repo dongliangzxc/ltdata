@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 import pandas as pd
 from openpyxl import Workbook
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.database import get_db, SessionLocal

@@ -10,6 +10,7 @@ import DataListPage from './pages/DataList'
 import CleanPage from './pages/Clean'
 import MatchPage from './pages/Match'
 import MatchResultsPage from './pages/MatchResults'
+import DataAdjustmentPage from './pages/DataAdjustment'
 import DashboardPage from './pages/Dashboard'
 import ExportPage from './pages/Export'
 import MetadataPage from './pages/Metadata'
@@ -48,7 +49,7 @@ export default function App() {
             <Route path="/upload" element={<ProtectedPage><UploadPage /></ProtectedPage>} />
             <Route path="/rawdata" element={<ProtectedPage><DataListPage /></ProtectedPage>} />
             <Route path="/clean" element={<ProtectedPage><CleanPage /></ProtectedPage>} />
-            <Route path="/data-adjustment" element={<Navigate to="/match-results" replace />} />
+            <Route path="/data-adjustment" element={<ProtectedPage><DataAdjustmentPage /></ProtectedPage>} />
             <Route path="/rules" element={<ProtectedPage><RulesPage /></ProtectedPage>} />
             <Route path="/match" element={<ProtectedPage><MatchPage /></ProtectedPage>} />
             <Route path="/match-results" element={<ProtectedPage><MatchResultsPage /></ProtectedPage>} />

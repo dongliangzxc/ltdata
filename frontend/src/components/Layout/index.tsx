@@ -65,6 +65,7 @@ const menuItems: AppMenuItem[] = [
       { key: '/url-mappings', icon: <LinkOutlined />,        label: '映射管理' },
       { key: '/historical',       icon: <HistoryOutlined />,     label: '历史库' },
       { key: '/clean',            icon: <ClearOutlined />,       label: '清洗任务' },
+      { key: '/data-adjustment',  icon: <LineChartOutlined />,   label: '数据调整' },
       { key: '/match-results',    icon: <CheckSquareOutlined />, label: '匹配结果' },
       { key: '/rules',         icon: <FilterOutlined />,      label: '规则管理' },
     ],
@@ -110,6 +111,7 @@ menuItems.forEach(item => {
   }
 })
 pageTitles.set('/match', '清洗任务详情')
+pageTitles.set('/data-adjustment', '数据调整')
 pageTitles.set('/match-results', '匹配结果')
 
 interface Props {

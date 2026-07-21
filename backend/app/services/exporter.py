@@ -50,6 +50,7 @@ BASE_COLS = [
 BASE_FIELD_NAMES = [f for f, _ in BASE_COLS]
 BASE_CN_NAMES    = [cn for _, cn in BASE_COLS]
 PAGE_SIZE = 5000
+EXPORTABLE_CLEAN_JOB_STATUSES = ("reviewing", "done", "published")
 
 
 def _sheet_name(name: str, used_names: set[str]) -> str:
@@ -124,7 +125,7 @@ def _filter_clean_job_ids(
     jobs = (
         db.query(CleanJobRecord)
         .filter(
-            CleanJobRecord.status == "done",
+            CleanJobRecord.status.in_(EXPORTABLE_CLEAN_JOB_STATUSES),
             CleanJobRecord.category_code.isnot(None),
             CleanJobRecord.platform.isnot(None),
         )

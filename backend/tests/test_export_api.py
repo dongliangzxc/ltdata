@@ -9,7 +9,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.api import export as export_api
 from app.models.database import Base, get_db
-from app.models.schemas import CleanJobRecord, ExportJob
+from app.models.schemas import Category, CleanJobRecord, ExportJob
 
 
 class NoopThread:
@@ -145,3 +145,23 @@ def test_list_jobs_serializes_filter_fields(client, db):
     assert body["data"][0]["months"] == [202501, 202502]
     assert body["data"][0]["category_code"] == "headphone"
     assert body["data"][0]["platforms"] == ["jd", "tmall"]
+
+
+def test_export_filters_include_reviewing_clean_jobs(client, db):
+    db.add(Category(code="headphone", name="耳机"))
+    db.add(CleanJobRecord(
+        category_code="headphone",
+        platform="jd",
+        source_scope={"months": [202501]},
+        status="reviewing",
+    ))
+    db.commit()
+
+    response = client.get("/api/export/filters")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "months": [202501],
+        "platforms": ["jd"],
+        "categories": [{"code": "headphone", "name": "耳机"}],
+    }

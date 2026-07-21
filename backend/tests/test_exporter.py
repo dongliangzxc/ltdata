@@ -5,9 +5,9 @@ exporter.py 单元测试。
 import pandas as pd
 import pytest
 
-from app.services.exporter import export_match_job
+from app.services.exporter import export_match_filters, export_match_job
 from app.models.schemas import (
-    Category, MetadataSpec, ModelRecord, RawDataRecord, MatchResult, FilteredItem,
+    Category, CleanJobRecord, MetadataSpec, ModelRecord, RawDataRecord, MatchResult, FilteredItem,
 )
 from app.core.config import settings
 
@@ -204,3 +204,25 @@ def test_only_filtered_items_still_produces_file(db):
     assert result, "仅干扰项时也应生成文件"
     sheets = pd.ExcelFile(result[0]["path"]).sheet_names
     assert sheets == ["干扰项过滤"]
+
+
+def test_export_match_filters_include_reviewing_clean_jobs(db):
+    clean_job_id = _seed(db)
+    db.add(CleanJobRecord(
+        id=clean_job_id,
+        category_code="headphone",
+        platform="jd",
+        source_scope={"months": [202501]},
+        status="reviewing",
+    ))
+    db.commit()
+
+    result = export_match_filters(
+        db,
+        months=[202501],
+        category_code="headphone",
+        platforms=["jd"],
+    )
+
+    assert result
+    assert result[0]["rows"] == 1

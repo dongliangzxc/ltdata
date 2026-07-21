@@ -14,7 +14,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 from app.models.database import get_db, SessionLocal
 from app.models.schemas import CleanJobRecord, Category, ExportJob, ExportJobOut
-from app.services.exporter import export_match_filters, export_match_job
+from app.services.exporter import EXPORTABLE_CLEAN_JOB_STATUSES, export_match_filters, export_match_job
 from app.services.export_guards import reserve_async_export_capacity
 
 router = APIRouter(prefix="/api/export", tags=["export"])
@@ -169,14 +169,14 @@ def list_jobs(clean_job_id: int | None = None, db: Session = Depends(get_db)):
 def get_export_filters(db: Session = Depends(get_db)):
     source_scopes = (
         db.query(CleanJobRecord.source_scope)
-        .filter(CleanJobRecord.status == "done")
+        .filter(CleanJobRecord.status.in_(EXPORTABLE_CLEAN_JOB_STATUSES))
         .all()
     )
     months = sorted({month for (scope,) in source_scopes for month in _parse_job_months(scope)}, reverse=True)
     platforms = sorted({
         platform
         for (platform,) in db.query(func.trim(CleanJobRecord.platform))
-        .filter(CleanJobRecord.status == "done", CleanJobRecord.platform.isnot(None))
+        .filter(CleanJobRecord.status.in_(EXPORTABLE_CLEAN_JOB_STATUSES), CleanJobRecord.platform.isnot(None))
         .distinct()
         .all()
         if platform
@@ -184,7 +184,7 @@ def get_export_filters(db: Session = Depends(get_db)):
     category_codes = sorted({
         code
         for (code,) in db.query(func.trim(CleanJobRecord.category_code))
-        .filter(CleanJobRecord.status == "done", CleanJobRecord.category_code.isnot(None))
+        .filter(CleanJobRecord.status.in_(EXPORTABLE_CLEAN_JOB_STATUSES), CleanJobRecord.category_code.isnot(None))
         .distinct()
         .all()
         if code

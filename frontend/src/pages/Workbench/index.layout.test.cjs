@@ -1,0 +1,16 @@
+const fs = require('node:fs')
+const path = require('node:path')
+const assert = require('node:assert/strict')
+
+const source = fs.readFileSync(path.join(__dirname, 'index.tsx'), 'utf8')
+const dataAdjustmentSource = fs.readFileSync(path.join(__dirname, '../DataAdjustment/index.tsx'), 'utf8')
+const api = fs.readFileSync(path.join(__dirname, '../../services/api.ts'), 'utf8')
+
+assert.match(source, /function WorkbenchPage\(/, 'workbench page should still exist')
+assert.match(source, /mode\?: 'default' \| 'data-adjustment'/, 'workbench page should expose a data-adjustment mode prop')
+assert.match(source, /useSearchParams\(\)/, 'workbench page should read URL params for mode-specific filters')
+assert.match(source, /clean_job_id: cleanJobId/, 'workbench page should include clean_job_id in mode params')
+assert.match(source, /queryWorkbenchData\(\{ \.\.\.queryParams, \.\.\.modeParams, page, page_size: pageSize \}\)/, 'page should query workbench data with mode params')
+assert.match(source, /exportWorkbench\(\{\s*\.\.\.modeParams,/, 'page should export workbench data with mode params')
+assert.match(dataAdjustmentSource, /<WorkbenchPage mode="data-adjustment" \/>/, 'data adjustment page should enable data-adjustment workbench mode')
+assert.match(api, /export const queryWorkbenchData = \(params: Record<string, unknown>\) =>/, 'workbench API should stay parameterized')

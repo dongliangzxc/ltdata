@@ -1,10 +1,11 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import {
   Card, Row, Col, Select, Input, Button, Table,
   Typography, Tooltip, Form, Statistic, Space,
   Popover, Spin, List, Checkbox, Modal
 } from 'antd'
 import { SearchOutlined, DownloadOutlined, ClearOutlined, LinkOutlined, InfoCircleOutlined } from '@ant-design/icons'
+import { useSearchParams } from 'react-router-dom'
 import {
   getWorkbenchFilters, queryWorkbenchData,
   getWorkbenchExportJob,
@@ -21,6 +22,10 @@ type FilterOptions = {
   brands: string[]
   models: string[]
   categories: string[]
+}
+
+type WorkbenchPageProps = {
+  mode?: 'default' | 'data-adjustment'
 }
 
 type DataRow = {
@@ -78,8 +83,9 @@ function AttrPopoverContent({ itemId }: { itemId: number }) {
   )
 }
 
-export default function WorkbenchPage() {
+export default function WorkbenchPage({ mode = 'default' }: WorkbenchPageProps) {
   const [form] = Form.useForm()
+  const [searchParams] = useSearchParams()
   const [filters, setFilters] = useState<FilterOptions>({
     years: [], months: [], platforms: [], brands: [], models: [], categories: [],
   })
@@ -100,6 +106,11 @@ export default function WorkbenchPage() {
   const [exportStatuses, setExportStatuses] = useState<string[]>(['matched', 'confirmed', 'url_matched'])
   const [exportYear, setExportYear] = useState<number | undefined>(undefined)
   const [exportQuarter, setExportQuarter] = useState<number | undefined>(undefined)
+  const cleanJobId = mode === 'data-adjustment' ? searchParams.get('clean_job_id') : null
+  const modeParams = useMemo<Record<string, unknown>>(
+    () => cleanJobId ? { clean_job_id: cleanJobId } : {},
+    [cleanJobId],
+  )
 
   // 页面加载时拉取筛选枚举
   useEffect(() => {
@@ -112,13 +123,13 @@ export default function WorkbenchPage() {
   useEffect(() => {
     if (!searched) return
     setLoading(true)
-    queryWorkbenchData({ ...queryParams, page, page_size: pageSize })
+    queryWorkbenchData({ ...queryParams, ...modeParams, page, page_size: pageSize })
       .then(r => {
         setDataSource(r.data.items)
         setTotal(r.data.total)
       })
       .finally(() => setLoading(false))
-  }, [queryParams, page, pageSize, searched])
+  }, [queryParams, modeParams, page, pageSize, searched])
 
   const handleSearch = () => {
     const vals = form.getFieldsValue()
@@ -164,6 +175,7 @@ export default function WorkbenchPage() {
     try {
       const vals = form.getFieldsValue()
       const res = await exportWorkbench({
+        ...modeParams,
         year: vals.year ?? exportYear,
         month: vals.month,
         category_name: vals.category_name,

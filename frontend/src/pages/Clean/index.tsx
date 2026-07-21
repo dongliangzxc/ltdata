@@ -5,7 +5,7 @@ import {
   Space, Statistic, Select, message, Tabs, Popconfirm
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { EyeOutlined, AimOutlined, CheckCircleFilled, DeleteOutlined } from '@ant-design/icons'
+import { EyeOutlined, AimOutlined, CheckCircleFilled, DeleteOutlined, LineChartOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -106,6 +106,7 @@ const renderStatus = (status: string) => {
 const jobColumns = (
   onView: (id: number) => void,
   onEnter: (id: number) => void,
+  onAdjust: (id: number) => void,
   onDelete: (id: number) => void,
   view: CleanJobListView,
 ): ColumnsType<CleanJobItem> => [
@@ -156,11 +157,14 @@ const jobColumns = (
     render: formatText,
   },
   {
-    title: '操作', width: 220, fixed: 'right',
+    title: '操作', width: 300, fixed: 'right',
     render: (_: unknown, row) => (
       <Space size={4}>
         {view === 'active' && (
           <Button type="link" icon={<AimOutlined />} size="small" onClick={() => onEnter(row.id)}>进入处理</Button>
+        )}
+        {view === 'active' && (
+          <Button type="link" icon={<LineChartOutlined />} size="small" onClick={() => onAdjust(row.id)}>数据调整</Button>
         )}
         <Button type="link" icon={<EyeOutlined />} size="small" onClick={() => onView(row.id)}>预览</Button>
         {view === 'active' && (
@@ -493,6 +497,7 @@ export default function CleanPage() {
           columns={jobColumns(
             id => { setPreviewJobId(id); setPreviewPage(1) },
             id => navigate(`/match?job_id=${id}`),
+            id => navigate(`/data-adjustment?clean_job_id=${id}`),
             handleDeleteJob,
             jobView,
           )}

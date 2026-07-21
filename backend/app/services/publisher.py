@@ -20,6 +20,10 @@ def _ensure_analytics_tables():
     AnalyticsBase.metadata.create_all(bind=analytics_engine)
 
 
+def _count_unique_published_items(items: list[dict]) -> int:
+    return len({(item["platform"], item["item_id"], item["month"]) for item in items})
+
+
 def _build_published_item_params(r, clean_job_id: int, published_at: datetime) -> dict:
     base_corrected_qty = r["corrected_sales_qty"] if r["corrected_sales_qty"] is not None else r["sales_qty"]
     if r["sales_coefficient"] is not None:
@@ -274,6 +278,6 @@ def run_publish(luotu_db: Session, analytics_db: Session, clean_job_id: int) -> 
 
     analytics_db.commit()
     return {
-        "published_count": len(items_to_insert),
+        "published_count": _count_unique_published_items(items_to_insert),
         "skipped_pending_count": skipped_pending_count,
     }

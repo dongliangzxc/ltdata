@@ -1,7 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
 
-from app.services.publisher import _build_published_item_params
+from app.services.publisher import _build_published_item_params, _count_unique_published_items
 
 
 def _row(**overrides):
@@ -84,3 +84,26 @@ def test_build_published_item_keeps_raw_sales_and_amounts_unchanged():
     assert item["sales_qty"] == 100
     assert item["sales_amount"] == Decimal("19900.00")
     assert item["corrected_sales_amount"] == Decimal("15920.00")
+
+
+def test_count_unique_published_items_matches_analytics_unique_key():
+    published_at = datetime(2026, 5, 19)
+    items = [
+        _build_published_item_params(
+            _row(match_result_id=1, platform="jd", item_id="sku-1", month=202605),
+            clean_job_id=7,
+            published_at=published_at,
+        ),
+        _build_published_item_params(
+            _row(match_result_id=2, platform="jd", item_id="sku-1", month=202605),
+            clean_job_id=7,
+            published_at=published_at,
+        ),
+        _build_published_item_params(
+            _row(match_result_id=3, platform="jd", item_id="sku-2", month=202605),
+            clean_job_id=7,
+            published_at=published_at,
+        ),
+    ]
+
+    assert _count_unique_published_items(items) == 2

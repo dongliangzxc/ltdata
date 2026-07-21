@@ -35,6 +35,7 @@ class WorkbenchExportParams(BaseModel):
     model_code:    Optional[str] = None
     item_url:      Optional[str] = None
     keyword:       Optional[str] = None
+    clean_job_id:  Optional[int] = None
     quarter:       Optional[int] = None
 
 
@@ -131,6 +132,8 @@ def _build_query(db: Session, params: dict):
         q = q.filter(PublishedItem.item_url.ilike(f"%{params['item_url']}%"))
     if params.get("keyword"):
         q = q.filter(PublishedItem.item_name.ilike(f"%{params['keyword']}%"))
+    if params.get("clean_job_id") is not None:
+        q = q.filter(PublishedItem.clean_job_id == int(params["clean_job_id"]))
 
     return q
 
@@ -303,6 +306,7 @@ def query_data(
     category_lv1: Optional[str] = Query(None),
     category_lv2: Optional[str] = Query(None),
     keyword: Optional[str] = Query(None),
+    clean_job_id: Optional[int] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_analytics_db),
@@ -313,6 +317,7 @@ def query_data(
         model_code=model_code, item_url=item_url,
         category_lv1=category_lv1,
         category_lv2=category_lv2, keyword=keyword,
+        clean_job_id=clean_job_id,
     )
     q = _build_query(db, params)
     total = q.count()
@@ -375,6 +380,7 @@ def export_data(payload: WorkbenchExportParams, db: Session = Depends(get_db)):
         "model_code":    payload.model_code,
         "item_url":      payload.item_url,
         "keyword":       payload.keyword,
+        "clean_job_id":  payload.clean_job_id,
         "quarter":       payload.quarter,
     }
     params = {k: v for k, v in params.items() if v not in (None, "", [])}

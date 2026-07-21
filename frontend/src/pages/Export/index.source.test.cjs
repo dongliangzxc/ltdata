@@ -3,6 +3,7 @@ const path = require('node:path')
 const assert = require('node:assert/strict')
 
 const source = fs.readFileSync(path.join(__dirname, 'index.tsx'), 'utf8')
+const exportColsSource = source.match(/const exportCols = \[[\s\S]*?\n  \]/)?.[0] ?? ''
 
 assert.match(source, /getExportFilters/, 'export page should load export filter options from the export API')
 assert.doesNotMatch(source, /useCategoryOptions/, 'export page should not use the global category list for export filters')
@@ -17,3 +18,9 @@ assert.match(source, /filterOptions\.categories\.map\(category => \(\{ value: ca
 assert.match(source, /placeholder="选择月度"/, 'export page should render month filter')
 assert.match(source, /placeholder="选择品类"/, 'export page should render category filter')
 assert.match(source, /placeholder="选择平台"/, 'export page should render platform filter')
+assert.match(exportColsSource, /title: '导出范围'/, 'export history should keep scope column')
+assert.match(exportColsSource, /title: '状态'/, 'export history should keep status column')
+assert.match(exportColsSource, /title: '提交时间'/, 'export history should keep created time column')
+assert.doesNotMatch(exportColsSource, /title: '文件名前缀'/, 'export history should not show filename prefix column')
+assert.doesNotMatch(exportColsSource, /title: '已匹配行'/, 'export history should not show matched row column')
+assert.doesNotMatch(exportColsSource, /title: '待确认行'/, 'export history should not show pending row column')

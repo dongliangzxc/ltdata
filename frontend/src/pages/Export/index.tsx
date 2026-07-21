@@ -127,13 +127,10 @@ export default function ExportPage() {
       title: '导出范围', dataIndex: 'clean_job_id', width: 220, ellipsis: true,
       render: (_: unknown, row: ExportJobItem) => formatExportScope(row),
     },
-    { title: '文件名前缀', dataIndex: 'filename_prefix', width: 150, ellipsis: true },
     {
       title: '状态', dataIndex: 'status', width: 90,
       render: (v: ExportJobItem['status']) => statusTag(v),
     },
-    { title: '已匹配行', dataIndex: 'rows', width: 90, render: (v: number | null) => v ?? '-' },
-    { title: '待确认行', dataIndex: 'pending_rows', width: 90, render: (v: number | null) => v ?? '-' },
     {
       title: '提交时间', dataIndex: 'created_at', width: 160,
       render: (v: string) => v || '-',

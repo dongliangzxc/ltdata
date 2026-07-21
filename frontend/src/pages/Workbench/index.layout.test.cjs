@@ -9,6 +9,7 @@ const api = fs.readFileSync(path.join(__dirname, '../../services/api.ts'), 'utf8
 assert.match(source, /function WorkbenchPage\(/, 'workbench page should still exist')
 assert.match(source, /mode\?: 'default' \| 'data-adjustment'/, 'workbench page should expose a data-adjustment mode prop')
 assert.match(source, /useSearchParams\(\)/, 'workbench page should read URL params for mode-specific filters')
+assert.match(source, /mode === 'data-adjustment'/, 'workbench page should seed initial search state in data-adjustment mode')
 assert.match(source, /clean_job_id: cleanJobId/, 'workbench page should include clean_job_id in mode params')
 assert.match(source, /queryWorkbenchData\(\{ \.\.\.queryParams, \.\.\.modeParams, page, page_size: pageSize \}\)/, 'page should query workbench data with mode params')
 assert.match(source, /exportWorkbench\(\{\s*\.\.\.modeParams,/, 'page should export workbench data with mode params')

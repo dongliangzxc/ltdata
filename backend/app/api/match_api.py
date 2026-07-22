@@ -12,7 +12,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from app.models.database import get_db, SessionLocal
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from app.models.schemas import (
     MatchResult, MatchResultOut, MatchSummary,
     CleanJobRecord, RawDataRecord, ModelRecord, BrandRecord,
@@ -1473,6 +1473,10 @@ def list_reviewed_global(
     match_source: Optional[list[str]] = Query(None),
     price_flag: Optional[Literal["below", "above", "normal", "none"]] = None,
     keyword: Optional[str] = None,
+    platform: Optional[str] = None,
+    brand_keyword: Optional[str] = None,
+    model_keyword: Optional[str] = None,
+    coefficient_filter: Optional[Literal["with", "without"]] = None,
     db: Session = Depends(get_db),
 ):
     """跨任务的匹配结果查询，支持三 Tab 语义与筛选叠加。返回 counts 供 Tab 徽标。"""
@@ -1480,7 +1484,7 @@ def list_reviewed_global(
 
     price_flag_map = {"below": "low", "above": "high", "normal": "ok"}
 
-    def apply_common_filters(q, *, join_raw=False):
+    def apply_common_filters(q, *, join_raw=False, join_model=False):
         if join_raw:
             q = q.join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
         q = q.filter(MatchResult.match_status.in_(reviewable_statuses))
@@ -1495,6 +1499,28 @@ def list_reviewed_global(
                 q = q.filter(MatchResult.price_flag == price_flag_map[price_flag])
         if keyword:
             q = q.filter(RawDataRecord.item_name.like(f"%{keyword}%"))
+        needs_model_join = bool(brand_keyword or model_keyword)
+        if needs_model_join and join_model:
+            q = q.outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
+        if platform:
+            q = q.filter(RawDataRecord.platform == platform)
+        if brand_keyword:
+            pattern = f"%{brand_keyword}%"
+            q = q.filter(or_(
+                RawDataRecord.brand_raw.ilike(pattern),
+                RawDataRecord.brand_std.ilike(pattern),
+                ModelRecord.brand_name.ilike(pattern),
+            ))
+        if model_keyword:
+            pattern = f"%{model_keyword}%"
+            q = q.filter(or_(
+                ModelRecord.model_code.ilike(pattern),
+                ModelRecord.model_name.ilike(pattern),
+            ))
+        if coefficient_filter == "with":
+            q = q.filter(MatchResult.sales_coefficient.isnot(None))
+        elif coefficient_filter == "without":
+            q = q.filter(MatchResult.sales_coefficient.is_(None))
         return q
 
     def apply_tab(q, which: str):
@@ -1509,8 +1535,9 @@ def list_reviewed_global(
 
     # counts：先建 base，再按 tab 分别 count
     counts = {}
+    needs_raw_join = bool(keyword or platform or brand_keyword or model_keyword)
     for which in ("all", "pending_review", "confirmed"):
-        q_count = apply_common_filters(db.query(MatchResult.id), join_raw=bool(keyword))
+        q_count = apply_common_filters(db.query(MatchResult.id), join_raw=needs_raw_join, join_model=True)
         q_count = apply_tab(q_count, which)
         counts[which] = q_count.distinct().count()
 

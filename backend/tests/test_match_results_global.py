@@ -24,19 +24,32 @@ def match_client(db):
 
 
 def _seed(db, *, clean_job_id, upload_id, status, source, item_name,
-          price_flag=None, brand_raw="Sony"):
+          price_flag=None, brand_raw="Sony", platform="jd", brand_std=None,
+          model_code=None, model_name=None, brand_name=None, sales_coefficient=None):
     rd = RawDataRecord(
-        file_id=upload_id, platform="jd",
+        file_id=upload_id, platform=platform,
         item_id=f"{status}-{source}-{item_name}",
         item_url=f"https://example.com/{status}/{item_name}",
-        item_name=item_name, brand_raw=brand_raw, sales_qty=1,
+        item_name=item_name, brand_raw=brand_raw, brand_std=brand_std, sales_qty=1,
     )
     db.add(rd)
     db.flush()
+    model = None
+    if model_code or model_name or brand_name:
+        model = ModelRecord(
+            brand_code=f"BRAND-{item_name}",
+            model_code=model_code or f"MODEL-{item_name}",
+            model_name=model_name or f"型号-{item_name}",
+            brand_name=brand_name or brand_raw,
+        )
+        db.add(model)
+        db.flush()
     mr = MatchResult(
         clean_job_id=clean_job_id, raw_data_id=rd.id,
+        model_id=model.id if model else None,
         match_status=status, matched_by="auto",
         match_source=source, price_flag=price_flag,
+        sales_coefficient=sales_coefficient,
     )
     db.add(mr)
     db.flush()
@@ -71,7 +84,7 @@ def seeded(db):
                                 status="confirmed",   source="manual", item_name="B2"),
     }
     db.commit()
-    return {"job_a": job_a, "job_b": job_b, "rows": rows}
+    return {"upload": upload, "job_a": job_a, "job_b": job_b, "rows": rows}
 
 
 def test_all_tab_returns_all_reviewable_rows_cross_jobs(match_client, seeded):
@@ -172,3 +185,66 @@ def test_orders_by_id_desc(match_client, seeded):
     r = match_client.get("/api/match/reviewed", params={"tab": "all"})
     ids = [item["id"] for item in r.json()["items"]]
     assert ids == sorted(ids, reverse=True)
+
+
+def test_filter_by_platform(match_client, db, seeded):
+    _seed(db, clean_job_id=seeded["job_a"].id, upload_id=seeded["upload"].id,
+          status="matched", source="s1", item_name="TMALL-ONLY", platform="tmall")
+    db.commit()
+
+    r = match_client.get("/api/match/reviewed", params={"platform": "tmall"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 1
+    assert body["items"][0]["item_name"] == "TMALL-ONLY"
+    assert body["counts"] == {"all": 1, "pending_review": 1, "confirmed": 0}
+
+
+def test_filter_by_brand_keyword(match_client, db, seeded):
+    _seed(db, clean_job_id=seeded["job_a"].id, upload_id=seeded["upload"].id,
+          status="matched", source="s1", item_name="BRAND-RAW", brand_raw="RawUnique")
+    _seed(db, clean_job_id=seeded["job_a"].id, upload_id=seeded["upload"].id,
+          status="matched", source="s1", item_name="BRAND-STD", brand_std="StdUnique")
+    _seed(db, clean_job_id=seeded["job_a"].id, upload_id=seeded["upload"].id,
+          status="matched", source="s1", item_name="BRAND-MATCHED", brand_name="MatchedUnique")
+    db.commit()
+
+    raw = match_client.get("/api/match/reviewed", params={"brand_keyword": "RawUnique"})
+    assert {item["item_name"] for item in raw.json()["items"]} == {"BRAND-RAW"}
+
+    std = match_client.get("/api/match/reviewed", params={"brand_keyword": "StdUnique"})
+    assert {item["item_name"] for item in std.json()["items"]} == {"BRAND-STD"}
+
+    matched = match_client.get("/api/match/reviewed", params={"brand_keyword": "MatchedUnique"})
+    assert {item["item_name"] for item in matched.json()["items"]} == {"BRAND-MATCHED"}
+
+
+def test_filter_by_model_keyword(match_client, db, seeded):
+    _seed(db, clean_job_id=seeded["job_a"].id, upload_id=seeded["upload"].id,
+          status="matched", source="s1", item_name="MODEL-CODE", model_code="CODE-UNIQUE")
+    _seed(db, clean_job_id=seeded["job_a"].id, upload_id=seeded["upload"].id,
+          status="matched", source="s1", item_name="MODEL-NAME", model_name="NameUnique")
+    db.commit()
+
+    by_code = match_client.get("/api/match/reviewed", params={"model_keyword": "CODE-UNIQUE"})
+    assert {item["item_name"] for item in by_code.json()["items"]} == {"MODEL-CODE"}
+
+    by_name = match_client.get("/api/match/reviewed", params={"model_keyword": "NameUnique"})
+    assert {item["item_name"] for item in by_name.json()["items"]} == {"MODEL-NAME"}
+
+
+def test_filter_by_coefficient_presence(match_client, db, seeded):
+    _seed(db, clean_job_id=seeded["job_a"].id, upload_id=seeded["upload"].id,
+          status="matched", source="s1", item_name="COEFF-WITH", sales_coefficient=1.2)
+    _seed(db, clean_job_id=seeded["job_a"].id, upload_id=seeded["upload"].id,
+          status="matched", source="s1", item_name="COEFF-WITHOUT")
+    db.commit()
+
+    with_coeff = match_client.get("/api/match/reviewed", params={"coefficient_filter": "with"})
+    assert {item["item_name"] for item in with_coeff.json()["items"]} == {"COEFF-WITH"}
+    assert with_coeff.json()["counts"] == {"all": 1, "pending_review": 1, "confirmed": 0}
+
+    without_coeff = match_client.get("/api/match/reviewed", params={"coefficient_filter": "without"})
+    names = {item["item_name"] for item in without_coeff.json()["items"]}
+    assert "COEFF-WITH" not in names
+    assert "COEFF-WITHOUT" in names

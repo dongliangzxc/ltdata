@@ -1422,6 +1422,7 @@ export const confirmUrlMappingImport = (payload: {
 // —— /match-results 页面用 ——
 export type MatchResultsTab = 'all' | 'pending_review' | 'confirmed'
 export type PriceFlagFilter = 'below' | 'above' | 'normal' | 'none'
+export type CoefficientFilter = 'with' | 'without'
 export interface MatchResultsQuery {
   page?: number
   page_size?: number
@@ -1430,6 +1431,10 @@ export interface MatchResultsQuery {
   match_source?: string[]
   price_flag?: PriceFlagFilter
   keyword?: string
+  platform?: string
+  brand_keyword?: string
+  model_keyword?: string
+  coefficient_filter?: CoefficientFilter
 }
 export interface MatchResultsResponse {
   total: number

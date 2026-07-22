@@ -36,6 +36,8 @@ export default function MatchResultsPage() {
   const [reselectOpen, setReselectOpen] = useState(false)
   const [reselectMatchId, setReselectMatchId] = useState<number | null>(null)
   const [keywordInput, setKeywordInput] = useState<string>(state.keyword ?? '')
+  const [brandInput, setBrandInput] = useState<string>(state.brandKeyword ?? '')
+  const [modelInput, setModelInput] = useState<string>(state.modelKeyword ?? '')
   const [coefficientDrafts, setCoefficientDrafts] = useState<Record<number, number | null>>({})
   const [editedCoefficientIds, setEditedCoefficientIds] = useState<Set<number>>(new Set())
   const [savingCoefficientIds, setSavingCoefficientIds] = useState<Set<number>>(new Set())
@@ -46,6 +48,14 @@ export default function MatchResultsPage() {
   useEffect(() => {
     setKeywordInput(state.keyword ?? '')
   }, [state.keyword])
+
+  useEffect(() => {
+    setBrandInput(state.brandKeyword ?? '')
+  }, [state.brandKeyword])
+
+  useEffect(() => {
+    setModelInput(state.modelKeyword ?? '')
+  }, [state.modelKeyword])
 
   useEffect(() => {
     setCoefficientDrafts(prev => {
@@ -116,6 +126,9 @@ export default function MatchResultsPage() {
     })),
     [jobsData],
   )
+  const platformOptions = useMemo(() => Array.from(new Set(
+    (jobsData ?? []).map((job: CleanJobItem) => job.platform).filter(Boolean) as string[]
+  )).sort((a, b) => a.localeCompare(b)).map(platform => ({ value: platform, label: platform })), [jobsData])
 
   const columns = useMemo(
     () => buildMatchResultsColumns({
@@ -191,6 +204,51 @@ export default function MatchResultsPage() {
                 onChange={v => setState({ priceFlag: v ?? undefined })}
               />
             </Space>
+          </Col>
+          <Col>
+            <Select
+              allowClear
+              showSearch
+              style={{ width: 160 }}
+              placeholder="平台"
+              value={state.platform}
+              options={platformOptions}
+              optionFilterProp="label"
+              onChange={platform => setState({ platform })}
+            />
+          </Col>
+          <Col>
+            <Input.Search
+              allowClear
+              style={{ width: 180 }}
+              placeholder="品牌"
+              value={brandInput}
+              onChange={e => setBrandInput(e.target.value)}
+              onSearch={value => setState({ brandKeyword: value.trim() })}
+            />
+          </Col>
+          <Col>
+            <Input.Search
+              allowClear
+              style={{ width: 180 }}
+              placeholder="匹配型号"
+              value={modelInput}
+              onChange={e => setModelInput(e.target.value)}
+              onSearch={value => setState({ modelKeyword: value.trim() })}
+            />
+          </Col>
+          <Col>
+            <Select
+              allowClear
+              style={{ width: 160 }}
+              placeholder="调整系数"
+              value={state.coefficientFilter}
+              options={[
+                { value: 'with', label: '有调整系数' },
+                { value: 'without', label: '无调整系数' },
+              ]}
+              onChange={coefficientFilter => setState({ coefficientFilter })}
+            />
           </Col>
           <Col flex="auto">
             <Input.Search

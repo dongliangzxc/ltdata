@@ -18,9 +18,39 @@ assert.match(source, /placeholder="平台"/, 'transfer modal should expose a pla
 assert.match(source, /placeholder="月度"/, 'transfer modal should expose a month filter');
 assert.match(source, /buildTransferFilterState\(/, 'transfer modal should use shared filter behavior');
 assert.match(source, /shouldClearTransferTarget\(/, 'transfer modal should clear hidden selected target through shared behavior');
-assert.match(source, /category_code: transferCategoryFilter/, 'transfer modal search should send category filter to the API');
-assert.match(source, /platform: transferPlatformFilter/, 'transfer modal search should send platform filter to the API');
-assert.match(source, /month: transferMonthFilter/, 'transfer modal search should send month filter to the API');
+assert.match(
+  source,
+  /getDefaultTransferFilters/,
+  'transfer modal should derive default filters from the shared helper'
+);
+assert.match(
+  source,
+  /const defaultFilters = getDefaultTransferFilters\(selectedJob\)/,
+  'transfer modal should default from the selected clean job'
+);
+assert.match(
+  source,
+  /setTransferCategoryFilter\(defaultFilters\.category\)/,
+  'transfer modal should explicitly clear the category default'
+);
+assert.match(
+  source,
+  /setTransferPlatformFilter\(defaultFilters\.platform\)/,
+  'transfer modal should default platform from the selected job'
+);
+assert.match(
+  source,
+  /setTransferMonthFilter\(defaultFilters\.month\)/,
+  'transfer modal should default month from the selected job'
+);
+assert.match(
+  source,
+  /doSearchCleanTasks\('', defaultFilters\)/,
+  'transfer modal initial search should use the freshly derived defaults'
+);
+assert.match(source, /category_code: filters\.category/, 'transfer modal search should send category filter to the API');
+assert.match(source, /platform: filters\.platform/, 'transfer modal search should send platform filter to the API');
+assert.match(source, /month: filters\.month/, 'transfer modal search should send month filter to the API');
 assert.match(source, /seq !== transferSearchSeqRef\.current/, 'transfer modal search should ignore stale responses');
 
 const transferTasks = [

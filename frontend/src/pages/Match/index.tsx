@@ -26,7 +26,8 @@ import SameTitleBatchActions from './components/SameTitleBatchActions'
 import InterventionRuleModal from './components/InterventionRuleModal'
 import CreateModelModal from '../../components/CreateModelModal'
 import ReselectModal from './components/ReselectModal'
-import { buildTransferFilterState, shouldClearTransferTarget } from './utils/transferFilters'
+import { buildTransferFilterState, getDefaultTransferFilters, shouldClearTransferTarget } from './utils/transferFilters'
+import type { TransferFilters } from './utils/transferFilters'
 import { buildMatchResultsColumns } from '../MatchResults/columns'
 
 const { Text } = Typography
@@ -561,12 +562,17 @@ export default function MatchPage() {
     getMatchSummary(selectedJobId!).then(r => setSummary(r.data))
   }
 
-  const doSearchCleanTasks = (keyword: string) => {
+  const doSearchCleanTasks = (keyword: string, overrideFilters?: TransferFilters) => {
     setTransferKeyword(keyword)
     if (debouncedSearchClean.current) {
       window.clearTimeout(debouncedSearchClean.current)
     }
     setTransferSearching(true)
+    const filters = overrideFilters ?? {
+      category: transferCategoryFilter,
+      platform: transferPlatformFilter,
+      month: transferMonthFilter,
+    }
     const seq = ++transferSearchSeqRef.current
     debouncedSearchClean.current = window.setTimeout(async () => {
       try {
@@ -574,9 +580,9 @@ export default function MatchPage() {
         const res = await searchCleanTasks({
           keyword: keyword.trim() || undefined,
           exclude_id: excludeId,
-          category_code: transferCategoryFilter,
-          platform: transferPlatformFilter,
-          month: transferMonthFilter,
+          category_code: filters.category,
+          platform: filters.platform,
+          month: filters.month,
           limit: 50,
         })
         if (seq !== transferSearchSeqRef.current) return
@@ -591,15 +597,16 @@ export default function MatchPage() {
   }
 
   const openTransferModal = () => {
+    const defaultFilters = getDefaultTransferFilters(selectedJob)
     setTransferTargetId(undefined)
     setTransferOptions([])
     setTransferError(null)
     setTransferKeyword('')
-    setTransferCategoryFilter(undefined)
-    setTransferPlatformFilter(undefined)
-    setTransferMonthFilter(undefined)
+    setTransferCategoryFilter(defaultFilters.category)
+    setTransferPlatformFilter(defaultFilters.platform)
+    setTransferMonthFilter(defaultFilters.month)
     setTransferModalOpen(true)
-    doSearchCleanTasks('')
+    doSearchCleanTasks('', defaultFilters)
   }
 
   const handleTransferSubmit = async () => {

@@ -31,12 +31,8 @@ export function buildTransferFilterState<TTask extends TransferTaskLike>(
 ): TransferFilterState<TTask>
 
 export function getDefaultTransferFilters(
-  currentTask: TransferTaskLike
-): {
-  category: undefined
-  platform: string | undefined
-  month: number | undefined
-}
+  currentTask: TransferTaskLike | undefined
+): TransferFilters
 
 export function shouldClearTransferTarget<TTask extends TransferTaskLike>(
   targetId: number | undefined,

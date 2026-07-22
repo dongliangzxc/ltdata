@@ -84,10 +84,10 @@ export default function CreateModelModal({
     [metadataSpecs]
   )
 
-  const loadBrands = async () => {
+  const loadBrands = async (keyword?: string) => {
     setBrandsLoading(true)
     try {
-      const res = await listBrands({ page_size: 2000 })
+      const res = await listBrands({ keyword: keyword?.trim() || undefined, page_size: 50 })
       setBrands(res.data.items)
     } finally {
       setBrandsLoading(false)
@@ -179,7 +179,8 @@ export default function CreateModelModal({
                     value: brand.brand_code,
                     label: `${brand.brand_name || brand.brand_code}（${brand.brand_code}）`,
                   }))}
-                  filterOption={(input, option) => String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
+                  filterOption={false}
+                  onSearch={loadBrands}
                 />
               </Form.Item>
             </Col>

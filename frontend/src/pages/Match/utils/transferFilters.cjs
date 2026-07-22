@@ -45,7 +45,16 @@ function shouldClearTransferTarget(targetId, visibleTasks) {
   return !visibleTasks.some(item => item.id === targetId)
 }
 
+function getDefaultTransferFilters(currentTask) {
+  return {
+    category: undefined,
+    platform: currentTask && currentTask.platform ? currentTask.platform : undefined,
+    month: currentTask && typeof currentTask.month === 'number' ? currentTask.month : undefined,
+  }
+}
+
 module.exports = {
   buildTransferFilterState,
+  getDefaultTransferFilters,
   shouldClearTransferTarget,
 }

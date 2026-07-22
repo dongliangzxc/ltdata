@@ -6,6 +6,7 @@ const sourcePath = path.join(__dirname, 'index.tsx');
 const source = fs.readFileSync(sourcePath, 'utf8');
 const {
   buildTransferFilterState,
+  getDefaultTransferFilters,
   shouldClearTransferTarget,
 } = require('./utils/transferFilters.cjs');
 
@@ -51,6 +52,36 @@ assert.equal(allTaskFilterState.categoryOptions.some(item => item.value === 'pro
 assert.equal(shouldClearTransferTarget(2, filteredState.filteredOptions), true, 'selected target should clear when filters hide it');
 assert.equal(shouldClearTransferTarget(1, filteredState.filteredOptions), false, 'selected target should remain when filters keep it visible');
 assert.equal(shouldClearTransferTarget(undefined, filteredState.filteredOptions), false, 'empty selection should not be cleared again');
+
+const defaultTransferFilters = getDefaultTransferFilters({
+  id: 10,
+  category_code: 'TV',
+  platform: '京东',
+  month: 202407,
+});
+assert.deepEqual(
+  defaultTransferFilters,
+  { category: undefined, platform: '京东', month: 202407 },
+  'transfer defaults should use current platform and month without category'
+);
+assert.equal(
+  Object.prototype.hasOwnProperty.call(defaultTransferFilters, 'category'),
+  true,
+  'transfer defaults should explicitly clear category'
+);
+
+const emptyTransferFilters = getDefaultTransferFilters({
+  id: 11,
+  category_code: 'TV',
+  platform: null,
+  month: null,
+});
+assert.deepEqual(
+  emptyTransferFilters,
+  { category: undefined, platform: undefined, month: undefined },
+  'transfer defaults should tolerate missing platform and month'
+);
+
 const interventionRuleModalPath = path.join(__dirname, 'components', 'InterventionRuleModal.tsx');
 const interventionRuleModalSource = fs.readFileSync(interventionRuleModalPath, 'utf8');
 const reselectModalPath = path.join(__dirname, 'components', 'ReselectModal.tsx');

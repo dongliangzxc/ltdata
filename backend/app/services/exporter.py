@@ -41,10 +41,9 @@ BASE_COLS = [
     ("sales_qty",     "销量"),
     ("sales_amount",  "销售额"),
     ("price",         "价格"),
-    ("brand_std",     "品牌"),
-    ("model_code",    "型号"),
-    ("brand_name",    "品牌名称"),
-    ("model_name",    "型号名称"),
+    ("brand_std",     "原品牌"),
+    ("brand_name",    "入库品牌"),
+    ("model_name",    "型号"),
 ]
 
 BASE_FIELD_NAMES = [f for f, _ in BASE_COLS]

@@ -5,7 +5,7 @@ exporter.py 单元测试。
 import pandas as pd
 import pytest
 
-from app.services.exporter import export_match_filters, export_match_job
+from app.services.exporter import BASE_CN_NAMES, BASE_FIELD_NAMES, _base_row, export_match_filters, export_match_job
 from app.models.schemas import (
     Category, CleanJobRecord, MetadataSpec, ModelRecord, RawDataRecord, MatchResult, FilteredItem,
 )
@@ -16,6 +16,26 @@ from app.core.config import settings
 def export_dir(tmp_path, monkeypatch):
     """将导出目录重定向到临时目录，避免写入真实路径。"""
     monkeypatch.setattr(settings, "EXPORT_DIR", str(tmp_path))
+
+
+def test_base_export_headers_use_confirmed_brand_and_model_labels():
+    assert "原品牌" in BASE_CN_NAMES
+    assert "入库品牌" in BASE_CN_NAMES
+    assert "型号" in BASE_CN_NAMES
+    assert "品牌" not in BASE_CN_NAMES
+    assert "品牌名称" not in BASE_CN_NAMES
+    assert "型号名称" not in BASE_CN_NAMES
+    assert "model_code" not in BASE_FIELD_NAMES
+    assert "model_name" in BASE_FIELD_NAMES
+
+    raw = RawDataRecord(brand_std="原始品牌", brand_raw="兜底品牌")
+    model = ModelRecord(model_code="MODEL-CODE", model_name="入库型号", brand_name="入库品牌")
+    row = _base_row(raw, model)
+
+    assert row["brand_std"] == "原始品牌"
+    assert row["brand_name"] == "入库品牌"
+    assert row["model_name"] == "入库型号"
+    assert "model_code" not in row
 
 
 def _seed(db):
@@ -60,16 +80,18 @@ def _seed(db):
 
 
 def test_brand_name_and_model_name_in_export(db):
-    """已匹配 Sheet 应包含品牌名称和型号名称列。"""
+    """已匹配 Sheet 应按确认文案导出入库品牌和型号名称值。"""
     clean_job_id = _seed(db)
     result = export_match_job(db, clean_job_id)
     assert result, "导出结果不应为空"
 
     xl = pd.read_excel(result[0]["path"], sheet_name="耳机-已处理")
-    assert "品牌名称" in xl.columns, "缺少品牌名称列"
-    assert "型号名称" in xl.columns, "缺少型号名称列"
-    assert xl["品牌名称"].iloc[0] == "索尼"
-    assert xl["型号名称"].iloc[0] == "WH-1000XM5降噪耳机"
+    assert "入库品牌" in xl.columns, "缺少入库品牌列"
+    assert "型号" in xl.columns, "缺少型号列"
+    assert "品牌名称" not in xl.columns
+    assert "型号名称" not in xl.columns
+    assert xl["入库品牌"].iloc[0] == "索尼"
+    assert xl["型号"].iloc[0] == "WH-1000XM5降噪耳机"
 
 
 def test_text_only_export_sheet_uses_url_mapping_pending_label(db):
@@ -165,13 +187,13 @@ def test_disputed_excluded_filtered_included_in_export(db):
 
     disputed = pd.read_excel(path, sheet_name="争议复核")
     assert disputed["宝贝ID"].astype(str).tolist() == ["200001"]
-    # 争议复核保留了 model_id，品牌名称/型号名称应有值
-    assert disputed["品牌名称"].iloc[0] == "索尼"
+    # 争议复核保留了 model_id，入库品牌/型号应有值
+    assert disputed["入库品牌"].iloc[0] == "索尼"
 
     excluded = pd.read_excel(path, sheet_name="已排除")
     assert excluded["宝贝ID"].astype(str).tolist() == ["200002"]
-    # 已排除 model_id 为空时，品牌名称/型号名称留空
-    assert pd.isna(excluded["品牌名称"].iloc[0]) or excluded["品牌名称"].iloc[0] == ""
+    # 已排除 model_id 为空时，入库品牌/型号留空
+    assert pd.isna(excluded["入库品牌"].iloc[0]) or excluded["入库品牌"].iloc[0] == ""
 
     filtered = pd.read_excel(path, sheet_name="干扰项过滤")
     assert filtered["宝贝ID"].astype(str).tolist() == ["200003"], "已恢复的干扰项不应被导出"

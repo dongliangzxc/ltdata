@@ -10,7 +10,7 @@ import { useSearchParams, useNavigate } from 'react-router-dom'
 import {
   listCleanJobs, runMatch, getMatchProgress, getMatchSummary, listPendingMatches,
   confirmMatch, revertMatch, listModels, runPublish, listPublishJobs,
-  listReviewedMatches, updateMatchCoefficient, getMatchReviewDetail,
+  getMatchReviewDetail,
   enableMatch, avgPriceDisable, listDisabled,
   triggerExport, getExportJob, getDownloadUrl,
   getCleanMonthlyPool, rerunCleanTaskWithCurrentRules,
@@ -18,17 +18,15 @@ import {
   batchConfirmMatch, previewBatchConfirmMatch,
   searchCleanTasks, transferMatchItem,
 } from '../../services/api'
-import type { CleanJobItem, MatchCandidateOut, ReviewedMatchResultOut, MatchReviewDetail, FilteredItemOut, ModelItem, BatchConfirmFilter, BatchConfirmResult, CleanTaskSearchItem } from '../../services/api'
+import type { CleanJobItem, MatchCandidateOut, MatchReviewDetail, FilteredItemOut, ModelItem, BatchConfirmFilter, BatchConfirmResult, CleanTaskSearchItem } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 import ProgressModal from '../../components/ProgressModal'
 import AttributeInsightCard from './components/AttributeInsightCard'
 import SameTitleBatchActions from './components/SameTitleBatchActions'
 import InterventionRuleModal from './components/InterventionRuleModal'
 import CreateModelModal from '../../components/CreateModelModal'
-import ReselectModal from './components/ReselectModal'
 import { buildTransferFilterState, getDefaultTransferFilters, shouldClearTransferTarget } from './utils/transferFilters'
 import type { TransferFilters } from './utils/transferFilters'
-import { buildMatchResultsColumns } from '../MatchResults/columns'
 
 const { Text } = Typography
 
@@ -188,7 +186,6 @@ export default function MatchPage() {
   const [categoryName, setCategoryName] = useState<string | undefined>()
   const [sortBy, setSortBy] = useState<string>('default')
   const [page, setPage] = useState(1)
-  const [reviewedPage, setReviewedPage] = useState(1)
   const [confirmingIds, setConfirmingIds] = useState<Set<number>>(new Set())
   const [recoveringFilteredIds, setRecoveringFilteredIds] = useState<Set<number>>(new Set())
   const [selectedModels, setSelectedModels] = useState<Record<number, number>>({})
@@ -198,9 +195,6 @@ export default function MatchPage() {
   const [disabledPage, setDisabledPage] = useState(1)
   const [disabledLoading, setDisabledLoading] = useState(false)
   const [avgPriceThreshold, setAvgPriceThreshold] = useState(200)
-  const [coefficientDrafts, setCoefficientDrafts] = useState<Record<number, number | null>>({})
-  const [editedCoefficientIds, setEditedCoefficientIds] = useState<Set<number>>(new Set())
-  const [savingCoefficientIds, setSavingCoefficientIds] = useState<Set<number>>(new Set())
   const [activeTab, setActiveTab] = useState<ReviewTabKey>('text_only')
   const [selectedBatchIds, setSelectedBatchIds] = useState<Set<number>>(new Set())
   const [batchConfirming, setBatchConfirming] = useState(false)
@@ -232,8 +226,6 @@ export default function MatchPage() {
   const [batchModelId, setBatchModelId] = useState<number | null>(null)
   const [batchModelSearchLoading, setBatchModelSearchLoading] = useState(false)
   const batchModelSearchSeqRef = useRef(0)
-  const [reselectOpen, setReselectOpen] = useState(false)
-  const [reselectMatchId, setReselectMatchId] = useState<number | null>(null)
   const [transferModalOpen, setTransferModalOpen] = useState(false)
   const [transferTargetId, setTransferTargetId] = useState<number | undefined>(undefined)
   const [transferOptions, setTransferOptions] = useState<CleanTaskSearchItem[]>([])
@@ -421,26 +413,6 @@ export default function MatchPage() {
     setSelectedBatchIds(new Set(validIds))
   }, [batchAllPages, activeTab, pendingData])
 
-  const { data: reviewedData, loading: reviewedLoading, refresh: refreshReviewed } = useRequest(
-    () => listReviewedMatches(selectedJobId!, {
-      page: reviewedPage,
-      page_size: 20,
-    }).then(r => r.data),
-    {
-      ready: selectedJobId != null && summary != null && readyCount > 0,
-      refreshDeps: [selectedJobId, reviewedPage],
-      onSuccess: data => {
-        setCoefficientDrafts(prev => {
-          const next = { ...prev }
-          data.items.forEach((item: ReviewedMatchResultOut) => {
-            if (!(item.id in next)) next[item.id] = item.sales_coefficient ?? null
-          })
-          return next
-        })
-      },
-    }
-  )
-
   useEffect(() => {
     if (!summary) return
     const counts: Record<ReviewTabKey, number> = {
@@ -513,7 +485,6 @@ export default function MatchPage() {
           message.success(`匹配完成：已匹配 ${p.matched} 条，待确认 ${p.total - p.matched} 条`)
           getMatchSummary(jobId).then(r => setSummary(r.data))
           refreshPending()
-          refreshReviewed()
         } else if (p.status === 'error') {
           clearInterval(pollTimerRef.current!)
           pollTimerRef.current = null
@@ -558,7 +529,6 @@ export default function MatchPage() {
   const refreshReviewWorkbench = (matchId: number) => {
     selectNextReview(matchId)
     refreshPending()
-    refreshReviewed()
     getMatchSummary(selectedJobId!).then(r => setSummary(r.data))
   }
 
@@ -629,7 +599,6 @@ export default function MatchPage() {
 
   const refreshReviewDetailInPlace = async (matchId: number) => {
     refreshPending()
-    refreshReviewed()
     if (selectedJobId) getMatchSummary(selectedJobId).then(r => setSummary(r.data))
     setReviewDetailLoading(true)
     try {
@@ -642,21 +611,6 @@ export default function MatchPage() {
     }
   }
 
-  const openReselectModal = (row: ReviewedMatchResultOut) => {
-    setReselectMatchId(row.id)
-    setReselectOpen(true)
-  }
-
-  const handleReselectSuccess = async (id: number) => {
-    if (selectedReviewId === id && activeTab !== 'filtered') {
-      await refreshReviewDetailInPlace(id)
-    } else {
-      refreshPending()
-      refreshReviewed()
-      if (selectedJobId) getMatchSummary(selectedJobId).then(r => setSummary(r.data))
-    }
-  }
-
   const refreshCurrentJobState = () => {
     if (!selectedJobId) return
     setSelectedReviewId(null)
@@ -666,11 +620,9 @@ export default function MatchPage() {
     setReviewReason('')
     setSelectedModels({})
     setPage(1)
-    setReviewedPage(1)
     refreshJobs()
     getMatchSummary(selectedJobId).then(r => setSummary(r.data))
     refreshPending()
-    refreshReviewed()
     loadDisabled()
   }
 
@@ -857,20 +809,6 @@ export default function MatchPage() {
     }
   }
 
-  const handleSaveCoefficient = async (matchId: number) => {
-    const coefficient = coefficientDrafts[matchId] ?? null
-    setSavingCoefficientIds(prev => new Set(prev).add(matchId))
-    try {
-      const res = await updateMatchCoefficient(matchId, coefficient)
-      setCoefficientDrafts(prev => ({ ...prev, [matchId]: res.data.sales_coefficient ?? null }))
-      setEditedCoefficientIds(prev => { const s = new Set(prev); s.delete(matchId); return s })
-      message.success(coefficient == null ? '已清除调整系数' : '已保存调整系数')
-      refreshReviewed()
-    } finally {
-      setSavingCoefficientIds(prev => { const s = new Set(prev); s.delete(matchId); return s })
-    }
-  }
-
   const handlePublish = async () => {
     if (!selectedJobId) { message.warning('请先选择清洗任务'); return }
     if (!summary || (summary.url_matched ?? 0) + summary.matched + summary.confirmed === 0) {
@@ -981,18 +919,6 @@ export default function MatchPage() {
     }
   }
 
-  const reviewedColumns = buildMatchResultsColumns({
-    coefficientDrafts,
-    editedCoefficientIds,
-    savingCoefficientIds,
-    onCoefficientChange: (matchId, value) => {
-      setCoefficientDrafts(prev => ({ ...prev, [matchId]: value }))
-      setEditedCoefficientIds(prev => new Set(prev).add(matchId))
-    },
-    onSaveCoefficient: handleSaveCoefficient,
-    onReselect: openReselectModal,
-  })
-
   const publishColumns = [
     { title: '发布ID', dataIndex: 'id', width: 70 },
     { title: '写入条数', dataIndex: 'published_count', width: 90 },
@@ -1038,7 +964,7 @@ export default function MatchPage() {
               style={{ width: '100%' }}
               placeholder="选择任务"
               value={selectedJobId}
-              onChange={v => { setSelectedJobId(v); setSummary(null); setPage(1); setReviewedPage(1); setPublishJobs([]); setCoefficientDrafts({}); setEditedCoefficientIds(new Set()); resetBatchSelection() }}
+              onChange={v => { setSelectedJobId(v); setSummary(null); setPage(1); setPublishJobs([]); resetBatchSelection() }}
               options={cleanJobs.map((j: CleanJobItem) => ({
                 value: j.id,
                 label: `${j.task_name || j.scope_desc || `任务#${j.id}`}｜${j.row_out}条｜${j.created_at?.slice(0, 10) || '-'}`,
@@ -1140,8 +1066,7 @@ export default function MatchPage() {
                 const res = await avgPriceDisable(selectedJobId, avgPriceThreshold)
                 message.success(`均价禁用完成，共禁用 ${res.data.disabled_count} 条`)
                 getMatchSummary(selectedJobId).then(r => setSummary(r.data))
-                refreshReviewed()
-                loadDisabled()
+                      loadDisabled()
               }}
             >
               <Button>均价批量禁用</Button>
@@ -1722,42 +1647,6 @@ export default function MatchPage() {
           </Row>
         </Card>
       )}
-
-      {summary && readyCount > 0 && (
-        <Card
-          title={
-            <Space>
-              <span>已匹配 / 已确认条目</span>
-              <span style={{ fontSize: 12, color: '#8c8c8c' }}>
-                价格预警仅提示，不影响确认或发布
-              </span>
-            </Space>
-          }
-        >
-          <Table
-            dataSource={reviewedData?.items ?? []}
-            columns={reviewedColumns}
-            rowKey="id"
-            size="small"
-            loading={reviewedLoading}
-            scroll={{ x: 1320 }}
-            pagination={{
-              current: reviewedPage,
-              pageSize: 20,
-              total: reviewedData?.total ?? 0,
-              onChange: setReviewedPage,
-              showTotal: t => `共 ${t} 条`,
-            }}
-          />
-        </Card>
-      )}
-
-      <ReselectModal
-        open={reselectOpen}
-        matchId={reselectMatchId}
-        onClose={() => { setReselectOpen(false); setReselectMatchId(null) }}
-        onSuccess={handleReselectSuccess}
-      />
 
       <Modal
         title="转移到其他清洗任务"

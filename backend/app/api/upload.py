@@ -13,8 +13,10 @@ from app.models.schemas import (
     CleanedDataRecord,
     FilteredItem,
     UploadFileRecord,
+    UploadDownloadJob,
     RawDataRecord,
     UploadFileOut,
+    UploadDownloadJobOut,
     RawDataOut,
     ColumnTemplate,
 )
@@ -132,6 +134,65 @@ DOMESTIC_UPLOAD_PLATFORMS = {
 
 
 router = APIRouter(prefix="/api/upload", tags=["upload"])
+
+
+def _upload_download_job_out(job: UploadDownloadJob) -> dict:
+    download_url = None
+    if job.status == "done" and job.download_token:
+        download_url = f"/api/upload/download-jobs/{job.id}/download"
+    return {
+        "job_id": job.id,
+        "file_id": job.file_id,
+        "status": job.status,
+        "progress": job.progress,
+        "filename": job.filename,
+        "download_url": download_url,
+        "error_msg": job.error_msg,
+        "created_at": format_beijing_datetime(job.created_at) if job.created_at else None,
+        "finished_at": format_beijing_datetime(job.finished_at) if job.finished_at else None,
+    }
+
+
+def _run_upload_download_job(job_id: int) -> None:
+    db = SessionLocal()
+    try:
+        job = db.query(UploadDownloadJob).filter(UploadDownloadJob.id == job_id).first()
+        if not job:
+            return
+        job.status = "running"
+        job.progress = 10
+        db.commit()
+
+        record = db.query(UploadFileRecord).filter(UploadFileRecord.id == job.file_id).first()
+        if record is None:
+            job.status = "error"
+            job.progress = 100
+            job.error_msg = "上传记录不存在"
+            job.finished_at = datetime.utcnow()
+            db.commit()
+            return
+
+        safe_filename = Path(record.filename).name
+        file_path = Path(settings.UPLOAD_DIR) / safe_filename
+        if not file_path.exists() or not file_path.is_file():
+            job.status = "error"
+            job.progress = 100
+            job.error_msg = "原始上传文件不存在，无法下载"
+            job.finished_at = datetime.utcnow()
+            db.commit()
+            return
+
+        job.progress = 80
+        db.commit()
+        job.filename = record.filename
+        job.download_token = uuid.uuid4().hex
+        job.status = "done"
+        job.progress = 100
+        job.error_msg = None
+        job.finished_at = datetime.utcnow()
+        db.commit()
+    finally:
+        db.close()
 
 
 @router.post("", response_model=dict)
@@ -284,6 +345,68 @@ def download_upload_file(file_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="原始上传文件不存在，无法下载")
 
     return FileResponse(file_path, filename=record.filename)
+
+
+@router.post("/files/{file_id}/download-jobs", response_model=UploadDownloadJobOut)
+def create_upload_download_job(file_id: int, db: Session = Depends(get_db)):
+    """创建上传历史原始文件后台下载准备任务"""
+    record = db.query(UploadFileRecord).filter(UploadFileRecord.id == file_id).first()
+    if record is None:
+        raise HTTPException(status_code=404, detail="上传记录不存在")
+
+    job = UploadDownloadJob(
+        file_id=record.id,
+        status="pending",
+        progress=0,
+        filename=record.filename,
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    thread = threading.Thread(target=_run_upload_download_job, args=(job.id,), daemon=True)
+    thread.start()
+    return _upload_download_job_out(job)
+
+
+@router.get("/download-jobs", response_model=list[UploadDownloadJobOut])
+def list_upload_download_jobs(
+    file_ids: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    """列出上传历史原始文件下载准备任务"""
+    q = db.query(UploadDownloadJob).order_by(UploadDownloadJob.created_at.desc(), UploadDownloadJob.id.desc())
+    if file_ids:
+        ids = [int(value) for value in file_ids.split(",") if value.strip().isdigit()]
+        if ids:
+            q = q.filter(UploadDownloadJob.file_id.in_(ids))
+    return [_upload_download_job_out(job) for job in q.limit(limit).all()]
+
+
+@router.get("/download-jobs/{job_id}", response_model=UploadDownloadJobOut)
+def get_upload_download_job(job_id: int, db: Session = Depends(get_db)):
+    """获取单个上传历史下载准备任务状态"""
+    job = db.query(UploadDownloadJob).filter(UploadDownloadJob.id == job_id).first()
+    if job is None:
+        raise HTTPException(status_code=404, detail="下载任务不存在")
+    return _upload_download_job_out(job)
+
+
+@router.get("/download-jobs/{job_id}/download")
+def download_upload_download_job_file(job_id: int, db: Session = Depends(get_db)):
+    """下载已准备完成的上传历史原始文件"""
+    job = db.query(UploadDownloadJob).filter(UploadDownloadJob.id == job_id).first()
+    if job is None:
+        raise HTTPException(status_code=404, detail="下载任务不存在")
+    if job.status != "done" or not job.download_token:
+        raise HTTPException(status_code=409, detail="下载任务尚未完成")
+
+    safe_filename = Path(job.filename).name
+    file_path = Path(settings.UPLOAD_DIR) / safe_filename
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="原始上传文件不存在，无法下载")
+    return FileResponse(file_path, filename=job.filename)
 
 
 @router.delete("/files/{file_id}")

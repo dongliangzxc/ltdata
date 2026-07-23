@@ -30,6 +30,22 @@ class UploadFileRecord(Base):
     raw_data = relationship("RawDataRecord", back_populates="file", cascade="save-update, merge")
 
 
+class UploadDownloadJob(Base):
+    __tablename__ = "upload_download_jobs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    file_id = Column(Integer, ForeignKey("upload_files.id"), nullable=False, index=True)
+    status = Column(String(20), default="pending")  # pending/running/done/error
+    progress = Column(SmallInteger, default=0)
+    filename = Column(String(255), nullable=False)
+    download_token = Column(String(64), nullable=True, index=True)
+    error_msg = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    finished_at = Column(DateTime, nullable=True)
+
+    file = relationship("UploadFileRecord")
+
+
 class RawDataRecord(Base):
     __tablename__ = "raw_data"
 
@@ -153,6 +169,20 @@ class UploadFileOut(BaseModel):
     data_year:    Optional[int] = None
     data_month:   Optional[int] = None
     uploaded_at: str
+
+    model_config = {"from_attributes": True}
+
+
+class UploadDownloadJobOut(BaseModel):
+    job_id: int
+    file_id: int
+    status: str
+    progress: int
+    filename: Optional[str] = None
+    download_url: Optional[str] = None
+    error_msg: Optional[str] = None
+    created_at: Optional[str] = None
+    finished_at: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

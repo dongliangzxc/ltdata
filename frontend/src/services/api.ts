@@ -112,6 +112,31 @@ export const deleteUploadFile = (fileId: number) => api.delete(`/upload/files/${
 export const downloadUploadFile = (fileId: number) =>
   api.get(`/upload/files/${fileId}/download`, { responseType: 'blob' })
 
+export interface UploadDownloadJob {
+  job_id: number
+  file_id: number
+  status: 'pending' | 'running' | 'done' | 'error'
+  progress: number
+  filename: string | null
+  download_url: string | null
+  error_msg: string | null
+  created_at: string | null
+  finished_at: string | null
+}
+
+export const createUploadDownloadJob = (fileId: number) =>
+  api.post<UploadDownloadJob>(`/upload/files/${fileId}/download-jobs`)
+
+export const listUploadDownloadJobs = (params?: { file_ids?: number[] }) =>
+  api.get<UploadDownloadJob[]>('/upload/download-jobs', {
+    params: params?.file_ids?.length ? { file_ids: params.file_ids.join(',') } : undefined,
+  })
+
+export const getUploadDownloadJob = (jobId: number) =>
+  api.get<UploadDownloadJob>(`/upload/download-jobs/${jobId}`)
+
+export const getUploadDownloadJobUrl = (jobId: number) => `/api/upload/download-jobs/${jobId}/download`
+
 // ─── Raw Data ──────────────────────────────────────────────
 const rawDataRequestConfig = (params: Record<string, unknown>) => ({
   params,

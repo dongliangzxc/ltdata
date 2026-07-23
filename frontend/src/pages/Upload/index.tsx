@@ -11,11 +11,13 @@ import {
 import { useRequest } from 'ahooks'
 import {
   getUploadHeaders, confirmUpload,
-  listUploadFiles, deleteUploadFile, downloadUploadFile,
+  listUploadFiles, deleteUploadFile,
+  createUploadDownloadJob, listUploadDownloadJobs, getUploadDownloadJobUrl,
   listUploadTemplates,
   updateUploadTemplate, deleteUploadTemplate,
   getUploadConfirmJob, listUploadConfirmJobs, cancelUploadConfirmJob, deleteUploadConfirmJob,
   type UploadConfirmJobResponse,
+  type UploadDownloadJob,
 } from '../../services/api'
 import ProgressModal from '../../components/ProgressModal'
 
@@ -69,7 +71,8 @@ const uploadJobStatusTag = (status: string) => {
 // ─── Upload history table columns ────────────────────────────
 const historyColumns = (
   onDelete: (id: number) => void,
-  onDownload: (id: number, filename: string) => void,
+  startDownloadJob: (id: number) => void,
+  downloadJobsByFileId: Record<number, UploadDownloadJob>,
 ) => [
   { title: 'ID', dataIndex: 'id', width: 60 },
   {
@@ -110,16 +113,35 @@ const historyColumns = (
     render: (v: string) => v || '—',
   },
   {
+    title: '下载状态',
+    width: 180,
+    render: (_: unknown, row: { id: number }) => {
+      const job = downloadJobsByFileId[row.id]
+      if (!job) return <span style={{ color: '#999' }}>未开始</span>
+      if (job.status === 'done') {
+        return <Button type="link" size="small" href={getUploadDownloadJobUrl(job.job_id)}>下载文件</Button>
+      }
+      if (job.status === 'error') {
+        return <Typography.Text type="danger">{job.error_msg || '下载准备失败'}</Typography.Text>
+      }
+      return <Progress percent={job.progress} size="small" status="active" />
+    },
+  },
+  {
     title: '操作', width: 150,
-    render: (_: unknown, row: { id: number; filename: string }) => (
-      <Space size="small">
+    render: (_: unknown, row: { id: number; filename: string }) => {
+      const job = downloadJobsByFileId[row.id]
+      const preparing = job?.status === 'pending' || job?.status === 'running'
+      return (
+        <Space size="small">
         <Button
           type="link"
           icon={<DownloadOutlined />}
           size="small"
-          onClick={() => onDownload(row.id, row.filename)}
+          disabled={preparing}
+          onClick={() => startDownloadJob(row.id)}
         >
-          下载
+          {job?.status === 'error' ? '重试' : '下载'}
         </Button>
         <Popconfirm
           title="确认删除该文件记录？"
@@ -129,8 +151,9 @@ const historyColumns = (
         >
           <Button type="link" danger icon={<DeleteOutlined />} size="small">删除</Button>
         </Popconfirm>
-      </Space>
-    ),
+        </Space>
+      )
+    },
   },
 ]
 
@@ -673,10 +696,40 @@ export default function UploadPage() {
       listUploadFiles(params).then(r => r.data),
     { manual: true }
   )
+  const [downloadJobsByFileId, setDownloadJobsByFileId] = useState<Record<number, UploadDownloadJob>>({})
+  const downloadJobsPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const visibleUploadFileIds = ((filesData as { id: number }[] | undefined) ?? []).map(file => file.id)
+
+  const refreshDownloadJobs = async () => {
+    if (visibleUploadFileIds.length === 0) {
+      setDownloadJobsByFileId({})
+      return
+    }
+    const response = await listUploadDownloadJobs({ file_ids: visibleUploadFileIds })
+    const next: Record<number, UploadDownloadJob> = {}
+    response.data.forEach(job => {
+      if (!(job.file_id in next)) next[job.file_id] = job
+    })
+    setDownloadJobsByFileId(next)
+  }
 
   useEffect(() => {
     runFilesQuery({ data_region: filterRegion, data_year: filterYear })
   }, [filterRegion, filterYear])
+
+  useEffect(() => {
+    refreshDownloadJobs().catch(() => undefined)
+    if (downloadJobsPollRef.current) clearInterval(downloadJobsPollRef.current)
+    downloadJobsPollRef.current = setInterval(() => {
+      refreshDownloadJobs().catch(() => undefined)
+    }, 15000)
+    return () => {
+      if (downloadJobsPollRef.current) {
+        clearInterval(downloadJobsPollRef.current)
+        downloadJobsPollRef.current = null
+      }
+    }
+  }, [visibleUploadFileIds.join(',')])
 
   const { data: templatesData, loading: templatesLoading, refresh: refreshTemplates } = useRequest(
     () => listUploadTemplates().then(r => r.data),
@@ -761,20 +814,13 @@ export default function UploadPage() {
     }
   }
 
-  const handleDownload = async (id: number, filename: string) => {
+  const startDownloadJob = async (id: number) => {
     try {
-      const response = await downloadUploadFile(id)
-      const blob = new Blob([response.data])
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = filename
-      document.body.appendChild(link)
-      link.click()
-      link.remove()
-      URL.revokeObjectURL(url)
+      const response = await createUploadDownloadJob(id)
+      setDownloadJobsByFileId(prev => ({ ...prev, [response.data.file_id]: response.data }))
+      refreshDownloadJobs().catch(() => undefined)
     } catch {
-      message.error('下载失败，请稍后重试')
+      // handled by API interceptor
     }
   }
 
@@ -1014,7 +1060,7 @@ export default function UploadPage() {
                   </Space>
                   <Table
                     dataSource={(filesData as { id: number; filename: string }[] | undefined) ?? []}
-                    columns={historyColumns(handleDelete, handleDownload)}
+                    columns={historyColumns(handleDelete, startDownloadJob, downloadJobsByFileId)}
                     rowKey="id"
                     size="small"
                     loading={filesLoading}

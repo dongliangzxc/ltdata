@@ -6,12 +6,12 @@ import {
 } from 'antd'
 import {
   InboxOutlined, DeleteOutlined, ReloadOutlined,
-  CheckCircleOutlined, EditOutlined,
+  CheckCircleOutlined, EditOutlined, DownloadOutlined,
 } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import {
   getUploadHeaders, confirmUpload,
-  listUploadFiles, deleteUploadFile,
+  listUploadFiles, deleteUploadFile, downloadUploadFile,
   listUploadTemplates,
   updateUploadTemplate, deleteUploadTemplate,
   getUploadConfirmJob, listUploadConfirmJobs, cancelUploadConfirmJob, deleteUploadConfirmJob,
@@ -67,7 +67,10 @@ const uploadJobStatusTag = (status: string) => {
 }
 
 // ─── Upload history table columns ────────────────────────────
-const historyColumns = (onDelete: (id: number) => void) => [
+const historyColumns = (
+  onDelete: (id: number) => void,
+  onDownload: (id: number, filename: string) => void,
+) => [
   { title: 'ID', dataIndex: 'id', width: 60 },
   {
     title: '文件名',
@@ -107,16 +110,26 @@ const historyColumns = (onDelete: (id: number) => void) => [
     render: (v: string) => v || '—',
   },
   {
-    title: '操作', width: 80,
-    render: (_: unknown, row: { id: number }) => (
-      <Popconfirm
-        title="确认删除该文件记录？"
-        onConfirm={() => onDelete(row.id)}
-        okText="删除"
-        cancelText="取消"
-      >
-        <Button type="link" danger icon={<DeleteOutlined />} size="small">删除</Button>
-      </Popconfirm>
+    title: '操作', width: 150,
+    render: (_: unknown, row: { id: number; filename: string }) => (
+      <Space size="small">
+        <Button
+          type="link"
+          icon={<DownloadOutlined />}
+          size="small"
+          onClick={() => onDownload(row.id, row.filename)}
+        >
+          下载
+        </Button>
+        <Popconfirm
+          title="确认删除该文件记录？"
+          onConfirm={() => onDelete(row.id)}
+          okText="删除"
+          cancelText="取消"
+        >
+          <Button type="link" danger icon={<DeleteOutlined />} size="small">删除</Button>
+        </Popconfirm>
+      </Space>
     ),
   },
 ]
@@ -748,6 +761,23 @@ export default function UploadPage() {
     }
   }
 
+  const handleDownload = async (id: number, filename: string) => {
+    try {
+      const response = await downloadUploadFile(id)
+      const blob = new Blob([response.data])
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+    } catch {
+      message.error('下载失败，请稍后重试')
+    }
+  }
+
   const handleCancelJob = async (jobId: number) => {
     await cancelUploadConfirmJob(jobId)
     message.success('已取消任务')
@@ -983,8 +1013,8 @@ export default function UploadPage() {
                     </Button>
                   </Space>
                   <Table
-                    dataSource={(filesData as { id: number }[] | undefined) ?? []}
-                    columns={historyColumns(handleDelete)}
+                    dataSource={(filesData as { id: number; filename: string }[] | undefined) ?? []}
+                    columns={historyColumns(handleDelete, handleDownload)}
                     rowKey="id"
                     size="small"
                     loading={filesLoading}

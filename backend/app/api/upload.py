@@ -4,6 +4,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from sqlalchemy import func, or_, select, tuple_, text
 from sqlalchemy.orm import Session
 from app.models.database import get_db
@@ -268,6 +269,21 @@ def list_upload_files(
         }
         for record in q.all()
     ]
+
+
+@router.get("/files/{file_id}/download")
+def download_upload_file(file_id: int, db: Session = Depends(get_db)):
+    """下载上传历史中的原始上传文件"""
+    record = db.query(UploadFileRecord).filter(UploadFileRecord.id == file_id).first()
+    if record is None:
+        raise HTTPException(status_code=404, detail="上传记录不存在")
+
+    safe_filename = Path(record.filename).name
+    file_path = Path(settings.UPLOAD_DIR) / safe_filename
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="原始上传文件不存在，无法下载")
+
+    return FileResponse(file_path, filename=record.filename)
 
 
 @router.delete("/files/{file_id}")

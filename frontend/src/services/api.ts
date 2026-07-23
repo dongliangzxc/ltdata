@@ -109,6 +109,9 @@ export const listUploadFiles = (params?: {
 
 export const deleteUploadFile = (fileId: number) => api.delete(`/upload/files/${fileId}`)
 
+export const downloadUploadFile = (fileId: number) =>
+  api.get(`/upload/files/${fileId}/download`, { responseType: 'blob' })
+
 // ─── Raw Data ──────────────────────────────────────────────
 const rawDataRequestConfig = (params: Record<string, unknown>) => ({
   params,

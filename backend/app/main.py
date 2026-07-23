@@ -22,6 +22,7 @@ _SKIP_AUTH_PREFIXES = (
     "/api/workbench/download/",
     "/api/analytics/download/",
     "/api/dispatch/export/download/",
+    "/api/upload/download-jobs/",
 )
 
 

@@ -1,0 +1,18 @@
+const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const path = require('node:path')
+
+const sourcePath = path.join(__dirname, 'index.tsx')
+const modalPath = path.join(__dirname, '../../components/CreateModelModal.tsx')
+const attrPath = path.join(__dirname, 'components/AttributeInsightCard.tsx')
+const source = fs.readFileSync(sourcePath, 'utf8')
+const modalSource = fs.readFileSync(modalPath, 'utf8')
+const attrSource = fs.readFileSync(attrPath, 'utf8')
+
+assert.match(source, /<AttributeInsightCard detail=\{reviewDetail\} onMetadataChanged=\{refreshCurrentReviewDetail\} \/>/, 'Match page should mount category field controls in the detail panel')
+assert.match(source, /const refreshCurrentReviewDetail = async \(\) => \{/, 'Match page should define a metadata refresh callback')
+assert.match(attrSource, /品类字段要求/, 'attribute card should render category field requirements')
+assert.match(attrSource, /新建字段要求/, 'attribute card should expose a create-field-requirement action')
+assert.match(attrSource, /搜索字段要求/, 'attribute card should expose a field-requirement search input')
+assert.doesNotMatch(modalSource, /新建字段要求/, 'CreateModelModal should not own field-requirement creation controls')
+assert.doesNotMatch(modalSource, /搜索字段要求/, 'CreateModelModal should not own field-requirement search controls')

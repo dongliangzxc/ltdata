@@ -1,17 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   Alert, Button, Col, Divider, Form, Input, InputNumber,
-  Modal, Row, Select, Space, Switch, Typography, message,
+  Modal, Row, Select, Typography,
 } from 'antd'
-import { PlusOutlined, SearchOutlined } from '@ant-design/icons'
+import { PlusOutlined } from '@ant-design/icons'
 import {
-  createMetadata,
   createModel,
   listBrands,
   type BrandItem,
   type CreateModelPayload,
   type MatchMetadataSpec,
-  type MetadataSpecPayload,
   type ModelItem,
   type ModelSpecPayload,
 } from '../services/api'
@@ -48,7 +46,6 @@ type CreateModelModalProps = {
   categoryOptions?: CategoryOption[]
   metadataSpecs?: MatchMetadataSpec[]
   brandSuggestion?: string | null
-  onMetadataChanged?: () => Promise<void> | void
 }
 
 const trimOrNull = (value?: string | null) => {
@@ -65,17 +62,12 @@ export default function CreateModelModal({
   categoryOptions = [],
   metadataSpecs = [],
   brandSuggestion,
-  onMetadataChanged,
 }: CreateModelModalProps) {
   const [form] = Form.useForm<CreateModelFormValues>()
-  const [metadataForm] = Form.useForm<MetadataSpecPayload>()
   const [brands, setBrands] = useState<BrandItem[]>([])
   const [brandsLoading, setBrandsLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [brandModalOpen, setBrandModalOpen] = useState(false)
-  const [specSearch, setSpecSearch] = useState('')
-  const [metadataModalOpen, setMetadataModalOpen] = useState(false)
-  const [metadataSaving, setMetadataSaving] = useState(false)
 
   const selectedBrandCode = Form.useWatch('brand_code', form)
   const selectedBrand = useMemo(
@@ -83,22 +75,13 @@ export default function CreateModelModal({
     [brands, selectedBrandCode]
   )
 
-  const currentCategoryCode = defaultCategoryCode?.trim() || undefined
-  const canManageMetadata = Boolean(currentCategoryCode && onMetadataChanged)
-
-  const filteredMetadataSpecs = useMemo(() => {
-    const keyword = specSearch.trim().toLowerCase()
-    if (!keyword) return metadataSpecs
-    return metadataSpecs.filter(spec => spec.spec_name.toLowerCase().includes(keyword))
-  }, [metadataSpecs, specSearch])
-
   const requiredSpecs = useMemo(
-    () => filteredMetadataSpecs.filter(spec => spec.required),
-    [filteredMetadataSpecs]
+    () => metadataSpecs.filter(spec => spec.required),
+    [metadataSpecs]
   )
   const optionalSpecs = useMemo(
-    () => filteredMetadataSpecs.filter(spec => !spec.required),
-    [filteredMetadataSpecs]
+    () => metadataSpecs.filter(spec => !spec.required),
+    [metadataSpecs]
   )
 
   const loadBrands = async (keyword?: string) => {
@@ -127,58 +110,6 @@ export default function CreateModelModal({
     setBrandModalOpen(false)
   }
 
-  const openMetadataModal = () => {
-    if (!currentCategoryCode) {
-      message.warning('当前记录缺少品类，无法新建字段要求')
-      return
-    }
-    if (!onMetadataChanged) {
-      message.warning('当前上下文无法新建字段要求')
-      return
-    }
-    metadataForm.resetFields()
-    metadataForm.setFieldsValue({
-      category_code: currentCategoryCode,
-      spec_type: '文本型',
-      required: false,
-      single_select: true,
-      decimal_places: null,
-      spec_values: null,
-    })
-    setMetadataModalOpen(true)
-  }
-
-  const handleCreateMetadata = async () => {
-    if (!currentCategoryCode) {
-      message.warning('当前记录缺少品类，无法新建字段要求')
-      return
-    }
-    if (!onMetadataChanged) {
-      message.warning('当前上下文无法新建字段要求')
-      return
-    }
-    const values = await metadataForm.validateFields()
-    const payload: MetadataSpecPayload = {
-      category_code: currentCategoryCode,
-      spec_name: values.spec_name.trim(),
-      spec_type: values.spec_type,
-      spec_values: trimOrNull(values.spec_values),
-      required: Boolean(values.required),
-      decimal_places: values.decimal_places ?? null,
-      single_select: values.single_select ?? true,
-    }
-    setMetadataSaving(true)
-    try {
-      await createMetadata(payload)
-      message.success('字段要求已新建')
-      setMetadataModalOpen(false)
-      await onMetadataChanged?.()
-      setSpecSearch('')
-    } finally {
-      setMetadataSaving(false)
-    }
-  }
-
   const handleOk = async () => {
     const values = await form.validateFields()
     setSaving(true)
@@ -194,21 +125,18 @@ export default function CreateModelModal({
         model_code: values.model_code.trim(),
         model_name: trimOrNull(values.model_name),
         category_code: selectedCategoryCode,
-        status: values.status || 'active',
         launch_year: values.launch_year ?? null,
         launch_month: values.launch_month ?? null,
         launch_week: values.launch_week ?? null,
         launch_price: values.launch_price ?? null,
         url: trimOrNull(values.url),
         operator: trimOrNull(values.operator),
+        status: values.status || 'active',
         specs,
       }
       const res = await createModel(payload)
-      message.success('型号已创建')
       onCreated?.(res.data)
       form.resetFields()
-    } catch {
-      // errors shown by axios interceptor
     } finally {
       setSaving(false)
     }
@@ -242,12 +170,13 @@ export default function CreateModelModal({
               <Form.Item label="品牌" name="brand_code" rules={[{ required: true, message: '请先选择或新建品牌' }]}>
                 <Select
                   showSearch
-                  placeholder="搜索并选择品牌"
-                  loading={brandsLoading}
+                  allowClear
+                  placeholder="请选择品牌"
                   options={brands.map(brand => ({
                     value: brand.brand_code,
                     label: `${brand.brand_name || brand.brand_code}（${brand.brand_code}）`,
                   }))}
+                  loading={brandsLoading}
                   filterOption={false}
                   onSearch={loadBrands}
                 />
@@ -265,7 +194,7 @@ export default function CreateModelModal({
           <Divider orientation="left" plain style={{ fontSize: 13, color: '#666' }}>型号信息</Divider>
           <Row gutter={12}>
             <Col span={12}>
-              <Form.Item label="型号码" name="model_code" rules={[{ required: true, message: '请填写型号码' }]}>
+              <Form.Item label="型号码" name="model_code" rules={[{ required: true, message: '请输入型号码' }]}>
                 <Input placeholder="如 OSMO-ACTION-4" />
               </Form.Item>
             </Col>
@@ -301,20 +230,8 @@ export default function CreateModelModal({
           </Row>
 
           <Divider orientation="left" plain style={{ fontSize: 13, color: '#666' }}>品类属性 / 品类字段要求</Divider>
-          <Space.Compact style={{ width: '100%', marginBottom: 12 }}>
-            <Input
-              allowClear
-              prefix={<SearchOutlined />}
-              placeholder="搜索字段要求"
-              value={specSearch}
-              onChange={event => setSpecSearch(event.target.value)}
-            />
-            <Button icon={<PlusOutlined />} onClick={openMetadataModal} disabled={!canManageMetadata}>
-              新建字段要求
-            </Button>
-          </Space.Compact>
-          {filteredMetadataSpecs.length === 0 ? (
-            <Text type="secondary">当前品类没有匹配的字段要求。</Text>
+          {metadataSpecs.length === 0 ? (
+            <Text type="secondary">选择品类后可填写规格属性；当前没有可用字段定义。</Text>
           ) : (
             <>
               <Text type="secondary" style={{ fontSize: 12 }}>必填</Text>
@@ -364,58 +281,7 @@ export default function CreateModelModal({
             <Col span={6}><Form.Item label="上市价格" name="launch_price"><InputNumber style={{ width: '100%' }} min={0} precision={2} prefix="¥" /></Form.Item></Col>
           </Row>
           <Form.Item label="网址" name="url"><Input placeholder="https://..." /></Form.Item>
-          <Form.Item label="操作人" name="operator"><Input placeholder="如 alice" /></Form.Item>
-        </Form>
-      </Modal>
-
-      <Modal
-        title="新建字段要求"
-        open={metadataModalOpen}
-        onOk={handleCreateMetadata}
-        onCancel={() => setMetadataModalOpen(false)}
-        confirmLoading={metadataSaving}
-        okText="新建"
-        cancelText="取消"
-        destroyOnClose
-      >
-        <Form form={metadataForm} layout="vertical">
-          <Form.Item label="当前品类" name="category_code">
-            <Input disabled />
-          </Form.Item>
-          <Form.Item
-            label="字段名称"
-            name="spec_name"
-            rules={[{ required: true, whitespace: true, message: '请输入字段名称' }]}
-          >
-            <Input placeholder="例如：佩戴方式" />
-          </Form.Item>
-          <Form.Item label="字段类型" name="spec_type" rules={[{ required: true, message: '请选择字段类型' }]}>
-            <Select
-              options={[
-                { value: '文本型', label: '文本型' },
-                { value: '数值型', label: '数值型' },
-                { value: '枚举型', label: '枚举型' },
-              ]}
-            />
-          </Form.Item>
-          <Form.Item label="可选值" name="spec_values">
-            <Input.TextArea rows={3} placeholder="多个值用逗号分隔" />
-          </Form.Item>
-          <Row gutter={12}>
-            <Col span={12}>
-              <Form.Item label="小数位" name="decimal_places">
-                <InputNumber style={{ width: '100%' }} min={0} max={6} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item label="是否单选" name="single_select" valuePropName="checked">
-                <Switch />
-              </Form.Item>
-            </Col>
-          </Row>
-          <Form.Item label="是否必填" name="required" valuePropName="checked">
-            <Switch />
-          </Form.Item>
+          <Form.Item label="操作人" name="operator"><Input placeholder="操作者" /></Form.Item>
         </Form>
       </Modal>
 

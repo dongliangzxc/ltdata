@@ -1646,7 +1646,7 @@ export default function MatchPage() {
                       onDone={() => refreshReviewWorkbench(reviewDetail.id)}
                     />
 
-                    <AttributeInsightCard detail={reviewDetail} />
+                    <AttributeInsightCard detail={reviewDetail} onMetadataChanged={refreshCurrentReviewDetail} />
                   </Space>
                 )}
               </Card>
@@ -1874,7 +1874,6 @@ export default function MatchPage() {
         defaultCategoryName={createModelContext === 'batch' ? null : reviewDetail?.category_name ?? null}
         metadataSpecs={createModelContext === 'batch' ? [] : reviewDetail?.metadata_specs ?? []}
         brandSuggestion={createModelContext === 'batch' ? null : reviewDetail?.brand_raw ?? null}
-        onMetadataChanged={createModelContext === 'batch' ? undefined : refreshCurrentReviewDetail}
       />
 
       <ProgressModal

@@ -124,7 +124,7 @@ const detailTitleIndex = source.indexOf("title={activeTab === 'filtered' ? '干�
 const productDetailIndex = source.indexOf('<Descriptions.Item label="商品名称" span={2}>{reviewDetail.item_name || \'-\'}</Descriptions.Item>');
 const candidatesIndex = source.indexOf('<Card size="small" title="候选型号"');
 const batchActionsIndex = source.indexOf('<SameTitleBatchActions');
-const attributeInsightIndex = source.indexOf('<AttributeInsightCard detail={reviewDetail} />');
+const attributeInsightIndex = source.indexOf('<AttributeInsightCard detail={reviewDetail} onMetadataChanged={refreshCurrentReviewDetail} />');
 const modelSearchPlaceholderIndex = source.indexOf('placeholder="搜索/选择其他型号确认"');
 const createModelButtonIndex = source.indexOf('新建型号');
 const modelSearchApiIndex = source.indexOf('const res = await listModels({');

@@ -9,4 +9,4 @@ assert.match(source, /const refreshCurrentReviewDetail = async \(\) => \{/, 'Mat
 assert.match(source, /if \(!selectedReviewId\) return/, 'refresh callback should guard missing selectedReviewId')
 assert.match(source, /const res = await getMatchReviewDetail\(selectedReviewId\)/, 'refresh callback should reload current review detail')
 assert.match(source, /setReviewDetail\(res\.data\)/, 'refresh callback should update reviewDetail')
-assert.match(source, /onMetadataChanged=\{createModelContext === 'batch' \? undefined : refreshCurrentReviewDetail\}/, 'CreateModelModal should refresh metadata after field creation')
+assert.match(source, /<AttributeInsightCard detail=\{reviewDetail\} onMetadataChanged=\{refreshCurrentReviewDetail\} \/>/, 'AttributeInsightCard should receive the refresh callback')

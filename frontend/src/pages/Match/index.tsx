@@ -402,6 +402,13 @@ export default function MatchPage() {
       .finally(() => setReviewDetailLoading(false))
   }, [activeTab, selectedReviewId])
 
+  const refreshCurrentReviewDetail = async () => {
+    if (!selectedReviewId) return
+    const res = await getMatchReviewDetail(selectedReviewId)
+    setReviewDetail(res.data)
+    setReviewReason(res.data.dispute_reason || res.data.review_note || '')
+  }
+
   // 跨页全选模式下翻新页：新页可选项默认全部勾中（§3.3 "翻页保留"）
   useEffect(() => {
     if (!batchAllPages) return
@@ -1867,6 +1874,7 @@ export default function MatchPage() {
         defaultCategoryName={createModelContext === 'batch' ? null : reviewDetail?.category_name ?? null}
         metadataSpecs={createModelContext === 'batch' ? [] : reviewDetail?.metadata_specs ?? []}
         brandSuggestion={createModelContext === 'batch' ? null : reviewDetail?.brand_raw ?? null}
+        onMetadataChanged={createModelContext === 'batch' ? undefined : refreshCurrentReviewDetail}
       />
 
       <ProgressModal

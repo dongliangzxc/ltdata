@@ -523,7 +523,18 @@ export const importMetadata = (formData: FormData) =>
 export const previewMetadata = (formData: FormData) =>
   api.post('/metadata/preview', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
 export const listMetadata = (params: Record<string, unknown>) => api.get('/metadata', { params })
-export const createMetadata = (data: unknown) => api.post('/metadata', data)
+
+export type MetadataSpecPayload = {
+  category_code: string
+  spec_name: string
+  spec_type: string
+  spec_values?: string | null
+  required?: boolean
+  decimal_places?: number | null
+  single_select?: boolean
+}
+
+export const createMetadata = (data: MetadataSpecPayload) => api.post('/metadata', data)
 export const updateMetadata = (id: number, data: unknown) => api.put(`/metadata/${id}`, data)
 export const deleteMetadata = (id: number) => api.delete(`/metadata/${id}`)
 export const downloadMetadataTemplate = () =>

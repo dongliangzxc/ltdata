@@ -6,6 +6,7 @@ const dir = __dirname
 const idx = fs.readFileSync(path.join(dir, 'index.tsx'), 'utf8')
 const cols = fs.readFileSync(path.join(dir, 'columns.tsx'), 'utf8')
 const hook = fs.readFileSync(path.join(dir, 'useMatchResultsQuery.ts'), 'utf8')
+const api = fs.readFileSync(path.resolve(dir, '../../services/api.ts'), 'utf8')
 
 // 页面挂载 ReselectModal
 assert.notEqual(idx.indexOf('<ReselectModal'), -1, 'page should mount ReselectModal')
@@ -15,6 +16,18 @@ assert.notEqual(idx.indexOf("key: 'pending_review'"), -1, 'tab pending_review')
 assert.notEqual(idx.indexOf("key: 'confirmed'"), -1, 'tab confirmed')
 // Badge 计数
 assert.notEqual(idx.indexOf('counts.all'), -1, 'badge all')
+
+// 整体计算汇总
+assert.notEqual(api.indexOf('export type MatchResultsSummary'), -1, 'API should type match results summary')
+assert.notEqual(api.indexOf('summary: MatchResultsSummary'), -1, 'match results response should include summary')
+assert.notEqual(idx.indexOf('const summary = data?.summary'), -1, 'page should read summary from response')
+assert.notEqual(idx.indexOf('价格'), -1, 'summary block should render price group')
+assert.notEqual(idx.indexOf('销量'), -1, 'summary block should render volume group')
+assert.notEqual(idx.indexOf('消费金额'), -1, 'summary block should render consumption group')
+assert.notEqual(idx.indexOf('整体消费价格'), -1, 'summary block should render original consumption amount')
+assert.notEqual(idx.indexOf('调整后消费价格'), -1, 'summary block should render adjusted consumption amount')
+assert.notEqual(idx.indexOf('formatSummaryMoney'), -1, 'page should format price and amount summary values')
+assert.notEqual(idx.indexOf('formatSummaryQuantity'), -1, 'page should format quantity summary values')
 assert.notEqual(idx.indexOf('counts.pending_review'), -1, 'badge pending_review')
 assert.notEqual(idx.indexOf('counts.confirmed'), -1, 'badge confirmed')
 // 筛选栏字段

@@ -1238,6 +1238,49 @@ def _quantity_preview(cleaned_qty: Optional[int], raw_qty: Optional[int], coeffi
     return corrected_qty, round(float(corrected_qty) * float(coefficient))
 
 
+def _to_float(value):
+    return float(value) if value is not None else None
+
+
+def _round_amount(value: float) -> float:
+    return round(float(value), 2)
+
+
+def _build_match_results_summary(rows) -> dict:
+    original_sales_qty = 0
+    adjusted_sales_qty = 0
+    original_consumption_amount = 0.0
+    adjusted_consumption_amount = 0.0
+
+    for row in rows:
+        raw_qty = int(row.raw_sales_qty or 0)
+        corrected_qty = int(row.corrected_sales_qty if row.corrected_sales_qty is not None else raw_qty)
+        coefficient = _to_float(row.sales_coefficient)
+        row_adjusted_qty = round(corrected_qty * coefficient) if coefficient is not None else corrected_qty
+
+        raw_price = _to_float(row.price)
+        row_adjusted_price = _to_float(row.adjusted_price)
+        effective_adjusted_price = row_adjusted_price if row_adjusted_price is not None else raw_price
+
+        original_sales_qty += raw_qty
+        adjusted_sales_qty += row_adjusted_qty
+        if raw_price is not None:
+            original_consumption_amount += raw_price * raw_qty
+        if effective_adjusted_price is not None:
+            adjusted_consumption_amount += effective_adjusted_price * row_adjusted_qty
+
+    original_amount = _round_amount(original_consumption_amount)
+    adjusted_amount = _round_amount(adjusted_consumption_amount)
+    return {
+        "original_price": _round_amount(original_amount / original_sales_qty) if original_sales_qty else None,
+        "adjusted_price": _round_amount(adjusted_amount / adjusted_sales_qty) if adjusted_sales_qty else None,
+        "original_sales_qty": original_sales_qty,
+        "adjusted_sales_qty": adjusted_sales_qty,
+        "original_consumption_amount": original_amount,
+        "adjusted_consumption_amount": adjusted_amount,
+    }
+
+
 def _reviewed_row_payload(mr, rd, model=None, cat=None, attr_count: int = 0, cleaned_qty: Optional[int] = None) -> MatchResultOut:
     corrected_qty, adjusted_qty = _quantity_preview(cleaned_qty, rd.sales_qty if rd else None, mr.sales_coefficient)
     return MatchResultOut(
@@ -1545,6 +1588,34 @@ def list_reviewed_global(
         q_count = apply_tab(q_count, which)
         counts[which] = q_count.distinct().count()
 
+    summary_q = (
+        db.query(
+            RawDataRecord.sales_qty.label("raw_sales_qty"),
+            func.max(CleanedDataRecord.corrected_sales_qty).label("corrected_sales_qty"),
+            MatchResult.sales_coefficient.label("sales_coefficient"),
+            RawDataRecord.price.label("price"),
+            MatchResult.adjusted_price.label("adjusted_price"),
+        )
+        .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
+        .outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
+        .outerjoin(
+            CleanedDataRecord,
+            (CleanedDataRecord.clean_job_id == MatchResult.clean_job_id) &
+            (CleanedDataRecord.raw_data_id == MatchResult.raw_data_id)
+        )
+    )
+    summary_q = apply_common_filters(summary_q, join_raw=False, join_model=False)
+    summary_q = apply_tab(summary_q, tab)
+    summary_q = summary_q.group_by(
+        MatchResult.id,
+        RawDataRecord.sales_qty,
+        RawDataRecord.price,
+        MatchResult.sales_coefficient,
+        MatchResult.adjusted_price,
+    )
+    summary_rows = summary_q.all()
+    summary = _build_match_results_summary(summary_rows)
+
     # items：查询绑定当前 tab
     q = (
         db.query(MatchResult, RawDataRecord, ModelRecord)
@@ -1581,6 +1652,7 @@ def list_reviewed_global(
         "total": total, "page": page, "page_size": page_size,
         "items": [item.model_dump() for item in items],
         "counts": counts,
+        "summary": summary,
     }
 
 

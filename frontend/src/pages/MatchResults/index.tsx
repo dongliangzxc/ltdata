@@ -31,6 +31,12 @@ const PRICE_FLAG_OPTIONS = [
   { value: 'none',   label: '无预警' },
 ]
 
+const formatSummaryMoney = (value?: number | null) =>
+  value == null ? '-' : value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+const formatSummaryQuantity = (value?: number | null) =>
+  value == null ? '-' : value.toLocaleString(undefined, { maximumFractionDigits: 0 })
+
 export default function MatchResultsPage() {
   const { state, setState, reset, data, loading, refresh } = useMatchResultsQuery()
   const [reselectOpen, setReselectOpen] = useState(false)
@@ -169,6 +175,7 @@ export default function MatchResultsPage() {
   const counts = data?.counts ?? { all: 0, pending_review: 0, confirmed: 0 }
   const items: ReviewedMatchResultOut[] = data?.items ?? []
   const total = data?.total ?? 0
+  const summary = data?.summary
 
   const tabItems = [
     { key: 'all',            label: <span>全部 <Badge count={counts.all} showZero style={{ backgroundColor: '#8c8c8c' }} /></span> },
@@ -285,6 +292,32 @@ export default function MatchResultsPage() {
             未选任务时展示全库最新结果（按 ID 倒序，最多 20 条/页）
           </Text>
         )}
+      </Card>
+
+      <Card size="small" styles={{ body: { padding: 12 } }}>
+        <Row gutter={[16, 8]}>
+          <Col xs={24} md={8}>
+            <Space direction="vertical" size={2}>
+              <Text strong>价格</Text>
+              <Text type="secondary">原价格 {formatSummaryMoney(summary?.original_price)}</Text>
+              <Text type="secondary">调整后价格 {formatSummaryMoney(summary?.adjusted_price)}</Text>
+            </Space>
+          </Col>
+          <Col xs={24} md={8}>
+            <Space direction="vertical" size={2}>
+              <Text strong>销量</Text>
+              <Text type="secondary">原销量 {formatSummaryQuantity(summary?.original_sales_qty)}</Text>
+              <Text type="secondary">调整后销量 {formatSummaryQuantity(summary?.adjusted_sales_qty)}</Text>
+            </Space>
+          </Col>
+          <Col xs={24} md={8}>
+            <Space direction="vertical" size={2}>
+              <Text strong>消费金额</Text>
+              <Text type="secondary">整体消费价格 {formatSummaryMoney(summary?.original_consumption_amount)}</Text>
+              <Text type="secondary">调整后消费价格 {formatSummaryMoney(summary?.adjusted_consumption_amount)}</Text>
+            </Space>
+          </Col>
+        </Row>
       </Card>
 
       <Card>

@@ -1475,12 +1475,22 @@ export interface MatchResultsQuery {
   model_keyword?: string
   coefficient_filter?: CoefficientFilter
 }
+export type MatchResultsSummary = {
+  original_price: number | null
+  adjusted_price: number | null
+  original_sales_qty: number
+  adjusted_sales_qty: number
+  original_consumption_amount: number
+  adjusted_consumption_amount: number
+}
+
 export interface MatchResultsResponse {
   total: number
   page: number
   page_size: number
   items: ReviewedMatchResultOut[]
   counts: { all: number; pending_review: number; confirmed: number }
+  summary: MatchResultsSummary
 }
 export const listMatchResults = (params: MatchResultsQuery) =>
   api.get<MatchResultsResponse>('/match/reviewed', {

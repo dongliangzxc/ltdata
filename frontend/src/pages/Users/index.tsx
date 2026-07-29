@@ -141,10 +141,17 @@ export default function UsersPage() {
     {
       title: '目录权限',
       dataIndex: 'permissions',
+      width: 220,
       render: (permissions: PermissionKey[], row: ManagedUser) => {
         if (row.is_admin) return <Text type="secondary">全部目录</Text>
         if (!permissions?.length) return <Text type="secondary">无目录权限</Text>
-        return <Space size={4} wrap>{permissions.map(key => <Tag key={key} color="blue">{PERMISSION_LABELS[key]}</Tag>)}</Space>
+        return (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, maxWidth: '100%' }}>
+            {permissions.map(key => (
+              <Tag key={key} color="blue" style={{ marginInlineEnd: 0 }}>{PERMISSION_LABELS[key]}</Tag>
+            ))}
+          </div>
+        )
       },
     },
     { title: '最后登录', dataIndex: 'last_login_at', width: 170, render: (v: string | null) => v || '-' },
@@ -152,7 +159,6 @@ export default function UsersPage() {
     {
       title: '操作',
       width: 230,
-      fixed: 'right' as const,
       render: (_: unknown, row: ManagedUser) => (
         <Space size={4} wrap>
           <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)}>编辑</Button>
@@ -205,7 +211,7 @@ export default function UsersPage() {
         dataSource={users ?? []}
         columns={columns}
         loading={loading}
-        scroll={{ x: 1300 }}
+        scroll={{ x: 1550 }}
         pagination={{ pageSize: 20 }}
         size="small"
       />

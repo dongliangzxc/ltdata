@@ -8,12 +8,12 @@ export type BuildMatchResultsColumnsOptions = {
   coefficientDrafts?: Record<number, number | null>
   editedCoefficientIds?: Set<number>
   savingCoefficientIds?: Set<number>
-  priceDrafts?: Record<number, number | null>
+  priceCoefficientDrafts?: Record<number, number | null>
   editedPriceIds?: Set<number>
   savingPriceIds?: Set<number>
   onCoefficientChange?: (matchId: number, value: number | null) => void
   onSaveCoefficient?: (matchId: number) => void
-  onPriceChange?: (matchId: number, value: number | null) => void
+  onPriceCoefficientChange?: (matchId: number, value: number | null) => void
   onSavePrice?: (matchId: number) => void
   onReselect: (row: ReviewedMatchResultOut) => void
 }
@@ -39,6 +39,21 @@ const getAdjustedSalesQty = (row: ReviewedMatchResultOut, options: BuildMatchRes
     ? options.coefficientDrafts?.[row.id] ?? null
     : row.sales_coefficient ?? null
   return base != null && coefficient != null ? Math.round(base * coefficient) : base
+}
+
+const getOriginalPrice = (row: ReviewedMatchResultOut) => row.price ?? null
+
+const getPriceCoefficient = (row: ReviewedMatchResultOut, options: BuildMatchResultsColumnsOptions) => {
+  if (options.editedPriceIds?.has(row.id)) return options.priceCoefficientDrafts?.[row.id] ?? null
+  const base = getOriginalPrice(row)
+  return base != null && base !== 0 && row.adjusted_price != null ? row.adjusted_price / base : null
+}
+
+const getAdjustedPrice = (row: ReviewedMatchResultOut, options: BuildMatchResultsColumnsOptions) => {
+  if (!options.editedPriceIds?.has(row.id) && row.adjusted_price != null) return row.adjusted_price
+  const base = getOriginalPrice(row)
+  const coefficient = getPriceCoefficient(row, options)
+  return base != null && coefficient != null ? Number((base * coefficient).toFixed(2)) : base
 }
 
 const renderNumber = (value?: number | null) => value != null ? value.toLocaleString() : '-'
@@ -75,14 +90,18 @@ export function buildMatchResultsColumns(
     },
     {
       title: '原价格', dataIndex: 'price', width: 100,
-      render: (value: number | null) => value != null ? value.toFixed(2) : '-',
+      render: (_: unknown, row: ReviewedMatchResultOut) => {
+        const value = getOriginalPrice(row)
+        return value != null ? value.toFixed(2) : '-'
+      },
     },
     {
-      title: '现价格', width: 190,
+      title: '调整系数', width: 190,
       render: (_: unknown, row: ReviewedMatchResultOut) => {
-        const value = options.priceDrafts && row.id in options.priceDrafts
-          ? options.priceDrafts[row.id]
-          : row.adjusted_price ?? row.price ?? null
+        const value = getPriceCoefficient(row, options)
+        if (!options.onPriceCoefficientChange || !options.onSavePrice) {
+          return value != null ? value.toFixed(2) : <Text type="secondary">不调整</Text>
+        }
         const edited = options.editedPriceIds?.has(row.id) ?? false
         const saving = options.savingPriceIds?.has(row.id) ?? false
         return (
@@ -92,9 +111,9 @@ export function buildMatchResultsColumns(
               min={0}
               step={0.01}
               precision={2}
-              placeholder="现价格"
+              placeholder="不调整"
               value={value}
-              onChange={(next) => options.onPriceChange?.(row.id, next == null ? null : Number(next))}
+              onChange={(next) => options.onPriceCoefficientChange?.(row.id, next == null ? null : Number(next))}
               style={{ width: 92 }}
             />
             <Button
@@ -107,6 +126,13 @@ export function buildMatchResultsColumns(
             </Button>
           </Space>
         )
+      },
+    },
+    {
+      title: '调整后价格', width: 110,
+      render: (_: unknown, row: ReviewedMatchResultOut) => {
+        const value = getAdjustedPrice(row, options)
+        return value != null ? value.toFixed(2) : '-'
       },
     },
     {

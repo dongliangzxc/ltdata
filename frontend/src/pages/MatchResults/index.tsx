@@ -41,7 +41,7 @@ export default function MatchResultsPage() {
   const [coefficientDrafts, setCoefficientDrafts] = useState<Record<number, number | null>>({})
   const [editedCoefficientIds, setEditedCoefficientIds] = useState<Set<number>>(new Set())
   const [savingCoefficientIds, setSavingCoefficientIds] = useState<Set<number>>(new Set())
-  const [priceDrafts, setPriceDrafts] = useState<Record<number, number | null>>({})
+  const [priceCoefficientDrafts, setPriceCoefficientDrafts] = useState<Record<number, number | null>>({})
   const [editedPriceIds, setEditedPriceIds] = useState<Set<number>>(new Set())
   const [savingPriceIds, setSavingPriceIds] = useState<Set<number>>(new Set())
 
@@ -65,10 +65,14 @@ export default function MatchResultsPage() {
       }
       return next
     })
-    setPriceDrafts(prev => {
+    setPriceCoefficientDrafts(prev => {
       const next = { ...prev }
       for (const item of data?.items ?? []) {
-        if (!(item.id in next)) next[item.id] = item.adjusted_price ?? item.price ?? null
+        if (!(item.id in next)) {
+          next[item.id] = item.price != null && item.price !== 0 && item.adjusted_price != null
+            ? Number((item.adjusted_price / item.price).toFixed(2))
+            : null
+        }
       }
       return next
     })
@@ -96,23 +100,32 @@ export default function MatchResultsPage() {
     }
   }
 
-  const handlePriceChange = (matchId: number, value: number | null) => {
-    setPriceDrafts(prev => ({ ...prev, [matchId]: value }))
+  const handlePriceCoefficientChange = (matchId: number, value: number | null) => {
+    setPriceCoefficientDrafts(prev => ({ ...prev, [matchId]: value }))
     setEditedPriceIds(prev => new Set(prev).add(matchId))
   }
 
   const handleSavePrice = async (matchId: number) => {
-    const adjustedPrice = priceDrafts[matchId] ?? null
+    const price = data?.items?.find(item => item.id === matchId)?.price ?? null
+    const coefficient = priceCoefficientDrafts[matchId] ?? null
+    const adjustedPrice = price != null && coefficient != null ? Number((price * coefficient).toFixed(2)) : null
     setSavingPriceIds(prev => new Set(prev).add(matchId))
     try {
       const res = await updateMatchPrice(matchId, adjustedPrice)
-      setPriceDrafts(prev => ({ ...prev, [matchId]: res.data.adjusted_price ?? res.data.price ?? null }))
+      setPriceCoefficientDrafts(prev => {
+        const next = { ...prev }
+        const currentPrice = res.data.price ?? price
+        next[matchId] = currentPrice != null && currentPrice !== 0 && res.data.adjusted_price != null
+          ? Number((res.data.adjusted_price / currentPrice).toFixed(2))
+          : null
+        return next
+      })
       setEditedPriceIds(prev => { const next = new Set(prev); next.delete(matchId); return next })
-      message.success(adjustedPrice == null ? '已清除现价格' : '已保存现价格')
+      message.success(adjustedPrice == null ? '已清除调整后价格' : '已保存调整后价格')
       refresh()
     } catch (error) {
       console.error(error)
-      message.error('保存现价格失败')
+      message.error('保存调整后价格失败')
     } finally {
       setSavingPriceIds(prev => { const next = new Set(prev); next.delete(matchId); return next })
     }
@@ -135,12 +148,12 @@ export default function MatchResultsPage() {
       coefficientDrafts,
       editedCoefficientIds,
       savingCoefficientIds,
-      priceDrafts,
+      priceCoefficientDrafts,
       editedPriceIds,
       savingPriceIds,
       onCoefficientChange: handleCoefficientChange,
       onSaveCoefficient: handleSaveCoefficient,
-      onPriceChange: handlePriceChange,
+      onPriceCoefficientChange: handlePriceCoefficientChange,
       onSavePrice: handleSavePrice,
       onReselect: (row: ReviewedMatchResultOut) => {
         setReselectMatchId(row.id)
@@ -149,7 +162,7 @@ export default function MatchResultsPage() {
     }),
     [
       coefficientDrafts, editedCoefficientIds, savingCoefficientIds,
-      priceDrafts, editedPriceIds, savingPriceIds,
+      priceCoefficientDrafts, editedPriceIds, savingPriceIds,
     ],
   )
 

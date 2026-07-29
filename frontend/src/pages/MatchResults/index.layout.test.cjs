@@ -28,22 +28,26 @@ const columnsReturnIndex = cols.indexOf('return [')
 assert.notEqual(columnsReturnIndex, -1, 'columns should return table column definitions')
 const columnDefinition = cols.slice(columnsReturnIndex)
 const sharedColumnLabels = [
-  '商品名称', '入库品牌', '匹配型号', '价格预警', '原价格', '现价格',
+  '商品名称', '入库品牌', '匹配型号', '价格预警', '原价格', '调整系数', '调整后价格',
   '原销量', '调整系数', '调整后销量', '重新选择', 'URL',
 ]
 let previousIndex = -1
 for (const label of sharedColumnLabels) {
-  const currentIndex = columnDefinition.indexOf(label)
+  const currentIndex = columnDefinition.indexOf(label, previousIndex + 1)
   assert.notEqual(currentIndex, -1, `columns should include ${label}`)
   assert.ok(currentIndex > previousIndex, `${label} should appear after previous shared column`)
   previousIndex = currentIndex
 }
+assert.notEqual(cols.indexOf('const getOriginalPrice = (row: ReviewedMatchResultOut) => row.price ?? null'), -1, 'original price should use the raw result price')
+assert.notEqual(cols.indexOf('getAdjustedPrice(row, options)'), -1, 'adjusted price should be derived by the price column helper')
+assert.equal(cols.indexOf('现价格'), -1, 'match results should not expose the old current-price column label')
+assert.notEqual(idx.indexOf('priceCoefficientDrafts'), -1, 'page should edit price through a coefficient draft')
 for (const removedLabel of ['宝贝名称', '参考均价', '修正销量']) {
   assert.equal(columnDefinition.indexOf(removedLabel), -1, `columns should not include old label ${removedLabel}`)
 }
-assert.notEqual(cols.indexOf('onPriceChange'), -1, 'columns should expose an editable current price input')
-assert.notEqual(cols.indexOf('onSavePrice'), -1, 'columns should save current price edits')
-assert.notEqual(cols.indexOf('adjusted_price'), -1, 'columns should bind current price to adjusted_price')
+assert.notEqual(cols.indexOf('onPriceCoefficientChange'), -1, 'columns should expose an editable price coefficient input')
+assert.notEqual(cols.indexOf('onSavePrice'), -1, 'columns should save adjusted price edits')
+assert.notEqual(cols.indexOf('adjusted_price'), -1, 'columns should derive adjusted price from persisted adjusted_price')
 // URL query 双向同步 key
 assert.notEqual(hook.indexOf("params.get('tab')"), -1)
 assert.notEqual(hook.indexOf("params.getAll('match_source')"), -1)

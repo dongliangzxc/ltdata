@@ -15,7 +15,7 @@ def row(raw_qty, cleaned_qty, coefficient, raw_price, adjusted_price):
     )
 
 
-def test_match_results_summary_uses_all_filtered_rows_and_adjustments():
+def test_match_results_summary_sums_filtered_result_columns():
     summary = _build_match_results_summary([
         row(10, None, None, Decimal("100.00"), None),
         row(5, 8, Decimal("2.0000"), Decimal("200.00"), Decimal("250.00")),
@@ -23,8 +23,8 @@ def test_match_results_summary_uses_all_filtered_rows_and_adjustments():
     ])
 
     assert summary == {
-        "original_price": 133.33,
-        "adjusted_price": 192.31,
+        "original_price": 300.00,
+        "adjusted_price": 350.00,
         "original_sales_qty": 15,
         "adjusted_sales_qty": 26,
         "original_consumption_amount": 2000.00,
@@ -32,14 +32,14 @@ def test_match_results_summary_uses_all_filtered_rows_and_adjustments():
     }
 
 
-def test_match_results_summary_returns_null_averages_when_no_quantity():
+def test_match_results_summary_sums_prices_even_when_quantity_is_empty():
     summary = _build_match_results_summary([
         row(None, None, Decimal("2.0000"), Decimal("100.00"), Decimal("120.00")),
     ])
 
     assert summary == {
-        "original_price": None,
-        "adjusted_price": None,
+        "original_price": 100.00,
+        "adjusted_price": 120.00,
         "original_sales_qty": 0,
         "adjusted_sales_qty": 0,
         "original_consumption_amount": 0.00,

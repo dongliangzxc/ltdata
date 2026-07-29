@@ -1247,6 +1247,8 @@ def _round_amount(value: float) -> float:
 
 
 def _build_match_results_summary(rows) -> dict:
+    original_price = 0.0
+    adjusted_price = 0.0
     original_sales_qty = 0
     adjusted_sales_qty = 0
     original_consumption_amount = 0.0
@@ -1265,15 +1267,17 @@ def _build_match_results_summary(rows) -> dict:
         original_sales_qty += raw_qty
         adjusted_sales_qty += row_adjusted_qty
         if raw_price is not None:
+            original_price += raw_price
             original_consumption_amount += raw_price * raw_qty
         if effective_adjusted_price is not None:
+            adjusted_price += effective_adjusted_price
             adjusted_consumption_amount += effective_adjusted_price * row_adjusted_qty
 
     original_amount = _round_amount(original_consumption_amount)
     adjusted_amount = _round_amount(adjusted_consumption_amount)
     return {
-        "original_price": _round_amount(original_amount / original_sales_qty) if original_sales_qty else None,
-        "adjusted_price": _round_amount(adjusted_amount / adjusted_sales_qty) if adjusted_sales_qty else None,
+        "original_price": _round_amount(original_price),
+        "adjusted_price": _round_amount(adjusted_price),
         "original_sales_qty": original_sales_qty,
         "adjusted_sales_qty": adjusted_sales_qty,
         "original_consumption_amount": original_amount,

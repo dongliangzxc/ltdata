@@ -43,6 +43,9 @@ export default function UsersPage() {
     () => new Map(categoryOptions.map(option => [option.value, option.label])),
     [categoryOptions],
   )
+  const selectAllCategories = () => {
+    form.setFieldsValue({ category_permissions: categoryOptions.map(option => option.value) })
+  }
 
   const { data: users, loading, refresh } = useRequest(
     () => listUsers({
@@ -280,7 +283,16 @@ export default function UsersPage() {
                 <Form.Item name="permissions" label="目录权限" initialValue={[]}>
                   <Checkbox.Group options={permissionOptions} />
                 </Form.Item>
-                <Form.Item name="category_permissions" label="品类权限" initialValue={[]}>
+                <Form.Item
+                  name="category_permissions"
+                  label={(
+                    <Space size={8}>
+                      <span>品类权限</span>
+                      <Button size="small" type="link" onClick={selectAllCategories} disabled={!categoryOptions.length}>全选</Button>
+                    </Space>
+                  )}
+                  initialValue={[]}
+                >
                   <Select
                     mode="multiple"
                     allowClear

@@ -14,4 +14,6 @@ assert.match(pageSource, /title:\s*'品类权限'/, 'users table should show a c
 assert.match(pageSource, /name="category_permissions"/, 'user form should render a category permissions field')
 assert.match(pageSource, /mode="multiple"/, 'category permissions field should allow multiple categories')
 assert.match(pageSource, /categoryOptions/, 'category permissions field should use category options')
+assert.match(pageSource, /全选/, 'category permissions field should expose a select-all control')
+assert.match(pageSource, /setFieldsValue\(\{[\s\S]*category_permissions:\s*categoryOptions\.map/, 'select-all control should fill every category option')
 assert.match(pageSource, /category_permissions:\s*values\.category_permissions/, 'save payload should submit category permissions')

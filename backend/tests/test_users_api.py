@@ -6,13 +6,13 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.users_api import router
-from app.core.security import hash_password
 from app.models.database import Base, get_db
 from app.models.schemas import User
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    monkeypatch.setattr("app.api.users_api.hash_password", lambda _password: "test-hash")
     engine = create_engine(
         "sqlite:///:memory:",
         connect_args={"check_same_thread": False},
@@ -21,7 +21,7 @@ def client():
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     session = Session()
-    admin = User(username="admin", hashed_password=hash_password("luotu123"), name="管理员", is_admin=1, permissions=[])
+    admin = User(username="admin", hashed_password="test-hash", name="管理员", is_admin=1, permissions=[])
     session.add(admin)
     session.commit()
     session.close()
@@ -63,6 +63,7 @@ def test_create_and_list_user(client):
             "phone": "13800000000",
             "email": "a@example.com",
             "permissions": ["data_management"],
+            "category_permissions": ["door_lock", "camera"],
         },
     )
     assert res.status_code == 200
@@ -70,11 +71,13 @@ def test_create_and_list_user(client):
     assert data["username"] == "analyst"
     assert data["name"] == "分析师"
     assert data["permissions"] == ["data_management"]
+    assert data["category_permissions"] == ["door_lock", "camera"]
 
     list_res = client.get("/api/users", params={"keyword": "分析"})
     assert list_res.status_code == 200
     users = list_res.json()["data"]
     assert [user["username"] for user in users] == ["analyst"]
+    assert users[0]["category_permissions"] == ["door_lock", "camera"]
 
 
 def test_admin_user_permissions_are_cleared(client):
@@ -103,13 +106,19 @@ def test_update_user_status_and_permissions(client):
     created = client.post("/api/users", json={"username": "analyst", "password": "secret123"}).json()["data"]
     res = client.patch(
         f"/api/users/{created['id']}",
-        json={"is_active": 0, "permissions": ["processing_workbench"], "name": " 新姓名 "},
+        json={
+            "is_active": 0,
+            "permissions": ["processing_workbench"],
+            "category_permissions": ["camera"],
+            "name": " 新姓名 ",
+        },
     )
     assert res.status_code == 200
     data = res.json()["data"]
     assert data["is_active"] == 0
     assert data["name"] == "新姓名"
     assert data["permissions"] == ["processing_workbench"]
+    assert data["category_permissions"] == ["camera"]
 
 
 def test_reset_password(client):

@@ -9,6 +9,7 @@ import {
   type CreateUserPayload, type ManagedUser, type PermissionKey, type UpdateUserPayload,
 } from '../../services/api'
 import { PERMISSION_LABELS } from '../../auth/permissions'
+import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 
 const { Text } = Typography
 
@@ -23,6 +24,7 @@ type UserFormValues = {
   is_active?: number
   is_admin?: number
   permissions?: PermissionKey[]
+  category_permissions?: string[]
 }
 
 export default function UsersPage() {
@@ -36,6 +38,11 @@ export default function UsersPage() {
   const [resetSaving, setResetSaving] = useState(false)
   const [form] = Form.useForm<UserFormValues>()
   const [resetForm] = Form.useForm<{ password: string }>()
+  const { options: categoryOptions, loading: categoryLoading } = useCategoryOptions()
+  const categoryLabelMap = useMemo(
+    () => new Map(categoryOptions.map(option => [option.value, option.label])),
+    [categoryOptions],
+  )
 
   const { data: users, loading, refresh } = useRequest(
     () => listUsers({
@@ -49,7 +56,7 @@ export default function UsersPage() {
   const openCreate = () => {
     setEditing(null)
     form.resetFields()
-    form.setFieldsValue({ is_active: 1, is_admin: 0, permissions: [] })
+    form.setFieldsValue({ is_active: 1, is_admin: 0, permissions: [], category_permissions: [] })
     setModalOpen(true)
   }
 
@@ -63,6 +70,7 @@ export default function UsersPage() {
       is_active: row.is_active,
       is_admin: row.is_admin,
       permissions: row.permissions,
+      category_permissions: row.category_permissions,
     })
     setModalOpen(true)
   }
@@ -78,6 +86,7 @@ export default function UsersPage() {
         is_active: values.is_active ?? 1,
         is_admin: values.is_admin ?? 0,
         permissions: values.is_admin ? [] : (values.permissions ?? []),
+        category_permissions: values.category_permissions ?? [],
       }
       if (editing) {
         await updateUser(editing.id, payload)
@@ -154,6 +163,22 @@ export default function UsersPage() {
         )
       },
     },
+    {
+      title: '品类权限',
+      dataIndex: 'category_permissions',
+      width: 240,
+      render: (categoryPermissions: string[], row: ManagedUser) => {
+        if (row.is_admin) return <Text type="secondary">全部品类</Text>
+        if (!categoryPermissions?.length) return <Text type="secondary">无品类权限</Text>
+        return (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, maxWidth: '100%' }}>
+            {categoryPermissions.map(code => (
+              <Tag key={code} color="cyan" style={{ marginInlineEnd: 0 }}>{categoryLabelMap.get(code) ?? code}</Tag>
+            ))}
+          </div>
+        )
+      },
+    },
     { title: '最后登录', dataIndex: 'last_login_at', width: 170, render: (v: string | null) => v || '-' },
     { title: '创建时间', dataIndex: 'created_at', width: 170 },
     {
@@ -211,7 +236,7 @@ export default function UsersPage() {
         dataSource={users ?? []}
         columns={columns}
         loading={loading}
-        scroll={{ x: 1550 }}
+        scroll={{ x: 1790 }}
         pagination={{ pageSize: 20 }}
         size="small"
       />
@@ -249,11 +274,24 @@ export default function UsersPage() {
           </Form.Item>
           <Form.Item shouldUpdate={(prev, cur) => prev.is_admin !== cur.is_admin} noStyle>
             {({ getFieldValue }) => getFieldValue('is_admin') ? (
-              <Text type="secondary">管理员默认拥有全部目录权限。</Text>
+              <Text type="secondary">管理员默认拥有全部目录权限和全部品类权限。</Text>
             ) : (
-              <Form.Item name="permissions" label="目录权限" initialValue={[]}>
-                <Checkbox.Group options={permissionOptions} />
-              </Form.Item>
+              <>
+                <Form.Item name="permissions" label="目录权限" initialValue={[]}>
+                  <Checkbox.Group options={permissionOptions} />
+                </Form.Item>
+                <Form.Item name="category_permissions" label="品类权限" initialValue={[]}>
+                  <Select
+                    mode="multiple"
+                    allowClear
+                    showSearch
+                    loading={categoryLoading}
+                    options={categoryOptions}
+                    optionFilterProp="label"
+                    placeholder="选择可访问品类"
+                  />
+                </Form.Item>
+              </>
             )}
           </Form.Item>
         </Form>

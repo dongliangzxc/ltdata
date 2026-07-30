@@ -24,6 +24,7 @@ class UserCreateIn(BaseModel):
     is_active: int = 1
     is_admin: int = 0
     permissions: list[str] = []
+    category_permissions: list[str] = []
 
     @field_validator("username")
     @classmethod
@@ -58,6 +59,7 @@ class UserUpdateIn(BaseModel):
     is_active: Optional[int] = None
     is_admin: Optional[int] = None
     permissions: Optional[list[str]] = None
+    category_permissions: Optional[list[str]] = None
 
     @field_validator("is_active", "is_admin")
     @classmethod
@@ -135,6 +137,7 @@ def create_user(
         is_active=payload.is_active,
         is_admin=payload.is_admin,
         permissions=[] if payload.is_admin else payload.permissions,
+        category_permissions=payload.category_permissions,
     )
     db.add(user)
     db.commit()
@@ -168,6 +171,8 @@ def update_user(
         user.is_admin = payload.is_admin
     if payload.permissions is not None:
         user.permissions = [] if user.is_admin else payload.permissions
+    if payload.category_permissions is not None:
+        user.category_permissions = payload.category_permissions
     if user.is_admin:
         user.permissions = []
 

@@ -44,6 +44,7 @@ export interface UserProfile {
   is_active: number
   is_admin: number
   permissions: PermissionKey[]
+  category_permissions: string[]
   created_at: string
   updated_at?: string | null
   last_login_at?: string | null
@@ -60,6 +61,7 @@ export interface CreateUserPayload {
   is_active?: number
   is_admin?: number
   permissions?: PermissionKey[]
+  category_permissions?: string[]
 }
 
 export interface UpdateUserPayload {
@@ -69,6 +71,7 @@ export interface UpdateUserPayload {
   is_active?: number
   is_admin?: number
   permissions?: PermissionKey[]
+  category_permissions?: string[]
 }
 
 interface ApiResponse<T> {

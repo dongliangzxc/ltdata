@@ -1112,6 +1112,7 @@ class User(Base):
     is_active       = Column(SmallInteger, nullable=False, default=1)
     is_admin        = Column(SmallInteger, nullable=False, default=0)
     permissions     = Column(JSON, nullable=True)
+    category_permissions = Column(JSON, nullable=True)
     created_at      = Column(DateTime, default=datetime.utcnow)
     updated_at      = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_login_at   = Column(DateTime, nullable=True)
@@ -1126,13 +1127,14 @@ class UserOut(BaseModel):
     is_active:     int
     is_admin:      int = 0
     permissions:   list[str] = []
+    category_permissions: list[str] = []
     created_at:    datetime
     updated_at:    Optional[datetime] = None
     last_login_at: Optional[datetime] = None
 
-    @field_validator("permissions", mode="before")
+    @field_validator("permissions", "category_permissions", mode="before")
     @classmethod
-    def normalize_permissions(cls, value):
+    def normalize_permission_lists(cls, value):
         return value or []
 
     @field_serializer("created_at", "updated_at", "last_login_at")

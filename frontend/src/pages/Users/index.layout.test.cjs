@@ -13,5 +13,5 @@ assert.match(permissionsColumn, /display:\s*'flex'/, 'permission tags should ren
 assert.match(permissionsColumn, /flexWrap:\s*'wrap'/, 'permission tags should wrap within the permissions column')
 assert.match(permissionsColumn, /maxWidth:\s*'100%'/, 'permission tag container should stay within the permissions cell')
 assert.match(permissionsColumn, /marginInlineEnd:\s*0/, 'permission tags should not add extra Ant tag margin while wrapping')
-assert.match(source, /scroll=\{\{\s*x:\s*1550\s*\}\}/, 'table horizontal scroll should cover the sum of fixed column widths')
+assert.match(source, /scroll=\{\{\s*x:\s*1790\s*\}\}/, 'table horizontal scroll should cover the sum of fixed column widths')
 assert.doesNotMatch(source, /fixed:\s*'right'/, 'actions column should not float over date or permission columns')

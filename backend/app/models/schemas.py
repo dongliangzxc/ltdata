@@ -1064,18 +1064,20 @@ class ExportJobOut(BaseModel):
 class WorkbenchExportJob(Base):
     __tablename__ = "workbench_export_jobs"
 
-    id            = Column(Integer, primary_key=True, index=True)
-    status        = Column(String(20), default="pending")   # pending/running/done/error
-    progress      = Column(SmallInteger, default=0)          # 0-100
-    category_code = Column(String(50), nullable=True)
-    platform      = Column(String(50), nullable=True)
-    month         = Column(Integer, nullable=True)
-    params        = Column(JSON, nullable=True)
-    file_token    = Column(String(64), nullable=True)
-    filename      = Column(String(500), nullable=True)
-    error_msg     = Column(Text, nullable=True)
-    created_at    = Column(DateTime, default=datetime.utcnow)
-    finished_at   = Column(DateTime, nullable=True)
+    id              = Column(Integer, primary_key=True, index=True)
+    status          = Column(String(20), default="pending")   # pending/running/done/error
+    progress        = Column(SmallInteger, default=0)          # 0-100
+    category_code   = Column(String(50), nullable=True)
+    platform        = Column(String(50), nullable=True)
+    month           = Column(Integer, nullable=True)
+    params          = Column(JSON, nullable=True)
+    file_token      = Column(String(64), nullable=True)
+    filename        = Column(String(500), nullable=True)
+    downloaders     = Column(JSON, nullable=True)
+    last_download_at = Column(DateTime, nullable=True)
+    error_msg       = Column(Text, nullable=True)
+    created_at      = Column(DateTime, default=datetime.utcnow)
+    finished_at     = Column(DateTime, nullable=True)
 
 
 class UploadConfirmJob(Base):

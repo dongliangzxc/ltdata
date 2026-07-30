@@ -199,3 +199,27 @@ def test_delete_dispatch_export_job_returns_404_for_missing_job(db):
 
     assert exc_info.value.status_code == 404
     assert exc_info.value.detail == "导出任务不存在"
+
+
+def test_dispatch_export_job_out_includes_downloaders_and_last_download_at():
+    job = WorkbenchExportJob(
+        id=123,
+        status="done",
+        progress=100,
+        category_code="camera",
+        platform="jd",
+        month=202607,
+        params={"months": [202607]},
+        file_token="token-123",
+        filename="export.xlsx",
+        downloaders=["张三", "李四"],
+        last_download_at=datetime(2026, 7, 30, 10, 20, 30),
+        created_at=datetime(2026, 7, 30, 9, 0, 0),
+        finished_at=datetime(2026, 7, 30, 9, 5, 0),
+    )
+
+    payload = dispatch_api._dispatch_export_job_out(job)
+
+    assert payload["downloaders"] == ["张三", "李四"]
+    assert payload["last_download_at"] is not None
+    assert payload["download_url"] == "/api/dispatch/export/download/token-123"

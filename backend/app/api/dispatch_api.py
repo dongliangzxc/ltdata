@@ -33,6 +33,7 @@ from app.models.schemas import (
     DispatchRuleIn, DispatchRuleOut, DispatchBatchOut,
     RawDataRecord, UploadFileRecord, ColumnTemplate, WorkbenchExportJob,
 )
+from app.utils.time_utils import format_beijing_datetime
 from app.services.export_guards import (
     MAX_SYNC_EXPORT_ROWS,
     ensure_export_row_limit,
@@ -982,6 +983,7 @@ def _dispatch_export_job_out(job: WorkbenchExportJob) -> dict:
     )
     params = job.params or {}
     months = _normalize_export_months(job.month, params.get("months") or [])
+    downloaders = job.downloaders if isinstance(job.downloaders, list) else []
     return {
         "job_id": job.id,
         "status": job.status,
@@ -993,8 +995,10 @@ def _dispatch_export_job_out(job: WorkbenchExportJob) -> dict:
         "filename": job.filename,
         "download_url": download_url,
         "error_msg": job.error_msg,
-        "created_at": job.created_at.isoformat() if job.created_at else None,
-        "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+        "created_at": format_beijing_datetime(job.created_at) if job.created_at else None,
+        "finished_at": format_beijing_datetime(job.finished_at) if job.finished_at else None,
+        "downloaders": downloaders,
+        "last_download_at": format_beijing_datetime(job.last_download_at) if job.last_download_at else None,
     }
 
 

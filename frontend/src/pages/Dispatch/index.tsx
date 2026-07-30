@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Tabs, Table, Button, Tag, Space, Modal, Form, Select,
   Input, InputNumber, Switch, message, Descriptions, Typography,
@@ -17,7 +17,8 @@ import {
   type DispatchBatchStatsResponse, type DispatchCategoryStat, type DispatchRuleStat,
   type DispatchExportJob, type DispatchUnmatchedRow
 } from '../../services/api'
-import { useCategoryOptions } from '../../hooks/useCategoryOptions'
+import { useCategoryOptions, type CategoryOption } from '../../hooks/useCategoryOptions'
+import { useAuth } from '../../auth/AuthContext'
 
 const { Text } = Typography
 
@@ -92,7 +93,7 @@ const normalizeRuleValues = (vals: Record<string, unknown>) => ({
   is_active: vals.is_active ? 1 : 0,
 })
 
-const RuleFormItems = ({ categoryOptions }: { categoryOptions: { value: string; label: string }[] }) => (
+const RuleFormItems = ({ categoryOptions }: { categoryOptions: CategoryOption[] }) => (
   <>
     <Form.Item name="category_code" label="目标品类" rules={[{ required: true }]}>
       <Select options={categoryOptions} placeholder="选择品类" />
@@ -124,8 +125,20 @@ const RuleFormItems = ({ categoryOptions }: { categoryOptions: { value: string; 
   </>
 )
 
+function useVisibleCategories() {
+  const { user } = useAuth()
+  const { options: categoryOptions, loading } = useCategoryOptions()
+  const categoryPermissions = user?.category_permissions ?? []
+  const visibleCategories = useMemo(
+    () => categoryOptions.filter(category => categoryPermissions.includes(category.value)),
+    [categoryOptions, categoryPermissions],
+  )
+
+  return { visibleCategories, loading }
+}
+
 // ─── Tab 1: 分发管理 ──────────────────────────────────────────
-function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void }) {
+function DispatchManagementTab({ onRulesChanged, visibleCategories }: { onRulesChanged: () => void; visibleCategories: CategoryOption[] }) {
   const [runningIds, setRunningIds] = useState<Set<number>>(new Set())
   const [runningCategoryKeys, setRunningCategoryKeys] = useState<Set<string>>(new Set())
   const [statsVisible, setStatsVisible] = useState(false)
@@ -139,7 +152,10 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
   const [editDrawerOpen, setEditDrawerOpen] = useState(false)
   const [editingRuleId, setEditingRuleId] = useState<number | null>(null)
   const [ruleForm] = Form.useForm()
-  const { options: categoryOptions } = useCategoryOptions()
+  const visibleCategoryCodes = useMemo(
+    () => new Set(visibleCategories.map(category => category.value)),
+    [visibleCategories],
+  )
 
   const { data: files } = useRequest(() => listUploadFiles().then(r => r.data as UploadFile[]))
   const { data: batches, refresh: refreshBatches } = useRequest(
@@ -215,8 +231,22 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
     [row.category_lv1, row.category_lv2, row.category_lv3].filter(Boolean).join(' / ') || '-'
   )
 
+  const visibleStatsCategories = useMemo(
+    () => statsData?.categories.filter(category => visibleCategoryCodes.has(category.category_code)) ?? [],
+    [statsData, visibleCategoryCodes],
+  )
+  const visibleStatsRules = useMemo(
+    () => statsData?.rules.filter(rule => !!rule.category_code && visibleCategoryCodes.has(rule.category_code)) ?? [],
+    [statsData, visibleCategoryCodes],
+  )
+
   const canEditRuleStat = (rule: DispatchRuleStat) => (
-    rule.rule_id != null && !!rule.field && !!rule.match_type && !!rule.value && !!rule.category_code
+    rule.rule_id != null
+      && !!rule.field
+      && !!rule.match_type
+      && !!rule.value
+      && !!rule.category_code
+      && visibleCategoryCodes.has(rule.category_code)
   )
 
   const openRuleEdit = (rule: DispatchRuleStat) => {
@@ -341,15 +371,15 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
             <Table<DispatchCategoryStat>
               size="small"
               rowKey={row => row.category_code || 'unknown'}
-              dataSource={statsData.categories}
+              dataSource={visibleStatsCategories}
               pagination={false}
               expandable={{
-                rowExpandable: category => statsData.rules.some(rule => rule.category_code === category.category_code),
+                rowExpandable: category => visibleStatsRules.some(rule => rule.category_code === category.category_code),
                 expandedRowRender: category => (
                   <Table<DispatchRuleStat>
                     size="small"
                     rowKey={(row, index) => `${row.rule_id ?? 'missing'}-${row.category_code ?? 'none'}-${index}`}
-                    dataSource={statsData.rules.filter(rule => rule.category_code === category.category_code)}
+                    dataSource={visibleStatsRules.filter(rule => rule.category_code === category.category_code)}
                     pagination={false}
                     columns={[
                       { title: '规则', render: (_: unknown, row) => formatRuleDescription(row) },
@@ -477,7 +507,7 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
         )}
       >
         <Form form={ruleForm} layout="vertical">
-          <RuleFormItems categoryOptions={categoryOptions} />
+          <RuleFormItems categoryOptions={visibleCategories} />
         </Form>
       </Drawer>
     </>
@@ -485,19 +515,31 @@ function DispatchManagementTab({ onRulesChanged }: { onRulesChanged: () => void 
 }
 
 // ─── Tab 2: 分发结果下载 ──────────────────────────────────────
-function DispatchExportTab() {
+function DispatchExportTab({ visibleCategories }: { visibleCategories: CategoryOption[] }) {
   const [categoryCode, setCategoryCode] = useState<string | undefined>()
   const [platform, setPlatform] = useState<string | undefined>()
   const [months, setMonths] = useState<number[]>([])
   const [exporting, setExporting] = useState(false)
   const [exportJobsPage, setExportJobsPage] = useState(1)
   const [exportJobsPageSize, setExportJobsPageSize] = useState(50)
-  const { options: categoryOptions } = useCategoryOptions()
+  const categoryOptions = visibleCategories
+  const visibleCategoryCodes = useMemo(
+    () => new Set(categoryOptions.map(category => category.value)),
+    [categoryOptions],
+  )
   const { data: exportJobsData, loading: exportJobsLoading, refresh: refreshExportJobs } = useRequest(
     () => listDispatchExportJobs({ page: exportJobsPage, page_size: exportJobsPageSize }),
     { pollingInterval: 10000, refreshDeps: [exportJobsPage, exportJobsPageSize] }
   )
-  const exportJobs = exportJobsData?.data.items ?? []
+  const exportJobs = useMemo(
+    () => (exportJobsData?.data.items ?? []).filter(job => !!job.category_code && visibleCategoryCodes.has(job.category_code)),
+    [exportJobsData, visibleCategoryCodes],
+  )
+  useEffect(() => {
+    if (categoryCode && !visibleCategoryCodes.has(categoryCode)) {
+      setCategoryCode(undefined)
+    }
+  }, [categoryCode, visibleCategoryCodes])
   const exportJobsInitialLoading = exportJobsLoading && !exportJobsData
 
   const refreshFirstExportJobsPage = () => {
@@ -678,7 +720,7 @@ function DispatchExportTab() {
           pagination={{
             current: exportJobsPage,
             pageSize: exportJobsPageSize,
-            total: exportJobsData?.data.total ?? 0,
+            total: exportJobs.length,
             showSizeChanger: true,
             showTotal: total => `共 ${total} 条`,
             onChange: (page, pageSize) => {
@@ -695,13 +737,17 @@ function DispatchExportTab() {
 }
 
 // ─── Tab 3: 分发规则 ──────────────────────────────────────────
-function DispatchRulesTab({ refreshVersion }: { refreshVersion: number }) {
+function DispatchRulesTab({ refreshVersion, visibleCategories }: { refreshVersion: number; visibleCategories: CategoryOption[] }) {
   const [filterPlatform, setFilterPlatform] = useState<string | undefined>()
   const [filterCategory, setFilterCategory] = useState<string | undefined>()
   const [modalOpen, setModalOpen] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [form] = Form.useForm()
-  const { options: categoryOptions } = useCategoryOptions()
+  const categoryOptions = visibleCategories
+  const visibleCategoryCodes = useMemo(
+    () => new Set(categoryOptions.map(category => category.value)),
+    [categoryOptions],
+  )
 
   const { data: rules, refresh } = useRequest(
     () => listDispatchRules({
@@ -714,6 +760,12 @@ function DispatchRulesTab({ refreshVersion }: { refreshVersion: number }) {
   useEffect(() => {
     if (refreshVersion > 0) refresh()
   }, [refreshVersion, refresh])
+
+  useEffect(() => {
+    if (filterCategory && !visibleCategoryCodes.has(filterCategory)) {
+      setFilterCategory(undefined)
+    }
+  }, [filterCategory, visibleCategoryCodes])
 
   const openCreate = () => {
     setEditingId(null)
@@ -748,7 +800,11 @@ function DispatchRulesTab({ refreshVersion }: { refreshVersion: number }) {
     refresh()
   }
 
-  const sortedRules = [...(rules ?? [])].sort((a, b) => (
+  const visibleRules = useMemo(
+    () => (rules ?? []).filter(rule => visibleCategoryCodes.has(rule.category_code)),
+    [rules, visibleCategoryCodes],
+  )
+  const sortedRules = [...visibleRules].sort((a, b) => (
     a.category_code.localeCompare(b.category_code) || a.priority - b.priority || a.id - b.id
   ))
 
@@ -779,7 +835,7 @@ function DispatchRulesTab({ refreshVersion }: { refreshVersion: number }) {
     },
     {
       title: '操作', width: 100,
-      render: (_: unknown, row: DispatchRule) => (
+      render: (_: unknown, row: DispatchRule) => visibleCategoryCodes.has(row.category_code) ? (
         <Space size={4}>
           <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(row)}>编辑</Button>
           <Button type="link" size="small" danger icon={<DeleteOutlined />}
@@ -787,7 +843,7 @@ function DispatchRulesTab({ refreshVersion }: { refreshVersion: number }) {
             删除
           </Button>
         </Space>
-      )
+      ) : null
     },
   ]
 
@@ -830,13 +886,29 @@ function DispatchRulesTab({ refreshVersion }: { refreshVersion: number }) {
 export default function DispatchPage() {
   const [rulesRefreshVersion, setRulesRefreshVersion] = useState(0)
   const notifyRulesChanged = () => setRulesRefreshVersion(v => v + 1)
+  const { visibleCategories, loading } = useVisibleCategories()
+
+  if (loading) {
+    return <Alert type="info" showIcon message="正在加载可用品类" />
+  }
+
+  if (visibleCategories.length === 0) {
+    return (
+      <Alert
+        type="warning"
+        showIcon
+        message="暂无可用品类"
+        description="当前账号未配置 category_permissions，无法查看分发页面中的分类内容。"
+      />
+    )
+  }
 
   return (
     <Tabs
       items={[
-        { key: 'management', label: '分发管理', children: <DispatchManagementTab onRulesChanged={notifyRulesChanged} /> },
-        { key: 'export', label: '分发结果下载', children: <DispatchExportTab /> },
-        { key: 'rules', label: '分发规则', children: <DispatchRulesTab refreshVersion={rulesRefreshVersion} /> },
+        { key: 'management', label: '分发管理', children: <DispatchManagementTab onRulesChanged={notifyRulesChanged} visibleCategories={visibleCategories} /> },
+        { key: 'export', label: '分发结果下载', children: <DispatchExportTab visibleCategories={visibleCategories} /> },
+        { key: 'rules', label: '分发规则', children: <DispatchRulesTab refreshVersion={rulesRefreshVersion} visibleCategories={visibleCategories} /> },
       ]}
     />
   )

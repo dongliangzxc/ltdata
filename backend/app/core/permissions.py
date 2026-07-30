@@ -23,16 +23,8 @@ API_PERMISSION_PREFIXES: tuple[tuple[str, str], ...] = (
     ("/api/dispatch", PERMISSION_DATA_MANAGEMENT),
     ("/api/rawdata", PERMISSION_DATA_MANAGEMENT),
     ("/api/categories", PERMISSION_DATA_MANAGEMENT),
-    ("/api/metadata", PERMISSION_PROCESSING_WORKBENCH),
-    ("/api/models", PERMISSION_PROCESSING_WORKBENCH),
-    ("/api/brands", PERMISSION_PROCESSING_WORKBENCH),
-    ("/api/url-mappings", PERMISSION_PROCESSING_WORKBENCH),
-    ("/api/historical", PERMISSION_PROCESSING_WORKBENCH),
-    ("/api/clean", PERMISSION_PROCESSING_WORKBENCH),
-    ("/api/rules", PERMISSION_PROCESSING_WORKBENCH),
     ("/api/match", PERMISSION_PROCESSING_WORKBENCH),
-    ("/api/correction-rules", PERMISSION_PROCESSING_WORKBENCH),
-    ("/api/analytics", PERMISSION_PRODUCT_MANAGEMENT),
+    ("/api/clean", PERMISSION_PROCESSING_WORKBENCH),
     ("/api/export", PERMISSION_PRODUCT_MANAGEMENT),
     ("/api/workbench", PERMISSION_PRODUCT_MANAGEMENT),
     ("/api/publish", PERMISSION_PRODUCT_MANAGEMENT),
@@ -49,6 +41,13 @@ def normalize_permissions(value: Any) -> list[str]:
 
 def normalize_category_permissions(value: Any) -> list[str]:
     return value or []
+
+
+def visible_category_codes(user: Any, all_category_codes: list[str]) -> list[str]:
+    if getattr(user, "is_admin", 0) == 1:
+        return all_category_codes
+    allowed = set(normalize_category_permissions(getattr(user, "category_permissions", None)))
+    return [code for code in all_category_codes if code in allowed]
 
 
 def validate_permissions(value: Any) -> list[str]:

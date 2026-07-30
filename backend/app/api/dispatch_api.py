@@ -24,7 +24,9 @@ from openpyxl import Workbook
 from pydantic import BaseModel, Field
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
+from app.core.auth_deps import get_current_user
 from app.core.config import settings
+from app.core.permissions import visible_category_codes
 from app.models.database import get_db, SessionLocal
 from app.models.schemas import (
     Category, CleanJobItemRecord, DispatchRule, DispatchBatch, DispatchItem,
@@ -42,6 +44,37 @@ router = APIRouter(prefix="/api/dispatch", tags=["dispatch"])
 DISPATCH_PAGE_SIZE = 2000
 DISPATCH_EXPORT_DIR = Path(settings.EXPORT_DIR)
 _dispatch_export_progress: dict[int, int] = {}
+
+
+def _category_scope_codes(db: Session, current_user) -> list[str] | None:
+    if getattr(current_user, "is_admin", 0) == 1:
+        return None
+    all_codes = [code for code, in db.query(Category.code).order_by(Category.sort_order, Category.code).all()]
+    if all_codes:
+        return visible_category_codes(current_user, all_codes)
+    return list(getattr(current_user, "category_permissions", None) or [])
+
+def _ensure_category_in_scope(db: Session, current_user, category_code: str) -> None:
+    scoped_codes = _category_scope_codes(db, current_user)
+    if scoped_codes is not None and category_code not in scoped_codes:
+        raise HTTPException(status_code=403, detail="无权限访问该品类")
+
+
+def _apply_category_scope(query, column, scoped_codes: list[str] | None):
+    if scoped_codes is None:
+        return query
+    return query.filter(column.in_(scoped_codes))
+
+
+def _job_matches_category_scope(job: WorkbenchExportJob, scoped_codes: list[str] | None) -> bool:
+    if scoped_codes is None:
+        return True
+    allowed = set(scoped_codes)
+    if job.category_code:
+        return job.category_code in allowed
+    params = job.params if isinstance(job.params, dict) else {}
+    job_codes = params.get("allowed_category_codes")
+    return isinstance(job_codes, list) and bool(job_codes) and set(job_codes).issubset(allowed)
 
 
 class DispatchExportParams(BaseModel):
@@ -284,7 +317,13 @@ def _dispatch_export_filename(category_code: str | None, platform: str | None, m
     )
 
 
-def _latest_dispatch_export_query(db: Session, category_code: str | None, platform: str | None, months: list[int] | None = None):
+def _latest_dispatch_export_query(
+    db: Session,
+    category_code: str | None,
+    platform: str | None,
+    months: list[int] | None = None,
+    allowed_category_codes: list[str] | None = None,
+):
     latest_batches = (
         db.query(
             DispatchBatch.file_id.label("file_id"),
@@ -304,6 +343,8 @@ def _latest_dispatch_export_query(db: Session, category_code: str | None, platfo
     )
     if category_code:
         query = query.filter(DispatchItem.category_code == category_code)
+    elif allowed_category_codes is not None:
+        query = query.filter(DispatchItem.category_code.in_(allowed_category_codes))
     if platform:
         query = query.filter(RawDataRecord.platform == platform)
     if months:
@@ -555,9 +596,13 @@ def run_dispatch(payload: dict, db: Session = Depends(get_db)):
 def list_batches(
     file_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     """列出所有分发批次，可按 file_id 过滤"""
     q = db.query(DispatchBatch)
+    scoped_codes = _category_scope_codes(db, current_user)
+    if scoped_codes is not None:
+        q = q.filter(DispatchBatch.items.any(DispatchItem.category_code.in_(scoped_codes)))
     if file_id:
         q = q.filter(DispatchBatch.file_id == file_id)
     return q.order_by(DispatchBatch.created_at.desc()).all()
@@ -606,11 +651,18 @@ def get_batch_unmatched(
     page_size: int = Query(20, ge=1, le=200),
     keyword: Optional[str] = Query(None),
     db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     """返回批次所属文件中未进入该批次 dispatch_items 的 raw_data 行"""
     batch = db.query(DispatchBatch).filter(DispatchBatch.id == batch_id).first()
     if not batch:
         raise HTTPException(status_code=404, detail="批次不存在")
+    scoped_codes = _category_scope_codes(db, current_user)
+    if scoped_codes is not None and not db.query(DispatchItem.id).filter(
+        DispatchItem.batch_id == batch_id,
+        DispatchItem.category_code.in_(scoped_codes),
+    ).first():
+        raise HTTPException(status_code=403, detail="无权限访问该品类")
     if batch.file_id is None:
         return {"total": 0, "page": page, "page_size": page_size, "items": []}
 
@@ -663,13 +715,15 @@ def get_batch_unmatched(
 
 
 @router.get("/batches/{batch_id}/stats")
-def get_batch_stats(batch_id: int, db: Session = Depends(get_db)):
+def get_batch_stats(batch_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """某批次各品类行数与规则命中明细"""
     batch = db.query(DispatchBatch).filter(DispatchBatch.id == batch_id).first()
     if not batch:
         raise HTTPException(status_code=404, detail="批次不存在")
 
-    category_rows = (
+    scoped_codes = _category_scope_codes(db, current_user)
+
+    category_query = (
         db.query(
             DispatchItem.category_code,
             Category.name.label("category_name"),
@@ -677,12 +731,15 @@ def get_batch_stats(batch_id: int, db: Session = Depends(get_db)):
         )
         .outerjoin(Category, DispatchItem.category_code == Category.code)
         .filter(DispatchItem.batch_id == batch_id)
+    )
+    category_rows = (
+        _apply_category_scope(category_query, DispatchItem.category_code, scoped_codes)
         .group_by(DispatchItem.category_code, Category.name)
         .order_by(func.count(DispatchItem.id).desc(), DispatchItem.category_code)
         .all()
     )
 
-    platform_rows = (
+    platform_query = (
         db.query(
             DispatchItem.category_code,
             RawDataRecord.platform,
@@ -690,6 +747,9 @@ def get_batch_stats(batch_id: int, db: Session = Depends(get_db)):
         )
         .outerjoin(RawDataRecord, DispatchItem.raw_data_id == RawDataRecord.id)
         .filter(DispatchItem.batch_id == batch_id)
+    )
+    platform_rows = (
+        _apply_category_scope(platform_query, DispatchItem.category_code, scoped_codes)
         .group_by(DispatchItem.category_code, RawDataRecord.platform)
         .order_by(DispatchItem.category_code, RawDataRecord.platform)
         .all()
@@ -738,7 +798,7 @@ def get_batch_stats(batch_id: int, db: Session = Depends(get_db)):
     return {
         "batch_id": batch_id,
         "total_rows": batch.total_rows,
-        "dispatched_rows": batch.dispatched_rows,
+        "dispatched_rows": sum(int(row.count or 0) for row in category_rows) if scoped_codes is not None else batch.dispatched_rows,
         "unmatched_rows": batch.unmatched_rows,
         "categories": [
             {
@@ -775,12 +835,14 @@ def export_batch_raw_data(
     category_code: str = Query(..., min_length=1),
     platform: Optional[str] = Query(None),
     db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     batch = db.query(DispatchBatch).filter(DispatchBatch.id == batch_id).first()
     if not batch:
         raise HTTPException(status_code=404, detail="批次不存在")
     if batch.status != "done":
         raise HTTPException(status_code=400, detail="批次尚未完成，不能导出")
+    _ensure_category_in_scope(db, current_user, category_code)
 
     query = (
         db.query(DispatchItem, RawDataRecord, UploadFileRecord, ColumnTemplate)
@@ -873,14 +935,19 @@ def _run_dispatch_export_thread(job_id: int, params: dict):
 
 
 @router.post("/export", status_code=202)
-def create_dispatch_export_job(payload: DispatchExportParams, db: Session = Depends(get_db)):
+def create_dispatch_export_job(payload: DispatchExportParams, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     category_code = payload.category_code.strip() if payload.category_code else None
     platform = payload.platform.strip() if payload.platform else None
     months = _normalize_export_months(payload.month, payload.months)
     primary_month = months[0] if months else None
     if not category_code and not platform and not months:
         raise HTTPException(status_code=400, detail="请选择品类、平台或月份后再导出")
-    has_export_data = _latest_dispatch_export_query(db, category_code, platform, months).limit(1).first()
+    scoped_codes = _category_scope_codes(db, current_user)
+    if category_code:
+        _ensure_category_in_scope(db, current_user, category_code)
+    elif scoped_codes is not None and not scoped_codes:
+        raise HTTPException(status_code=403, detail="无权限访问该品类")
+    has_export_data = _latest_dispatch_export_query(db, category_code, platform, months, scoped_codes).limit(1).first()
     if not has_export_data:
         raise HTTPException(status_code=400, detail="当前筛选条件无可导出数据，请调整月份、品类或平台")
 
@@ -942,15 +1009,14 @@ def list_dispatch_export_jobs(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
     db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
-    query = db.query(WorkbenchExportJob)
-    total = query.count()
-    jobs = (
-        query.order_by(WorkbenchExportJob.created_at.desc(), WorkbenchExportJob.id.desc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-        .all()
-    )
+    scoped_codes = _category_scope_codes(db, current_user)
+    query = db.query(WorkbenchExportJob).order_by(WorkbenchExportJob.created_at.desc(), WorkbenchExportJob.id.desc())
+    visible_jobs = [job for job in query.all() if _job_matches_category_scope(job, scoped_codes)]
+    total = len(visible_jobs)
+    start = (page - 1) * page_size
+    jobs = visible_jobs[start:start + page_size]
     return {"total": total, "items": [_dispatch_export_job_out(job) for job in jobs]}
 
 
@@ -974,18 +1040,22 @@ def delete_dispatch_export_job(job_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/export/jobs/{job_id}")
-def get_dispatch_export_job(job_id: int, db: Session = Depends(get_db)):
+def get_dispatch_export_job(job_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     job = db.query(WorkbenchExportJob).filter(WorkbenchExportJob.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="导出任务不存在")
+    if not _job_matches_category_scope(job, _category_scope_codes(db, current_user)):
+        raise HTTPException(status_code=403, detail="无权限访问该品类")
     return _dispatch_export_job_out(job)
 
 
 @router.get("/export/download/{token}")
-def download_dispatch_export(token: str, db: Session = Depends(get_db)):
+def download_dispatch_export(token: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     job = db.query(WorkbenchExportJob).filter(WorkbenchExportJob.file_token == token).first()
     if not job or not job.filename:
         raise HTTPException(status_code=404, detail="文件不存在或已过期")
+    if not _job_matches_category_scope(job, _category_scope_codes(db, current_user)):
+        raise HTTPException(status_code=403, detail="无权限访问该品类")
     file_path = DISPATCH_EXPORT_DIR / f"{token}_{job.filename}"
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="文件已被清理，请重新导出")
@@ -1001,17 +1071,22 @@ def list_rules(
     platform: Optional[str] = Query(None),
     category_code: Optional[str] = Query(None),
     db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     q = db.query(DispatchRule)
+    scoped_codes = _category_scope_codes(db, current_user)
+    q = _apply_category_scope(q, DispatchRule.category_code, scoped_codes)
     if platform:
         q = q.filter(DispatchRule.platform == platform)
     if category_code:
+        _ensure_category_in_scope(db, current_user, category_code)
         q = q.filter(DispatchRule.category_code == category_code)
     return q.order_by(DispatchRule.priority, DispatchRule.id).all()
 
 
 @router.post("/rules", response_model=DispatchRuleOut)
-def create_rule(body: DispatchRuleIn, db: Session = Depends(get_db)):
+def create_rule(body: DispatchRuleIn, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    _ensure_category_in_scope(db, current_user, body.category_code)
     rule = DispatchRule(**body.model_dump())
     db.add(rule)
     db.commit()
@@ -1020,10 +1095,12 @@ def create_rule(body: DispatchRuleIn, db: Session = Depends(get_db)):
 
 
 @router.put("/rules/{rule_id}", response_model=DispatchRuleOut)
-def update_rule(rule_id: int, body: DispatchRuleIn, db: Session = Depends(get_db)):
+def update_rule(rule_id: int, body: DispatchRuleIn, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     rule = db.query(DispatchRule).filter(DispatchRule.id == rule_id).first()
     if not rule:
         raise HTTPException(status_code=404, detail="规则不存在")
+    _ensure_category_in_scope(db, current_user, rule.category_code)
+    _ensure_category_in_scope(db, current_user, body.category_code)
     for k, v in body.model_dump().items():
         setattr(rule, k, v)
     db.commit()
@@ -1032,10 +1109,11 @@ def update_rule(rule_id: int, body: DispatchRuleIn, db: Session = Depends(get_db
 
 
 @router.delete("/rules/{rule_id}")
-def delete_rule(rule_id: int, db: Session = Depends(get_db)):
+def delete_rule(rule_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     rule = db.query(DispatchRule).filter(DispatchRule.id == rule_id).first()
     if not rule:
         raise HTTPException(status_code=404, detail="规则不存在")
+    _ensure_category_in_scope(db, current_user, rule.category_code)
     db.delete(rule)
     db.commit()
     return {"message": "已删除"}

@@ -12,8 +12,15 @@ from sqlalchemy.pool import StaticPool
 
 from app.api import dispatch_api
 from app.api.dispatch_api import router
+from app.core.auth_deps import get_current_user
 from app.models.database import Base, get_db
 from app.models.schemas import Category, ColumnTemplate, DispatchBatch, DispatchItem, DispatchRule, RawDataRecord, UploadFileRecord, WorkbenchExportJob
+
+
+class DummyCurrentUser:
+    def __init__(self, *, is_admin=1, category_permissions=None):
+        self.is_admin = is_admin
+        self.category_permissions = category_permissions or []
 
 
 @pytest.fixture
@@ -33,6 +40,7 @@ def client_and_db(monkeypatch):
         yield db
 
     app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: DummyCurrentUser()
     monkeypatch.setattr(dispatch_api, "DISPATCH_PAGE_SIZE", 2)
     monkeypatch.setattr(dispatch_api, "DISPATCH_EXPORT_DIR", Path(tempfile.mkdtemp()))
     monkeypatch.setattr(dispatch_api, "SessionLocal", Session)
@@ -41,6 +49,13 @@ def client_and_db(monkeypatch):
     finally:
         db.close()
         Base.metadata.drop_all(engine)
+
+
+def _set_dispatch_user(client, *, is_admin=0, category_permissions=None):
+    client.app.dependency_overrides[get_current_user] = lambda: DummyCurrentUser(
+        is_admin=is_admin,
+        category_permissions=category_permissions or [],
+    )
 
 
 def test_run_dispatch_processes_raw_data_in_pages(client_and_db):
@@ -1336,3 +1351,163 @@ def test_enqueue_dispatch_category_for_clean_returns_counts(client_and_db):
         "pending_count": 0,
         "queued_count": 0,
     }
+
+
+def test_dispatch_batches_stats_and_unmatched_are_scoped_to_visible_categories(client_and_db):
+    client, db = client_and_db
+    _set_dispatch_user(client, category_permissions=["headphone"])
+    db.add_all([
+        Category(code="headphone", name="耳机", sort_order=1),
+        Category(code="speaker", name="音箱", sort_order=2),
+    ])
+    db.flush()
+
+    mixed_file = UploadFileRecord(filename="mixed.xlsx", platform="JD", row_count=3, status="done")
+    speaker_file = UploadFileRecord(filename="speaker.xlsx", platform="JD", row_count=1, status="done")
+    db.add_all([mixed_file, speaker_file])
+    db.flush()
+
+    mixed_rows = [
+        RawDataRecord(file_id=mixed_file.id, platform="jd", item_id="h-1", item_name="耳机 1"),
+        RawDataRecord(file_id=mixed_file.id, platform="jd", item_id="s-1", item_name="音箱 1"),
+        RawDataRecord(file_id=mixed_file.id, platform="jd", item_id="u-1", item_name="未分类 1"),
+    ]
+    speaker_rows = [
+        RawDataRecord(file_id=speaker_file.id, platform="jd", item_id="s-only", item_name="音箱 only"),
+    ]
+    db.add_all(mixed_rows + speaker_rows)
+    db.flush()
+
+    mixed_batch = DispatchBatch(file_id=mixed_file.id, status="done", total_rows=3, dispatched_rows=2, unmatched_rows=1)
+    speaker_batch = DispatchBatch(file_id=speaker_file.id, status="done", total_rows=1, dispatched_rows=1, unmatched_rows=0)
+    db.add_all([mixed_batch, speaker_batch])
+    db.flush()
+
+    db.add_all([
+        DispatchItem(batch_id=mixed_batch.id, raw_data_id=mixed_rows[0].id, category_code="headphone"),
+        DispatchItem(batch_id=mixed_batch.id, raw_data_id=mixed_rows[1].id, category_code="speaker"),
+        DispatchItem(batch_id=speaker_batch.id, raw_data_id=speaker_rows[0].id, category_code="speaker"),
+    ])
+    db.commit()
+
+    list_response = client.get("/api/dispatch/batches")
+    assert list_response.status_code == 200
+    assert [item["id"] for item in list_response.json()] == [mixed_batch.id]
+
+    stats_response = client.get(f"/api/dispatch/batches/{mixed_batch.id}/stats")
+    assert stats_response.status_code == 200
+    stats_payload = stats_response.json()
+    assert stats_payload["dispatched_rows"] == 1
+    assert stats_payload["categories"] == [
+        {
+            "category_code": "headphone",
+            "category_name": "耳机",
+            "count": 1,
+            "platforms": [{"platform": "jd", "count": 1}],
+        }
+    ]
+
+    unmatched_response = client.get(f"/api/dispatch/batches/{speaker_batch.id}/unmatched")
+    assert unmatched_response.status_code == 403
+
+
+def test_dispatch_rule_mutations_reject_unauthorized_category_code(client_and_db):
+    client, db = client_and_db
+    _set_dispatch_user(client, category_permissions=["headphone"])
+    db.add_all([
+        Category(code="headphone", name="耳机", sort_order=1),
+        Category(code="speaker", name="音箱", sort_order=2),
+    ])
+    db.flush()
+
+    create_response = client.post(
+        "/api/dispatch/rules",
+        json={
+            "category_code": "speaker",
+            "platform": "jd",
+            "field": "category_lv1",
+            "match_type": "equals",
+            "value": "音箱",
+            "priority": 10,
+            "is_active": True,
+        },
+    )
+    assert create_response.status_code == 403
+
+    rule = DispatchRule(
+        category_code="headphone",
+        platform="jd",
+        field="category_lv1",
+        match_type="equals",
+        value="耳机",
+        priority=10,
+        is_active=1,
+    )
+    speaker_rule = DispatchRule(
+        category_code="speaker",
+        platform="jd",
+        field="category_lv1",
+        match_type="equals",
+        value="音箱",
+        priority=20,
+        is_active=1,
+    )
+    db.add_all([rule, speaker_rule])
+    db.commit()
+
+    update_response = client.put(
+        f"/api/dispatch/rules/{rule.id}",
+        json={
+            "category_code": "speaker",
+            "platform": "jd",
+            "field": "category_lv1",
+            "match_type": "equals",
+            "value": "耳机",
+            "priority": 10,
+            "is_active": True,
+        },
+    )
+    assert update_response.status_code == 403
+
+    delete_response = client.delete(f"/api/dispatch/rules/{speaker_rule.id}")
+    assert delete_response.status_code == 403
+
+
+def test_dispatch_export_jobs_are_scoped_to_visible_categories(client_and_db):
+    client, db = client_and_db
+    _set_dispatch_user(client, category_permissions=["headphone"])
+
+    export_dir = Path(dispatch_api.DISPATCH_EXPORT_DIR)
+    headphone_job = WorkbenchExportJob(
+        status="done",
+        progress=100,
+        category_code="headphone",
+        platform="jd",
+        month=202605,
+        file_token="headphone-token",
+        filename="headphone.xlsx",
+    )
+    speaker_job = WorkbenchExportJob(
+        status="done",
+        progress=100,
+        category_code="speaker",
+        platform="jd",
+        month=202605,
+        file_token="speaker-token",
+        filename="speaker.xlsx",
+    )
+    db.add_all([headphone_job, speaker_job])
+    db.commit()
+    (export_dir / f"speaker-token_{speaker_job.filename}").write_bytes(b"speaker export")
+
+    create_response = client.post("/api/dispatch/export", json={"category_code": "speaker"})
+    assert create_response.status_code == 403
+
+    list_response = client.get("/api/dispatch/export/jobs")
+    assert list_response.status_code == 200
+    payload = list_response.json()
+    assert payload["total"] == 1
+    assert [item["category_code"] for item in payload["items"]] == ["headphone"]
+
+    download_response = client.get("/api/dispatch/export/download/speaker-token")
+    assert download_response.status_code == 403

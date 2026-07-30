@@ -60,3 +60,15 @@ def test_required_permission_preserves_confirmed_directory_mapping():
     assert required_permission_for_path("/api/clean/jobs") == PERMISSION_PROCESSING_WORKBENCH
     assert required_permission_for_path("/api/workbench/query") == PERMISSION_PRODUCT_MANAGEMENT
     assert required_permission_for_path("/api/auth/me") is None
+
+
+def test_admin_can_see_all_categories():
+    user = DummyUser(is_admin=1, category_permissions=[])
+
+    assert visible_category_codes(user, ["headphone", "speaker"]) == ["headphone", "speaker"]
+
+
+def test_normal_user_only_sees_granted_categories_in_original_order():
+    user = DummyUser(category_permissions=["speaker", "unknown"])
+
+    assert visible_category_codes(user, ["headphone", "speaker", "tv"]) == ["speaker"]

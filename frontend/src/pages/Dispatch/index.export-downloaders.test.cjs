@@ -50,3 +50,13 @@ assert.match(
   /downloadDispatchExport\(/,
   'Dispatch export page should call the authenticated download helper',
 )
+assert.match(
+  dispatchSource,
+  /const downloadToken = row\.download_url\.slice\('\/api\/dispatch\/export\/download\/'.length\)/,
+  'Dispatch export page should derive the row download token once',
+)
+assert.match(
+  dispatchSource,
+  /loading=\{downloadingToken === downloadToken\}/,
+  'Dispatch export page should show row-level loading feedback while downloading',
+)

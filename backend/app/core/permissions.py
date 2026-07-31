@@ -46,7 +46,10 @@ def normalize_category_permissions(value: Any) -> list[str]:
 def visible_category_codes(user: Any, all_category_codes: list[str]) -> list[str]:
     if getattr(user, "is_admin", 0) == 1:
         return all_category_codes
-    allowed = set(normalize_category_permissions(getattr(user, "category_permissions", None)))
+    category_permissions = getattr(user, "category_permissions", None)
+    if not category_permissions:
+        return all_category_codes
+    allowed = set(normalize_category_permissions(category_permissions))
     return [code for code in all_category_codes if code in allowed]
 
 
@@ -65,13 +68,6 @@ def user_has_permission(user: Any, permission_key: str) -> bool:
     if getattr(user, "is_admin", 0):
         return True
     return permission_key in normalize_permissions(getattr(user, "permissions", None))
-
-
-def visible_category_codes(user: Any, all_category_codes: list[str]) -> list[str]:
-    if getattr(user, "is_admin", 0) == 1:
-        return all_category_codes
-    allowed = set(normalize_category_permissions(getattr(user, "category_permissions", None)))
-    return [code for code in all_category_codes if code in allowed]
 
 
 def required_permission_for_path(path: str) -> str | None:

@@ -520,6 +520,7 @@ function DispatchExportTab({ visibleCategories }: { visibleCategories: CategoryO
   const [platform, setPlatform] = useState<string | undefined>()
   const [months, setMonths] = useState<number[]>([])
   const [exporting, setExporting] = useState(false)
+  const [downloadingToken, setDownloadingToken] = useState<string | null>(null)
   const [exportJobsPage, setExportJobsPage] = useState(1)
   const [exportJobsPageSize, setExportJobsPageSize] = useState(50)
   const categoryOptions = visibleCategories
@@ -589,6 +590,7 @@ function DispatchExportTab({ visibleCategories }: { visibleCategories: CategoryO
       return
     }
 
+    setDownloadingToken(token)
     try {
       const response = await downloadDispatchExport(token)
       const url = window.URL.createObjectURL(new Blob([response.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
@@ -601,6 +603,8 @@ function DispatchExportTab({ visibleCategories }: { visibleCategories: CategoryO
       setTimeout(() => window.URL.revokeObjectURL(url), 100)
     } catch {
       message.error('导出失败，请重试')
+    } finally {
+      setDownloadingToken(null)
     }
   }
 
@@ -661,9 +665,12 @@ function DispatchExportTab({ visibleCategories }: { visibleCategories: CategoryO
       render: (_: unknown, row: DispatchExportJob) => (
         <Space>
           <Button size="small" onClick={refreshExportJobs}>刷新</Button>
-          {row.status === 'done' && row.download_url && (
-            <Button size="small" type="link" icon={<DownloadOutlined />} onClick={() => handleDownloadExportJob(row.download_url as string, row.filename)}>下载</Button>
-          )}
+          {row.status === 'done' && row.download_url && (() => {
+            const downloadToken = row.download_url.slice('/api/dispatch/export/download/'.length)
+            return (
+              <Button size="small" type="link" icon={<DownloadOutlined />} loading={downloadingToken === downloadToken} onClick={() => handleDownloadExportJob(row.download_url as string, row.filename)}>下载</Button>
+            )
+          })()}
           {row.status === 'error' && row.error_msg && (
             <Button size="small" type="link" danger onClick={() => Modal.error({ title: '导出失败', content: row.error_msg })}>原因</Button>
           )}

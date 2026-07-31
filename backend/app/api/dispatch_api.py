@@ -34,7 +34,6 @@ from app.models.schemas import (
     DispatchRuleIn, DispatchRuleOut, DispatchBatchOut,
     RawDataRecord, UploadFileRecord, ColumnTemplate, WorkbenchExportJob,
 )
-from app.utils.time_utils import format_beijing_datetime
 from app.services.export_guards import (
     MAX_SYNC_EXPORT_ROWS,
     ensure_export_row_limit,
@@ -455,7 +454,7 @@ def run_dispatch(payload: dict, db: Session = Depends(get_db)):
     platform = (file_record.platform or "").lower()
     rule_filters = [
         DispatchRule.is_active == 1,
-        (DispatchRule.platform == None) | (DispatchRule.platform == platform),
+        (DispatchRule.platform.is_(None)) | (DispatchRule.platform == platform),
     ]
     if category_code:
         rule_filters.append(DispatchRule.category_code == category_code)

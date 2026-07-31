@@ -13,7 +13,7 @@ import {
   listUploadFiles, listDispatchBatches, runDispatch, enqueueDispatchCategoryForClean,
   getDispatchBatchStats, listDispatchUnmatched, listDispatchRules,
   createDispatchRule, updateDispatchRule, deleteDispatchRule,
-  createDispatchExportJob, listDispatchExportJobs, deleteDispatchExportJob,
+  createDispatchExportJob, listDispatchExportJobs, deleteDispatchExportJob, downloadDispatchExport,
   type DispatchBatchStatsResponse, type DispatchCategoryStat, type DispatchRuleStat,
   type DispatchExportJob, type DispatchUnmatchedRow
 } from '../../services/api'
@@ -577,6 +577,33 @@ function DispatchExportTab({ visibleCategories }: { visibleCategories: CategoryO
     }
   }
 
+  const handleDownloadExportJob = async (downloadUrl: string, filename?: string | null) => {
+    const tokenPrefix = '/api/dispatch/export/download/'
+    if (!downloadUrl.startsWith(tokenPrefix)) {
+      message.error('导出失败，下载链接不合法')
+      return
+    }
+    const token = downloadUrl.slice(tokenPrefix.length)
+    if (!token) {
+      message.error('导出失败，未返回下载链接')
+      return
+    }
+
+    try {
+      const response = await downloadDispatchExport(token)
+      const url = window.URL.createObjectURL(new Blob([response.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
+      const a = document.createElement('a')
+      document.body.appendChild(a)
+      a.href = url
+      a.download = filename || 'dispatch_export.xlsx'
+      a.click()
+      document.body.removeChild(a)
+      setTimeout(() => window.URL.revokeObjectURL(url), 100)
+    } catch {
+      message.error('导出失败，请重试')
+    }
+  }
+
   const statusMeta: Record<DispatchExportJob['status'], { label: string; color: string }> = {
     pending: { label: '等待中', color: 'default' },
     running: { label: '导出中', color: 'processing' },
@@ -635,7 +662,7 @@ function DispatchExportTab({ visibleCategories }: { visibleCategories: CategoryO
         <Space>
           <Button size="small" onClick={refreshExportJobs}>刷新</Button>
           {row.status === 'done' && row.download_url && (
-            <Button size="small" type="link" icon={<DownloadOutlined />} href={row.download_url}>下载</Button>
+            <Button size="small" type="link" icon={<DownloadOutlined />} onClick={() => handleDownloadExportJob(row.download_url as string, row.filename)}>下载</Button>
           )}
           {row.status === 'error' && row.error_msg && (
             <Button size="small" type="link" danger onClick={() => Modal.error({ title: '导出失败', content: row.error_msg })}>原因</Button>

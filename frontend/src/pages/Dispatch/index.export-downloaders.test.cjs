@@ -30,3 +30,23 @@ assert.match(
   /downloaders\.join\('、'\)/,
   'Downloader names should render as a readable deduplicated list',
 )
+assert.match(
+  apiSource,
+  /export const downloadDispatchExport = \(token: string\) =>/,
+  'Dispatch export API should expose an authenticated blob download helper',
+)
+assert.match(
+  apiSource,
+  /responseType: 'blob'/,
+  'Dispatch export downloads should use blob responses so the bearer token is sent by axios',
+)
+assert.doesNotMatch(
+  dispatchSource,
+  /href=\{row\.download_url\}/,
+  'Dispatch export download button should not rely on a bare href navigation',
+)
+assert.match(
+  dispatchSource,
+  /downloadDispatchExport\(/,
+  'Dispatch export page should call the authenticated download helper',
+)

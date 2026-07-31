@@ -467,6 +467,9 @@ export const listDispatchExportJobs = (params?: { page?: number; page_size?: num
 export const getDispatchExportJob = (jobId: number) =>
   api.get<DispatchExportJob>(`/dispatch/export/jobs/${jobId}`)
 
+export const downloadDispatchExport = (token: string) =>
+  api.get(`/dispatch/export/download/${token}`, { responseType: 'blob' })
+
 export const deleteDispatchExportJob = (jobId: number) =>
   api.delete(`/dispatch/export/jobs/${jobId}`)
 

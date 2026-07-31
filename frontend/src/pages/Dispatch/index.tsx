@@ -619,8 +619,11 @@ function DispatchExportTab({ visibleCategories }: { visibleCategories: CategoryO
       render: (value: string | null) => value ? dayjs(value).format('YYYY-MM-DD HH:mm:ss') : '-'
     },
     {
-      title: '完成时间', dataIndex: 'finished_at', width: 170,
-      render: (value: string | null) => value ? dayjs(value).format('YYYY-MM-DD HH:mm:ss') : '-'
+      title: '下载人', dataIndex: 'downloaders', width: 220,
+      render: (value: string[] | null) => {
+        const downloaders = Array.isArray(value) ? value.filter(Boolean) : []
+        return downloaders.length ? downloaders.join('、') : <Text type="secondary">—</Text>
+      }
     },
     {
       title: '文件名', dataIndex: 'filename', ellipsis: true,

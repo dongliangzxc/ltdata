@@ -444,6 +444,8 @@ export interface DispatchExportJob {
   error_msg: string | null
   created_at: string | null
   finished_at: string | null
+  downloaders: string[]
+  last_download_at: string | null
 }
 
 export interface DispatchExportJobsResponse {

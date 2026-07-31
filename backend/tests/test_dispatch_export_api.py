@@ -223,3 +223,63 @@ def test_dispatch_export_job_out_includes_downloaders_and_last_download_at():
     assert payload["downloaders"] == ["张三", "李四"]
     assert payload["last_download_at"] is not None
     assert payload["download_url"] == "/api/dispatch/export/download/token-123"
+
+
+def test_download_dispatch_export_deduplicates_downloader_names(db, tmp_path, monkeypatch):
+    monkeypatch.setattr(dispatch_api, "DISPATCH_EXPORT_DIR", tmp_path)
+    job = WorkbenchExportJob(
+        status="done",
+        progress=100,
+        category_code="camera",
+        file_token="dedupe-token",
+        filename="dedupe.xlsx",
+        downloaders=[],
+        created_at=datetime.utcnow(),
+        finished_at=datetime.utcnow(),
+    )
+    db.add(job)
+    db.commit()
+    (tmp_path / "dedupe-token_dedupe.xlsx").write_bytes(b"export-bytes")
+
+    user = type("UserStub", (), {"username": "alice", "name": "张三", "is_admin": 1})()
+
+    first = dispatch_api.download_dispatch_export("dedupe-token", db, user)
+    assert first.filename == "dedupe.xlsx"
+    db.refresh(job)
+    first_download_at = job.last_download_at
+    assert job.downloaders == ["张三"]
+
+    dispatch_api.download_dispatch_export("dedupe-token", db, user)
+    db.refresh(job)
+
+    assert job.downloaders == ["张三"]
+    assert job.last_download_at >= first_download_at
+
+
+def test_download_dispatch_export_records_each_unique_downloader(db, tmp_path, monkeypatch):
+    monkeypatch.setattr(dispatch_api, "DISPATCH_EXPORT_DIR", tmp_path)
+    job = WorkbenchExportJob(
+        status="done",
+        progress=100,
+        category_code="camera",
+        file_token="multi-token",
+        filename="multi.xlsx",
+        downloaders=[],
+        created_at=datetime.utcnow(),
+        finished_at=datetime.utcnow(),
+    )
+    db.add(job)
+    db.commit()
+    (tmp_path / "multi-token_multi.xlsx").write_bytes(b"export-bytes")
+
+    alice = type("UserStub", (), {"username": "alice", "name": "张三", "is_admin": 1})()
+    bob = type("UserStub", (), {"username": "bob", "name": "李四", "is_admin": 1})()
+    fallback = type("UserStub", (), {"username": "carol", "name": None, "is_admin": 1})()
+
+    dispatch_api.download_dispatch_export("multi-token", db, alice)
+    dispatch_api.download_dispatch_export("multi-token", db, bob)
+    dispatch_api.download_dispatch_export("multi-token", db, fallback)
+    db.refresh(job)
+
+    assert job.downloaders == ["张三", "李四", "carol"]
+    assert job.last_download_at is not None

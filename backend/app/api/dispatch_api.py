@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 from app.core.auth_deps import get_current_user
 from app.core.config import settings
 from app.core.permissions import visible_category_codes
+from app.utils.time_utils import format_beijing_datetime
 from app.models.database import get_db, SessionLocal
 from app.models.schemas import (
     Category, CleanJobItemRecord, DispatchRule, DispatchBatch, DispatchItem,
@@ -53,7 +54,7 @@ def _category_scope_codes(db: Session, current_user) -> list[str] | None:
     all_codes = [code for code, in db.query(Category.code).order_by(Category.sort_order, Category.code).all()]
     if all_codes:
         return visible_category_codes(current_user, all_codes)
-    return list(getattr(current_user, "category_permissions", None) or [])
+    return None
 
 def _ensure_category_in_scope(db: Session, current_user, category_code: str) -> None:
     scoped_codes = _category_scope_codes(db, current_user)
@@ -1002,6 +1003,26 @@ def _dispatch_export_job_out(job: WorkbenchExportJob) -> dict:
     }
 
 
+def _current_downloader_name(current_user) -> str:
+    name = (getattr(current_user, "name", None) or "").strip()
+    if name:
+        return name
+    return getattr(current_user, "username", "未知用户") or "未知用户"
+
+
+def _record_export_downloader(job: WorkbenchExportJob, current_user) -> None:
+    downloader_name = _current_downloader_name(current_user)
+    downloaders = []
+    existing_downloaders = job.downloaders if isinstance(job.downloaders, list) else []
+    for name in existing_downloaders:
+        if name not in downloaders:
+            downloaders.append(name)
+    if downloader_name not in downloaders:
+        downloaders.append(downloader_name)
+    job.downloaders = downloaders
+    job.last_download_at = datetime.utcnow()
+
+
 def _dispatch_export_file_path(job: WorkbenchExportJob) -> Path | None:
     if not job.file_token or not job.filename:
         return None
@@ -1063,8 +1084,12 @@ def download_dispatch_export(token: str, db: Session = Depends(get_db), current_
     file_path = DISPATCH_EXPORT_DIR / f"{token}_{job.filename}"
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="文件已被清理，请重新导出")
+    _record_export_downloader(job, current_user)
+    db.commit()
+    db.refresh(job)
     return FileResponse(
         path=str(file_path),
+        filename=job.filename,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(job.filename)}"},
     )

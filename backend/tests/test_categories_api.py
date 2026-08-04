@@ -6,9 +6,16 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from app.models.database import Base, get_db
-from app.models.schemas import Category, ModelRecord
+from app.core.auth_deps import get_current_user
 from fastapi import FastAPI
 from app.api.categories_api import router
+
+
+class DummyUser:
+    def __init__(self, *, is_admin=0, category_permissions=None):
+        self.is_admin = is_admin
+        self.category_permissions = category_permissions
+
 
 @pytest.fixture
 def client():
@@ -23,6 +30,8 @@ def client():
     app = FastAPI()
     app.include_router(router)
 
+    current_user = DummyUser(is_admin=1, category_permissions=[])
+
     def override_db():
         s = Session()
         try:
@@ -30,8 +39,14 @@ def client():
         finally:
             s.close()
 
+    def override_current_user():
+        return current_user
+
     app.dependency_overrides[get_db] = override_db
-    return TestClient(app)
+    app.dependency_overrides[get_current_user] = override_current_user
+    test_client = TestClient(app)
+    test_client.current_user = current_user
+    return test_client
 
 
 def test_list_empty(client):
@@ -74,3 +89,49 @@ def test_delete_category(client):
 def test_delete_category_with_models_returns_409(client):
     """有关联型号时禁止删除"""
     pass  # 在集成测试中验证
+
+
+def test_scoped_user_only_lists_permitted_category_tree(client):
+    client.current_user.is_admin = 0
+    client.current_user.category_permissions = ["tv"]
+    client.post("/api/categories", json={"code": "tv", "name": "电视"})
+    client.post("/api/categories", json={"code": "soundbar", "name": "回音壁"})
+
+    response = client.get("/api/categories/tree")
+
+    assert response.status_code == 200
+    assert [item["code"] for item in response.json()] == ["tv"]
+
+
+def test_user_without_category_permissions_lists_all_categories(client):
+    client.current_user.is_admin = 0
+    client.current_user.category_permissions = []
+    client.post("/api/categories", json={"code": "tv", "name": "电视"})
+    client.post("/api/categories", json={"code": "soundbar", "name": "回音壁"})
+
+    response = client.get("/api/categories/tree")
+
+    assert response.status_code == 200
+    assert [item["code"] for item in response.json()] == ["soundbar", "tv"]
+
+
+def test_scoped_user_cannot_update_unpermitted_category(client):
+    created = client.post("/api/categories", json={"code": "tv", "name": "电视"})
+    client.current_user.is_admin = 0
+    client.current_user.category_permissions = ["soundbar"]
+
+    response = client.put(f"/api/categories/{created.json()['id']}", json={"name": "电视机"})
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "无权限访问该品类"
+
+
+def test_scoped_user_cannot_delete_unpermitted_category(client):
+    created = client.post("/api/categories", json={"code": "tv", "name": "电视"})
+    client.current_user.is_admin = 0
+    client.current_user.category_permissions = ["soundbar"]
+
+    response = client.delete(f"/api/categories/{created.json()['id']}")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "无权限访问该品类"

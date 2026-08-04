@@ -6,6 +6,8 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
+from app.core.auth_deps import get_current_user
+from app.core.permissions import visible_category_codes
 from app.models.database import get_db
 from app.models.schemas import Category, ModelRecord, MetadataSpec, CategoryOut, CategoryCreate
 
@@ -31,10 +33,27 @@ class CategoryTreeNode(BaseModel):
 CategoryTreeNode.model_rebuild()
 
 
+def _category_scope_codes(db: Session, current_user) -> list[str] | None:
+    all_codes = [code for code, in db.query(Category.code).order_by(Category.sort_order, Category.name).all()]
+    if not all_codes:
+        return None
+    return visible_category_codes(current_user, all_codes)
+
+
+def _ensure_category_in_scope(db: Session, current_user, category_code: str) -> None:
+    scoped_codes = _category_scope_codes(db, current_user)
+    if scoped_codes is not None and category_code not in scoped_codes:
+        raise HTTPException(status_code=403, detail="无权限访问该品类")
+
+
 @router.get("/tree", response_model=list[CategoryTreeNode])
-def get_category_tree(db: Session = Depends(get_db)):
+def get_category_tree(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """返回品类嵌套树，父→子结构。"""
-    cats = db.query(Category).order_by(Category.sort_order, Category.name).all()
+    scoped_codes = _category_scope_codes(db, current_user)
+    query = db.query(Category).order_by(Category.sort_order, Category.name)
+    if scoped_codes is not None:
+        query = query.filter(Category.code.in_(scoped_codes))
+    cats = query.all()
     by_code: dict = {c.code: {
         "id": c.id,
         "code": c.code,
@@ -54,17 +73,22 @@ def get_category_tree(db: Session = Depends(get_db)):
 
 
 @router.get("", response_model=list[CategoryOut])
-def list_categories(db: Session = Depends(get_db)):
-    return db.query(Category).order_by(Category.sort_order, Category.name).all()
+def list_categories(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    scoped_codes = _category_scope_codes(db, current_user)
+    query = db.query(Category).order_by(Category.sort_order, Category.name)
+    if scoped_codes is not None:
+        query = query.filter(Category.code.in_(scoped_codes))
+    return query.all()
 
 
 @router.post("", response_model=CategoryOut, status_code=201)
-def create_category(payload: CategoryCreate, db: Session = Depends(get_db)):
+def create_category(payload: CategoryCreate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     if db.query(Category).filter(Category.code == payload.code).first():
         raise HTTPException(status_code=409, detail=f"品类码 {payload.code} 已存在")
     if payload.parent_code:
         if not db.query(Category).filter(Category.code == payload.parent_code).first():
             raise HTTPException(status_code=404, detail=f"父品类码 '{payload.parent_code}' 不存在")
+        _ensure_category_in_scope(db, current_user, payload.parent_code)
     cat = Category(
         code=payload.code.strip(),
         name=payload.name.strip(),
@@ -82,10 +106,11 @@ def create_category(payload: CategoryCreate, db: Session = Depends(get_db)):
 
 
 @router.put("/{category_id}", response_model=CategoryOut)
-def update_category(category_id: int, payload: CategoryUpdate, db: Session = Depends(get_db)):
+def update_category(category_id: int, payload: CategoryUpdate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     cat = db.query(Category).filter(Category.id == category_id).first()
     if not cat:
         raise HTTPException(status_code=404, detail="品类不存在")
+    _ensure_category_in_scope(db, current_user, cat.code)
     if "name" in payload.model_fields_set and payload.name is not None:
         cat.name = payload.name.strip()
     if "parent_code" in payload.model_fields_set:
@@ -93,6 +118,7 @@ def update_category(category_id: int, payload: CategoryUpdate, db: Session = Dep
         if payload.parent_code:
             if not db.query(Category).filter(Category.code == payload.parent_code).first():
                 raise HTTPException(status_code=404, detail=f"父品类码 '{payload.parent_code}' 不存在")
+            _ensure_category_in_scope(db, current_user, payload.parent_code)
         # Cycle check BEFORE assignment (uses clean DB state)
         if payload.parent_code:
             all_cats = {c.code: c for c in db.query(Category).all()}
@@ -116,10 +142,11 @@ def update_category(category_id: int, payload: CategoryUpdate, db: Session = Dep
 
 
 @router.delete("/{category_id}", status_code=204)
-def delete_category(category_id: int, db: Session = Depends(get_db)):
+def delete_category(category_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     cat = db.query(Category).filter(Category.id == category_id).first()
     if not cat:
         raise HTTPException(status_code=404, detail="品类不存在")
+    _ensure_category_in_scope(db, current_user, cat.code)
     child_count = db.query(Category).filter(Category.parent_code == cat.code).count()
     if child_count:
         raise HTTPException(status_code=409, detail=f"品类下存在 {child_count} 个子品类，请先处理")

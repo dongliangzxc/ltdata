@@ -60,3 +60,8 @@ assert.match(
   /loading=\{downloadingToken === downloadToken\}/,
   'Dispatch export page should show row-level loading feedback while downloading',
 )
+assert.match(
+  dispatchSource,
+  /categoryPermissions\.length === 0\s*\?\s*categoryOptions\s*:\s*categoryOptions\.filter\(category => categoryPermissions\.includes\(category\.value\)\)/,
+  'Dispatch visible categories should fall back to all categories when no category permissions are configured',
+)

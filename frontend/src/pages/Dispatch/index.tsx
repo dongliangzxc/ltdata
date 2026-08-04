@@ -130,7 +130,9 @@ function useVisibleCategories() {
   const { options: categoryOptions, loading } = useCategoryOptions()
   const categoryPermissions = user?.category_permissions ?? []
   const visibleCategories = useMemo(
-    () => categoryOptions.filter(category => categoryPermissions.includes(category.value)),
+    () => categoryPermissions.length === 0
+      ? categoryOptions
+      : categoryOptions.filter(category => categoryPermissions.includes(category.value)),
     [categoryOptions, categoryPermissions],
   )
 

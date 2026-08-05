@@ -25,7 +25,7 @@ const PATH_PERMISSION_PREFIXES: Array<[string, PermissionKey]> = [
   ['/match-results', 'processing_workbench'],
   ['/dashboard', 'product_management'],
   ['/export', 'product_management'],
-  ['/workbench', 'product_management'],
+  ['/workbench', 'processing_workbench'],
 ]
 
 export function hasPermission(user: UserProfile | null, permission?: PermissionKey) {

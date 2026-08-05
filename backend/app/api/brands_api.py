@@ -6,8 +6,10 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.auth_deps import get_current_user
+from app.core.permissions import visible_category_codes
 from app.models.database import get_db
-from app.models.schemas import BrandRecord, ModelRecord, BrandAlias, BrandIn, BrandOut, PaginatedResponse
+from app.models.schemas import BrandRecord, ModelRecord, BrandAlias, BrandIn, BrandOut, PaginatedResponse, Category, User
 
 router = APIRouter(prefix="/api/brands", tags=["brands"])
 
@@ -32,6 +34,13 @@ class BrandAliasUpdate(BaseModel):
 class BrandUpdate(BaseModel):
     brand_name: str | None = None
     alias_name: str | None = None
+
+
+def _visible_brand_category_codes(db: Session, current_user: User) -> set[str] | None:
+    all_codes = [code for code, in db.query(Category.code).order_by(Category.sort_order, Category.name).all()]
+    if not all_codes:
+        return None
+    return set(visible_category_codes(current_user, all_codes))
 
 
 def _clean_brand_code(value: str | None) -> str:
@@ -85,17 +94,20 @@ def _is_placeholder_brand_code(value: str) -> bool:
     return not value or set(value) == {"-"}
 
 
-def _build_brand_outs(db: Session, brands: list[BrandRecord]) -> list[BrandOut]:
+def _build_brand_outs(db: Session, brands: list[BrandRecord], visible_codes: set[str] | None = None) -> list[BrandOut]:
     if not brands:
         return []
 
     brand_codes = [brand.brand_code for brand in brands]
     normalized_brand_code = func.trim(ModelRecord.brand_code)
+    model_count_query = db.query(normalized_brand_code, func.count(ModelRecord.id)).filter(
+        ModelRecord.brand_code.isnot(None),
+        normalized_brand_code.in_(brand_codes),
+    )
+    if visible_codes is not None:
+        model_count_query = model_count_query.filter(ModelRecord.category_code.in_(visible_codes))
     model_counts: dict[str, int] = dict(
-        db.query(normalized_brand_code, func.count(ModelRecord.id))
-        .filter(ModelRecord.brand_code.isnot(None), normalized_brand_code.in_(brand_codes))
-        .group_by(normalized_brand_code)
-        .all()
+        model_count_query.group_by(normalized_brand_code).all()
     )
     alias_counts: dict[str, int] = dict(
         db.query(BrandAlias.brand_code, func.count(BrandAlias.id))
@@ -105,11 +117,13 @@ def _build_brand_outs(db: Session, brands: list[BrandRecord]) -> list[BrandOut]:
     )
     model_brand_names: dict[str, str] = {}
     category_map: dict[str, set[str]] = {}
-    for brand_code, brand_name, category_code in (
-        db.query(normalized_brand_code, ModelRecord.brand_name, ModelRecord.category_code)
-        .filter(ModelRecord.brand_code.isnot(None), normalized_brand_code.in_(brand_codes))
-        .all()
-    ):
+    model_detail_query = db.query(normalized_brand_code, ModelRecord.brand_name, ModelRecord.category_code).filter(
+        ModelRecord.brand_code.isnot(None),
+        normalized_brand_code.in_(brand_codes),
+    )
+    if visible_codes is not None:
+        model_detail_query = model_detail_query.filter(ModelRecord.category_code.in_(visible_codes))
+    for brand_code, brand_name, category_code in model_detail_query.all():
         if not brand_code:
             continue
         if brand_name and brand_code not in model_brand_names:
@@ -142,8 +156,10 @@ def list_brands(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=2000),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """返回分页品牌主数据列表，附带型号数、别名数、覆盖品类。"""
+    visible_codes = _visible_brand_category_codes(db, current_user)
     normalized_model_brand_code = func.trim(ModelRecord.brand_code)
     query = db.query(BrandRecord)
 
@@ -164,6 +180,17 @@ def list_brands(
             BrandRecord.original_brand_name.ilike(pattern) |
             BrandRecord.brand_code.in_(keyword_brand_codes)
         )
+
+    if visible_codes is not None:
+        visible_brand_codes = (
+            db.query(normalized_model_brand_code)
+            .filter(
+                ModelRecord.brand_code.isnot(None),
+                ModelRecord.category_code.in_(visible_codes),
+            )
+            .distinct()
+        )
+        query = query.filter(BrandRecord.brand_code.in_(visible_brand_codes))
 
     cleaned_category_code = (category_code or "").strip()
     if cleaned_category_code:
@@ -188,7 +215,7 @@ def list_brands(
         total=total,
         page=page,
         page_size=page_size,
-        items=_build_brand_outs(db, brands),
+        items=_build_brand_outs(db, brands, visible_codes),
     )
 
 

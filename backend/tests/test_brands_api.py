@@ -8,8 +8,14 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
+from app.core.auth_deps import get_current_user
 from app.models.database import Base, get_db
 from app.models.schemas import ModelRecord, BrandAlias, BrandRecord
+
+
+class DummyUser:
+    is_admin = 1
+    category_permissions = []
 
 
 @pytest.fixture(scope="function")
@@ -28,6 +34,7 @@ def client_and_db():
     def override_db():
         yield db
     app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: DummyUser()
     yield TestClient(app), db
     db.close()
 

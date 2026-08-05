@@ -61,6 +61,7 @@ def test_required_permission_preserves_confirmed_directory_mapping():
     assert required_permission_for_path("/api/clean/jobs") == PERMISSION_PROCESSING_WORKBENCH
     assert required_permission_for_path("/api/metadata") == PERMISSION_PROCESSING_WORKBENCH
     assert required_permission_for_path("/api/models") == PERMISSION_PROCESSING_WORKBENCH
+    assert required_permission_for_path("/api/brands") == PERMISSION_PROCESSING_WORKBENCH
     assert required_permission_for_path("/api/workbench/query") == PERMISSION_PRODUCT_MANAGEMENT
     assert required_permission_for_path("/api/auth/me") is None
 

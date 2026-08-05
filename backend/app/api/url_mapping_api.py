@@ -13,10 +13,12 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 import openpyxl
 
+from app.core.auth_deps import get_current_user
+from app.core.permissions import visible_category_codes
 from app.models.database import get_db
 from app.models.schemas import (
     ItemUrlMapping, ItemUrlMappingIn, ItemUrlMappingOut,
-    ModelRecord, PaginatedResponse,
+    ModelRecord, PaginatedResponse, Category, User,
 )
 from app.utils.url_utils import extract_item_id
 from app.services.import_helper import save_tmp_file, read_columns, find_best_template, col_fingerprint
@@ -34,6 +36,21 @@ _PLATFORM_MAP = {
 }
 
 _LEGACY_HEADPHONE_PLATFORMS = {"jd", "tmall", "taobao"}
+
+
+def _visible_url_mapping_category_codes(db: Session, current_user: User) -> set[str] | None:
+    all_codes = [code for code, in db.query(Category.code).order_by(Category.sort_order, Category.name).all()]
+    if not all_codes:
+        return None
+    return set(visible_category_codes(current_user, all_codes))
+
+
+def _ensure_url_mapping_model_visible(db: Session, current_user: User, model: ModelRecord | None) -> None:
+    if not model or not model.category_code:
+        return
+    visible_codes = _visible_url_mapping_category_codes(db, current_user)
+    if visible_codes is not None and model.category_code not in visible_codes:
+        raise HTTPException(status_code=403, detail="无权限访问该品类")
 
 
 def _legacy_headphone_category(m: ItemUrlMapping) -> tuple[str | None, str | None]:
@@ -107,6 +124,7 @@ async def url_mapping_headers(
 def url_mapping_confirm(
     payload: UrlMappingConfirmPayload,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """P10: Step 2 — parse file with mapping, upsert item_url_mappings."""
     from app.models.schemas import ItemUrlMapping, ModelRecord as ModelORM
@@ -176,6 +194,7 @@ def url_mapping_confirm(
         if not model:
             errors.append(f"Row {i}: model ({brand_code}, {model_code}) not found")
             continue
+        _ensure_url_mapping_model_visible(db, current_user, model)
 
         # Category mismatch warning (non-blocking)
         if model.category_code and payload.category_code and model.category_code != payload.category_code:
@@ -240,7 +259,11 @@ def url_mapping_confirm(
 
 
 @router.post("/import")
-def import_url_mappings(file: UploadFile = File(...), db: Session = Depends(get_db)):
+def import_url_mappings(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """
     从 Excel rawdata sheet 批量导入 URL→型号 映射。
     期望列：渠道 / 网址 / 品牌码 / 型号码 / 单价
@@ -274,8 +297,8 @@ def import_url_mappings(file: UploadFile = File(...), db: Session = Depends(get_
 
     # 构建 (brand_code, model_code) → model_id 缓存
     all_models = db.query(ModelRecord).all()
-    model_lookup: dict[tuple[str, str], int] = {
-        (m.brand_code.upper().strip(), m.model_code.upper().strip()): m.id
+    model_lookup: dict[tuple[str, str], ModelRecord] = {
+        (m.brand_code.upper().strip(), m.model_code.upper().strip()): m
         for m in all_models
     }
 
@@ -323,11 +346,13 @@ def import_url_mappings(file: UploadFile = File(...), db: Session = Depends(get_
             continue
         seen_keys.add(key)
 
-        model_id = model_lookup.get((brand_code, model_code))
-        if not model_id:
+        model = model_lookup.get((brand_code, model_code))
+        if not model:
             errors.append(f"第{row_idx}行：型号 [{brand_code}]{model_code} 不存在，已跳过")
             skipped += 1
             continue
+        _ensure_url_mapping_model_visible(db, current_user, model)
+        model_id = model.id
 
         # Upsert
         existing = db.query(ItemUrlMapping).filter_by(
@@ -360,10 +385,14 @@ def list_url_mappings(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    q = db.query(ItemUrlMapping).filter(
+    visible_codes = _visible_url_mapping_category_codes(db, current_user)
+    q = db.query(ItemUrlMapping).outerjoin(ModelRecord, ItemUrlMapping.model_id == ModelRecord.id).filter(
         or_(ItemUrlMapping.brand_code.isnot(None), ItemUrlMapping.model_id.isnot(None))
     )
+    if visible_codes is not None:
+        q = q.filter(or_(ItemUrlMapping.model_id.is_(None), ModelRecord.category_code.in_(visible_codes)))
     if platform:
         q = q.filter(ItemUrlMapping.platform == platform)
     if year is not None:
@@ -372,15 +401,13 @@ def list_url_mappings(
         q = q.filter(ItemUrlMapping.data_month == month)
     if keyword:
         kw = f"%{keyword}%"
-        q = q.outerjoin(ModelRecord, ItemUrlMapping.model_id == ModelRecord.id).filter(
+        q = q.filter(
             or_(
                 ItemUrlMapping.item_id.ilike(kw),
                 ModelRecord.model_code.ilike(kw),
                 ModelRecord.brand_code.ilike(kw),
             )
         )
-    elif category_code:
-        q = q.outerjoin(ModelRecord, ItemUrlMapping.model_id == ModelRecord.id)
     if category_code:
         q = q.filter(ModelRecord.category_code == category_code)
     total = q.count()
@@ -398,10 +425,15 @@ def list_url_mappings(
 
 
 @router.post("", response_model=ItemUrlMappingOut)
-def create_url_mapping(payload: ItemUrlMappingIn, db: Session = Depends(get_db)):
+def create_url_mapping(
+    payload: ItemUrlMappingIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     model_for_brand = db.query(ModelRecord).filter_by(id=payload.model_id).first() if payload.model_id else None
     if not model_for_brand:
         raise HTTPException(404, "型号不存在")
+    _ensure_url_mapping_model_visible(db, current_user, model_for_brand)
     existing = db.query(ItemUrlMapping).filter_by(
         platform=payload.platform, item_id=payload.item_id
     ).first()
@@ -423,13 +455,21 @@ def create_url_mapping(payload: ItemUrlMappingIn, db: Session = Depends(get_db))
 
 
 @router.put("/{mapping_id}", response_model=ItemUrlMappingOut)
-def update_url_mapping(mapping_id: int, payload: ItemUrlMappingIn, db: Session = Depends(get_db)):
+def update_url_mapping(
+    mapping_id: int,
+    payload: ItemUrlMappingIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     m = db.query(ItemUrlMapping).filter_by(id=mapping_id).first()
     if not m:
         raise HTTPException(404, "映射记录不存在")
+    existing_model = db.query(ModelRecord).filter_by(id=m.model_id).first() if m.model_id else None
+    _ensure_url_mapping_model_visible(db, current_user, existing_model)
     model_for_brand = db.query(ModelRecord).filter_by(id=payload.model_id).first() if payload.model_id else None
     if not model_for_brand:
         raise HTTPException(404, "型号不存在")
+    _ensure_url_mapping_model_visible(db, current_user, model_for_brand)
     m.platform = payload.platform
     m.item_id = payload.item_id
     m.item_url = payload.item_url
@@ -443,10 +483,16 @@ def update_url_mapping(mapping_id: int, payload: ItemUrlMappingIn, db: Session =
 
 
 @router.delete("/{mapping_id}")
-def delete_url_mapping(mapping_id: int, db: Session = Depends(get_db)):
+def delete_url_mapping(
+    mapping_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     m = db.query(ItemUrlMapping).filter_by(id=mapping_id).first()
     if not m:
         raise HTTPException(404, "映射记录不存在")
+    existing_model = db.query(ModelRecord).filter_by(id=m.model_id).first() if m.model_id else None
+    _ensure_url_mapping_model_visible(db, current_user, existing_model)
     db.delete(m)
     db.commit()
     return {"deleted": True}

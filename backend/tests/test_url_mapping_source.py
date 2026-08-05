@@ -7,8 +7,14 @@ from app.models.database import Base
 from app.models.schemas import ItemUrlMapping, ItemUrlMappingOut
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
+from app.core.auth_deps import get_current_user
 from app.models.database import get_db
 from app.api.url_mapping_api import router as url_router
+
+
+class DummyUser:
+    is_admin = 1
+    category_permissions = []
 
 
 @pytest.fixture
@@ -73,6 +79,7 @@ def client_and_db():
     def override_db():
         yield db
     app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: DummyUser()
     yield TestClient(app), db
     db.close()
 

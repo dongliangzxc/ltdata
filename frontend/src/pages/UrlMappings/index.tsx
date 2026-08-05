@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   Card, Table, Button, Input, Select, Space, Typography,
   Modal, Form, InputNumber, message, Popconfirm, Tag,
@@ -9,10 +9,22 @@ import {
   listUrlMappings, createUrlMapping, updateUrlMapping,
   deleteUrlMapping, listModels,
 } from '../../services/api'
+import type { UserProfile } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 import ImportMappingModal from '../../components/ImportMappingModal'
 
 const { Text } = Typography
+
+function readStoredUser(): UserProfile | null {
+  if (typeof localStorage === 'undefined') return null
+  const raw = localStorage.getItem('auth_user')
+  if (!raw) return null
+  try {
+    return JSON.parse(raw) as UserProfile
+  } catch {
+    return null
+  }
+}
 
 type UrlMapping = {
   id: number
@@ -66,7 +78,16 @@ export default function UrlMappingsPage() {
   const [filterYear, setFilterYear] = useState<number | undefined>()
   const [filterMonth, setFilterMonth] = useState<number | undefined>()
 
+  const currentUser = readStoredUser()
   const { options: categoryOptions } = useCategoryOptions()
+  const visibleCategoryOptions = useMemo(() => {
+    if (!currentUser) return categoryOptions
+    if (currentUser.is_admin === 1) return categoryOptions
+    if (!currentUser.category_permissions?.length) return categoryOptions
+    const allowed = new Set(currentUser.category_permissions)
+    return categoryOptions.filter(c => allowed.has(c.value))
+  }, [categoryOptions, currentUser])
+  const visibleCategoryCodes = useMemo(() => new Set(visibleCategoryOptions.map(c => c.value)), [visibleCategoryOptions])
 
   const { data: modelsData } = useRequest(
     () => listModels({ page: 1, page_size: 500 }).then(r => r.data)
@@ -79,6 +100,7 @@ export default function UrlMappingsPage() {
     model_name: m.model_name ?? null,
     category_code: m.category_code ?? null,
   }))
+  const visibleModelOptions = modelOptions.filter(m => !m.category_code || visibleCategoryCodes.has(m.category_code))
 
   const { data, loading, refresh } = useRequest(
     () => listUrlMappings({
@@ -138,8 +160,8 @@ export default function UrlMappingsPage() {
   }
 
   const filteredModelOptions = modalCategoryCode
-    ? modelOptions.filter(m => m.category_code === modalCategoryCode)
-    : modelOptions
+    ? visibleModelOptions.filter(m => m.category_code === modalCategoryCode)
+    : visibleModelOptions
 
   const columns = [
     {
@@ -224,7 +246,7 @@ export default function UrlMappingsPage() {
             placeholder="品类筛选"
             allowClear
             style={{ width: 140 }}
-            options={categoryOptions}
+            options={visibleCategoryOptions}
             onChange={v => { setCategoryCode(v); setPage(1) }}
           />
           <Select
@@ -295,7 +317,7 @@ export default function UrlMappingsPage() {
               allowClear
               placeholder="选择品类可缩小型号列表"
               style={{ width: '100%' }}
-              options={categoryOptions}
+              options={visibleCategoryOptions}
               value={modalCategoryCode}
               onChange={v => setModalCategoryCode(v)}
             />

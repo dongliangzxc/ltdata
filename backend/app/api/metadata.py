@@ -12,8 +12,10 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy import func
+from app.core.auth_deps import get_current_user
+from app.core.permissions import visible_category_codes
 from app.models.database import get_db
-from app.models.schemas import Category, MetadataSpec, MetadataSpecIn, MetadataSpecOut, PaginatedResponse
+from app.models.schemas import Category, MetadataSpec, MetadataSpecIn, MetadataSpecOut, PaginatedResponse, User
 
 router = APIRouter(prefix="/api/metadata", tags=["metadata"])
 
@@ -61,6 +63,23 @@ def _match_category_code(db: Session, sheet_name: str) -> str:
     if not category:
         raise HTTPException(status_code=422, detail=f"找不到匹配品类：{sheet_name}，请确认 sheet 名是已有品类码或品类名称")
     return category.code
+
+
+def _visible_metadata_category_codes(db: Session, current_user: User) -> list[str]:
+    all_codes = [code for code, in db.query(Category.code).order_by(Category.sort_order, Category.name).all()]
+    return visible_category_codes(current_user, all_codes)
+
+
+def _ensure_metadata_category_visible(db: Session, current_user: User, category_code: str) -> None:
+    if category_code not in _visible_metadata_category_codes(db, current_user):
+        raise HTTPException(status_code=403, detail="无权限访问该品类")
+
+
+def _ensure_metadata_rows_visible(db: Session, current_user: User, rows: list[dict]) -> None:
+    scoped_codes = set(_visible_metadata_category_codes(db, current_user))
+    for row in rows:
+        if row["category_code"] not in scoped_codes:
+            raise HTTPException(status_code=403, detail="无权限访问该品类")
 
 
 def _read_metadata_excel(content: bytes, db: Session | None = None) -> pd.DataFrame:
@@ -162,16 +181,26 @@ def _parse_metadata_file(content: bytes, db: Session | None = None) -> dict:
 
 
 @router.post("/preview", response_model=dict)
-async def preview_metadata(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def preview_metadata(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """解析 Excel 并返回预览数据，不写入数据库"""
     if not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="只支持 .xlsx / .xls 格式文件")
     content = await file.read()
-    return _parse_metadata_file(content, db)
+    result = _parse_metadata_file(content, db)
+    _ensure_metadata_rows_visible(db, current_user, result["preview"])
+    return result
 
 
 @router.post("/import", response_model=dict)
-async def import_metadata(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def import_metadata(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """
     从 Excel 导入元数据。
     读取「元数据」sheet，同一 category_code+spec_name 的多行 spec_values 合并为逗号分隔，
@@ -237,6 +266,8 @@ async def import_metadata(file: UploadFile = File(...), db: Session = Depends(ge
     if not rows_to_upsert:
         return {"imported": 0, "upserted": 0}
 
+    _ensure_metadata_rows_visible(db, current_user, rows_to_upsert)
+
     upserted = 0
     for row in rows_to_upsert:
         stmt = mysql_insert(MetadataSpec).values(**row)
@@ -273,8 +304,11 @@ def list_metadata(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     q = db.query(MetadataSpec)
+    visible_codes = set(_visible_metadata_category_codes(db, current_user))
+    q = q.filter(MetadataSpec.category_code.in_(visible_codes))
     if category_code:
         q = q.filter(MetadataSpec.category_code.ilike(f"%{category_code}%"))
     if spec_name:
@@ -293,7 +327,13 @@ def list_metadata(
 
 
 @router.post("", response_model=MetadataSpecOut)
-def create_metadata(payload: MetadataSpecIn, db: Session = Depends(get_db)):
+def create_metadata(
+    payload: MetadataSpecIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_metadata_category_visible(db, current_user, payload.category_code)
+
     existing = db.query(MetadataSpec).filter(
         MetadataSpec.category_code == payload.category_code,
         MetadataSpec.spec_name == payload.spec_name,
@@ -317,10 +357,18 @@ def create_metadata(payload: MetadataSpecIn, db: Session = Depends(get_db)):
 
 
 @router.put("/{spec_id}", response_model=MetadataSpecOut)
-def update_metadata(spec_id: int, payload: MetadataSpecIn, db: Session = Depends(get_db)):
+def update_metadata(
+    spec_id: int,
+    payload: MetadataSpecIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     obj = db.query(MetadataSpec).filter(MetadataSpec.id == spec_id).first()
     if not obj:
         raise HTTPException(status_code=404, detail="记录不存在")
+
+    _ensure_metadata_category_visible(db, current_user, obj.category_code)
+    _ensure_metadata_category_visible(db, current_user, payload.category_code)
 
     obj.category_code  = payload.category_code
     obj.spec_name      = payload.spec_name
@@ -335,10 +383,15 @@ def update_metadata(spec_id: int, payload: MetadataSpecIn, db: Session = Depends
 
 
 @router.delete("/{spec_id}")
-def delete_metadata(spec_id: int, db: Session = Depends(get_db)):
+def delete_metadata(
+    spec_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     obj = db.query(MetadataSpec).filter(MetadataSpec.id == spec_id).first()
     if not obj:
         raise HTTPException(status_code=404, detail="记录不存在")
+    _ensure_metadata_category_visible(db, current_user, obj.category_code)
     db.delete(obj)
     db.commit()
     return {"message": "已删除"}

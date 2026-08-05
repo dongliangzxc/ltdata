@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useMemo, useState, useRef } from 'react'
 import {
   Card, Table, Button, Input, Space, Popconfirm, Upload, Modal, Form,
   Select, Switch, InputNumber, message, Tag, Row, Col, Tooltip, Collapse
@@ -9,6 +9,17 @@ import {
   listMetadata, createMetadata, updateMetadata, deleteMetadata, importMetadata, previewMetadata,
   downloadMetadataTemplate, listCategories
 } from '../../services/api'
+import type { UserProfile } from '../../services/api'
+
+function readStoredUser(): UserProfile | null {
+  const raw = localStorage.getItem('auth_user')
+  if (!raw) return null
+  try {
+    return JSON.parse(raw) as UserProfile
+  } catch {
+    return null
+  }
+}
 
 type MetadataItem = {
   id: number
@@ -65,10 +76,18 @@ export default function MetadataPage() {
     }
   }
 
+  const currentUser = readStoredUser()
   const { data: categoriesData } = useRequest(() => listCategories().then(r => r.data))
   const categoryOptions = (categoriesData ?? []).map((c: { code: string; name: string }) => ({
     value: c.code, label: `${c.code} · ${c.name}`
   }))
+  const visibleCategoryOptions = useMemo(() => {
+    if (!currentUser) return categoryOptions
+    if (currentUser.is_admin === 1) return categoryOptions
+    if (!currentUser.category_permissions?.length) return categoryOptions
+    const allowed = new Set(currentUser.category_permissions)
+    return categoryOptions.filter((option: { value: string; label: string }) => allowed.has(option.value))
+  }, [categoryOptions, currentUser])
 
   const queryParams = { ...search, page, page_size: pageSize }
   const { data, loading, refresh } = useRequest(
@@ -202,7 +221,7 @@ export default function MetadataPage() {
             showSearch
             optionFilterProp="label"
             style={{ width: 180 }}
-            options={categoryOptions}
+            options={visibleCategoryOptions}
             onChange={v => { setSearch(p => ({ ...p, category_code: v || undefined })); setPage(1) }}
           />
         </Col>
@@ -343,7 +362,7 @@ export default function MetadataPage() {
           <Row gutter={12}>
             <Col span={12}>
               <Form.Item label="品类码" name="category_code" rules={[{ required: true, message: '请选择品类' }]}>
-                <Select placeholder="请选择品类" options={categoryOptions} showSearch
+                <Select placeholder="请选择品类" options={visibleCategoryOptions} showSearch
                   filterOption={(input, opt) => (opt?.label as string ?? '').toLowerCase().includes(input.toLowerCase())} />
               </Form.Item>
             </Col>

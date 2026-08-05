@@ -15,12 +15,14 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy import func
+from app.core.auth_deps import get_current_user
+from app.core.permissions import visible_category_codes
 from app.models.database import get_db
 from app.models.schemas import (
     BrandRecord, ModelRecord, ModelSpec, ModelAlias,
     HistoricalMapping, ItemUrlMapping, MatchRule,
     ModelIn, ModelOut, ModelSpecOut, ModelAliasOut,
-    PaginatedResponse, Category,
+    PaginatedResponse, Category, User,
 )
 from app.services.import_helper import save_tmp_file, read_columns, find_best_template, col_fingerprint
 
@@ -32,6 +34,28 @@ _MODEL_TEMPLATE_FILENAME = "产品属性导入模板.xlsx"
 _MODEL_TEMPLATE_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _MODEL_TEMPLATE_HEADERS = ["品牌码", "型号码", "品类", "品牌名称", "型号名称", "上市年", "上市月", "上市周", "上市价格", "网址"]
 _MODEL_SPEC_TEMPLATE_HEADERS = ["品牌码", "型号码", "规格名称", "规格值"]
+
+
+def _visible_model_category_codes(db: Session, current_user: User) -> list[str]:
+    all_codes = [code for code, in db.query(Category.code).order_by(Category.sort_order, Category.name).all()]
+    return visible_category_codes(current_user, all_codes)
+
+
+def _ensure_model_category_visible(db: Session, current_user: User, category_code: str | None) -> None:
+    if not category_code:
+        return
+    if category_code not in _visible_model_category_codes(db, current_user):
+        raise HTTPException(status_code=403, detail="无权限访问该品类")
+
+
+def _ensure_model_rows_visible(db: Session, current_user: User, rows: list[dict]) -> None:
+    scoped_codes = set(_visible_model_category_codes(db, current_user))
+    for row in rows:
+        category_code = row.get("category_code")
+        if category_code and category_code not in scoped_codes:
+            raise HTTPException(status_code=403, detail="无权限访问该品类")
+
+
 _MODEL_TEMPLATE_MAPPING = {
     "品牌码": "brand_code",
     "型号码": "model_code",
@@ -110,6 +134,7 @@ async def models_headers(
 def models_confirm(
     payload: ModelsConfirmPayload,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """P10: Step 2 — parse model sheet with mapping, upsert models."""
     tmp_dir = Path(UPLOAD_DIR) / "tmp"
@@ -162,6 +187,7 @@ def models_confirm(
         # category_code: from Excel if present and non-empty, else fallback
         cat_val = str(row_dict.get("category_code") or "").strip()
         category_code = cat_val if cat_val else payload.category_code
+        _ensure_model_category_visible(db, current_user, category_code)
 
         optional_fields = {
             k: str(row_dict.get(k) or "").strip() or None
@@ -463,7 +489,11 @@ async def preview_models(file: UploadFile = File(...)):
 
 
 @router.post("/import", response_model=dict)
-async def import_models(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def import_models(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """
     从 Excel 导入型号及规格。
     读取「型号」sheet 和「型号规格」sheet。
@@ -554,6 +584,7 @@ async def import_models(file: UploadFile = File(...), db: Session = Depends(get_
             "url":           str(_clean_val(row.get("url")) or "") or None,
         }
 
+        _ensure_model_category_visible(db, current_user, vals["category_code"])
         _ensure_import_brand(db, vals["brand_code"], vals["brand_name"])
 
         if dialect_name == "mysql":
@@ -668,9 +699,12 @@ def list_models(
     page:          int = Query(1, ge=1),
     page_size:     int = Query(20, ge=1, le=2000),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
+    visible_codes = set(_visible_model_category_codes(db, current_user))
+
     # count query (no join needed)
-    cq = db.query(ModelRecord)
+    cq = db.query(ModelRecord).filter(ModelRecord.category_code.in_(visible_codes))
     if brand_code:
         cq = cq.filter(ModelRecord.brand_code.ilike(f"%{brand_code}%"))
     if keyword:
@@ -687,7 +721,7 @@ def list_models(
 
     q = db.query(ModelRecord, Category).outerjoin(
         Category, ModelRecord.category_code == Category.code
-    )
+    ).filter(ModelRecord.category_code.in_(visible_codes))
     if brand_code:
         q = q.filter(ModelRecord.brand_code.ilike(f"%{brand_code}%"))
     if keyword:
@@ -714,20 +748,31 @@ def list_models(
 
 
 @router.get("/{model_id}", response_model=ModelOut)
-def get_model(model_id: int, db: Session = Depends(get_db)):
+def get_model(
+    model_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     row = db.query(ModelRecord, Category).outerjoin(
         Category, ModelRecord.category_code == Category.code
     ).filter(ModelRecord.id == model_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="型号不存在")
     m, cat = row
+    _ensure_model_category_visible(db, current_user, m.category_code)
     out = ModelOut.model_validate(m)
     out.category_name = cat.name if cat else None
     return out
 
 
 @router.post("", response_model=ModelOut)
-def create_model(payload: ModelIn, db: Session = Depends(get_db)):
+def create_model(
+    payload: ModelIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_model_category_visible(db, current_user, payload.category_code)
+
     brand_code = _normalize_code(payload.brand_code)
     model_code = _normalize_code(payload.model_code)
 
@@ -771,10 +816,18 @@ def create_model(payload: ModelIn, db: Session = Depends(get_db)):
 
 
 @router.put("/{model_id}", response_model=ModelOut)
-def update_model(model_id: int, payload: ModelIn, db: Session = Depends(get_db)):
+def update_model(
+    model_id: int,
+    payload: ModelIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     obj = db.query(ModelRecord).filter(ModelRecord.id == model_id).first()
     if not obj:
         raise HTTPException(status_code=404, detail="型号不存在")
+
+    _ensure_model_category_visible(db, current_user, obj.category_code)
+    _ensure_model_category_visible(db, current_user, payload.category_code)
 
     obj.brand_code    = payload.brand_code
     obj.model_code    = payload.model_code
@@ -802,10 +855,15 @@ def update_model(model_id: int, payload: ModelIn, db: Session = Depends(get_db))
 
 
 @router.delete("/{model_id}")
-def delete_model(model_id: int, db: Session = Depends(get_db)):
+def delete_model(
+    model_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     obj = db.query(ModelRecord).filter(ModelRecord.id == model_id).first()
     if not obj:
         raise HTTPException(status_code=404, detail="型号不存在")
+    _ensure_model_category_visible(db, current_user, obj.category_code)
     if db.query(MatchRule).filter(MatchRule.model_id == model_id).first():
         raise HTTPException(status_code=409, detail="该型号仍被匹配规则引用，请先删除或调整规则")
 

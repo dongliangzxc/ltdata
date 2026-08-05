@@ -6,8 +6,15 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from app.models.database import Base, get_db
 from app.models.schemas import BrandRecord, Category
+from app.core.auth_deps import get_current_user
 from fastapi import FastAPI
 from app.api.models_api import router
+
+
+class DummyUser:
+    is_admin = 1
+    category_permissions = []
+
 
 @pytest.fixture
 def client():
@@ -26,6 +33,7 @@ def client():
             s.close()
 
     app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: DummyUser()
     c = TestClient(app)
     # 预置品类和品牌
     s = Session()

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   Card, Table, Button, Input, Space, Popconfirm, Modal, Form,
   InputNumber, message, Row, Col, Divider, Typography, Select
@@ -13,11 +13,21 @@ import {
   listModelAliases, addModelAlias, deleteModelAlias,
   listCategories, downloadModelTemplate,
 } from '../../services/api'
-import type { ModelItem as ApiModelItem } from '../../services/api'
+import type { ModelItem as ApiModelItem, UserProfile } from '../../services/api'
 import ImportMappingModal from '../../components/ImportMappingModal'
 import CreateModelModal from '../../components/CreateModelModal'
 
 const { Text } = Typography
+
+function readStoredUser(): UserProfile | null {
+  const raw = localStorage.getItem('auth_user')
+  if (!raw) return null
+  try {
+    return JSON.parse(raw) as UserProfile
+  } catch {
+    return null
+  }
+}
 
 type ModelSpec = {
   id?: number
@@ -67,10 +77,18 @@ export default function ModelsPage() {
   const [aliasInput, setAliasInput] = useState('')
   const [aliasLoading, setAliasLoading] = useState(false)
 
+  const currentUser = readStoredUser()
   const { data: categoriesData } = useRequest(() => listCategories().then(r => r.data))
   const categoryOptions = (categoriesData ?? []).map((c: { code: string; name: string }) => ({
     value: c.code, label: `${c.name}（${c.code}）`
   }))
+  const visibleCategoryOptions = useMemo(() => {
+    if (!currentUser) return categoryOptions
+    if (currentUser.is_admin === 1) return categoryOptions
+    if (!currentUser.category_permissions?.length) return categoryOptions
+    const allowed = new Set(currentUser.category_permissions)
+    return categoryOptions.filter((option: { value: string; label: string }) => allowed.has(option.value))
+  }, [categoryOptions, currentUser])
 
   const queryParams = { ...search, page, page_size: pageSize }
   const { data, loading, refresh } = useRequest(
@@ -215,7 +233,7 @@ export default function ModelsPage() {
             placeholder="品类筛选"
             allowClear
             style={{ width: 140 }}
-            options={categoryOptions}
+            options={visibleCategoryOptions}
             onChange={v => { setSearch(p => ({ ...p, category_code: v || undefined })); setPage(1) }}
           />
         </Col>
@@ -315,7 +333,7 @@ export default function ModelsPage() {
 
       <CreateModelModal
         open={createModalOpen}
-        categoryOptions={categoryOptions}
+        categoryOptions={visibleCategoryOptions}
         onCancel={() => setCreateModalOpen(false)}
         onCreated={() => {
           setCreateModalOpen(false)
@@ -337,7 +355,7 @@ export default function ModelsPage() {
           <Row gutter={12}>
             <Col span={8}>
               <Form.Item label="品类" name="category_code">
-                <Select placeholder="请选择品类" allowClear options={categoryOptions} showSearch
+                <Select placeholder="请选择品类" allowClear options={visibleCategoryOptions} showSearch
                   filterOption={(input, opt) => (opt?.label as string ?? '').toLowerCase().includes(input.toLowerCase())} />
               </Form.Item>
             </Col>

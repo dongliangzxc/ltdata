@@ -62,6 +62,14 @@ def _filter_historical_visible_categories(query, db: Session, current_user: User
     return query.filter(HistoricalMapping.category_code.in_(visible_codes))
 
 
+def _ensure_historical_category_visible(db: Session, current_user: User, category_code: Optional[str]) -> None:
+    if not category_code:
+        return
+    visible_codes = _visible_historical_category_codes(db, current_user)
+    if visible_codes is not None and category_code not in visible_codes:
+        raise HTTPException(status_code=403, detail="无权限访问该品类")
+
+
 HISTORICAL_STANDARD_FIELDS = {
     "year": "年",
     "month_num": "月",
@@ -1320,7 +1328,12 @@ async def historical_headers(file: UploadFile = File(...), db: Session = Depends
 
 
 @router.post("/preview")
-def historical_preview(payload: HistoricalPreviewIn, db: Session = Depends(get_db)):
+def historical_preview(
+    payload: HistoricalPreviewIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_historical_category_visible(db, current_user, payload.category_code)
     save_path = _find_tmp_file(payload.temp_file_id)
     xls = pd.ExcelFile(save_path)
     if payload.sheet_name not in xls.sheet_names:
@@ -1342,7 +1355,12 @@ def historical_preview(payload: HistoricalPreviewIn, db: Session = Depends(get_d
 
 
 @router.post("/confirm")
-def historical_confirm(payload: HistoricalConfirmIn, db: Session = Depends(get_db)):
+def historical_confirm(
+    payload: HistoricalConfirmIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_historical_category_visible(db, current_user, payload.category_code)
     save_path = _find_tmp_file(payload.temp_file_id)
     xls = pd.ExcelFile(save_path)
     if payload.sheet_name not in xls.sheet_names:

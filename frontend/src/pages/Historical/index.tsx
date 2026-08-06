@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import {
   Tabs, Table, Button, Upload, Space, Select, Tag, Popconfirm, message, Input, Card, Statistic, Alert, Form
 } from 'antd'
@@ -17,11 +17,23 @@ import {
   type HistoricalImportPreview,
   type HistoricalImportResult,
   type HistoricalMappingItem,
+  type UserProfile,
 } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 
 const { Dragger } = Upload
 const PAGE_SIZE = 20
+
+function readStoredUser(): UserProfile | null {
+  if (typeof localStorage === 'undefined') return null
+  const raw = localStorage.getItem('auth_user')
+  if (!raw) return null
+  try {
+    return JSON.parse(raw) as UserProfile
+  } catch {
+    return null
+  }
+}
 
 function formatDateTime(value: string | null | undefined) {
   return value ? value.slice(0, 19) : '-'
@@ -38,7 +50,15 @@ function ImportTab() {
   const [categoryCode, setCategoryCode] = useState<string | undefined>()
   const [result, setResult] = useState<HistoricalImportResult | null>(null)
   const [batches, setBatches] = useState<HistoricalBatchItem[]>([])
+  const currentUser = readStoredUser()
   const { options: categoryOptions, loading: categoryLoading } = useCategoryOptions()
+  const visibleCategoryOptions = useMemo(() => {
+    if (!currentUser) return categoryOptions
+    if (currentUser.is_admin === 1) return categoryOptions
+    if (!currentUser.category_permissions?.length) return categoryOptions
+    const allowed = new Set(currentUser.category_permissions)
+    return categoryOptions.filter(c => allowed.has(c.value))
+  }, [categoryOptions, currentUser])
 
   const loadBatches = async () => {
     const res = await listHistoricalBatches()
@@ -194,7 +214,7 @@ function ImportTab() {
                   placeholder="选择品类"
                   value={categoryCode}
                   style={{ width: 260 }}
-                  options={categoryOptions}
+                  options={visibleCategoryOptions}
                   onChange={value => { setCategoryCode(value); refreshPreview(sheetName, mapping, value) }}
                 />
               </Form.Item>

@@ -329,6 +329,73 @@ def test_confirm_imports_old_router_alias_format_after_preview(db, tmp_path, mon
     assert row.sales_qty == 3
 
 
+def test_preview_rejects_invisible_category(db, tmp_path, monkeypatch):
+    monkeypatch.setattr("app.api.historical_api.settings.UPLOAD_DIR", str(tmp_path))
+    db.add_all([
+        Category(code="TV", name="电视", sort_order=1),
+        Category(code="headphone", name="耳机", sort_order=2),
+    ])
+    db.commit()
+    client = _client(db, DummyUser(category_permissions=["TV"]))
+    content = _history_excel([{
+        "年": 2026,
+        "月": 6,
+        "商场": "JD",
+        "标题": "耳机 商品",
+        "品类码": "headphone",
+    }])
+    headers_resp = client.post(
+        "/api/historical/headers",
+        files={"file": ("耳机历史库.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert headers_resp.status_code == 200
+    preview = headers_resp.json()
+
+    resp = client.post("/api/historical/preview", json={
+        "temp_file_id": preview["temp_file_id"],
+        "sheet_name": preview["sheet_name"],
+        "mapping": preview["mapping"],
+        "category_code": "headphone",
+    })
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "无权限访问该品类"
+
+
+def test_confirm_rejects_invisible_category(db, tmp_path, monkeypatch):
+    monkeypatch.setattr("app.api.historical_api.settings.UPLOAD_DIR", str(tmp_path))
+    db.add_all([
+        Category(code="TV", name="电视", sort_order=1),
+        Category(code="headphone", name="耳机", sort_order=2),
+    ])
+    db.commit()
+    client = _client(db, DummyUser(category_permissions=["TV"]))
+    content = _history_excel([{
+        "年": 2026,
+        "月": 6,
+        "商场": "JD",
+        "标题": "耳机 商品",
+        "品类码": "headphone",
+    }])
+    headers_resp = client.post(
+        "/api/historical/headers",
+        files={"file": ("耳机历史库.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert headers_resp.status_code == 200
+    preview = headers_resp.json()
+
+    resp = client.post("/api/historical/confirm", json={
+        "temp_file_id": preview["temp_file_id"],
+        "sheet_name": preview["sheet_name"],
+        "mapping": preview["mapping"],
+        "category_code": "headphone",
+    })
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "无权限访问该品类"
+    assert db.query(HistoricalMapping).count() == 0
+
+
 def test_headers_maps_notebook_time_dimension_and_requires_category_when_unresolved(db, tmp_path, monkeypatch):
     monkeypatch.setattr("app.api.historical_api.settings.UPLOAD_DIR", str(tmp_path))
     client = _client(db)

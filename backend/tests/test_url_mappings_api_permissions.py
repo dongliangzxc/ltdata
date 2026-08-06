@@ -98,3 +98,28 @@ def test_create_url_mapping_rejects_invisible_model_category(client):
 
     assert res.status_code == 403
     assert res.json()["detail"] == "无权限访问该品类"
+
+
+def test_list_url_mappings_hides_legacy_headphone_rows_outside_scope(client):
+    with client.Session() as session:
+        session.add_all([
+            Category(code="TV", name="电视", sort_order=1),
+            Category(code="headphone", name="耳机", sort_order=2),
+            ItemUrlMapping(
+                platform="jd",
+                item_id="legacy-headphone",
+                item_url="https://item.jd.com/legacy-headphone.html",
+                model_id=None,
+                brand_code="SONY",
+                source=None,
+                price=99,
+            ),
+        ])
+        session.commit()
+
+    res = client.get("/api/url-mappings")
+
+    assert res.status_code == 200
+    data = res.json()
+    assert data["total"] == 0
+    assert data["items"] == []

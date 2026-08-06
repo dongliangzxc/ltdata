@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from pydantic import BaseModel
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session, joinedload
 import openpyxl
 
@@ -392,7 +392,17 @@ def list_url_mappings(
         or_(ItemUrlMapping.brand_code.isnot(None), ItemUrlMapping.model_id.isnot(None))
     )
     if visible_codes is not None:
-        q = q.filter(or_(ItemUrlMapping.model_id.is_(None), ModelRecord.category_code.in_(visible_codes)))
+        legacy_headphone_filter = and_(
+            ItemUrlMapping.model_id.is_(None),
+            ItemUrlMapping.brand_code.isnot(None),
+            ItemUrlMapping.source.is_(None),
+            ItemUrlMapping.platform.in_(_LEGACY_HEADPHONE_PLATFORMS),
+        )
+        q = q.filter(or_(
+            ModelRecord.category_code.in_(visible_codes),
+            and_(ItemUrlMapping.model_id.is_(None), ~legacy_headphone_filter),
+            and_(legacy_headphone_filter, "headphone" in visible_codes),
+        ))
     if platform:
         q = q.filter(ItemUrlMapping.platform == platform)
     if year is not None:

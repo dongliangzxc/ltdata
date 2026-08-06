@@ -18,9 +18,11 @@ from pydantic import BaseModel
 from sqlalchemy import func, or_, tuple_
 from sqlalchemy.orm import Session
 
+from app.core.auth_deps import get_current_user
 from app.core.config import settings
+from app.core.permissions import visible_category_codes
 from app.models.database import get_db
-from app.models.schemas import Category, HistoricalMapping, ModelRecord
+from app.models.schemas import Category, HistoricalMapping, ModelRecord, User
 from app.services.import_helper import save_tmp_file
 from app.utils.time_utils import format_beijing_datetime
 from app.utils.url_utils import extract_item_id
@@ -44,6 +46,20 @@ class HistoricalPreviewIn(BaseModel):
     sheet_name: str
     mapping: dict[str, str]
     category_code: Optional[str] = None
+
+
+def _visible_historical_category_codes(db: Session, current_user: User) -> set[str] | None:
+    all_codes = [code for code, in db.query(Category.code).order_by(Category.sort_order, Category.name).all()]
+    if not all_codes:
+        return None
+    return set(visible_category_codes(current_user, all_codes))
+
+
+def _filter_historical_visible_categories(query, db: Session, current_user: User):
+    visible_codes = _visible_historical_category_codes(db, current_user)
+    if visible_codes is None:
+        return query
+    return query.filter(HistoricalMapping.category_code.in_(visible_codes))
 
 
 HISTORICAL_STANDARD_FIELDS = {
@@ -1359,15 +1375,18 @@ def historical_confirm(payload: HistoricalConfirmIn, db: Session = Depends(get_d
 
 
 @router.get("/batches")
-def list_batches(db: Session = Depends(get_db)):
+def list_batches(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    q = db.query(
+        HistoricalMapping.import_batch,
+        func.count(HistoricalMapping.id).label("count"),
+        func.max(HistoricalMapping.updated_at).label("updated_at"),
+    ).filter(HistoricalMapping.import_batch.isnot(None))
+    q = _filter_historical_visible_categories(q, db, current_user)
     rows = (
-        db.query(
-            HistoricalMapping.import_batch,
-            func.count(HistoricalMapping.id).label("count"),
-            func.max(HistoricalMapping.updated_at).label("updated_at"),
-        )
-        .filter(HistoricalMapping.import_batch.isnot(None))
-        .group_by(HistoricalMapping.import_batch)
+        q.group_by(HistoricalMapping.import_batch)
         .order_by(func.max(HistoricalMapping.updated_at).desc(), func.max(HistoricalMapping.id).desc())
         .all()
     )
@@ -1385,11 +1404,13 @@ def list_mappings(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     q = (
         db.query(HistoricalMapping, ModelRecord)
         .outerjoin(ModelRecord, HistoricalMapping.model_id == ModelRecord.id)
     )
+    q = _filter_historical_visible_categories(q, db, current_user)
     if platform:
         q = q.filter(HistoricalMapping.platform == platform.lower())
     if import_batch:
@@ -1453,20 +1474,28 @@ def list_mappings(
 
 
 @router.delete("/mappings/batch", status_code=204)
-def delete_batch(body: BatchDeleteIn, db: Session = Depends(get_db)):
-    deleted = (
-        db.query(HistoricalMapping)
-        .filter(HistoricalMapping.import_batch == body.import_batch)
-        .delete(synchronize_session=False)
-    )
+def delete_batch(
+    body: BatchDeleteIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    q = db.query(HistoricalMapping).filter(HistoricalMapping.import_batch == body.import_batch)
+    q = _filter_historical_visible_categories(q, db, current_user)
+    deleted = q.delete(synchronize_session=False)
     if deleted == 0:
         raise HTTPException(404, f"批次 '{body.import_batch}' 不存在或已删除")
     db.commit()
 
 
 @router.delete("/mappings/{mapping_id}", status_code=204)
-def delete_mapping(mapping_id: int, db: Session = Depends(get_db)):
-    row = db.query(HistoricalMapping).filter(HistoricalMapping.id == mapping_id).first()
+def delete_mapping(
+    mapping_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    q = db.query(HistoricalMapping).filter(HistoricalMapping.id == mapping_id)
+    q = _filter_historical_visible_categories(q, db, current_user)
+    row = q.first()
     if not row:
         raise HTTPException(404, "记录不存在")
     db.delete(row)

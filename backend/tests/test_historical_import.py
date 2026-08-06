@@ -7,17 +7,25 @@ from fastapi.testclient import TestClient
 from sqlalchemy import event
 
 from app.api.historical_api import router as historical_router
+from app.core.auth_deps import get_current_user
 from app.models.database import get_db
 from app.models.schemas import Category, HistoricalMapping, ModelRecord
 
 
-def _client(db):
+class DummyUser:
+    def __init__(self, *, is_admin=0, category_permissions=None):
+        self.is_admin = is_admin
+        self.category_permissions = category_permissions
+
+
+def _client(db, current_user=None):
     def override_db():
         yield db
 
     test_app = FastAPI()
     test_app.include_router(historical_router)
     test_app.dependency_overrides[get_db] = override_db
+    test_app.dependency_overrides[get_current_user] = lambda: current_user or DummyUser(is_admin=1)
     return TestClient(test_app)
 
 
@@ -379,6 +387,148 @@ def test_list_history_returns_beijing_time_strings(db):
     assert mapping_resp.status_code == 200
     assert batch_resp.json()[0]["updated_at"] == "2026-06-01 09:02:03"
     assert mapping_resp.json()["items"][0]["updated_at"] == "2026-06-01 09:02:03"
+
+
+def test_list_history_filters_mappings_by_category_permissions(db):
+    db.add_all([
+        Category(code="TV", name="电视", sort_order=1),
+        Category(code="headphone", name="耳机", sort_order=2),
+        HistoricalMapping(
+            import_batch="batch-tv",
+            platform="jd",
+            item_id="tv-item",
+            item_name="电视商品",
+            item_name_norm="电视商品",
+            year=2026,
+            month_num=6,
+            month="2026-06",
+            category_code="TV",
+            model_text="TV-1",
+            model_code="TV-1",
+            match_key_type="manual",
+            raw_payload={"标题": "电视商品"},
+        ),
+        HistoricalMapping(
+            import_batch="batch-headphone",
+            platform="jd",
+            item_id="headphone-item",
+            item_name="耳机商品",
+            item_name_norm="耳机商品",
+            year=2026,
+            month_num=6,
+            month="2026-06",
+            category_code="headphone",
+            model_text="HP-1",
+            model_code="HP-1",
+            match_key_type="manual",
+            raw_payload={"标题": "耳机商品"},
+        ),
+    ])
+    db.commit()
+    client = _client(db, DummyUser(category_permissions=["TV"]))
+
+    resp = client.get("/api/historical/mappings")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 1
+    assert [item["item_id"] for item in data["items"]] == ["tv-item"]
+
+
+def test_list_history_filters_batches_by_category_permissions(db):
+    db.add_all([
+        Category(code="TV", name="电视", sort_order=1),
+        Category(code="headphone", name="耳机", sort_order=2),
+        HistoricalMapping(
+            import_batch="batch-tv",
+            platform="jd",
+            item_id="tv-item",
+            item_name="电视商品",
+            item_name_norm="电视商品",
+            year=2026,
+            month_num=6,
+            month="2026-06",
+            category_code="TV",
+            match_key_type="manual",
+            raw_payload={"标题": "电视商品"},
+        ),
+        HistoricalMapping(
+            import_batch="batch-headphone",
+            platform="jd",
+            item_id="headphone-item",
+            item_name="耳机商品",
+            item_name_norm="耳机商品",
+            year=2026,
+            month_num=6,
+            month="2026-06",
+            category_code="headphone",
+            match_key_type="manual",
+            raw_payload={"标题": "耳机商品"},
+        ),
+    ])
+    db.commit()
+    client = _client(db, DummyUser(category_permissions=["TV"]))
+
+    resp = client.get("/api/historical/batches")
+
+    assert resp.status_code == 200
+    assert [item["batch"] for item in resp.json()] == ["batch-tv"]
+
+
+def test_delete_history_mapping_respects_category_permissions(db):
+    db.add_all([
+        Category(code="TV", name="电视", sort_order=1),
+        Category(code="headphone", name="耳机", sort_order=2),
+    ])
+    row = HistoricalMapping(
+        import_batch="batch-headphone",
+        platform="jd",
+        item_id="headphone-item",
+        item_name="耳机商品",
+        item_name_norm="耳机商品",
+        year=2026,
+        month_num=6,
+        month="2026-06",
+        category_code="headphone",
+        match_key_type="manual",
+        raw_payload={"标题": "耳机商品"},
+    )
+    db.add(row)
+    db.commit()
+    mapping_id = row.id
+    client = _client(db, DummyUser(category_permissions=["TV"]))
+
+    resp = client.delete(f"/api/historical/mappings/{mapping_id}")
+
+    assert resp.status_code == 404
+    assert db.query(HistoricalMapping).filter(HistoricalMapping.id == mapping_id).first() is not None
+
+
+def test_delete_history_batch_respects_category_permissions(db):
+    db.add_all([
+        Category(code="TV", name="电视", sort_order=1),
+        Category(code="headphone", name="耳机", sort_order=2),
+        HistoricalMapping(
+            import_batch="batch-headphone",
+            platform="jd",
+            item_id="headphone-item",
+            item_name="耳机商品",
+            item_name_norm="耳机商品",
+            year=2026,
+            month_num=6,
+            month="2026-06",
+            category_code="headphone",
+            match_key_type="manual",
+            raw_payload={"标题": "耳机商品"},
+        ),
+    ])
+    db.commit()
+    client = _client(db, DummyUser(category_permissions=["TV"]))
+
+    resp = client.request("DELETE", "/api/historical/mappings/batch", json={"import_batch": "batch-headphone"})
+
+    assert resp.status_code == 404
+    assert db.query(HistoricalMapping).filter(HistoricalMapping.import_batch == "batch-headphone").count() == 1
 
 
 def test_import_requires_platform_title_year_and_month(db):

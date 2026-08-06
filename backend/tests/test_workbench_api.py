@@ -8,9 +8,16 @@ from sqlalchemy.pool import StaticPool
 from sqlalchemy.orm import sessionmaker
 
 from app.api.workbench_api import router
+from app.core.auth_deps import get_current_user
 from app.models.analytics_db import AnalyticsBase, PublishedItem, get_analytics_db
 from app.models.database import get_db
-from app.models.schemas import Base
+from app.models.schemas import Base, Category
+
+
+class DummyUser:
+    def __init__(self, *, is_admin=0, category_permissions=None):
+        self.is_admin = is_admin
+        self.category_permissions = category_permissions
 
 
 @pytest.fixture(scope="function")
@@ -28,13 +35,20 @@ def client_and_db(monkeypatch):
     app = FastAPI()
     app.include_router(router)
 
+    current_user = {"value": DummyUser(is_admin=1)}
+
     def override_db():
         yield db
 
+    def override_current_user():
+        return current_user["value"]
+
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_analytics_db] = override_db
+    app.dependency_overrides[get_current_user] = override_current_user
 
     client = TestClient(app)
+    client.current_user = current_user
     yield client, db, monkeypatch
 
     client.close()
@@ -119,6 +133,83 @@ def test_query_data_filters_by_clean_job_id(client_and_db):
     body = response.json()
     assert body["total"] == 1
     assert body["items"][0]["id"] == 1
+
+
+def _seed_category_permission_items(db):
+    db.add_all([
+        Category(code="rice_cooker", name="电饭煲", sort_order=1),
+        Category(code="headphone", name="耳机", sort_order=2),
+        PublishedItem(
+            publish_job_id=1,
+            clean_job_id=201,
+            match_result_id=201,
+            platform="jd",
+            month=202606,
+            category_name="电饭煲",
+            item_id="rice-item",
+            item_name="Rice cooker",
+            price=199.0,
+        ),
+        PublishedItem(
+            publish_job_id=2,
+            clean_job_id=202,
+            match_result_id=202,
+            platform="jd",
+            month=202606,
+            category_name="耳机",
+            item_id="headphone-item",
+            item_name="Headphone",
+            price=299.0,
+        ),
+    ])
+    db.commit()
+
+
+def test_workbench_filters_respect_category_permissions(client_and_db):
+    client, db, _monkeypatch = client_and_db
+    _seed_category_permission_items(db)
+    client.current_user["value"] = DummyUser(category_permissions=["rice_cooker"])
+
+    response = client.get("/api/workbench/filters")
+
+    assert response.status_code == 200
+    assert response.json()["categories"] == ["电饭煲"]
+
+
+def test_workbench_data_respects_category_permissions(client_and_db):
+    client, db, monkeypatch = client_and_db
+    _seed_category_permission_items(db)
+    client.current_user["value"] = DummyUser(category_permissions=["rice_cooker"])
+    monkeypatch.setattr("app.api.workbench_api._load_workbench_context", lambda rows: ({}, {}))
+
+    response = client.get("/api/workbench/data")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert [item["item_name"] for item in payload["items"]] == ["Rice cooker"]
+
+
+def test_workbench_data_rejects_invisible_category_filter(client_and_db):
+    client, db, _monkeypatch = client_and_db
+    _seed_category_permission_items(db)
+    client.current_user["value"] = DummyUser(category_permissions=["rice_cooker"])
+
+    response = client.get("/api/workbench/data?category_name=耳机")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "无权限访问该品类"
+
+
+def test_workbench_export_rejects_invisible_category_filter(client_and_db):
+    client, db, _monkeypatch = client_and_db
+    _seed_category_permission_items(db)
+    client.current_user["value"] = DummyUser(category_permissions=["rice_cooker"])
+
+    response = client.post("/api/workbench/export", json={"category_name": "耳机"})
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "无权限访问该品类"
 
 
 def test_export_passes_clean_job_id_to_background_thread(client_and_db):

@@ -17,13 +17,38 @@ from pydantic import BaseModel
 from sqlalchemy import distinct
 from sqlalchemy.orm import Session
 
+from app.core.auth_deps import get_current_user
+from app.core.permissions import visible_category_codes
 from app.models.analytics_db import get_analytics_db, AnalyticsSession, PublishedItem, PublishedItemSpec
 from app.models.database import get_db, SessionLocal
-from app.models.schemas import MatchResult, ModelAlias, RawDataRecord, WorkbenchExportJob
+from app.models.schemas import Category, MatchResult, ModelAlias, RawDataRecord, User, WorkbenchExportJob
 from app.utils.time_utils import format_beijing_datetime
 from app.services.export_guards import reserve_async_export_capacity
 
 router = APIRouter(prefix="/api/workbench", tags=["workbench"])
+
+
+def _visible_workbench_category_names(db: Session, current_user: User) -> set[str] | None:
+    if getattr(current_user, "is_admin", 0) == 1:
+        return None
+    if not getattr(current_user, "category_permissions", None):
+        return None
+    categories = db.query(Category).order_by(Category.sort_order, Category.name).all()
+    if not categories:
+        return None
+    visible_codes = set(visible_category_codes(current_user, [category.code for category in categories]))
+    return {category.name for category in categories if category.code in visible_codes}
+
+
+def _filter_workbench_visible_categories(query, category_names: set[str] | None):
+    if category_names is None:
+        return query
+    return query.filter(PublishedItem.category_name.in_(category_names))
+
+
+def _ensure_workbench_category_visible(category_names: set[str] | None, category_name: str | None) -> None:
+    if category_names is not None and category_name and category_name not in category_names:
+        raise HTTPException(status_code=403, detail="无权限访问该品类")
 
 
 class WorkbenchExportParams(BaseModel):
@@ -102,8 +127,9 @@ def _load_workbench_context(rows: list[PublishedItem]) -> tuple[dict[int, tuple[
         luotu_db.close()
 
 
-def _build_query(db: Session, params: dict):
+def _build_query(db: Session, params: dict, visible_category_names: set[str] | None = None):
     q = db.query(PublishedItem)
+    q = _filter_workbench_visible_categories(q, visible_category_names)
 
     if params.get("year") and params.get("quarter"):
         year = int(params["year"])
@@ -154,7 +180,8 @@ def _run_wb_export_thread(job_id: int, params: dict):
         _wb_progress[job_id] = 5
 
         # 1. 查询 PublishedItems（5→10%）
-        q = _build_query(adb, params).order_by(PublishedItem.id.desc())
+        visible_category_names = params.get("visible_category_names")
+        q = _build_query(adb, params, visible_category_names).order_by(PublishedItem.id.desc())
 
         total = q.count()
         if total == 0:
@@ -275,13 +302,26 @@ def _run_wb_export_thread(job_id: int, params: dict):
 
 
 @router.get("/filters")
-def get_filters(db: Session = Depends(get_analytics_db)):
+def get_filters(
+    db: Session = Depends(get_analytics_db),
+    luotu_db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """获取可用筛选枚举值"""
-    def _vals(col):
-        return sorted([r[0] for r in db.query(distinct(col)).all() if r[0]])
+    visible_category_names = _visible_workbench_category_names(luotu_db, current_user)
 
+    def _vals(col):
+        q = db.query(distinct(col))
+        if col is not PublishedItem.category_name:
+            q = _filter_workbench_visible_categories(q, visible_category_names)
+        values = [r[0] for r in q.all() if r[0]]
+        if col is PublishedItem.category_name and visible_category_names is not None:
+            values = [value for value in values if value in visible_category_names]
+        return sorted(values)
+
+    month_query = _filter_workbench_visible_categories(db.query(distinct(PublishedItem.month)), visible_category_names)
     months = sorted(
-        [r[0] for r in db.query(distinct(PublishedItem.month)).all() if r[0]],
+        [r[0] for r in month_query.all() if r[0]],
         reverse=True,
     )
     return {
@@ -310,6 +350,8 @@ def query_data(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_analytics_db),
+    luotu_db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     params = dict(
         year=year, month=month, category_name=category_name,
@@ -319,7 +361,9 @@ def query_data(
         category_lv2=category_lv2, keyword=keyword,
         clean_job_id=clean_job_id,
     )
-    q = _build_query(db, params)
+    visible_category_names = _visible_workbench_category_names(luotu_db, current_user)
+    _ensure_workbench_category_visible(visible_category_names, category_name)
+    q = _build_query(db, params, visible_category_names)
     total = q.count()
     rows = (
         q.order_by(PublishedItem.id.desc())
@@ -369,8 +413,14 @@ def query_data(
 
 
 @router.post("/export", status_code=202)
-def export_data(payload: WorkbenchExportParams, db: Session = Depends(get_db)):
+def export_data(
+    payload: WorkbenchExportParams,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """异步触发工作台导出，立即返回 job_id。"""
+    visible_category_names = _visible_workbench_category_names(db, current_user)
+    _ensure_workbench_category_visible(visible_category_names, payload.category_name)
     params = {
         "year":          payload.year,
         "month":         payload.month,
@@ -384,6 +434,8 @@ def export_data(payload: WorkbenchExportParams, db: Session = Depends(get_db)):
         "quarter":       payload.quarter,
     }
     params = {k: v for k, v in params.items() if v not in (None, "", [])}
+    if visible_category_names is not None:
+        params["visible_category_names"] = sorted(visible_category_names)
 
     with reserve_async_export_capacity(db):
         job = WorkbenchExportJob(status="pending")

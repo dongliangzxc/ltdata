@@ -11,7 +11,9 @@ import {
   getWorkbenchExportJob,
   exportWorkbench, fetchItemAttrs
 } from '../../services/api'
+import type { UserProfile } from '../../services/api'
 import ProgressModal from '../../components/ProgressModal'
+import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 
 const { Text } = Typography
 
@@ -26,6 +28,17 @@ type FilterOptions = {
 
 type WorkbenchPageProps = {
   mode?: 'default' | 'data-adjustment'
+}
+
+function readStoredUser(): UserProfile | null {
+  if (typeof localStorage === 'undefined') return null
+  const raw = localStorage.getItem('auth_user')
+  if (!raw) return null
+  try {
+    return JSON.parse(raw) as UserProfile
+  } catch {
+    return null
+  }
 }
 
 type DataRow = {
@@ -86,6 +99,8 @@ function AttrPopoverContent({ itemId }: { itemId: number }) {
 export default function WorkbenchPage({ mode = 'default' }: WorkbenchPageProps) {
   const [form] = Form.useForm()
   const [searchParams] = useSearchParams()
+  const currentUser = readStoredUser()
+  const { options: categoryOptions } = useCategoryOptions()
   const [filters, setFilters] = useState<FilterOptions>({
     years: [], months: [], platforms: [], brands: [], models: [], categories: [],
   })
@@ -111,6 +126,17 @@ export default function WorkbenchPage({ mode = 'default' }: WorkbenchPageProps) 
     () => cleanJobId ? { clean_job_id: cleanJobId } : {},
     [cleanJobId],
   )
+  const visibleCategoryOptions = useMemo(() => {
+    const optionNames = new Set(filters.categories)
+    const allOptions = categoryOptions
+      .filter(c => optionNames.has(c.label))
+      .map(c => ({ value: c.label, label: c.label, code: c.value }))
+    if (!currentUser) return allOptions
+    if (currentUser.is_admin === 1) return allOptions
+    if (!currentUser.category_permissions?.length) return allOptions
+    const allowed = new Set(currentUser.category_permissions)
+    return allOptions.filter(c => allowed.has(c.code))
+  }, [categoryOptions, currentUser, filters.categories])
 
   // 页面加载时拉取筛选枚举
   useEffect(() => {
@@ -314,7 +340,7 @@ export default function WorkbenchPage({ mode = 'default' }: WorkbenchPageProps) 
               placeholder="品类"
               allowClear
               style={{ width: 150 }}
-              options={filters.categories.map(c => ({ value: c, label: c }))}
+              options={visibleCategoryOptions}
               filterOption={(input, option) =>
                 (option?.label as string ?? '').toLowerCase().includes(input.toLowerCase())
               }

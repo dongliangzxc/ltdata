@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.clean import router
+from app.core.auth_deps import get_current_user
 from app.services.clean_task_snapshot import get_monthly_clean_pool
 from app.models.database import get_db
 from app.models.schemas import (
@@ -29,7 +30,13 @@ from app.models.schemas import (
 )
 
 
-def _make_client(db, *, raise_server_exceptions=True):
+class DummyUser:
+    def __init__(self, *, is_admin=0, category_permissions=None):
+        self.is_admin = is_admin
+        self.category_permissions = category_permissions
+
+
+def _make_client(db, *, current_user=None, raise_server_exceptions=True):
     app = FastAPI()
     app.include_router(router)
 
@@ -37,6 +44,7 @@ def _make_client(db, *, raise_server_exceptions=True):
         yield db
 
     app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: current_user or DummyUser(is_admin=1)
     return TestClient(app, raise_server_exceptions=raise_server_exceptions)
 
 
@@ -2051,3 +2059,220 @@ def test_clean_pool_summary_and_task_creation_handle_platform_aliases(db):
         .all()
     ]
     assert snapshot_platforms == ["jd", "jd"]
+
+
+def _seed_permission_clean_jobs(db):
+    db.add_all([
+        Category(code="TV", name="电视", sort_order=1),
+        Category(code="headphone", name="耳机", sort_order=2),
+    ])
+    tv_job = CleanJobRecord(
+        file_ids=[],
+        rules={"dedup": True},
+        status="done",
+        category_code="TV",
+        platform="jd",
+        task_name="电视清洗任务",
+        row_in=1,
+        row_out=1,
+    )
+    headphone_job = CleanJobRecord(
+        file_ids=[],
+        rules={"dedup": True},
+        status="done",
+        category_code="headphone",
+        platform="jd",
+        task_name="耳机清洗任务",
+        row_in=1,
+        row_out=1,
+    )
+    db.add_all([tv_job, headphone_job])
+    db.flush()
+    db.add(CleanedDataRecord(
+        clean_job_id=headphone_job.id,
+        platform="jd",
+        item_id="headphone-item",
+        item_name="耳机商品",
+    ))
+    db.commit()
+    return tv_job, headphone_job
+
+
+def test_list_clean_jobs_filters_by_category_permissions(db):
+    _seed_permission_clean_jobs(db)
+    client = _make_client(db, current_user=DummyUser(category_permissions=["TV"]))
+
+    response = client.get("/api/clean/jobs")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [job["category_code"] for job in payload] == ["TV"]
+
+
+def test_preview_clean_job_hides_invisible_category(db):
+    _, headphone_job = _seed_permission_clean_jobs(db)
+    client = _make_client(db, current_user=DummyUser(category_permissions=["TV"]))
+
+    response = client.get(f"/api/clean/jobs/{headphone_job.id}/preview")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "清洗任务不存在"
+
+
+def test_delete_clean_job_hides_invisible_category(db):
+    _, headphone_job = _seed_permission_clean_jobs(db)
+    client = _make_client(db, current_user=DummyUser(category_permissions=["TV"]))
+
+    response = client.delete(f"/api/clean/jobs/{headphone_job.id}")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "清洗任务不存在"
+    assert db.get(CleanJobRecord, headphone_job.id).status == "done"
+
+
+def test_search_clean_tasks_filters_by_category_permissions(db):
+    _seed_permission_clean_jobs(db)
+    client = _make_client(db, current_user=DummyUser(category_permissions=["TV"]))
+
+    response = client.get("/api/clean/tasks/search")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [task["category_code"] for task in payload] == ["TV"]
+
+
+def test_create_clean_task_rejects_invisible_category(db):
+    db.add_all([
+        Category(code="TV", name="电视", sort_order=1),
+        Category(code="headphone", name="耳机", sort_order=2),
+    ])
+    db.commit()
+    client = _make_client(db, current_user=DummyUser(category_permissions=["TV"]))
+
+    response = client.post("/api/clean/tasks", json={
+        "category_code": "headphone",
+        "platform": "jd",
+    })
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "无权限访问该品类"
+
+
+def test_upsert_monthly_clean_task_rejects_invisible_category(db):
+    db.add_all([
+        Category(code="TV", name="电视", sort_order=1),
+        Category(code="headphone", name="耳机", sort_order=2),
+    ])
+    db.commit()
+    client = _make_client(db, current_user=DummyUser(category_permissions=["TV"]))
+
+    response = client.post("/api/clean/tasks/upsert-monthly", json={
+        "category_code": "headphone",
+        "platform": "jd",
+        "month": 202606,
+    })
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "无权限访问该品类"
+
+
+def test_run_clean_job_rejects_invisible_dispatch_category(db):
+    db.add_all([
+        Category(code="TV", name="电视", sort_order=1),
+        Category(code="headphone", name="耳机", sort_order=2),
+    ])
+    db.commit()
+    client = _make_client(db, current_user=DummyUser(category_permissions=["TV"]))
+
+    response = client.post("/api/clean/run", json={
+        "file_ids": [1],
+        "dispatch_category_code": "headphone",
+    })
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "无权限访问该品类"
+
+
+def test_rerun_clean_task_hides_invisible_category(db):
+    _, headphone_job = _seed_permission_clean_jobs(db)
+    client = _make_client(db, current_user=DummyUser(category_permissions=["TV"]))
+
+    response = client.post(f"/api/clean/tasks/{headphone_job.id}/rerun-with-current-rules")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "清洗任务不存在"
+
+
+def test_monthly_clean_pool_filters_by_category_permissions(db):
+    db.add_all([
+        Category(code="TV", name="电视", sort_order=1),
+        Category(code="headphone", name="耳机", sort_order=2),
+    ])
+    upload = UploadFileRecord(filename="permission-pool.xlsx", platform="jd", row_count=2, status="done")
+    db.add(upload)
+    db.flush()
+    tv_raw = RawDataRecord(file_id=upload.id, platform="jd", month=202606, item_id="tv", item_name="电视")
+    headphone_raw = RawDataRecord(file_id=upload.id, platform="jd", month=202606, item_id="headphone", item_name="耳机")
+    db.add_all([tv_raw, headphone_raw])
+    db.flush()
+    batch = DispatchBatch(file_id=upload.id, status="done", total_rows=2, dispatched_rows=2, unmatched_rows=0)
+    db.add(batch)
+    db.flush()
+    db.add_all([
+        DispatchItem(batch_id=batch.id, raw_data_id=tv_raw.id, category_code="TV"),
+        DispatchItem(batch_id=batch.id, raw_data_id=headphone_raw.id, category_code="headphone"),
+    ])
+    db.commit()
+    client = _make_client(db, current_user=DummyUser(category_permissions=["TV"]))
+
+    response = client.get("/api/clean/pool/monthly")
+
+    assert response.status_code == 200
+    assert [row["category_code"] for row in response.json()] == ["TV"]
+
+
+def test_run_dispatch_batch_clean_only_creates_visible_category_jobs(db, monkeypatch):
+    db.add_all([
+        Category(code="TV", name="电视", sort_order=1),
+        Category(code="headphone", name="耳机", sort_order=2),
+    ])
+    upload = UploadFileRecord(filename="permission-dispatch.xlsx", platform="jd", row_count=2, status="done")
+    db.add(upload)
+    db.flush()
+    tv_raw = RawDataRecord(file_id=upload.id, platform="jd", item_id="tv", item_name="电视")
+    headphone_raw = RawDataRecord(file_id=upload.id, platform="jd", item_id="headphone", item_name="耳机")
+    db.add_all([tv_raw, headphone_raw])
+    db.flush()
+    batch = DispatchBatch(file_id=upload.id, status="done", total_rows=2, dispatched_rows=2, unmatched_rows=0)
+    db.add(batch)
+    db.flush()
+    db.add_all([
+        DispatchItem(batch_id=batch.id, raw_data_id=tv_raw.id, category_code="TV"),
+        DispatchItem(batch_id=batch.id, raw_data_id=headphone_raw.id, category_code="headphone"),
+    ])
+    db.commit()
+    created_categories = []
+
+    def fake_run(db_arg, file_id, rules, dispatch_batch_id, category_code):
+        created_categories.append(category_code)
+        job = CleanJobRecord(
+            file_ids=[file_id],
+            rules=rules,
+            status="done",
+            dispatch_batch_id=dispatch_batch_id,
+            dispatch_category_code=category_code,
+            category_code=category_code,
+            platform="jd",
+        )
+        db_arg.add(job)
+        db_arg.flush()
+        return job
+
+    monkeypatch.setattr("app.api.clean._run_clean_for_dispatch_category", fake_run)
+    client = _make_client(db, current_user=DummyUser(category_permissions=["TV"]))
+
+    response = client.post("/api/clean/run-dispatch-batch", json={"dispatch_batch_id": batch.id})
+
+    assert response.status_code == 200
+    assert created_categories == ["TV"]
+    assert [job["category_code"] for job in response.json()["jobs"]] == ["TV"]

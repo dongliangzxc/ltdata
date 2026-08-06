@@ -1,9 +1,11 @@
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import String, func, or_, select
+from sqlalchemy import String, and_, func, or_, select
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
+from app.core.auth_deps import get_current_user
+from app.core.permissions import visible_category_codes
 from app.models.database import get_db
 from app.models.schemas import (
     CleanJobRecord,
@@ -29,6 +31,7 @@ from app.models.schemas import (
     UploadFileRecord,
     Category,
     CleanJobItemRecord,
+    User,
 )
 from app.services.clean_task_snapshot import (
     ACTIVE_TASK_STATUSES,
@@ -42,6 +45,53 @@ from app.services.matcher import run_match
 from app.utils.time_utils import format_beijing_datetime
 
 router = APIRouter(prefix="/api/clean", tags=["clean"])
+
+
+def _visible_clean_category_codes(db: Session, current_user: User) -> set[str] | None:
+    if getattr(current_user, "is_admin", 0) == 1:
+        return None
+    if not getattr(current_user, "category_permissions", None):
+        return None
+    all_codes = [code for code, in db.query(Category.code).order_by(Category.sort_order, Category.name).all()]
+    if not all_codes:
+        return None
+    return set(visible_category_codes(current_user, all_codes))
+
+
+def _ensure_clean_category_visible(db: Session, current_user: User, category_code: str | None) -> None:
+    if not category_code:
+        return
+    visible_codes = _visible_clean_category_codes(db, current_user)
+    if visible_codes is not None and category_code not in visible_codes:
+        raise HTTPException(status_code=403, detail="无权限访问该品类")
+
+
+def _filter_clean_job_visible_categories(query, db: Session, current_user: User, visible_codes: set[str] | None = None):
+    if visible_codes is None:
+        visible_codes = _visible_clean_category_codes(db, current_user)
+    if visible_codes is None:
+        return query
+    return query.filter(or_(
+        CleanJobRecord.category_code.in_(visible_codes),
+        CleanJobRecord.dispatch_category_code.in_(visible_codes),
+        and_(CleanJobRecord.category_code.is_(None), CleanJobRecord.dispatch_category_code.is_(None)),
+    ))
+
+
+def _filter_dispatch_item_visible_categories(query, db: Session, current_user: User):
+    visible_codes = _visible_clean_category_codes(db, current_user)
+    if visible_codes is None:
+        return query
+    return query.filter(DispatchItem.category_code.in_(visible_codes))
+
+
+def _get_visible_clean_job_or_404(db: Session, current_user: User, job_id: int) -> CleanJobRecord:
+    q = db.query(CleanJobRecord).filter(CleanJobRecord.id == job_id)
+    q = _filter_clean_job_visible_categories(q, db, current_user)
+    job = q.first()
+    if not job:
+        raise HTTPException(status_code=404, detail="清洗任务不存在")
+    return job
 
 
 def _build_clean_scope_desc(
@@ -367,8 +417,13 @@ def _run_clean_for_dispatch_category(
 def get_clean_pool_summary_endpoint(
     dispatch_batch_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    return get_clean_pool_summary(db, dispatch_batch_id=dispatch_batch_id)
+    rows = get_clean_pool_summary(db, dispatch_batch_id=dispatch_batch_id)
+    visible_codes = _visible_clean_category_codes(db, current_user)
+    if visible_codes is None:
+        return rows
+    return [row for row in rows if row.get("category_code") in visible_codes]
 
 
 @router.get("/pool/monthly", response_model=list[CleanMonthlyPoolOut])
@@ -378,18 +433,30 @@ def get_monthly_clean_pool_endpoint(
     month: Optional[int] = Query(None),
     limit: int = Query(50, ge=1, le=500),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    return get_monthly_clean_pool(
+    visible_codes = _visible_clean_category_codes(db, current_user)
+    if visible_codes is not None and category_code and category_code not in visible_codes:
+        return []
+    rows = get_monthly_clean_pool(
         db,
         category_code=category_code,
         platform=platform,
         month=month,
         limit=limit,
     )
+    if visible_codes is None:
+        return rows
+    return [row for row in rows if row.get("category_code") in visible_codes]
 
 
 @router.post("/tasks", response_model=CreateCleanTaskOut)
-def create_clean_task(payload: CreateCleanTaskIn, db: Session = Depends(get_db)):
+def create_clean_task(
+    payload: CreateCleanTaskIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_clean_category_visible(db, current_user, payload.category_code)
     try:
         job, snapshot_count = create_category_task_snapshot(
             db,
@@ -445,7 +512,12 @@ def create_clean_task(payload: CreateCleanTaskIn, db: Session = Depends(get_db))
 
 
 @router.post("/tasks/upsert-monthly", response_model=UpsertMonthlyCleanTaskOut)
-def upsert_monthly_clean_task(payload: UpsertMonthlyCleanTaskIn, db: Session = Depends(get_db)):
+def upsert_monthly_clean_task(
+    payload: UpsertMonthlyCleanTaskIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_clean_category_visible(db, current_user, payload.category_code)
     try:
         job, snapshot_count, action, _new_snapshot_ids = upsert_monthly_task_snapshot(
             db,
@@ -469,10 +541,12 @@ def upsert_monthly_clean_task(payload: UpsertMonthlyCleanTaskIn, db: Session = D
 
 
 @router.post("/tasks/{job_id}/rerun-with-current-rules")
-def rerun_clean_task_with_current_rules(job_id: int, db: Session = Depends(get_db)):
-    job = db.query(CleanJobRecord).filter(CleanJobRecord.id == job_id).first()
-    if not job:
-        raise HTTPException(status_code=404, detail="清洗任务不存在")
+def rerun_clean_task_with_current_rules(
+    job_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    job = _get_visible_clean_job_or_404(db, current_user, job_id)
     if db.query(PublishJob.id).filter(PublishJob.clean_job_id == job_id).first():
         raise HTTPException(status_code=400, detail="已发布任务不支持重新处理")
 
@@ -522,7 +596,11 @@ def rerun_clean_task_with_current_rules(job_id: int, db: Session = Depends(get_d
 
 
 @router.post("/run", response_model=CleanJobOut)
-def run_clean_job(payload: dict, db: Session = Depends(get_db)):
+def run_clean_job(
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """
     执行数据清洗任务。
     payload: {
@@ -536,6 +614,7 @@ def run_clean_job(payload: dict, db: Session = Depends(get_db)):
     rules: dict = payload.get("rules", {"dedup": True})
     dispatch_batch_id: int | None = payload.get("dispatch_batch_id")
     dispatch_category_code: str | None = payload.get("dispatch_category_code")
+    _ensure_clean_category_visible(db, current_user, dispatch_category_code)
 
     if not file_ids:
         raise HTTPException(status_code=400, detail="file_ids 不能为空")
@@ -583,7 +662,11 @@ def run_clean_job(payload: dict, db: Session = Depends(get_db)):
 
 
 @router.post("/run-dispatch-batch")
-def run_dispatch_batch_clean(payload: dict, db: Session = Depends(get_db)):
+def run_dispatch_batch_clean(
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     dispatch_batch_id: int | None = payload.get("dispatch_batch_id")
     rules: dict = payload.get("rules", {"dedup": True})
 
@@ -606,6 +689,9 @@ def run_dispatch_batch_clean(payload: dict, db: Session = Depends(get_db)):
         .order_by(DispatchItem.category_code)
         .all()
     ]
+    visible_codes = _visible_clean_category_codes(db, current_user)
+    if visible_codes is not None:
+        category_codes = [code for code in category_codes if code in visible_codes]
     if not category_codes:
         raise HTTPException(status_code=400, detail="分发批次没有可清洗的类目")
 
@@ -629,8 +715,11 @@ def list_clean_jobs(
     limit: Optional[int] = Query(None, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
+    visible_codes = _visible_clean_category_codes(db, current_user)
     q = db.query(CleanJobRecord)
+    q = _filter_clean_job_visible_categories(q, db, current_user, visible_codes)
     if view == "active":
         q = q.filter(CleanJobRecord.status != "archived")
     elif view == "archived":
@@ -683,10 +772,12 @@ def list_clean_jobs(
 
 
 @router.delete("/jobs/{job_id}")
-def delete_clean_job(job_id: int, db: Session = Depends(get_db)):
-    job = db.get(CleanJobRecord, job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="清洗任务不存在")
+def delete_clean_job(
+    job_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    job = _get_visible_clean_job_or_404(db, current_user, job_id)
     job.status = "archived"
     db.commit()
     db.refresh(job)
@@ -699,10 +790,9 @@ def preview_clean_job(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    job = db.query(CleanJobRecord).filter(CleanJobRecord.id == job_id).first()
-    if not job:
-        raise HTTPException(status_code=404, detail="清洗任务不存在")
+    _get_visible_clean_job_or_404(db, current_user, job_id)
 
     q = db.query(CleanedDataRecord).filter(CleanedDataRecord.clean_job_id == job_id)
     total = q.count()
@@ -736,6 +826,7 @@ def search_clean_tasks(
     month: int | None = Query(None, description="按任务月份精确筛选"),
     limit: int = Query(50, ge=1, le=100),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     kw = (keyword or "").strip()
     q = (
@@ -743,6 +834,7 @@ def search_clean_tasks(
         .outerjoin(Category, CleanJobRecord.category_code == Category.code)
         .filter(CleanJobRecord.status.in_(ACTIVE_TASK_STATUSES))
     )
+    q = _filter_clean_job_visible_categories(q, db, current_user)
     if exclude_id is not None:
         q = q.filter(CleanJobRecord.id != exclude_id)
     if kw:

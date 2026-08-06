@@ -15,7 +15,7 @@ import {
   previewCleanJob,
   upsertMonthlyCleanTask,
 } from '../../services/api'
-import type { CleanJobItem, CleanMonthlyPoolItem, CleanJobListView } from '../../services/api'
+import type { CleanJobItem, CleanMonthlyPoolItem, CleanJobListView, UserProfile } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 
 type CleanJobStatus = 'created' | 'cleaning' | 'matching' | 'processing' | 'reviewing' | 'published' | 'failed' | 'done' | 'error' | 'archived'
@@ -38,6 +38,17 @@ type CleanPreviewResponse = {
 
 type TaggedCleanPreviewResponse = CleanPreviewResponse & {
   jobId: number
+}
+
+function readStoredUser(): UserProfile | null {
+  if (typeof localStorage === 'undefined') return null
+  const raw = localStorage.getItem('auth_user')
+  if (!raw) return null
+  try {
+    return JSON.parse(raw) as UserProfile
+  } catch {
+    return null
+  }
 }
 
 type FilterState = {
@@ -274,7 +285,15 @@ const previewCols: ColumnsType<CleanPreviewRow> = [
 
 export default function CleanPage() {
   const navigate = useNavigate()
+  const currentUser = readStoredUser()
   const { options: categoryOptions, loading: categoryLoading } = useCategoryOptions()
+  const visibleCategoryOptions = useMemo(() => {
+    if (!currentUser) return categoryOptions
+    if (currentUser.is_admin === 1) return categoryOptions
+    if (!currentUser.category_permissions?.length) return categoryOptions
+    const allowed = new Set(currentUser.category_permissions)
+    return categoryOptions.filter(c => allowed.has(c.value))
+  }, [categoryOptions, currentUser])
   const [filters, setFilters] = useState<FilterState>({})
   const [jobView, setJobView] = useState<CleanJobListView>('active')
   const [previewJobId, setPreviewJobId] = useState<number | null>(null)
@@ -424,7 +443,7 @@ export default function CleanPage() {
               showSearch
               placeholder="全部品类"
               loading={categoryLoading}
-              options={categoryOptions}
+              options={visibleCategoryOptions}
               value={filters.category_code}
               onChange={value => setFilters(prev => ({ ...prev, category_code: value }))}
               optionFilterProp="label"

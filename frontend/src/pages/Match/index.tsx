@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useMemo, useState, useEffect, useRef } from 'react'
 import {
   Card, Select, Button, Table, Tag, Space, Typography, Input,
   message, Row, Col, Statistic, Tooltip, Progress, Alert, Popconfirm, InputNumber, Tabs,
@@ -18,7 +18,7 @@ import {
   batchConfirmMatch, previewBatchConfirmMatch,
   searchCleanTasks, transferMatchItem,
 } from '../../services/api'
-import type { CleanJobItem, MatchCandidateOut, MatchReviewDetail, FilteredItemOut, ModelItem, BatchConfirmFilter, BatchConfirmResult, CleanTaskSearchItem } from '../../services/api'
+import type { CleanJobItem, MatchCandidateOut, MatchReviewDetail, FilteredItemOut, ModelItem, BatchConfirmFilter, BatchConfirmResult, CleanTaskSearchItem, UserProfile } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 import ProgressModal from '../../components/ProgressModal'
 import AttributeInsightCard from './components/AttributeInsightCard'
@@ -164,6 +164,17 @@ const searchByPlaceholderMap: Record<SearchBy, string> = {
   brand_code: '搜索入库品牌',
 }
 
+function readStoredUser(): UserProfile | null {
+  if (typeof localStorage === 'undefined') return null
+  const raw = localStorage.getItem('auth_user')
+  if (!raw) return null
+  try {
+    return JSON.parse(raw) as UserProfile
+  } catch {
+    return null
+  }
+}
+
 export default function MatchPage() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
@@ -238,8 +249,16 @@ export default function MatchPage() {
   const [transferMonthFilter, setTransferMonthFilter] = useState<number | undefined>(undefined)
   const debouncedSearchClean = useRef<number | null>(null)
   const transferSearchSeqRef = useRef(0)
+  const currentUser = readStoredUser()
   const { options: categoryOptions } = useCategoryOptions()
-  const categoryLabelMap = new Map(categoryOptions.map(item => [item.value, item.label]))
+  const visibleCategoryOptions = useMemo(() => {
+    if (!currentUser) return categoryOptions
+    if (currentUser.is_admin === 1) return categoryOptions
+    if (!currentUser.category_permissions?.length) return categoryOptions
+    const allowed = new Set(currentUser.category_permissions)
+    return categoryOptions.filter(c => allowed.has(c.value))
+  }, [categoryOptions, currentUser])
+  const categoryLabelMap = new Map(visibleCategoryOptions.map(item => [item.value, item.label]))
   const {
     categoryOptions: transferCategoryOptions,
     platformOptions: transferPlatformOptions,
@@ -1191,7 +1210,7 @@ export default function MatchPage() {
                 placeholder="品类筛选"
                 allowClear
                 style={{ width: 140 }}
-                options={categoryOptions}
+                options={visibleCategoryOptions}
                 onChange={v => { setCategoryName(v); setPage(1); resetBatchSelection() }}
               />
               <Select

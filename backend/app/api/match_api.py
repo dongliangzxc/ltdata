@@ -11,8 +11,10 @@ from threading import Thread
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+from app.core.auth_deps import get_current_user
+from app.core.permissions import visible_category_codes
 from app.models.database import get_db, SessionLocal
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from app.models.schemas import (
     MatchResult, MatchResultOut, MatchSummary,
     CleanJobRecord, RawDataRecord, ModelRecord, BrandRecord,
@@ -21,6 +23,7 @@ from app.models.schemas import (
     DispatchItem,
     PaginatedResponse,
     MatchTransferLog,
+    User,
 )
 from app.services.clean_task_snapshot import ACTIVE_TASK_STATUSES
 from app.services.matcher import run_match, run_match_for_result
@@ -29,6 +32,50 @@ from app.utils.time_utils import format_beijing_datetime
 
 router = APIRouter(prefix="/api/match", tags=["match"])
 logger = logging.getLogger(__name__)
+
+
+def _visible_match_category_codes(db: Session, current_user: User) -> set[str] | None:
+    if getattr(current_user, "is_admin", 0) == 1:
+        return None
+    if not getattr(current_user, "category_permissions", None):
+        return None
+    all_codes = [code for code, in db.query(Category.code).order_by(Category.sort_order, Category.name).all()]
+    if not all_codes:
+        return None
+    return set(visible_category_codes(current_user, all_codes))
+
+
+def _filter_match_clean_job_visible_categories(query, db: Session, current_user: User):
+    visible_codes = _visible_match_category_codes(db, current_user)
+    if visible_codes is None:
+        return query
+    return query.filter(or_(
+        CleanJobRecord.category_code.in_(visible_codes),
+        CleanJobRecord.dispatch_category_code.in_(visible_codes),
+        and_(CleanJobRecord.category_code.is_(None), CleanJobRecord.dispatch_category_code.is_(None)),
+    ))
+
+
+def _get_visible_match_clean_job_or_404(db: Session, current_user: User, clean_job_id: int) -> CleanJobRecord:
+    q = db.query(CleanJobRecord).filter(CleanJobRecord.id == clean_job_id)
+    q = _filter_match_clean_job_visible_categories(q, db, current_user)
+    job = q.first()
+    if not job:
+        raise HTTPException(status_code=404, detail="清洗任务不存在")
+    return job
+
+
+def _get_visible_match_result_or_404(db: Session, current_user: User, match_id: int) -> MatchResult:
+    q = (
+        db.query(MatchResult)
+        .outerjoin(CleanJobRecord, MatchResult.clean_job_id == CleanJobRecord.id)
+        .filter(MatchResult.id == match_id)
+    )
+    q = _filter_match_clean_job_visible_categories(q, db, current_user)
+    mr = q.first()
+    if not mr:
+        raise HTTPException(status_code=404, detail="匹配记录不存在")
+    return mr
 
 # ── 进度状态（内存，key=clean_job_id）────────────────────────────────
 # {
@@ -275,8 +322,13 @@ def get_match_progress(clean_job_id: int):
 
 
 @router.get("/{clean_job_id}/summary", response_model=MatchSummary)
-def get_match_summary(clean_job_id: int, db: Session = Depends(get_db)):
+def get_match_summary(
+    clean_job_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """查看某次清洗任务的匹配统计，无记录时返回全零（不报错）"""
+    _get_visible_match_clean_job_or_404(db, current_user, clean_job_id)
     rows = db.query(MatchResult).filter(MatchResult.clean_job_id == clean_job_id).all()
     if not rows:
         return MatchSummary(
@@ -405,6 +457,7 @@ def list_pending(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """分页查询复核队列条目。"""
     allowed_statuses = {"pending", "text_only", "disputed", "matched", "url_matched", "confirmed", "excluded"}
@@ -412,8 +465,8 @@ def list_pending(
         status = "pending"
 
     # 获取 clean_job 的 dispatch_batch_id，用于关联 dispatch_items 取类目
-    clean_job = db.query(CleanJobRecord).filter(CleanJobRecord.id == clean_job_id).first()
-    dispatch_batch_id = clean_job.dispatch_batch_id if clean_job else None
+    clean_job = _get_visible_match_clean_job_or_404(db, current_user, clean_job_id)
+    dispatch_batch_id = clean_job.dispatch_batch_id
 
     # 构建 dispatch_items join 条件（仅在有 dispatch_batch_id 时关联）
     if dispatch_batch_id is not None:
@@ -784,15 +837,18 @@ def list_missing_attrs(
 
 
 @router.put("/confirm/{match_id}", response_model=MatchResultOut)
-def confirm_match(match_id: int, payload: dict, db: Session = Depends(get_db)):
+def confirm_match(
+    match_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """
     人工确认或排除匹配结果。
     payload: { "model_id": 123 }  → 指定型号，status=confirmed
     payload: { "excluded": true } → 标记排除，status=excluded
     """
-    mr = db.query(MatchResult).filter(MatchResult.id == match_id).first()
-    if not mr:
-        raise HTTPException(status_code=404, detail="匹配记录不存在")
+    mr = _get_visible_match_result_or_404(db, current_user, match_id)
 
     reason = (payload.get("reason") or "").strip() or None
 

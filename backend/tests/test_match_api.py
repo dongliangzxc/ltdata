@@ -3,6 +3,7 @@ from datetime import datetime
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from app.core.auth_deps import get_current_user
 from app.models.database import get_db
 from app.models.schemas import (
     ModelRecord, UploadFileRecord, RawDataRecord,
@@ -13,16 +14,29 @@ from app.models.schemas import (
 from app.api.match_api import confirm_match, router as match_router
 
 
+class DummyUser:
+    def __init__(self, *, is_admin=0, category_permissions=None):
+        self.is_admin = is_admin
+        self.category_permissions = category_permissions
+
+
 @pytest.fixture()
 def match_client(db):
     app = FastAPI()
     app.include_router(match_router)
+    current_user = {"value": DummyUser(is_admin=1)}
 
     def override_db():
         yield db
 
+    def override_current_user():
+        return current_user["value"]
+
     app.dependency_overrides[get_db] = override_db
-    return TestClient(app)
+    app.dependency_overrides[get_current_user] = override_current_user
+    client = TestClient(app)
+    client.current_user = current_user
+    return client
 
 
 def _seed_review_row(
@@ -1698,3 +1712,42 @@ def test_batch_confirm_preview_returns_candidate_distribution(db, match_client):
     dist = {(d["brand_code"], d["model_code"]): d["count"] for d in body["candidate_distribution"]}
     assert dist[("速影", "C200PRO")] == 3
     assert dist[("速影", "C200")] == 2
+
+
+def _seed_match_permission_rows(db):
+    db.add_all([
+        Category(code="TV", name="电视", sort_order=1),
+        Category(code="headphone", name="耳机", sort_order=2),
+    ])
+    upload = UploadFileRecord(filename="match-permission.xlsx", platform="jd", row_count=2, status="done")
+    db.add(upload)
+    db.flush()
+    tv_job = CleanJobRecord(file_ids=[upload.id], status="done", category_code="TV", task_name="电视匹配任务")
+    headphone_job = CleanJobRecord(file_ids=[upload.id], status="done", category_code="headphone", task_name="耳机匹配任务")
+    db.add_all([tv_job, headphone_job])
+    db.flush()
+    _seed_review_row(db, clean_job_id=tv_job.id, upload_id=upload.id, status="pending", item_name="电视商品")
+    headphone_match = _seed_review_row(db, clean_job_id=headphone_job.id, upload_id=upload.id, status="pending", item_name="耳机商品")
+    db.commit()
+    return tv_job, headphone_job, headphone_match
+
+
+def test_match_pending_hides_invisible_clean_job_category(db, match_client):
+    _tv_job, headphone_job, _headphone_match = _seed_match_permission_rows(db)
+    match_client.current_user["value"] = DummyUser(category_permissions=["TV"])
+
+    resp = match_client.get(f"/api/match/{headphone_job.id}/pending")
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "清洗任务不存在"
+
+
+def test_confirm_match_hides_invisible_clean_job_category(db, match_client):
+    _tv_job, _headphone_job, headphone_match = _seed_match_permission_rows(db)
+    match_client.current_user["value"] = DummyUser(category_permissions=["TV"])
+
+    resp = match_client.put(f"/api/match/confirm/{headphone_match.id}", json={"excluded": True})
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "匹配记录不存在"
+    assert db.get(MatchResult, headphone_match.id).match_status == "pending"

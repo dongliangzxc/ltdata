@@ -238,3 +238,27 @@ def test_export_passes_clean_job_id_to_background_thread(client_and_db):
     assert response.status_code == 202, response.text
     assert captured["started"] is True
     assert captured["args"][1]["clean_job_id"] == 101
+
+
+def test_workbench_export_scopes_background_query_by_category_permissions(client_and_db):
+    client, db, monkeypatch = client_and_db
+    _seed_category_permission_items(db)
+    client.current_user["value"] = DummyUser(category_permissions=["rice_cooker"])
+    captured = {}
+
+    class FakeThread:
+        def __init__(self, target, args, daemon):
+            captured["target"] = target
+            captured["args"] = args
+            captured["daemon"] = daemon
+
+        def start(self):
+            captured["started"] = True
+
+    monkeypatch.setattr("app.api.workbench_api.threading.Thread", FakeThread)
+
+    response = client.post("/api/workbench/export", json={})
+
+    assert response.status_code == 202, response.text
+    assert captured["started"] is True
+    assert captured["args"][1]["visible_category_names"] == ["电饭煲"]

@@ -7,10 +7,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
+from app.core.auth_deps import get_current_user
 from app.core.config import settings
+from app.core.permissions import visible_category_codes
 from app.models.analytics_db import get_analytics_db
 from app.models.database import get_db
-from app.models.schemas import WorkbenchExportJob
+from app.models.schemas import Category, User, WorkbenchExportJob
 from app.services.analytics_service import (
     build_analytics_query,
     content_disposition,
@@ -51,10 +53,35 @@ def _filter_kwargs(
     }
 
 
+def _allowed_analytics_categories(db: Session, current_user: User) -> set[str] | None:
+    if getattr(current_user, "is_admin", 0) == 1:
+        return None
+    if not getattr(current_user, "category_permissions", None):
+        return None
+    all_codes = [code for code, in db.query(Category.code).order_by(Category.sort_order, Category.name).all()]
+    if not all_codes:
+        return None
+    visible_codes = set(visible_category_codes(current_user, all_codes))
+    rows = db.query(Category.name).filter(Category.code.in_(visible_codes)).all()
+    return {name for name, in rows}
+
+
+def _ensure_analytics_category_visible(allowed_categories: set[str] | None, category: str | None) -> None:
+    if not category or allowed_categories is None:
+        return
+    if category not in allowed_categories:
+        raise HTTPException(status_code=403, detail="无权限访问该品类")
+
+
 @router.get("/filters")
-def filters(db: Session = Depends(get_analytics_db)):
+def filters(
+    luotu_db: Session = Depends(get_db),
+    analytics_db: Session = Depends(get_analytics_db),
+    current_user: User = Depends(get_current_user),
+):
     """Return available analytics filter dimensions."""
-    return get_analytics_filters(db)
+    allowed_categories = _allowed_analytics_categories(luotu_db, current_user)
+    return get_analytics_filters(analytics_db, allowed_categories=allowed_categories)
 
 
 @router.get("/summary")
@@ -70,16 +97,21 @@ def summary(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     sort_by: str = Query("corrected_sales_qty_desc"),
-    db: Session = Depends(get_analytics_db),
+    luotu_db: Session = Depends(get_db),
+    analytics_db: Session = Depends(get_analytics_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Return grouped analytics summary metrics."""
+    allowed_categories = _allowed_analytics_categories(luotu_db, current_user)
+    _ensure_analytics_category_visible(allowed_categories, category)
     return get_analytics_summary(
-        db,
+        analytics_db,
         **_filter_kwargs(year, month, brand, category, platform, model_keyword, item_keyword),
         group_by=group_by,
         page=page,
         page_size=page_size,
         sort_by=sort_by,
+        allowed_categories=allowed_categories,
     )
 
 
@@ -96,11 +128,15 @@ def export_summary(
     sort_by: str = Query("corrected_sales_qty_desc"),
     luotu_db: Session = Depends(get_db),
     analytics_db: Session = Depends(get_analytics_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Export current summary rows to Excel."""
+    allowed_categories = _allowed_analytics_categories(luotu_db, current_user)
+    _ensure_analytics_category_visible(allowed_categories, category)
     source_total = build_analytics_query(
         analytics_db,
         **_filter_kwargs(year, month, brand, category, platform, model_keyword, item_keyword),
+        allowed_categories=allowed_categories,
     ).count()
     ensure_export_row_limit(source_total, max_rows=MAX_SYNC_EXPORT_ROWS, label="看板汇总导出")
 
@@ -117,6 +153,7 @@ def export_summary(
             group_by=group_by,
             paginate=False,
             sort_by=sort_by,
+            allowed_categories=allowed_categories,
         )
         token, filename, _ = write_summary_export_file(data["rows"])
         mark_export_job_done(luotu_db, job, token, filename)
@@ -142,11 +179,15 @@ def export_detail(
     fields: Optional[str] = Query(None),
     luotu_db: Session = Depends(get_db),
     analytics_db: Session = Depends(get_analytics_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Export current detail rows to Excel."""
+    allowed_categories = _allowed_analytics_categories(luotu_db, current_user)
+    _ensure_analytics_category_visible(allowed_categories, category)
     source_total = build_analytics_query(
         analytics_db,
         **_filter_kwargs(year, month, brand, category, platform, model_keyword, item_keyword),
+        allowed_categories=allowed_categories,
     ).count()
     ensure_export_row_limit(source_total, max_rows=MAX_SYNC_EXPORT_ROWS, label="看板明细导出")
 
@@ -160,6 +201,7 @@ def export_detail(
         rows = get_analytics_detail_rows(
             analytics_db,
             **_filter_kwargs(year, month, brand, category, platform, model_keyword, item_keyword),
+            allowed_categories=allowed_categories,
         )
         token, filename, _ = write_detail_export_file(rows, fields)
         mark_export_job_done(luotu_db, job, token, filename)

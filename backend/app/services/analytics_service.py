@@ -105,6 +105,7 @@ def build_analytics_query(
     platform: Optional[str] = None,
     model_keyword: Optional[str] = None,
     item_keyword: Optional[str] = None,
+    allowed_categories: Optional[set[str]] = None,
 ) -> Query:
     """Build the filtered PublishedItem query used by dashboard endpoints."""
     query = db.query(PublishedItem)
@@ -124,6 +125,11 @@ def build_analytics_query(
         query = query.filter(
             or_(PublishedItem.brand_code.ilike(pattern), PublishedItem.brand_name.ilike(pattern))
         )
+    if allowed_categories is not None:
+        if not allowed_categories:
+            query = query.filter(False)
+        else:
+            query = query.filter(PublishedItem.category_name.in_(allowed_categories))
     if category:
         pattern = _like(category)
         query = query.filter(or_(*[col.ilike(pattern) for col in _CATEGORY_COLUMNS]))
@@ -140,21 +146,27 @@ def build_analytics_query(
     return query
 
 
-def get_analytics_filters(db: Session) -> dict[str, Any]:
+def get_analytics_filters(
+    db: Session,
+    *,
+    allowed_categories: Optional[set[str]] = None,
+) -> dict[str, Any]:
     """Return available filter dimensions from published analytics rows."""
-    months_raw = [r[0] for r in db.query(PublishedItem.month).distinct().all() if r[0]]
+    scoped = build_analytics_query(db, allowed_categories=allowed_categories).subquery()
+
+    months_raw = [r[0] for r in db.query(scoped.c.month).distinct().all() if r[0]]
     years = sorted({int(month) // 100 for month in months_raw}, reverse=True)
     months = sorted({int(month) % 100 for month in months_raw}, reverse=True)
 
     platforms = sorted(
-        [r[0] for r in db.query(PublishedItem.platform).distinct().all() if r[0]]
+        [r[0] for r in db.query(scoped.c.platform).distinct().all() if r[0]]
     )
 
     brand_rows = (
-        db.query(PublishedItem.brand_code, func.min(PublishedItem.brand_name))
-        .filter(PublishedItem.brand_code.isnot(None), PublishedItem.brand_code != "")
-        .group_by(PublishedItem.brand_code)
-        .order_by(PublishedItem.brand_code)
+        db.query(scoped.c.brand_code, func.min(scoped.c.brand_name))
+        .filter(scoped.c.brand_code.isnot(None), scoped.c.brand_code != "")
+        .group_by(scoped.c.brand_code)
+        .order_by(scoped.c.brand_code)
         .all()
     )
     brands = [
@@ -163,7 +175,15 @@ def get_analytics_filters(db: Session) -> dict[str, Any]:
         if code
     ]
 
-    category_expr = _category_fallback_expr()
+    category_expr = func.coalesce(
+        func.nullif(scoped.c.category_name, ""),
+        func.nullif(scoped.c.category_lv5, ""),
+        func.nullif(scoped.c.category_lv4, ""),
+        func.nullif(scoped.c.category_lv3, ""),
+        func.nullif(scoped.c.category_lv2, ""),
+        func.nullif(scoped.c.category_lv1, ""),
+        "未填",
+    )
     category_rows = db.query(category_expr.label("category_name")).distinct().all()
     categories = [
         {"category_name": row[0]}
@@ -215,6 +235,7 @@ def get_analytics_summary(
     page_size: int = 20,
     sort_by: str = "corrected_sales_qty_desc",
     paginate: bool = True,
+    allowed_categories: Optional[set[str]] = None,
 ) -> dict[str, Any]:
     """Return grouped sales metrics for the analytics dashboard."""
     if group_by != "category" and group_by not in _GROUP_COLUMNS:
@@ -231,6 +252,7 @@ def get_analytics_summary(
         platform=platform,
         model_keyword=model_keyword,
         item_keyword=item_keyword,
+        allowed_categories=allowed_categories,
     )
 
     corrected_qty_expr = func.coalesce(PublishedItem.corrected_sales_qty, PublishedItem.sales_qty, 0)

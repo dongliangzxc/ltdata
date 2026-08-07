@@ -12,9 +12,16 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.analytics_api import router
+from app.core.auth_deps import get_current_user
 from app.models.analytics_db import AnalyticsBase, PublishedItem, get_analytics_db
 from app.models.database import get_db
-from app.models.schemas import Base, WorkbenchExportJob
+from app.models.schemas import Base, Category, WorkbenchExportJob
+
+
+class DummyUser:
+    def __init__(self, *, is_admin=0, category_permissions=None):
+        self.is_admin = is_admin
+        self.category_permissions = category_permissions
 
 
 @pytest.fixture(scope="function")
@@ -54,13 +61,19 @@ def client_and_dbs(tmp_path, monkeypatch):
     def override_luotu_db():
         yield luotu_db
 
+    current_user = {"value": DummyUser(category_permissions=["TV"])}
+
     def override_analytics_db():
         yield analytics_db
 
+    def override_current_user():
+        return current_user["value"]
+
     app.dependency_overrides[get_db] = override_luotu_db
     app.dependency_overrides[get_analytics_db] = override_analytics_db
+    app.dependency_overrides[get_current_user] = override_current_user
 
-    yield TestClient(app), luotu_db, analytics_db, tmp_path
+    yield TestClient(app), luotu_db, analytics_db, tmp_path, current_user
 
     luotu_db.close()
     analytics_db.close()
@@ -160,7 +173,7 @@ def _seed_published(analytics_db):
 
 
 def test_filters_return_available_dimensions(client_and_dbs):
-    client, _, analytics_db, _ = client_and_dbs
+    client, _, analytics_db, _, _ = client_and_dbs
     _seed_published(analytics_db)
 
     response = client.get("/api/analytics/filters")
@@ -174,8 +187,41 @@ def test_filters_return_available_dimensions(client_and_dbs):
     assert {c["category_name"] for c in body["categories"]} == {"耳机", "音箱", "回音壁"}
 
 
+def test_filters_are_scoped_by_category_permissions(client_and_dbs):
+    client, luotu_db, analytics_db, _, _ = client_and_dbs
+    luotu_db.add_all([
+        Category(code="TV", name="耳机", sort_order=1),
+        Category(code="SPEAKER", name="音箱", sort_order=2),
+        Category(code="SOUNDBAR", name="回音壁", sort_order=3),
+    ])
+    luotu_db.commit()
+    _seed_published(analytics_db)
+
+    response = client.get("/api/analytics/filters")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["categories"] == [{"category_name": "耳机"}]
+    assert {b["brand_code"] for b in body["brands"]} == {"SONY"}
+
+
+def test_summary_rejects_invisible_category(client_and_dbs):
+    client, luotu_db, analytics_db, _, _ = client_and_dbs
+    luotu_db.add_all([
+        Category(code="TV", name="耳机", sort_order=1),
+        Category(code="SPEAKER", name="音箱", sort_order=2),
+    ])
+    luotu_db.commit()
+    _seed_published(analytics_db)
+
+    response = client.get("/api/analytics/summary", params={"category": "音箱"})
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "无权限访问该品类"
+
+
 def test_summary_defaults_to_model_group_and_corrected_qty_desc(client_and_dbs):
-    client, _, analytics_db, _ = client_and_dbs
+    client, _, analytics_db, _, _ = client_and_dbs
     _seed_published(analytics_db)
 
     response = client.get("/api/analytics/summary?year=2026&month=4")
@@ -196,7 +242,7 @@ def test_summary_defaults_to_model_group_and_corrected_qty_desc(client_and_dbs):
 
 
 def test_summary_supports_page_and_page_size(client_and_dbs):
-    client, _, analytics_db, _ = client_and_dbs
+    client, _, analytics_db, _, _ = client_and_dbs
     _seed_published(analytics_db)
 
     response = client.get("/api/analytics/summary?year=2026&month=4&page=1&page_size=1")
@@ -210,7 +256,7 @@ def test_summary_supports_page_and_page_size(client_and_dbs):
 
 
 def test_summary_supports_brand_category_platform_and_keyword_filters(client_and_dbs):
-    client, _, analytics_db, _ = client_and_dbs
+    client, _, analytics_db, _, _ = client_and_dbs
     _seed_published(analytics_db)
 
     brand_response = client.get("/api/analytics/summary?group_by=brand&brand=SONY")
@@ -240,7 +286,7 @@ def test_summary_supports_brand_category_platform_and_keyword_filters(client_and
 
 
 def test_summary_returns_null_avg_price_when_raw_sales_qty_is_zero(client_and_dbs):
-    client, _, analytics_db, _ = client_and_dbs
+    client, _, analytics_db, _, _ = client_and_dbs
     analytics_db.add(PublishedItem(
         publish_job_id=1,
         clean_job_id=1,
@@ -268,7 +314,7 @@ def test_summary_returns_null_avg_price_when_raw_sales_qty_is_zero(client_and_db
 
 
 def test_get_export_summary_respects_query_filters_and_creates_done_job(client_and_dbs, monkeypatch):
-    client, luotu_db, analytics_db, _ = client_and_dbs
+    client, luotu_db, analytics_db, _, _ = client_and_dbs
     _seed_published(analytics_db)
     captured = {}
 
@@ -293,7 +339,7 @@ def test_get_export_summary_respects_query_filters_and_creates_done_job(client_a
 
 
 def test_get_export_detail_respects_query_filters_and_creates_done_job(client_and_dbs, monkeypatch):
-    client, luotu_db, analytics_db, _ = client_and_dbs
+    client, luotu_db, analytics_db, _, _ = client_and_dbs
     _seed_published(analytics_db)
     captured = {}
 
@@ -319,7 +365,7 @@ def test_get_export_detail_respects_query_filters_and_creates_done_job(client_an
 
 
 def test_export_summary_rejects_when_row_limit_exceeded(client_and_dbs, monkeypatch):
-    client, _, analytics_db, _ = client_and_dbs
+    client, _, analytics_db, _, _ = client_and_dbs
     _seed_published(analytics_db)
     monkeypatch.setattr("app.api.analytics_api.MAX_SYNC_EXPORT_ROWS", 1)
 
@@ -330,7 +376,7 @@ def test_export_summary_rejects_when_row_limit_exceeded(client_and_dbs, monkeypa
 
 
 def test_export_detail_rejects_when_exports_are_busy(client_and_dbs):
-    client, luotu_db, analytics_db, _ = client_and_dbs
+    client, luotu_db, analytics_db, _, _ = client_and_dbs
     _seed_published(analytics_db)
     luotu_db.add_all([
         WorkbenchExportJob(status="running", progress=10),
@@ -345,7 +391,7 @@ def test_export_detail_rejects_when_exports_are_busy(client_and_dbs):
 
 
 def test_export_summary_creates_downloadable_excel(client_and_dbs):
-    client, _, analytics_db, _ = client_and_dbs
+    client, _, analytics_db, _, _ = client_and_dbs
     _seed_published(analytics_db)
 
     response = client.get("/api/analytics/export/summary?year=2026&month=4&group_by=brand")
@@ -364,7 +410,7 @@ def test_export_summary_creates_downloadable_excel(client_and_dbs):
 
 
 def test_export_summary_exports_all_model_rows_despite_summary_pagination_defaults(client_and_dbs):
-    client, _, analytics_db, _ = client_and_dbs
+    client, _, analytics_db, _, _ = client_and_dbs
     _seed_published(analytics_db)
 
     response = client.get("/api/analytics/export/summary?year=2026&month=4&group_by=model")
@@ -377,7 +423,7 @@ def test_export_summary_exports_all_model_rows_despite_summary_pagination_defaul
 
 
 def test_export_summary_respects_sort_by_sales_qty_asc(client_and_dbs):
-    client, _, analytics_db, _ = client_and_dbs
+    client, _, analytics_db, _, _ = client_and_dbs
     _seed_published(analytics_db)
 
     response = client.get("/api/analytics/export/summary?year=2026&month=4&group_by=model&sort_by=sales_qty_asc")
@@ -390,7 +436,7 @@ def test_export_summary_respects_sort_by_sales_qty_asc(client_and_dbs):
 
 
 def test_export_detail_respects_selected_fields(client_and_dbs):
-    client, _, analytics_db, _ = client_and_dbs
+    client, _, analytics_db, _, _ = client_and_dbs
     _seed_published(analytics_db)
 
     response = client.get("/api/analytics/export/detail?brand=SONY&fields=platform,item_name,corrected_sales_qty")
@@ -409,7 +455,7 @@ def test_export_detail_respects_selected_fields(client_and_dbs):
 
 
 def test_export_detail_falls_back_to_default_fields_when_fields_are_invalid(client_and_dbs):
-    client, _, analytics_db, _ = client_and_dbs
+    client, _, analytics_db, _, _ = client_and_dbs
     _seed_published(analytics_db)
 
     response = client.get("/api/analytics/export/detail?brand=JBL&fields=bad_field")
@@ -425,7 +471,7 @@ def test_export_detail_falls_back_to_default_fields_when_fields_are_invalid(clie
 
 
 def test_export_failure_marks_job_error(client_and_dbs, monkeypatch):
-    client, luotu_db, analytics_db, _ = client_and_dbs
+    client, luotu_db, analytics_db, _, _ = client_and_dbs
     _seed_published(analytics_db)
 
     def fail_write_summary_export_file(rows):

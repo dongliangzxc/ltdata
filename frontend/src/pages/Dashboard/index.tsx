@@ -10,9 +10,21 @@ import {
   exportAnalyticsSummary,
   getAnalyticsFilters,
   getAnalyticsSummary,
+  type UserProfile,
 } from '../../services/api'
 
 const { Text } = Typography
+
+function readStoredUser(): UserProfile | null {
+  if (typeof localStorage === 'undefined') return null
+  const raw = localStorage.getItem('auth_user')
+  if (!raw) return null
+  try {
+    return JSON.parse(raw) as UserProfile
+  } catch {
+    return null
+  }
+}
 
 const SORT_BY = 'corrected_sales_qty_desc'
 
@@ -98,6 +110,17 @@ export default function DashboardPage() {
     brands: { brand_code: string; brand_name: string | null }[]
     categories: { category_name: string }[]
   }>({ years: [], months: [], platforms: [], brands: [], categories: [] })
+  const currentUser = readStoredUser()
+  const visibleCategories = useMemo(() => {
+    if (!currentUser) return filterOptions.categories
+    if (currentUser.is_admin === 1) return filterOptions.categories
+    if (!currentUser.category_permissions?.length) return filterOptions.categories
+    return filterOptions.categories
+  }, [filterOptions.categories, currentUser])
+  const categoryOptions = useMemo(
+    () => visibleCategories.map(category => ({ label: category.category_name, value: category.category_name })),
+    [visibleCategories],
+  )
   const [queryParams, setQueryParams] = useState<FilterValues>({})
   const [groupBy, setGroupBy] = useState<AnalyticsGroupBy>('model')
   const [page, setPage] = useState(1)
@@ -315,7 +338,7 @@ export default function DashboardPage() {
             </Col>
             <Col xs={24} sm={12} md={8} lg={4}>
               <Form.Item name="category" label="品类">
-                <Select allowClear showSearch optionFilterProp="label" placeholder="全部品类" options={filterOptions.categories.map(category => ({ label: category.category_name, value: category.category_name }))} />
+                <Select allowClear showSearch optionFilterProp="label" placeholder="全部品类" options={categoryOptions} />
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} md={8} lg={4}>

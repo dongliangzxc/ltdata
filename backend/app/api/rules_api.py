@@ -17,6 +17,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.core.auth_deps import get_current_user
+from app.core.permissions import visible_category_codes
 from app.models.database import get_db
 from app.models.schemas import (
     NoiseWord, FilteredItem, BrandAlias, MatchRule,
@@ -25,6 +27,7 @@ from app.models.schemas import (
     AttrRuleIn, AttrRuleOut,
     Category, InterventionRule, InterventionRuleIn,
     InterventionRulePatch,
+    User,
 )
 from app.services.import_helper import save_tmp_file, read_columns, find_best_template, col_fingerprint
 from app.utils.time_utils import format_beijing_datetime
@@ -32,6 +35,32 @@ from app.utils.time_utils import format_beijing_datetime
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "./uploads")
 
 router = APIRouter(prefix="/api/rules", tags=["rules"])
+
+
+def _visible_rule_category_codes(db: Session, current_user: User) -> set[str] | None:
+    if getattr(current_user, "is_admin", 0) == 1:
+        return None
+    if not getattr(current_user, "category_permissions", None):
+        return None
+    all_codes = [code for code, in db.query(Category.code).order_by(Category.sort_order, Category.name).all()]
+    if not all_codes:
+        return None
+    return set(visible_category_codes(current_user, all_codes))
+
+
+def _ensure_rule_category_visible(db: Session, current_user: User, category_code: str | None) -> None:
+    if not category_code:
+        return
+    visible_codes = _visible_rule_category_codes(db, current_user)
+    if visible_codes is not None and category_code not in visible_codes:
+        raise HTTPException(status_code=403, detail="无权限访问该品类")
+
+
+def _filter_rule_category(query, model, db: Session, current_user: User):
+    visible_codes = _visible_rule_category_codes(db, current_user)
+    if visible_codes is None:
+        return query
+    return query.filter(model.category_code.in_(visible_codes))
 
 
 ALLOWED_PRICE_OPS = {"gt", "gte", "lt", "lte", "between"}
@@ -158,15 +187,23 @@ def _intervention_rule_to_dict(rule: InterventionRule) -> dict:
 def list_intervention_rules(
     category_code: Optional[str] = Query(None),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
+    _ensure_rule_category_visible(db, current_user, category_code)
     q = db.query(InterventionRule).order_by(InterventionRule.priority, InterventionRule.id)
+    q = _filter_rule_category(q, InterventionRule, db, current_user)
     if category_code:
         q = q.filter(InterventionRule.category_code == category_code)
     return [_intervention_rule_to_dict(rule) for rule in q.all()]
 
 
 @router.post("/intervention-rules", status_code=201)
-def create_intervention_rule(body: InterventionRuleIn, db: Session = Depends(get_db)):
+def create_intervention_rule(
+    body: InterventionRuleIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_rule_category_visible(db, current_user, body.category_code)
     values = _validate_intervention_rule_payload(body, db)
     if "category_code" not in values or not values["category_code"]:
         raise HTTPException(400, "category_code 不能为空")
@@ -178,11 +215,19 @@ def create_intervention_rule(body: InterventionRuleIn, db: Session = Depends(get
 
 
 @router.patch("/intervention-rules/{rule_id}")
-def update_intervention_rule(rule_id: int, body: InterventionRulePatch, db: Session = Depends(get_db)):
+def update_intervention_rule(
+    rule_id: int,
+    body: InterventionRulePatch,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     rule = db.query(InterventionRule).filter(InterventionRule.id == rule_id).first()
     if not rule:
         raise HTTPException(404, "干预规则不存在")
+    _ensure_rule_category_visible(db, current_user, rule.category_code)
     values = _validate_intervention_rule_payload(body, db)
+    if "category_code" in values:
+        _ensure_rule_category_visible(db, current_user, values["category_code"])
     for field, value in values.items():
         setattr(rule, field, value)
     db.commit()
@@ -191,10 +236,15 @@ def update_intervention_rule(rule_id: int, body: InterventionRulePatch, db: Sess
 
 
 @router.delete("/intervention-rules/{rule_id}", status_code=204)
-def delete_intervention_rule(rule_id: int, db: Session = Depends(get_db)):
+def delete_intervention_rule(
+    rule_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     rule = db.query(InterventionRule).filter(InterventionRule.id == rule_id).first()
     if not rule:
         raise HTTPException(404, "干预规则不存在")
+    _ensure_rule_category_visible(db, current_user, rule.category_code)
     db.delete(rule)
     db.commit()
 
@@ -213,8 +263,11 @@ class NoiseWordIn(BaseModel):
 def list_noise_words(
     category_code: Optional[str] = Query(None),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
+    _ensure_rule_category_visible(db, current_user, category_code)
     q = db.query(NoiseWord).order_by(NoiseWord.created_at.desc())
+    q = _filter_rule_category(q, NoiseWord, db, current_user)
     if category_code:
         q = q.filter(NoiseWord.category_code == category_code)
     rows = q.all()
@@ -232,7 +285,12 @@ def list_noise_words(
 
 
 @router.post("/noise-words", status_code=201)
-def create_noise_word(body: NoiseWordIn, db: Session = Depends(get_db)):
+def create_noise_word(
+    body: NoiseWordIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_rule_category_visible(db, current_user, body.category_code)
     if body.match_field not in ("item_name", "shop_name", "brand_raw"):
         raise HTTPException(400, "match_field 必须是 item_name / shop_name / brand_raw")
     existing = db.query(NoiseWord).filter(
@@ -252,20 +310,30 @@ def create_noise_word(body: NoiseWordIn, db: Session = Depends(get_db)):
 
 
 @router.patch("/noise-words/{nw_id}")
-def toggle_noise_word(nw_id: int, db: Session = Depends(get_db)):
+def toggle_noise_word(
+    nw_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     row = db.query(NoiseWord).filter(NoiseWord.id == nw_id).first()
     if not row:
         raise HTTPException(404, "干扰词不存在")
+    _ensure_rule_category_visible(db, current_user, row.category_code)
     row.is_active = 0 if row.is_active else 1
     db.commit()
     return {"id": row.id, "is_active": row.is_active}
 
 
 @router.delete("/noise-words/{nw_id}", status_code=204)
-def delete_noise_word(nw_id: int, db: Session = Depends(get_db)):
+def delete_noise_word(
+    nw_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     row = db.query(NoiseWord).filter(NoiseWord.id == nw_id).first()
     if not row:
         raise HTTPException(404, "干扰词不存在")
+    _ensure_rule_category_visible(db, current_user, row.category_code)
     db.delete(row)
     db.commit()
 
@@ -359,10 +427,17 @@ class MatchRuleUpdate(BaseModel):
 
 
 @router.get("/match-rules")
-def list_match_rules(db: Session = Depends(get_db)):
-    rows = db.query(MatchRule, ModelRecord).join(
+def list_match_rules(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    q = db.query(MatchRule, ModelRecord).join(
         ModelRecord, MatchRule.model_id == ModelRecord.id
-    ).order_by(MatchRule.priority).all()
+    )
+    visible_codes = _visible_rule_category_codes(db, current_user)
+    if visible_codes is not None:
+        q = q.filter(ModelRecord.category_code.in_(visible_codes))
+    rows = q.order_by(MatchRule.priority).all()
     return [
         {
             "id": mr.id, "keyword": mr.keyword, "match_type": mr.match_type,
@@ -375,11 +450,17 @@ def list_match_rules(db: Session = Depends(get_db)):
 
 
 @router.post("/match-rules", status_code=201)
-def create_match_rule(body: MatchRuleIn, db: Session = Depends(get_db)):
+def create_match_rule(
+    body: MatchRuleIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     if body.match_type not in ("contains", "exact"):
         raise HTTPException(400, "match_type 必须是 contains 或 exact")
-    if not db.query(ModelRecord).filter(ModelRecord.id == body.model_id).first():
+    model = db.query(ModelRecord).filter(ModelRecord.id == body.model_id).first()
+    if not model:
         raise HTTPException(404, "型号不存在")
+    _ensure_rule_category_visible(db, current_user, model.category_code)
     if db.query(MatchRule).filter(MatchRule.keyword == body.keyword).first():
         raise HTTPException(400, "该关键词规则已存在")
     row = MatchRule(
@@ -396,10 +477,18 @@ def create_match_rule(body: MatchRuleIn, db: Session = Depends(get_db)):
 
 
 @router.patch("/match-rules/{rule_id}")
-def update_match_rule(rule_id: int, body: MatchRuleUpdate, db: Session = Depends(get_db)):
+def update_match_rule(
+    rule_id: int,
+    body: MatchRuleUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     row = db.query(MatchRule).filter(MatchRule.id == rule_id).first()
     if not row:
         raise HTTPException(404, "规则不存在")
+    current_model = db.query(ModelRecord).filter(ModelRecord.id == row.model_id).first()
+    if current_model:
+        _ensure_rule_category_visible(db, current_user, current_model.category_code)
     if body.keyword is not None:
         row.keyword = body.keyword.strip()
     if body.match_type is not None:
@@ -407,8 +496,10 @@ def update_match_rule(rule_id: int, body: MatchRuleUpdate, db: Session = Depends
             raise HTTPException(400, "match_type 必须是 contains 或 exact")
         row.match_type = body.match_type
     if body.model_id is not None:
-        if not db.query(ModelRecord).filter(ModelRecord.id == body.model_id).first():
+        model = db.query(ModelRecord).filter(ModelRecord.id == body.model_id).first()
+        if not model:
             raise HTTPException(404, "型号不存在")
+        _ensure_rule_category_visible(db, current_user, model.category_code)
         row.model_id = body.model_id
     if body.priority is not None:
         row.priority = body.priority
@@ -419,10 +510,17 @@ def update_match_rule(rule_id: int, body: MatchRuleUpdate, db: Session = Depends
 
 
 @router.delete("/match-rules/{rule_id}", status_code=204)
-def delete_match_rule(rule_id: int, db: Session = Depends(get_db)):
+def delete_match_rule(
+    rule_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     row = db.query(MatchRule).filter(MatchRule.id == rule_id).first()
     if not row:
         raise HTTPException(404, "规则不存在")
+    model = db.query(ModelRecord).filter(ModelRecord.id == row.model_id).first()
+    if model:
+        _ensure_rule_category_visible(db, current_user, model.category_code)
     db.delete(row)
     db.commit()
 
@@ -553,9 +651,16 @@ def recover_filtered_item(fi_id: int, db: Session = Depends(get_db)):
 # ═══════════════════════════════════════════════════════════
 
 @router.get("/attr-rules/categories")
-def list_attr_rule_categories(db: Session = Depends(get_db)):
-    """返回 categories 表列表，供前端属性规则品类下拉使用"""
-    rows = db.query(Category).order_by(Category.name).all()
+def list_attr_rule_categories(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """返回当前用户可见的品类列表，供前端属性规则品类下拉使用"""
+    q = db.query(Category).order_by(Category.name)
+    visible_codes = _visible_rule_category_codes(db, current_user)
+    if visible_codes is not None:
+        q = q.filter(Category.code.in_(visible_codes))
+    rows = q.all()
     return [{"code": r.code, "name": r.name} for r in rows]
 
 
@@ -593,8 +698,11 @@ def apply_attr_rules(payload: dict, db: Session = Depends(get_db)):
 def list_attr_rules(
     category_code: Optional[str] = Query(None),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
+    _ensure_rule_category_visible(db, current_user, None if category_code == "__global__" else category_code)
     q = db.query(AttrRule).order_by(AttrRule.priority, AttrRule.id)
+    q = _filter_rule_category(q, AttrRule, db, current_user)
     if category_code == "__global__":
         q = q.filter(AttrRule.category_code.is_(None))
     elif category_code:
@@ -612,7 +720,12 @@ def list_attr_rules(
 
 
 @router.post("/attr-rules", status_code=201)
-def create_attr_rule(body: AttrRuleIn, db: Session = Depends(get_db)):
+def create_attr_rule(
+    body: AttrRuleIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_rule_category_visible(db, current_user, body.category_code)
     if body.match_type not in ("contains", "exact"):
         raise HTTPException(400, "match_type 必须是 contains 或 exact")
     if body.category_code:
@@ -642,11 +755,18 @@ def create_attr_rule(body: AttrRuleIn, db: Session = Depends(get_db)):
 
 
 @router.patch("/attr-rules/{rule_id}")
-def update_attr_rule(rule_id: int, body: AttrRulePatch, db: Session = Depends(get_db)):
+def update_attr_rule(
+    rule_id: int,
+    body: AttrRulePatch,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     row = db.query(AttrRule).filter(AttrRule.id == rule_id).first()
     if not row:
         raise HTTPException(404, "规则不存在")
+    _ensure_rule_category_visible(db, current_user, row.category_code)
     if body.category_code:
+        _ensure_rule_category_visible(db, current_user, body.category_code)
         if not db.query(Category).filter(Category.code == body.category_code).first():
             raise HTTPException(400, f"品类码 {body.category_code} 不存在")
     for field in ("keyword", "match_type", "attr_name", "attr_value", "priority", "is_active"):
@@ -663,10 +783,15 @@ def update_attr_rule(rule_id: int, body: AttrRulePatch, db: Session = Depends(ge
 
 
 @router.delete("/attr-rules/{rule_id}", status_code=204)
-def delete_attr_rule(rule_id: int, db: Session = Depends(get_db)):
+def delete_attr_rule(
+    rule_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     row = db.query(AttrRule).filter(AttrRule.id == rule_id).first()
     if not row:
         raise HTTPException(404, "规则不存在")
+    _ensure_rule_category_visible(db, current_user, row.category_code)
     db.delete(row)
     db.commit()
 

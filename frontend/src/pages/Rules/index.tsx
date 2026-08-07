@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   Tabs, Card, Table, Button, Input, Select, Space, Popconfirm,
@@ -18,9 +18,21 @@ import {
   listAttrRuleCategories, listAttrRules, createAttrRule,
   updateAttrRule, deleteAttrRule,
   listCorrectionRules, createCorrectionRule, updateCorrectionRule, deleteCorrectionRule,
+  type UserProfile,
 } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 import ImportMappingModal from '../../components/ImportMappingModal'
+
+function readStoredUser(): UserProfile | null {
+  if (typeof localStorage === 'undefined') return null
+  const raw = localStorage.getItem('auth_user')
+  if (!raw) return null
+  try {
+    return JSON.parse(raw) as UserProfile
+  } catch {
+    return null
+  }
+}
 
 // ══════════════════════════════════════════════
 // Tab 1: 清洗干预规则
@@ -70,7 +82,15 @@ function InterventionRuleTab() {
   const [filterCategory, setFilterCategory] = useState<string | undefined>()
   const [saving, setSaving] = useState(false)
   const [form] = Form.useForm()
+  const currentUser = readStoredUser()
   const { options: categoryOptions } = useCategoryOptions()
+  const visibleCategoryOptions = useMemo(() => {
+    if (!currentUser) return categoryOptions
+    if (currentUser.is_admin === 1) return categoryOptions
+    if (!currentUser.category_permissions?.length) return categoryOptions
+    const allowed = new Set(currentUser.category_permissions)
+    return categoryOptions.filter(c => allowed.has(c.value))
+  }, [categoryOptions, currentUser])
   const { data, loading, refresh } = useRequest(
     () => listInterventionRules(filterCategory ? { category_code: filterCategory } : undefined).then(r => r.data),
     { refreshDeps: [filterCategory] }
@@ -166,7 +186,7 @@ function InterventionRuleTab() {
             placeholder="品类筛选"
             allowClear
             style={{ width: 180 }}
-            options={categoryOptions}
+            options={visibleCategoryOptions}
             value={filterCategory}
             onChange={v => setFilterCategory(v)}
           />
@@ -183,7 +203,7 @@ function InterventionRuleTab() {
             <Input placeholder="例如：海信低价配件过滤" />
           </Form.Item>
           <Form.Item label="品类" name="category_code" rules={[{ required: true, message: '请选择品类' }]}>
-            <Select showSearch placeholder="选择品类" options={categoryOptions}
+            <Select showSearch placeholder="选择品类" options={visibleCategoryOptions}
               filterOption={(input, option) => (option?.label as string ?? '').toLowerCase().includes(input.toLowerCase())} />
           </Form.Item>
           <Space style={{ width: '100%' }} size={16} align="start">
@@ -478,6 +498,7 @@ function AttrRuleTab() {
   const [filterCategory, setFilterCategory] = useState<string | undefined>(undefined)
   const [form] = Form.useForm()
 
+  const currentUser = readStoredUser()
   const { data: categories } = useRequest(() =>
     listAttrRuleCategories().then(r => r.data as { code: string; name: string }[])
   )
@@ -507,10 +528,17 @@ function AttrRuleTab() {
     refresh()
   }
 
+  const visibleCategories = useMemo(() => {
+    if (!currentUser) return categories ?? []
+    if (currentUser.is_admin === 1) return categories ?? []
+    if (!currentUser.category_permissions?.length) return categories ?? []
+    const allowed = new Set(currentUser.category_permissions)
+    return (categories ?? []).filter(c => allowed.has(c.code))
+  }, [categories, currentUser])
   const categoryOptions = [
     { value: '', label: '全部' },
     { value: '__global__', label: '全局（无品类限制）' },
-    ...(categories ?? []).map(c => ({ value: c.code, label: c.name })),
+    ...visibleCategories.map(c => ({ value: c.code, label: c.name })),
   ]
 
   const columns = [
@@ -640,7 +668,15 @@ function CorrectionRulesTab() {
   const [editingId, setEditingId] = useState<number | null>(null)
   const [form] = Form.useForm()
   const [filterCategory, setFilterCategory] = useState<string | undefined>()
+  const currentUser = readStoredUser()
   const { options: categoryOptions } = useCategoryOptions()
+  const visibleCategoryOptions = useMemo(() => {
+    if (!currentUser) return categoryOptions
+    if (currentUser.is_admin === 1) return categoryOptions
+    if (!currentUser.category_permissions?.length) return categoryOptions
+    const allowed = new Set(currentUser.category_permissions)
+    return categoryOptions.filter(c => allowed.has(c.value))
+  }, [categoryOptions, currentUser])
   const { data, loading, refresh } = useRequest(
     () => listCorrectionRules(filterCategory ? { category_code: filterCategory } : undefined).then(r => r.data),
     { refreshDeps: [filterCategory] }
@@ -742,7 +778,7 @@ function CorrectionRulesTab() {
             placeholder="品类筛选"
             allowClear
             style={{ width: 140 }}
-            options={categoryOptions}
+            options={visibleCategoryOptions}
             value={filterCategory}
             onChange={v => setFilterCategory(v || undefined)}
           />
@@ -775,7 +811,7 @@ function CorrectionRulesTab() {
             <Select
               allowClear
               placeholder="选择品类（留空=全局）"
-              options={categoryOptions}
+              options={visibleCategoryOptions}
             />
           </Form.Item>
           <Form.Item label="品牌码（留空=不限）" name="brand_code">

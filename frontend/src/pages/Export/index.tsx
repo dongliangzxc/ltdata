@@ -12,9 +12,21 @@ import {
   getExportFilters,
   type ExportFilterOption,
   type ExportJobItem,
+  type UserProfile,
 } from '../../services/api'
 
 const { Text } = Typography
+
+function readStoredUser(): UserProfile | null {
+  if (typeof localStorage === 'undefined') return null
+  const raw = localStorage.getItem('auth_user')
+  if (!raw) return null
+  try {
+    return JSON.parse(raw) as UserProfile
+  } catch {
+    return null
+  }
+}
 
 const platformLabelMap: Record<string, string> = {
   jd: '京东',
@@ -44,13 +56,25 @@ export default function ExportPage() {
     () => getExportFilters().then(r => r.data)
   )
   const filterOptions = filterData ?? emptyFilterOptions
+  const currentUser = readStoredUser()
+  const visibleCategories = useMemo(() => {
+    if (!currentUser) return filterOptions.categories
+    if (currentUser.is_admin === 1) return filterOptions.categories
+    if (!currentUser.category_permissions?.length) return filterOptions.categories
+    const allowed = new Set(currentUser.category_permissions)
+    return filterOptions.categories.filter(category => allowed.has(category.code))
+  }, [filterOptions.categories, currentUser])
+  const categoryOptions = useMemo(
+    () => visibleCategories.map(category => ({ value: category.code, label: category.name })),
+    [visibleCategories]
+  )
 
   const categoryLabelMap = useMemo(
-    () => filterOptions.categories.reduce<Record<string, string>>((acc, category) => {
+    () => visibleCategories.reduce<Record<string, string>>((acc, category) => {
       acc[category.code] = category.name
       return acc
     }, {}),
-    [filterOptions.categories]
+    [visibleCategories]
   )
 
   const platformOptions = useMemo(
@@ -164,7 +188,7 @@ export default function ExportPage() {
   ]
 
   const hasFilterOptions = filterOptions.months.length > 0
-    || filterOptions.categories.length > 0
+    || visibleCategories.length > 0
     || filterOptions.platforms.length > 0
 
   return (
@@ -203,7 +227,7 @@ export default function ExportPage() {
               value={selectedCategoryCode}
               onChange={setSelectedCategoryCode}
               optionFilterProp="label"
-              options={filterOptions.categories.map(category => ({ value: category.code, label: category.name }))}
+              options={categoryOptions}
             />
           </Col>
           <Col span={8}>

@@ -8,8 +8,15 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api import export as export_api
+from app.core.auth_deps import get_current_user
 from app.models.database import Base, get_db
 from app.models.schemas import Category, CleanJobRecord, ExportJob
+
+
+class DummyUser:
+    def __init__(self, *, is_admin=0, category_permissions=None):
+        self.is_admin = is_admin
+        self.category_permissions = category_permissions
 
 
 class NoopThread:
@@ -49,12 +56,19 @@ def db():
 def client(db):
     app = FastAPI()
     app.include_router(export_api.router)
+    current_user = {"value": DummyUser(category_permissions=["headphone"])}
 
     def override_db():
         yield db
 
+    def override_current_user():
+        return current_user["value"]
+
     app.dependency_overrides[get_db] = override_db
-    return TestClient(app)
+    app.dependency_overrides[get_current_user] = override_current_user
+    test_client = TestClient(app)
+    test_client.current_user = current_user
+    return test_client
 
 
 def test_trigger_export_creates_filter_job(client, db):
@@ -165,3 +179,72 @@ def test_export_filters_include_reviewing_clean_jobs(client, db):
         "platforms": ["jd"],
         "categories": [{"code": "headphone", "name": "耳机"}],
     }
+
+
+def test_export_filters_are_scoped_by_category_permissions(client, db):
+    db.add_all([
+        Category(code="headphone", name="耳机"),
+        Category(code="projector", name="投影"),
+        CleanJobRecord(
+            category_code="headphone",
+            platform="jd",
+            source_scope={"months": [202501]},
+            status="reviewing",
+        ),
+        CleanJobRecord(
+            category_code="projector",
+            platform="tmall",
+            source_scope={"months": [202502]},
+            status="reviewing",
+        ),
+    ])
+    db.commit()
+
+    response = client.get("/api/export/filters")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "months": [202501],
+        "platforms": ["jd"],
+        "categories": [{"code": "headphone", "name": "耳机"}],
+    }
+
+
+def test_trigger_export_rejects_invisible_category(client):
+    response = client.post("/api/export", json={
+        "months": [202501],
+        "category_code": "projector",
+        "platforms": ["jd"],
+        "filename_prefix": "越权导出",
+    })
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "无权限访问该品类"
+
+
+def test_list_jobs_filters_invisible_categories(client, db):
+    db.add_all([
+        ExportJob(
+            clean_job_id=None,
+            months=[202501],
+            category_code="headphone",
+            platforms=["jd"],
+            filename_prefix="耳机导出",
+            status="done",
+        ),
+        ExportJob(
+            clean_job_id=None,
+            months=[202502],
+            category_code="projector",
+            platforms=["tmall"],
+            filename_prefix="投影导出",
+            status="done",
+        ),
+    ])
+    db.commit()
+
+    response = client.get("/api/export/jobs")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert [job["category_code"] for job in data] == ["headphone"]

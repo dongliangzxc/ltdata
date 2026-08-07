@@ -12,12 +12,41 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
+from app.core.auth_deps import get_current_user
+from app.core.permissions import visible_category_codes
 from app.models.database import get_db, SessionLocal
-from app.models.schemas import CleanJobRecord, Category, ExportJob, ExportJobOut
+from app.models.schemas import CleanJobRecord, Category, ExportJob, ExportJobOut, User
 from app.services.exporter import EXPORTABLE_CLEAN_JOB_STATUSES, export_match_filters, export_match_job
 from app.services.export_guards import reserve_async_export_capacity
 
 router = APIRouter(prefix="/api/export", tags=["export"])
+
+
+def _visible_export_category_codes(db: Session, current_user: User) -> set[str] | None:
+    if getattr(current_user, "is_admin", 0) == 1:
+        return None
+    permissions = getattr(current_user, "category_permissions", None)
+    if not permissions:
+        return None
+    all_codes = [code for code, in db.query(Category.code).order_by(Category.sort_order, Category.name).all()]
+    if not all_codes:
+        return set(permissions)
+    return set(visible_category_codes(current_user, all_codes))
+
+
+def _ensure_export_category_visible(db: Session, current_user: User, category_code: str | None) -> None:
+    if not category_code:
+        return
+    visible_codes = _visible_export_category_codes(db, current_user)
+    if visible_codes is not None and category_code not in visible_codes:
+        raise HTTPException(status_code=403, detail="无权限访问该品类")
+
+
+def _filter_export_category(query, model, db: Session, current_user: User):
+    visible_codes = _visible_export_category_codes(db, current_user)
+    if visible_codes is None:
+        return query
+    return query.filter(model.category_code.in_(visible_codes))
 
 
 def _parse_job_months(scope, fallback_month=None) -> list[int]:
@@ -104,7 +133,11 @@ def _as_non_empty_str_list(value, field_name: str) -> list[str]:
 
 
 @router.post("")
-def trigger_export(payload: dict, db: Session = Depends(get_db)):
+def trigger_export(
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """
     异步触发导出，立即返回 job_id。
     payload: {"clean_job_id": 1, "filename_prefix": "已处理数据"}
@@ -126,6 +159,7 @@ def trigger_export(payload: dict, db: Session = Depends(get_db)):
         job_record = db.query(CleanJobRecord).filter(CleanJobRecord.id == clean_job_id).first()
         if not job_record:
             raise HTTPException(status_code=404, detail="清洗任务不存在")
+        _ensure_export_category_visible(db, current_user, job_record.category_code)
         job_kwargs = {"clean_job_id": clean_job_id, "months": None, "category_code": None, "platforms": None}
     else:
         months = _as_non_empty_int_list(payload.get("months"), "months")
@@ -133,6 +167,7 @@ def trigger_export(payload: dict, db: Session = Depends(get_db)):
         platforms = _as_non_empty_str_list(payload.get("platforms"), "platforms")
         if not category_code:
             raise HTTPException(status_code=400, detail="category_code 不能为空")
+        _ensure_export_category_visible(db, current_user, category_code)
         job_kwargs = {
             "clean_job_id": None,
             "months": months,
@@ -157,26 +192,39 @@ def trigger_export(payload: dict, db: Session = Depends(get_db)):
 
 
 @router.get("/jobs")
-def list_jobs(clean_job_id: int | None = None, db: Session = Depends(get_db)):
+def list_jobs(
+    clean_job_id: int | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     query = db.query(ExportJob).order_by(ExportJob.created_at.desc())
+    visible_codes = _visible_export_category_codes(db, current_user)
     if clean_job_id is not None:
+        job_record = db.query(CleanJobRecord).filter(CleanJobRecord.id == clean_job_id).first()
+        if job_record:
+            _ensure_export_category_visible(db, current_user, job_record.category_code)
         query = query.filter(ExportJob.clean_job_id == clean_job_id)
+    elif visible_codes is not None:
+        query = query.filter(ExportJob.category_code.in_(visible_codes))
     jobs = query.all()
     return {"data": [ExportJobOut.model_validate(j) for j in jobs]}
 
 
 @router.get("/filters")
-def get_export_filters(db: Session = Depends(get_db)):
-    source_scopes = (
-        db.query(CleanJobRecord.source_scope)
-        .filter(CleanJobRecord.status.in_(EXPORTABLE_CLEAN_JOB_STATUSES))
-        .all()
-    )
+def get_export_filters(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    visible_codes = _visible_export_category_codes(db, current_user)
+    base_filters = [CleanJobRecord.status.in_(EXPORTABLE_CLEAN_JOB_STATUSES)]
+    if visible_codes is not None:
+        base_filters.append(CleanJobRecord.category_code.in_(visible_codes))
+    source_scopes = db.query(CleanJobRecord.source_scope).filter(*base_filters).all()
     months = sorted({month for (scope,) in source_scopes for month in _parse_job_months(scope)}, reverse=True)
     platforms = sorted({
         platform
         for (platform,) in db.query(func.trim(CleanJobRecord.platform))
-        .filter(CleanJobRecord.status.in_(EXPORTABLE_CLEAN_JOB_STATUSES), CleanJobRecord.platform.isnot(None))
+        .filter(*base_filters, CleanJobRecord.platform.isnot(None))
         .distinct()
         .all()
         if platform
@@ -184,7 +232,7 @@ def get_export_filters(db: Session = Depends(get_db)):
     category_codes = sorted({
         code
         for (code,) in db.query(func.trim(CleanJobRecord.category_code))
-        .filter(CleanJobRecord.status.in_(EXPORTABLE_CLEAN_JOB_STATUSES), CleanJobRecord.category_code.isnot(None))
+        .filter(*base_filters, CleanJobRecord.category_code.isnot(None))
         .distinct()
         .all()
         if code

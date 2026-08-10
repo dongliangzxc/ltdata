@@ -839,9 +839,10 @@ def search_clean_tasks(
     current_user: User = Depends(get_current_user),
 ):
     kw = (keyword or "").strip()
+    effective_category_code = func.coalesce(CleanJobRecord.category_code, CleanJobRecord.dispatch_category_code)
     q = (
         db.query(CleanJobRecord, Category)
-        .outerjoin(Category, CleanJobRecord.category_code == Category.code)
+        .outerjoin(Category, Category.code == effective_category_code)
         .filter(CleanJobRecord.status.in_(ACTIVE_TASK_STATUSES))
     )
     q = _filter_clean_job_visible_categories(q, db, current_user)
@@ -852,11 +853,15 @@ def search_clean_tasks(
         q = q.filter(or_(
             CleanJobRecord.task_name.ilike(like),
             CleanJobRecord.category_code.ilike(like),
+            CleanJobRecord.dispatch_category_code.ilike(like),
             CleanJobRecord.platform.ilike(like),
             Category.name.ilike(like),
         ))
     if category_code:
-        q = q.filter(CleanJobRecord.category_code == category_code)
+        q = q.filter(or_(
+            CleanJobRecord.category_code == category_code,
+            CleanJobRecord.dispatch_category_code == category_code,
+        ))
     if platform:
         q = q.filter(func.lower(CleanJobRecord.platform) == platform.lower())
     if month is not None:
@@ -869,10 +874,11 @@ def search_clean_tasks(
 
     items: list[CleanTaskSearchItem] = []
     for cj, cat in q.all():
+        resolved_category_code = cj.category_code or cj.dispatch_category_code
         items.append(CleanTaskSearchItem(
             id=cj.id,
             task_name=cj.task_name,
-            category_code=cj.category_code,
+            category_code=resolved_category_code,
             category_name=cat.name if cat else None,
             platform=cj.platform,
             month=_job_month(cj),

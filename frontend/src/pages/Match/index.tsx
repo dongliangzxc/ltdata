@@ -185,9 +185,13 @@ export default function MatchPage() {
   const [matchProgress, setMatchProgress] = useState<MatchProgress | null>(null)
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const transferPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const transferNoticeJobRef = useRef<number | null>(selectedJobId)
+  const transferNoticeSinceRef = useRef<string>('')
   const [transferNoticeVisible, setTransferNoticeVisible] = useState(false)
   const [transferNoticeCount, setTransferNoticeCount] = useState(0)
   const [transferNoticeSince, setTransferNoticeSince] = useState<string>('')
+  transferNoticeJobRef.current = selectedJobId
+  transferNoticeSinceRef.current = transferNoticeSince
   const [publishing, setPublishing] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [exportProgress, setExportProgress] = useState(0)
@@ -480,23 +484,27 @@ export default function MatchPage() {
     }
   }, [])
 
-  useEffect(() => {
-    if (!selectedJobId) {
-      setTransferNoticeVisible(false)
-      setTransferNoticeCount(0)
-      setTransferNoticeSince('')
-      return
-    }
+  const resetTransferNoticeBaseline = (jobId: number | null) => {
+    const since = jobId ? new Date().toISOString() : ''
+    transferNoticeJobRef.current = jobId
+    transferNoticeSinceRef.current = since
     setTransferNoticeVisible(false)
     setTransferNoticeCount(0)
-    setTransferNoticeSince(new Date().toISOString())
+    setTransferNoticeSince(since)
+  }
+
+  useEffect(() => {
+    resetTransferNoticeBaseline(selectedJobId)
   }, [selectedJobId])
 
   useEffect(() => {
     if (!selectedJobId || !transferNoticeSince) return
+    const requestJobId = selectedJobId
+    const requestSince = transferNoticeSince
     const poll = async () => {
       try {
-        const resp = await getTransferNotice(selectedJobId, transferNoticeSince)
+        const resp = await getTransferNotice(requestJobId, requestSince)
+        if (transferNoticeJobRef.current !== requestJobId || transferNoticeSinceRef.current !== requestSince) return
         const data = resp.data
         if (data.new_count > 0) {
           setTransferNoticeVisible(true)
@@ -677,9 +685,7 @@ export default function MatchPage() {
 
   const refreshCurrentJobState = () => {
     if (!selectedJobId) return
-    setTransferNoticeVisible(false)
-    setTransferNoticeCount(0)
-    setTransferNoticeSince(new Date().toISOString())
+    resetTransferNoticeBaseline(selectedJobId)
     setSelectedReviewId(null)
     setSelectedFilteredId(null)
     setReviewDetail(null)
@@ -694,9 +700,7 @@ export default function MatchPage() {
   }
 
   const dismissTransferNotice = () => {
-    setTransferNoticeVisible(false)
-    setTransferNoticeCount(0)
-    setTransferNoticeSince(new Date().toISOString())
+    resetTransferNoticeBaseline(selectedJobId)
   }
 
   const handleRerunWithCurrentRules = async () => {

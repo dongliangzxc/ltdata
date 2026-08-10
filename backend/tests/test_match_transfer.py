@@ -133,6 +133,7 @@ def test_transfer_notice_reports_new_transfers(db, match_client):
     assert body["clean_job_id"] == dst_job.id
     assert body["new_count"] == 1
     assert body["latest_transfer_at"]
+    assert body["checked_at"]
 
 
 def test_transfer_notice_respects_visibility_and_baseline(db, match_client):
@@ -146,6 +147,7 @@ def test_transfer_notice_respects_visibility_and_baseline(db, match_client):
     body = resp.json()
     assert body["new_count"] == 0
     assert body["latest_transfer_at"] is None
+    assert body["checked_at"]
 
 
 def test_transfer_rejects_target_with_existing_raw_data(db, match_client):

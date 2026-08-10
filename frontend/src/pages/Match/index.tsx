@@ -187,11 +187,14 @@ export default function MatchPage() {
   const transferPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const transferNoticeJobRef = useRef<number | null>(selectedJobId)
   const transferNoticeSinceRef = useRef<string>('')
+  const transferNoticeCheckedAtRef = useRef<string | null>(null)
   const [transferNoticeVisible, setTransferNoticeVisible] = useState(false)
   const [transferNoticeCount, setTransferNoticeCount] = useState(0)
   const [transferNoticeSince, setTransferNoticeSince] = useState<string>('')
+  const [transferNoticeCheckedAt, setTransferNoticeCheckedAt] = useState<string | null>(null)
   transferNoticeJobRef.current = selectedJobId
   transferNoticeSinceRef.current = transferNoticeSince
+  transferNoticeCheckedAtRef.current = transferNoticeCheckedAt
   const [publishing, setPublishing] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [exportProgress, setExportProgress] = useState(0)
@@ -484,17 +487,46 @@ export default function MatchPage() {
     }
   }, [])
 
-  const resetTransferNoticeBaseline = (jobId: number | null) => {
-    const since = jobId ? new Date().toISOString() : ''
+  const setTransferNoticeBaseline = (jobId: number | null, since: string) => {
     transferNoticeJobRef.current = jobId
     transferNoticeSinceRef.current = since
+    transferNoticeCheckedAtRef.current = null
     setTransferNoticeVisible(false)
     setTransferNoticeCount(0)
+    setTransferNoticeCheckedAt(null)
     setTransferNoticeSince(since)
   }
 
+  const resetTransferNoticeBaseline = (jobId: number | null, since = '') => {
+    setTransferNoticeBaseline(jobId, jobId ? since : '')
+  }
+
+  const acknowledgeTransferNotice = (jobId: number | null) => {
+    const checkedAt = transferNoticeCheckedAtRef.current
+    if (!checkedAt) {
+      setTransferNoticeVisible(false)
+      setTransferNoticeCount(0)
+      return
+    }
+    setTransferNoticeBaseline(jobId, checkedAt)
+  }
+
   useEffect(() => {
-    resetTransferNoticeBaseline(selectedJobId)
+    if (!selectedJobId) {
+      resetTransferNoticeBaseline(null)
+      return
+    }
+    const jobId = selectedJobId
+    let active = true
+    setTransferNoticeBaseline(jobId, '')
+    getTransferNotice(jobId, '1970-01-01T00:00:00').then(resp => {
+      if (!active || transferNoticeJobRef.current !== jobId) return
+      setTransferNoticeBaseline(jobId, resp.data.checked_at)
+    }).catch(() => {
+      if (!active || transferNoticeJobRef.current !== jobId) return
+      setTransferNoticeBaseline(jobId, '')
+    })
+    return () => { active = false }
   }, [selectedJobId])
 
   useEffect(() => {
@@ -509,6 +541,7 @@ export default function MatchPage() {
         if (data.new_count > 0) {
           setTransferNoticeVisible(true)
           setTransferNoticeCount(data.new_count)
+          setTransferNoticeCheckedAt(data.checked_at)
         }
       } catch {
         // keep the last visible state; polling retries on the next tick
@@ -701,24 +734,25 @@ export default function MatchPage() {
   const refreshTransferNoticeAfterReload = async () => {
     if (!selectedJobId) return
     const jobId = selectedJobId
-    setSelectedReviewId(null)
-    setSelectedFilteredId(null)
-    setReviewDetail(null)
-    setFilteredDetail(null)
-    setReviewReason('')
-    setSelectedModels({})
-    setPage(1)
     try {
-      await Promise.all([
+      const [summaryResp] = await Promise.all([
+        getMatchSummary(jobId),
         refreshJobsAsync(),
-        getMatchSummary(jobId).then(r => setSummary(r.data)),
         refreshPendingAsync(),
         loadDisabled(),
       ])
       if (transferNoticeJobRef.current !== jobId) return
-      resetTransferNoticeBaseline(jobId)
+      setSummary(summaryResp.data)
+      setSelectedReviewId(null)
+      setSelectedFilteredId(null)
+      setReviewDetail(null)
+      setFilteredDetail(null)
+      setReviewReason('')
+      setSelectedModels({})
+      setPage(1)
+      acknowledgeTransferNotice(jobId)
     } catch {
-      // keep the current notice state if the reload does not complete
+      // keep the current notice and selection state if the reload does not complete
     }
   }
 

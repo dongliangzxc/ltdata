@@ -686,6 +686,7 @@ export interface TransferNoticeOut {
   clean_job_id: number
   new_count: number
   latest_transfer_at: string | null
+  checked_at: string
 }
 
 export const getTransferNotice = (cleanJobId: number, since: string) =>

@@ -1723,6 +1723,7 @@ class TransferNoticeOut(_PydanticBase):
     clean_job_id: int
     new_count: int
     latest_transfer_at: Optional[datetime] = None
+    checked_at: datetime
 
 
 class TransferPayload(_PydanticBase):
@@ -1737,6 +1738,7 @@ def get_transfer_notice(
     current_user: User = Depends(get_current_user),
 ):
     _get_visible_match_clean_job_or_404(db, current_user, clean_job_id)
+    checked_at = datetime.utcnow()
     q = db.query(MatchTransferLog).filter(
         MatchTransferLog.to_clean_job_id == clean_job_id,
         MatchTransferLog.transferred_at > since,
@@ -1747,6 +1749,7 @@ def get_transfer_notice(
         clean_job_id=clean_job_id,
         new_count=new_count,
         latest_transfer_at=latest.transferred_at if latest else None,
+        checked_at=checked_at,
     )
 
 

@@ -21,6 +21,12 @@ assert.match(source, /Alert/, 'Match page should render an Alert for transfer no
 assert.match(source, /setInterval\(/, 'Match page should poll for transfer notices');
 assert.match(source, /transferNoticeJobRef\.current !== requestJobId/, 'Match page should ignore stale transfer notice job responses');
 assert.match(source, /transferNoticeSinceRef\.current !== requestSince/, 'Match page should ignore stale transfer notice baseline responses');
+assert.match(source, /checked_at/, 'Match page should use the backend transfer notice checked_at cursor');
+assert.match(source, /setTransferNoticeCheckedAt\(data\.checked_at\)/, 'Match page should store the server notice cursor from poll responses');
+assert.match(source, /setTransferNoticeBaseline\(jobId, resp\.data\.checked_at\)/, 'Match page should initialize the transfer notice baseline from the server cursor');
+assert.match(source, /const checkedAt = transferNoticeCheckedAtRef\.current/, 'Match page should acknowledge notices with the stored server cursor');
+assert.doesNotMatch(source, /transferNoticeLatestAtRef/, 'Match page should not keep the old latest-transfer cursor ref');
+assert.doesNotMatch(source, /new Date\(\)\.toISOString\(\)/, 'Match page should not use client time as a transfer notice cursor');
 assert.match(source, /await Promise\.all\(/, 'Match page should await refresh work before clearing the transfer notice baseline');
 
 assert.match(source, /transferCategoryFilter/, 'transfer modal should keep category filter state');

@@ -89,7 +89,9 @@ assert.deepEqual(filteredState.categoryOptions.map(item => item.value), ['soundb
 assert.deepEqual(filteredState.platformOptions.map(item => item.value), ['douyin', 'jd'], 'transfer platform options should be derived from candidate tasks');
 assert.match(source, /const TRANSFER_PLATFORM_OPTIONS/, 'transfer modal should define a complete platform option list');
 assert.match(source, /value: 'tmall', label: '天猫'/, 'transfer modal platform options should include Tmall');
+assert.match(source, /value: 'TMALL', label: '天猫'/, 'transfer modal platform options should include uppercase Tmall for stored task values');
 assert.match(source, /value: 'taobao', label: '淘宝'/, 'transfer modal platform options should include Taobao');
+assert.match(source, /value: 'TAOBAO', label: '淘宝'/, 'transfer modal platform options should include uppercase Taobao for stored task values');
 assert.match(source, /fetchAllCategories/, 'transfer modal should request unrestricted category options');
 assert.match(source, /const allTransferCategoryOptions = transferCategoryOptionsSource\.length/, 'transfer modal should prefer the unrestricted category source');
 assert.match(source, /const categoryLabelMap = new Map\(allTransferCategoryOptions\.map/, 'transfer modal category labels should use unrestricted categories, not permission-filtered categories');

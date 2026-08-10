@@ -848,7 +848,7 @@ def search_clean_tasks(
     if category_code:
         q = q.filter(CleanJobRecord.category_code == category_code)
     if platform:
-        q = q.filter(CleanJobRecord.platform == platform)
+        q = q.filter(func.lower(CleanJobRecord.platform) == platform.lower())
     if month is not None:
         q = q.filter(CleanJobRecord.source_scope.cast(String).ilike(f"%{month}%"))
     q = q.order_by(CleanJobRecord.created_at.desc()).limit(limit)

@@ -2098,6 +2098,29 @@ def _seed_permission_clean_jobs(db):
     return tv_job, headphone_job
 
 
+def test_search_clean_tasks_filters_platform_case_insensitively(db):
+    client = _make_client(db)
+    db.add(Category(code="smart_lock", name="智能门锁", sort_order=1))
+    db.add(CleanJobRecord(
+        file_ids=[],
+        rules={"dedup": True},
+        status="done",
+        category_code="smart_lock",
+        platform="TMALL",
+        source_scope={"month": 202605},
+        task_name="天猫智能门锁任务",
+    ))
+    db.commit()
+
+    response = client.get("/api/clean/tasks/search", params={"platform": "tmall"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 1
+    assert payload[0]["platform"] == "TMALL"
+
+
+
 def test_list_clean_jobs_filters_by_category_permissions(db):
     _seed_permission_clean_jobs(db)
     client = _make_client(db, current_user=DummyUser(category_permissions=["TV"]))

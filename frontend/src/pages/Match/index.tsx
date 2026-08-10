@@ -30,17 +30,6 @@ import type { TransferFilters, TransferSelectOption } from './utils/transferFilt
 
 const { Text } = Typography
 
-const TRANSFER_PLATFORM_OPTIONS: TransferSelectOption<string>[] = [
-  { value: 'jd', label: '京东' },
-  { value: 'JD', label: '京东' },
-  { value: 'tmall', label: '天猫' },
-  { value: 'TMALL', label: '天猫' },
-  { value: 'taobao', label: '淘宝' },
-  { value: 'TAOBAO', label: '淘宝' },
-  { value: 'suning', label: '苏宁' },
-  { value: 'douyin', label: '抖音' },
-  { value: 'pdd', label: '拼多多' },
-]
 
 const formatNumber = (value?: number | null) => (
   value != null ? value.toLocaleString() : '-'
@@ -288,7 +277,6 @@ export default function MatchPage() {
   const categoryLabelMap = new Map(allTransferCategoryOptions.map(item => [item.value, item.label]))
   const transferOptionSources = {
     categoryOptions: allTransferCategoryOptions,
-    platformOptions: TRANSFER_PLATFORM_OPTIONS,
   }
   const {
     categoryOptions: transferCategoryOptions,

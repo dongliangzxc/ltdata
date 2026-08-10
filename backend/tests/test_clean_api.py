@@ -2120,6 +2120,32 @@ def test_search_clean_tasks_filters_platform_case_insensitively(db):
     assert payload[0]["platform"] == "TMALL"
 
 
+def test_search_clean_tasks_filters_month_from_task_name_when_scope_is_empty(db):
+    client = _make_client(db)
+    db.add(Category(code="smart_lock", name="智能门锁", sort_order=1))
+    db.add(CleanJobRecord(
+        file_ids=[],
+        rules={"dedup": True},
+        status="done",
+        category_code="smart_lock",
+        platform=None,
+        source_scope=None,
+        task_name="分发批次#68 / 品类：智能门锁（smart_lock） / 平台：TMALL / 月份：202605 / 文件：tm202605-1.csv",
+    ))
+    db.commit()
+
+    response = client.get(
+        "/api/clean/tasks/search",
+        params={"category_code": "smart_lock", "month": 202605},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 1
+    assert payload[0]["category_code"] == "smart_lock"
+    assert payload[0]["month"] == 202605
+
+
 
 def test_list_clean_jobs_filters_by_category_permissions(db):
     _seed_permission_clean_jobs(db)

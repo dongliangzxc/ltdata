@@ -1,4 +1,5 @@
 from datetime import datetime
+import re
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import String, and_, func, or_, select
@@ -161,15 +162,24 @@ def _match_status_counts(db: Session, clean_job_id: int) -> dict[str, int]:
 
 def _job_month(job: CleanJobRecord) -> int | None:
     scope = job.source_scope
-    if not isinstance(scope, dict):
-        return None
-    months = scope.get("months")
-    if not isinstance(months, list) or len(months) != 1:
-        return None
-    try:
-        return int(months[0])
-    except (TypeError, ValueError):
-        return None
+    if isinstance(scope, dict):
+        month = scope.get("month")
+        if month is not None:
+            try:
+                return int(month)
+            except (TypeError, ValueError):
+                pass
+        months = scope.get("months")
+        if isinstance(months, list) and len(months) == 1:
+            try:
+                return int(months[0])
+            except (TypeError, ValueError):
+                pass
+    if job.task_name:
+        match = re.search(r"(?<!\d)(20\d{4})(?!\d)", job.task_name)
+        if match:
+            return int(match.group(1))
+    return None
 
 
 def _clean_job_to_dict(
@@ -850,7 +860,11 @@ def search_clean_tasks(
     if platform:
         q = q.filter(func.lower(CleanJobRecord.platform) == platform.lower())
     if month is not None:
-        q = q.filter(CleanJobRecord.source_scope.cast(String).ilike(f"%{month}%"))
+        month_like = f"%{month}%"
+        q = q.filter(or_(
+            CleanJobRecord.source_scope.cast(String).ilike(month_like),
+            CleanJobRecord.task_name.ilike(month_like),
+        ))
     q = q.order_by(CleanJobRecord.created_at.desc()).limit(limit)
 
     items: list[CleanTaskSearchItem] = []

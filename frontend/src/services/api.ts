@@ -1296,6 +1296,9 @@ export const listCategories = () =>
 export const fetchCategories = () =>
   api.get<{ id: number; code: string; name: string }[]>('/categories').then(r => r.data)
 
+export const fetchAllCategories = () =>
+  api.get<{ id: number; code: string; name: string }[]>('/categories/all').then(r => r.data)
+
 export const getCategoryTree = () =>
   api.get<CategoryTreeNode[]>('/categories/tree')
 

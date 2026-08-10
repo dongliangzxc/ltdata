@@ -16,7 +16,7 @@ import {
   getCleanMonthlyPool, rerunCleanTaskWithCurrentRules,
   listFilteredItems, recoverFilteredItem,
   batchConfirmMatch, previewBatchConfirmMatch,
-  searchCleanTasks, transferMatchItem, getTransferNotice,
+  searchCleanTasks, transferMatchItem, getTransferNotice, fetchAllCategories,
 } from '../../services/api'
 import type { CleanJobItem, MatchCandidateOut, MatchReviewDetail, FilteredItemOut, ModelItem, BatchConfirmFilter, BatchConfirmResult, CleanTaskSearchItem, UserProfile } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
@@ -271,6 +271,7 @@ export default function MatchPage() {
   const transferSearchSeqRef = useRef(0)
   const currentUser = readStoredUser()
   const { options: categoryOptions } = useCategoryOptions()
+  const [transferCategoryOptionsSource, setTransferCategoryOptionsSource] = useState<TransferSelectOption<string>[]>([])
   const visibleCategoryOptions = useMemo(() => {
     if (!currentUser) return categoryOptions
     if (currentUser.is_admin === 1) return categoryOptions
@@ -278,9 +279,12 @@ export default function MatchPage() {
     const allowed = new Set(currentUser.category_permissions)
     return categoryOptions.filter(c => allowed.has(c.value))
   }, [categoryOptions, currentUser])
-  const categoryLabelMap = new Map(categoryOptions.map(item => [item.value, item.label]))
+  const allTransferCategoryOptions = transferCategoryOptionsSource.length
+    ? transferCategoryOptionsSource
+    : categoryOptions
+  const categoryLabelMap = new Map(allTransferCategoryOptions.map(item => [item.value, item.label]))
   const transferOptionSources = {
-    categoryOptions,
+    categoryOptions: allTransferCategoryOptions,
     platformOptions: TRANSFER_PLATFORM_OPTIONS,
   }
   const {
@@ -298,6 +302,20 @@ export default function MatchPage() {
     categoryLabelMap,
     transferOptionSources
   )
+
+  useEffect(() => {
+    let active = true
+    fetchAllCategories()
+      .then(cats => {
+        if (!active) return
+        setTransferCategoryOptionsSource(cats.map(c => ({ label: c.name, value: c.code })))
+      })
+      .catch(() => {
+        if (!active) return
+        setTransferCategoryOptionsSource([])
+      })
+    return () => { active = false }
+  }, [])
 
   useEffect(() => {
     if (shouldClearTransferTarget(transferTargetId, filteredTransferOptions)) {

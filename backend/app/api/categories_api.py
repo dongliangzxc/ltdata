@@ -72,6 +72,11 @@ def get_category_tree(db: Session = Depends(get_db), current_user=Depends(get_cu
     return roots
 
 
+@router.get("/all", response_model=list[CategoryOut])
+def list_all_categories(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    return db.query(Category).order_by(Category.sort_order, Category.name).all()
+
+
 @router.get("", response_model=list[CategoryOut])
 def list_categories(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     scoped_codes = _category_scope_codes(db, current_user)

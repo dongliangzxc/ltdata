@@ -115,6 +115,21 @@ def test_user_without_category_permissions_lists_all_categories(client):
     assert [item["code"] for item in response.json()] == ["soundbar", "tv"]
 
 
+def test_scoped_user_can_request_unrestricted_category_options(client):
+    client.current_user.is_admin = 0
+    client.current_user.category_permissions = ["tv"]
+    client.post("/api/categories", json={"code": "tv", "name": "电视"})
+    client.post("/api/categories", json={"code": "soundbar", "name": "回音壁"})
+
+    scoped_response = client.get("/api/categories")
+    all_response = client.get("/api/categories/all")
+
+    assert scoped_response.status_code == 200
+    assert [item["code"] for item in scoped_response.json()] == ["tv"]
+    assert all_response.status_code == 200
+    assert [item["code"] for item in all_response.json()] == ["soundbar", "tv"]
+
+
 def test_scoped_user_cannot_update_unpermitted_category(client):
     created = client.post("/api/categories", json={"code": "tv", "name": "电视"})
     client.current_user.is_admin = 0

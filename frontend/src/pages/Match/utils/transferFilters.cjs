@@ -1,26 +1,35 @@
-function buildTransferFilterState(tasks, filters, categoryLabelMap) {
+function uniqueOptions(options) {
+  return Array.from(
+    new Map(
+      (options || [])
+        .filter(item => item && item.value)
+        .map(item => [item.value, item])
+    ).values()
+  )
+}
+
+function buildTransferFilterState(tasks, filters, categoryLabelMap, optionSources) {
   const labelMap = categoryLabelMap || new Map()
 
-  const categoryOptions = Array.from(
-    new Map(
-      tasks
-        .filter(item => item.category_code)
-        .map(item => [
-          item.category_code,
-          item.category_name || labelMap.get(item.category_code) || item.category_code,
-        ])
-    ).entries()
-  )
-    .map(([value, label]) => ({ value, label }))
+  const categoryOptions = uniqueOptions([
+    ...(optionSources && optionSources.categoryOptions ? optionSources.categoryOptions : []),
+    ...tasks
+      .filter(item => item.category_code)
+      .map(item => ({
+        value: item.category_code,
+        label: item.category_name || labelMap.get(item.category_code) || item.category_code,
+      })),
+  ])
     .sort((a, b) => a.label.localeCompare(b.label, 'zh-Hans-CN'))
 
-  const platformOptions = Array.from(new Set(
-    tasks
+  const platformOptions = uniqueOptions([
+    ...(optionSources && optionSources.platformOptions ? optionSources.platformOptions : []),
+    ...tasks
       .map(item => item.platform)
       .filter(Boolean)
-  ))
-    .sort((a, b) => a.localeCompare(b))
-    .map(value => ({ value, label: value }))
+      .map(value => ({ value, label: value })),
+  ])
+    .sort((a, b) => a.label.localeCompare(b.label, 'zh-Hans-CN'))
 
   const monthOptions = Array.from(new Set(
     tasks

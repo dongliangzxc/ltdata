@@ -87,6 +87,23 @@ const filteredState = buildTransferFilterState(
 assert.deepEqual(filteredState.filteredOptions.map(item => item.id), [1], 'transfer filters should narrow target tasks by category/platform/month');
 assert.deepEqual(filteredState.categoryOptions.map(item => item.value), ['soundbar', 'action_cameras'], 'transfer category options should be derived from candidate tasks');
 assert.deepEqual(filteredState.platformOptions.map(item => item.value), ['douyin', 'jd'], 'transfer platform options should be derived from candidate tasks');
+assert.match(source, /const TRANSFER_PLATFORM_OPTIONS/, 'transfer modal should define a complete platform option list');
+assert.match(source, /value: 'tmall', label: '天猫'/, 'transfer modal platform options should include Tmall');
+assert.match(source, /value: 'taobao', label: '淘宝'/, 'transfer modal platform options should include Taobao');
+assert.match(source, /const categoryLabelMap = new Map\(categoryOptions\.map/, 'transfer modal category labels should use all categories, not permission-filtered categories');
+const expandedOptionState = buildTransferFilterState(
+  transferTasks,
+  { category: 'projector' },
+  new Map([['action_cameras', '运动相机']]),
+  {
+    categoryOptions: [{ value: 'projector', label: '投影仪' }],
+    platformOptions: [{ value: 'tmall', label: '天猫' }, { value: 'taobao', label: '淘宝' }],
+  }
+);
+assert.equal(expandedOptionState.categoryOptions.some(item => item.value === 'projector'), true, 'transfer category options should merge unrestricted category choices with task-derived categories');
+assert.equal(expandedOptionState.categoryOptions.some(item => item.value === 'action_cameras'), true, 'transfer category options should keep task-derived categories');
+assert.equal(expandedOptionState.platformOptions.some(item => item.value === 'tmall'), true, 'transfer platform options should include fixed platform choices even without current tasks');
+assert.deepEqual(expandedOptionState.filteredOptions.map(item => item.id), [], 'external option choices should not bypass target task filtering');
 assert.deepEqual(filteredState.monthOptions.map(item => item.value), [202605, 202512, 202504], 'transfer month options should sort newest first');
 
 const allTaskFilterState = buildTransferFilterState(

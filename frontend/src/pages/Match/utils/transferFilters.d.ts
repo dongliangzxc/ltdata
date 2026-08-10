@@ -24,10 +24,16 @@ export interface TransferFilterState<TTask extends TransferTaskLike = TransferTa
   filteredOptions: TTask[]
 }
 
+export interface TransferOptionSources {
+  categoryOptions?: TransferSelectOption<string>[]
+  platformOptions?: TransferSelectOption<string>[]
+}
+
 export function buildTransferFilterState<TTask extends TransferTaskLike>(
   tasks: TTask[],
   filters: TransferFilters,
-  categoryLabelMap?: Map<string, string>
+  categoryLabelMap?: Map<string, string>,
+  optionSources?: TransferOptionSources
 ): TransferFilterState<TTask>
 
 export function getDefaultTransferFilters(

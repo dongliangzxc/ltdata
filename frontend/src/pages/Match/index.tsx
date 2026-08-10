@@ -26,9 +26,18 @@ import SameTitleBatchActions from './components/SameTitleBatchActions'
 import InterventionRuleModal from './components/InterventionRuleModal'
 import CreateModelModal from '../../components/CreateModelModal'
 import { buildTransferFilterState, getDefaultTransferFilters, shouldClearTransferTarget } from './utils/transferFilters'
-import type { TransferFilters } from './utils/transferFilters'
+import type { TransferFilters, TransferSelectOption } from './utils/transferFilters'
 
 const { Text } = Typography
+
+const TRANSFER_PLATFORM_OPTIONS: TransferSelectOption<string>[] = [
+  { value: 'jd', label: '京东' },
+  { value: 'tmall', label: '天猫' },
+  { value: 'taobao', label: '淘宝' },
+  { value: 'suning', label: '苏宁' },
+  { value: 'douyin', label: '抖音' },
+  { value: 'pdd', label: '拼多多' },
+]
 
 const formatNumber = (value?: number | null) => (
   value != null ? value.toLocaleString() : '-'
@@ -269,12 +278,16 @@ export default function MatchPage() {
     const allowed = new Set(currentUser.category_permissions)
     return categoryOptions.filter(c => allowed.has(c.value))
   }, [categoryOptions, currentUser])
-  const categoryLabelMap = new Map(visibleCategoryOptions.map(item => [item.value, item.label]))
+  const categoryLabelMap = new Map(categoryOptions.map(item => [item.value, item.label]))
+  const transferOptionSources = {
+    categoryOptions,
+    platformOptions: TRANSFER_PLATFORM_OPTIONS,
+  }
   const {
     categoryOptions: transferCategoryOptions,
     platformOptions: transferPlatformOptions,
     monthOptions: transferMonthOptions,
-  } = buildTransferFilterState(jobsData ?? [], {}, categoryLabelMap)
+  } = buildTransferFilterState(jobsData ?? [], {}, categoryLabelMap, transferOptionSources)
   const { filteredOptions: filteredTransferOptions } = buildTransferFilterState(
     transferOptions,
     {
@@ -282,7 +295,8 @@ export default function MatchPage() {
       platform: transferPlatformFilter,
       month: transferMonthFilter,
     },
-    categoryLabelMap
+    categoryLabelMap,
+    transferOptionSources
   )
 
   useEffect(() => {

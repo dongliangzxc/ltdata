@@ -15,6 +15,11 @@ assert.doesNotMatch(source, /listReviewedMatches/, 'Match page should not reques
 assert.doesNotMatch(source, /reviewedData/, 'Match page should not keep reviewed table data state');
 assert.doesNotMatch(source, /reviewedColumns/, 'Match page should not keep reviewed table columns');
 
+assert.match(source, /transferNotice/, 'Match page should track transfer notice state');
+assert.match(source, /getTransferNotice/, 'Match page should call the transfer notice helper');
+assert.match(source, /Alert/, 'Match page should render an Alert for transfer notices');
+assert.match(source, /setInterval\(/, 'Match page should poll for transfer notices');
+
 assert.match(source, /transferCategoryFilter/, 'transfer modal should keep category filter state');
 assert.match(source, /transferPlatformFilter/, 'transfer modal should keep platform filter state');
 assert.match(source, /transferMonthFilter/, 'transfer modal should keep month filter state');

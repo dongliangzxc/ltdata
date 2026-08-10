@@ -682,6 +682,15 @@ export const batchConfirmMatch = (clean_job_id: number, payload: BatchConfirmPay
 export const previewBatchConfirmMatch = (clean_job_id: number, filter: BatchConfirmFilter) =>
   api.get<BatchConfirmPreview>(`/match/${clean_job_id}/batch-confirm/preview`, { params: filter })
 
+export interface TransferNoticeOut {
+  clean_job_id: number
+  new_count: number
+  latest_transfer_at: string | null
+}
+
+export const getTransferNotice = (cleanJobId: number, since: string) =>
+  api.get<TransferNoticeOut>(`/match/${cleanJobId}/transfer-notice`, { params: { since } })
+
 export const revertMatch = (match_id: number) =>
   api.post<MatchResultOut>(`/match/items/${match_id}/revert`)
 

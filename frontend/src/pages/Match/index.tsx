@@ -16,7 +16,7 @@ import {
   getCleanMonthlyPool, rerunCleanTaskWithCurrentRules,
   listFilteredItems, recoverFilteredItem,
   batchConfirmMatch, previewBatchConfirmMatch,
-  searchCleanTasks, transferMatchItem,
+  searchCleanTasks, transferMatchItem, getTransferNotice,
 } from '../../services/api'
 import type { CleanJobItem, MatchCandidateOut, MatchReviewDetail, FilteredItemOut, ModelItem, BatchConfirmFilter, BatchConfirmResult, CleanTaskSearchItem, UserProfile } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
@@ -184,6 +184,10 @@ export default function MatchPage() {
   const [running, setRunning] = useState(false)
   const [matchProgress, setMatchProgress] = useState<MatchProgress | null>(null)
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const transferPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [transferNoticeVisible, setTransferNoticeVisible] = useState(false)
+  const [transferNoticeCount, setTransferNoticeCount] = useState(0)
+  const [transferNoticeSince, setTransferNoticeSince] = useState<string>('')
   const [publishing, setPublishing] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [exportProgress, setExportProgress] = useState(0)
@@ -476,6 +480,40 @@ export default function MatchPage() {
     }
   }, [])
 
+  useEffect(() => {
+    if (!selectedJobId) {
+      setTransferNoticeVisible(false)
+      setTransferNoticeCount(0)
+      setTransferNoticeSince('')
+      return
+    }
+    setTransferNoticeVisible(false)
+    setTransferNoticeCount(0)
+    setTransferNoticeSince(new Date().toISOString())
+  }, [selectedJobId])
+
+  useEffect(() => {
+    if (!selectedJobId || !transferNoticeSince) return
+    const poll = async () => {
+      try {
+        const resp = await getTransferNotice(selectedJobId, transferNoticeSince)
+        const data = resp.data
+        if (data.new_count > 0) {
+          setTransferNoticeVisible(true)
+          setTransferNoticeCount(data.new_count)
+        }
+      } catch {
+        // keep the last visible state; polling retries on the next tick
+      }
+    }
+    poll()
+    transferPollRef.current = setInterval(poll, 15000)
+    return () => {
+      if (transferPollRef.current) clearInterval(transferPollRef.current)
+      transferPollRef.current = null
+    }
+  }, [selectedJobId, transferNoticeSince])
+
   // 选任务后自动拉取摘要 + 发布历史；若后台匹配正在运行则自动恢复轮询
   useEffect(() => {
     if (!selectedJobId) return
@@ -639,6 +677,9 @@ export default function MatchPage() {
 
   const refreshCurrentJobState = () => {
     if (!selectedJobId) return
+    setTransferNoticeVisible(false)
+    setTransferNoticeCount(0)
+    setTransferNoticeSince(new Date().toISOString())
     setSelectedReviewId(null)
     setSelectedFilteredId(null)
     setReviewDetail(null)
@@ -650,6 +691,12 @@ export default function MatchPage() {
     getMatchSummary(selectedJobId).then(r => setSummary(r.data))
     refreshPending()
     loadDisabled()
+  }
+
+  const dismissTransferNotice = () => {
+    setTransferNoticeVisible(false)
+    setTransferNoticeCount(0)
+    setTransferNoticeSince(new Date().toISOString())
   }
 
   const handleRerunWithCurrentRules = async () => {
@@ -980,6 +1027,23 @@ export default function MatchPage() {
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      {transferNoticeVisible && (
+        <Alert
+          type="warning"
+          showIcon
+          closable
+          onClose={dismissTransferNotice}
+          message={transferNoticeCount > 1
+            ? `当前任务有 ${transferNoticeCount} 条新转入记录`
+            : '当前任务有新转入记录'}
+          description="请刷新后查看最新数据"
+          action={(
+            <Button size="small" onClick={refreshCurrentJobState}>
+              刷新
+            </Button>
+          )}
+        />
+      )}
       <Card title="清洗任务详情">
         <Row gutter={16} align="middle">
           <Col>

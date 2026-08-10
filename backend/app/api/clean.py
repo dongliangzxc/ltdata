@@ -845,7 +845,6 @@ def search_clean_tasks(
         .outerjoin(Category, Category.code == effective_category_code)
         .filter(CleanJobRecord.status.in_(ACTIVE_TASK_STATUSES))
     )
-    q = _filter_clean_job_visible_categories(q, db, current_user)
     if exclude_id is not None:
         q = q.filter(CleanJobRecord.id != exclude_id)
     if kw:

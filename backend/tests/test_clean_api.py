@@ -2175,6 +2175,33 @@ def test_search_clean_tasks_uses_dispatch_category_when_category_code_missing(db
     assert payload[0]["month"] == 202605
 
 
+def test_search_clean_tasks_is_not_limited_by_user_category_permissions(db):
+    client = _make_client(db, current_user=DummyUser(category_permissions=["action_camera"]))
+    db.add(Category(code="action_camera", name="运动相机", sort_order=1))
+    db.add(Category(code="smart_lock", name="智能门锁", sort_order=2))
+    db.add(CleanJobRecord(
+        file_ids=[],
+        rules={"dedup": True},
+        status="done",
+        category_code="smart_lock",
+        platform="TMALL",
+        source_scope={"month": 202605},
+        task_name="智能门锁转移目标",
+    ))
+    db.commit()
+
+    response = client.get(
+        "/api/clean/tasks/search",
+        params={"category_code": "smart_lock", "month": 202605},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 1
+    assert payload[0]["category_code"] == "smart_lock"
+    assert payload[0]["category_name"] == "智能门锁"
+
+
 
 def test_list_clean_jobs_filters_by_category_permissions(db):
     _seed_permission_clean_jobs(db)

@@ -17,7 +17,8 @@ assert.doesNotMatch(source, /reviewedColumns/, 'Match page should not keep revie
 
 assert.match(source, /transferNotice/, 'Match page should track transfer notice state');
 assert.match(source, /getTransferNotice/, 'Match page should call the transfer notice helper');
-assert.match(source, /Alert/, 'Match page should render an Alert for transfer notices');
+assert.match(source, /open=\{transferNoticeVisible\}/, 'Match page should render a Modal for transfer notices');
+assert.match(source, /okText="刷新查看"/, 'transfer notice modal should make the refresh action prominent');
 assert.match(source, /setInterval\(/, 'Match page should poll for transfer notices');
 assert.match(source, /transferNoticeJobRef\.current !== requestJobId/, 'Match page should ignore stale transfer notice job responses');
 assert.match(source, /transferNoticeSinceRef\.current !== requestSince/, 'Match page should ignore stale transfer notice baseline responses');

@@ -1088,23 +1088,21 @@ export default function MatchPage() {
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      {transferNoticeVisible && (
-        <Alert
-          type="warning"
-          showIcon
-          closable
-          onClose={dismissTransferNotice}
-          message={transferNoticeCount > 1
-            ? `当前任务有 ${transferNoticeCount} 条新转入记录`
-            : '当前任务有新转入记录'}
-          description="请刷新后查看最新数据"
-          action={(
-            <Button size="small" onClick={refreshTransferNoticeAfterReload}>
-              刷新
-            </Button>
-          )}
-        />
-      )}
+      <Modal
+        open={transferNoticeVisible}
+        title={transferNoticeCount > 1
+          ? `当前任务有 ${transferNoticeCount} 条新转入记录`
+          : '当前任务有新转入记录'}
+        okText="刷新查看"
+        cancelText="稍后处理"
+        onOk={refreshTransferNoticeAfterReload}
+        onCancel={dismissTransferNotice}
+        maskClosable={false}
+      >
+        <Typography.Paragraph style={{ marginBottom: 0 }}>
+          有其他任务转入了新的记录，请刷新当前任务后查看最新数据。
+        </Typography.Paragraph>
+      </Modal>
       <Card title="清洗任务详情">
         <Row gutter={16} align="middle">
           <Col>

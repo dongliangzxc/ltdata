@@ -21,6 +21,7 @@ assert.match(source, /Alert/, 'Match page should render an Alert for transfer no
 assert.match(source, /setInterval\(/, 'Match page should poll for transfer notices');
 assert.match(source, /transferNoticeJobRef\.current !== requestJobId/, 'Match page should ignore stale transfer notice job responses');
 assert.match(source, /transferNoticeSinceRef\.current !== requestSince/, 'Match page should ignore stale transfer notice baseline responses');
+assert.match(source, /await Promise\.all\(/, 'Match page should await refresh work before clearing the transfer notice baseline');
 
 assert.match(source, /transferCategoryFilter/, 'transfer modal should keep category filter state');
 assert.match(source, /transferPlatformFilter/, 'transfer modal should keep platform filter state');

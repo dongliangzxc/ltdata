@@ -230,7 +230,7 @@ export default function MatchPage() {
   const [reviewReason, setReviewReason] = useState('')
   const [interventionModalOpen, setInterventionModalOpen] = useState(false)
   const [rerunningRules, setRerunningRules] = useState(false)
-  const { data: jobsData, refresh: refreshJobs } = useRequest(() => listCleanJobs().then(r => r.data))
+  const { data: jobsData, refresh: refreshJobs, refreshAsync: refreshJobsAsync } = useRequest(() => listCleanJobs().then(r => r.data))
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
   const [modelSearchLoading, setModelSearchLoading] = useState(false)
   const [createModelOpen, setCreateModelOpen] = useState(false)
@@ -360,7 +360,7 @@ export default function MatchPage() {
     message.success('型号已创建并选中')
   }
 
-  const { data: pendingData, loading: pendingLoading, refresh: refreshPending } = useRequest(
+  const { data: pendingData, loading: pendingLoading, refresh: refreshPending, refreshAsync: refreshPendingAsync } = useRequest(
     () => listPendingMatches(selectedJobId!, {
       keyword: keyword || undefined,
       search_by: searchBy,
@@ -685,7 +685,6 @@ export default function MatchPage() {
 
   const refreshCurrentJobState = () => {
     if (!selectedJobId) return
-    resetTransferNoticeBaseline(selectedJobId)
     setSelectedReviewId(null)
     setSelectedFilteredId(null)
     setReviewDetail(null)
@@ -697,6 +696,30 @@ export default function MatchPage() {
     getMatchSummary(selectedJobId).then(r => setSummary(r.data))
     refreshPending()
     loadDisabled()
+  }
+
+  const refreshTransferNoticeAfterReload = async () => {
+    if (!selectedJobId) return
+    const jobId = selectedJobId
+    setSelectedReviewId(null)
+    setSelectedFilteredId(null)
+    setReviewDetail(null)
+    setFilteredDetail(null)
+    setReviewReason('')
+    setSelectedModels({})
+    setPage(1)
+    try {
+      await Promise.all([
+        refreshJobsAsync(),
+        getMatchSummary(jobId).then(r => setSummary(r.data)),
+        refreshPendingAsync(),
+        loadDisabled(),
+      ])
+      if (transferNoticeJobRef.current !== jobId) return
+      resetTransferNoticeBaseline(jobId)
+    } catch {
+      // keep the current notice state if the reload does not complete
+    }
   }
 
   const dismissTransferNotice = () => {
@@ -1042,7 +1065,7 @@ export default function MatchPage() {
             : '当前任务有新转入记录'}
           description="请刷新后查看最新数据"
           action={(
-            <Button size="small" onClick={refreshCurrentJobState}>
+            <Button size="small" onClick={refreshTransferNoticeAfterReload}>
               刷新
             </Button>
           )}

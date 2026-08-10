@@ -56,7 +56,7 @@ assert.match(
 assert.match(
   source,
   /setTransferPlatformFilter\(defaultFilters\.platform\)/,
-  'transfer modal should default platform from the selected job'
+  'transfer modal should clear the platform default so tasks without platform remain selectable'
 );
 assert.match(
   source,
@@ -129,13 +129,18 @@ const defaultTransferFilters = getDefaultTransferFilters({
 });
 assert.deepEqual(
   defaultTransferFilters,
-  { category: undefined, platform: '京东', month: 202407 },
-  'transfer defaults should use current platform and month without category'
+  { category: undefined, platform: undefined, month: 202407 },
+  'transfer defaults should use current month without category or platform'
 );
 assert.equal(
   Object.prototype.hasOwnProperty.call(defaultTransferFilters, 'category'),
   true,
   'transfer defaults should explicitly clear category'
+);
+assert.equal(
+  Object.prototype.hasOwnProperty.call(defaultTransferFilters, 'platform'),
+  true,
+  'transfer defaults should explicitly clear platform'
 );
 
 const emptyTransferFilters = getDefaultTransferFilters({

@@ -1,9 +1,11 @@
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.core.auth_deps import get_current_user
 from app.models.database import get_db
 from app.models.schemas import (
     MatchTransferLog, MatchResult, RawDataRecord, ModelRecord,
@@ -22,6 +24,10 @@ def match_client(db):
         yield db
 
     app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+        is_admin=1,
+        category_permissions=None,
+    )
     return TestClient(app)
 
 
@@ -108,6 +114,38 @@ def test_transfer_moves_to_target_and_reruns_match(db, match_client):
     assert log.from_clean_job_id == src_job.id
     assert log.to_clean_job_id == dst_job.id
     assert log.raw_data_id == raw.id
+
+
+def test_transfer_notice_reports_new_transfers(db, match_client):
+    src_job, dst_job, mr, model, raw = _seed_transfer_case(db)
+    match_client.post(
+        f"/api/match/items/{mr.id}/transfer",
+        json={"target_clean_job_id": dst_job.id},
+    )
+
+    resp = match_client.get(
+        f"/api/match/{dst_job.id}/transfer-notice",
+        params={"since": "2026-01-01T00:00:00"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["clean_job_id"] == dst_job.id
+    assert body["new_count"] == 1
+    assert body["latest_transfer_at"]
+
+
+def test_transfer_notice_respects_visibility_and_baseline(db, match_client):
+    src_job, dst_job, mr, model, raw = _seed_transfer_case(db)
+    resp = match_client.get(
+        f"/api/match/{dst_job.id}/transfer-notice",
+        params={"since": "2100-01-01T00:00:00"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["new_count"] == 0
+    assert body["latest_transfer_at"] is None
 
 
 def test_transfer_rejects_target_with_existing_raw_data(db, match_client):

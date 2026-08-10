@@ -1719,8 +1719,35 @@ def list_reviewed_global(
 # ── 单条转移到其他清洗任务 ─────────────────────────────────────────────────
 
 
+class TransferNoticeOut(_PydanticBase):
+    clean_job_id: int
+    new_count: int
+    latest_transfer_at: Optional[datetime] = None
+
+
 class TransferPayload(_PydanticBase):
     target_clean_job_id: int
+
+
+@router.get("/{clean_job_id}/transfer-notice", response_model=TransferNoticeOut)
+def get_transfer_notice(
+    clean_job_id: int,
+    since: datetime = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _get_visible_match_clean_job_or_404(db, current_user, clean_job_id)
+    q = db.query(MatchTransferLog).filter(
+        MatchTransferLog.to_clean_job_id == clean_job_id,
+        MatchTransferLog.transferred_at > since,
+    )
+    new_count = q.count()
+    latest = q.order_by(MatchTransferLog.transferred_at.desc()).first()
+    return TransferNoticeOut(
+        clean_job_id=clean_job_id,
+        new_count=new_count,
+        latest_transfer_at=latest.transferred_at if latest else None,
+    )
 
 
 @router.post("/items/{match_id}/transfer", response_model=MatchResultOut)

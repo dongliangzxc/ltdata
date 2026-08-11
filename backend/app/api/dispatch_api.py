@@ -657,11 +657,22 @@ def _redispatch_job_out(job: DispatchRedispatchJob, category_name: str | None = 
     }
 
 
-def _redispatch_item_out(item: DispatchRedispatchJobItem, db: Session) -> dict:
+def _redispatch_item_out(item: DispatchRedispatchJobItem, db: Session, category_code: str) -> dict:
     filename = None
     batch = db.get(DispatchBatch, item.batch_id)
     if batch is not None and batch.file is not None:
         filename = batch.file.filename
+    category_count = None
+    if item.new_batch_id:
+        category_count = (
+            db.query(func.count(DispatchItem.id))
+            .filter(
+                DispatchItem.batch_id == item.new_batch_id,
+                DispatchItem.category_code == category_code,
+            )
+            .scalar()
+            or 0
+        )
     return {
         "id": item.id,
         "batch_id": item.batch_id,
@@ -669,6 +680,7 @@ def _redispatch_item_out(item: DispatchRedispatchJobItem, db: Session) -> dict:
         "filename": filename,
         "status": item.status,
         "new_batch_id": item.new_batch_id,
+        "category_count": category_count,
         "dispatched_rows": item.dispatched_rows,
         "unmatched_rows": item.unmatched_rows,
         "error_msg": item.error_msg,
@@ -836,7 +848,7 @@ def get_redispatch_job(job_id: int, db: Session = Depends(get_db), current_user=
         .order_by(DispatchRedispatchJobItem.id)
         .all()
     )
-    out["items"] = [_redispatch_item_out(item, db) for item in items]
+    out["items"] = [_redispatch_item_out(item, db, job.category_code) for item in items]
     return out
 
 

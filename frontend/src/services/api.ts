@@ -493,6 +493,7 @@ export interface DispatchRedispatchItem {
   filename: string | null
   status: 'pending' | 'running' | 'done' | 'error' | 'skipped'
   new_batch_id: number | null
+  category_count: number | null
   dispatched_rows: number | null
   unmatched_rows: number | null
   error_msg: string | null

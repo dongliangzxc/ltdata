@@ -1749,4 +1749,7 @@ def test_list_and_get_redispatch_jobs_are_scoped(client_and_db, monkeypatch):
     detail_payload = client.get(f"/api/dispatch/redispatch/jobs/{job_id}").json()
     assert detail_payload["success_batches"] == 1
     assert len(detail_payload["items"]) == 1
-    assert detail_payload["items"][0]["filename"] == "scoped-redispatch.xlsx"
+    item_payload = detail_payload["items"][0]
+    assert item_payload["filename"] == "scoped-redispatch.xlsx"
+    assert item_payload["category_count"] == 1
+    assert item_payload["dispatched_rows"] == 2

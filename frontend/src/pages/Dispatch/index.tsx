@@ -920,7 +920,7 @@ function DispatchRedispatchTab({ visibleCategories }: { visibleCategories: Categ
       title: '状态', dataIndex: 'status', width: 80,
       render: (value: string) => value === 'done' ? <Tag color="green">已完成</Tag> : <Tag>{value}</Tag>
     },
-    { title: '分发结果数', dataIndex: 'dispatched_rows', width: 100, render: (v: number | null) => v ?? 0 },
+    { title: '批次结果数', dataIndex: 'dispatched_rows', width: 100, render: (v: number | null) => v ?? 0 },
     {
       title: '创建时间', dataIndex: 'created_at', width: 170,
       render: (value: string | null) => value ? dayjs(value).format('YYYY-MM-DD HH:mm:ss') : '-'
@@ -989,7 +989,8 @@ function DispatchRedispatchTab({ visibleCategories }: { visibleCategories: Categ
       }
     },
     { title: '新批次ID', dataIndex: 'new_batch_id', width: 90, render: (v: number | null) => v ?? '-' },
-    { title: '分发结果数', dataIndex: 'dispatched_rows', width: 100, render: (v: number | null) => v ?? 0 },
+    { title: '目标品类结果数', dataIndex: 'category_count', width: 110, render: (v: number | null) => v ?? 0 },
+    { title: '批次结果数', dataIndex: 'dispatched_rows', width: 110, render: (v: number | null) => v ?? 0 },
     { title: '未匹配数', dataIndex: 'unmatched_rows', width: 90, render: (v: number | null) => v ?? 0 },
     {
       title: '错误信息', dataIndex: 'error_msg', ellipsis: true,

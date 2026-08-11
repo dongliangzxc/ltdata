@@ -512,6 +512,44 @@ CREATE TABLE IF NOT EXISTS dispatch_items (
     INDEX ix_dispatch_items_category_code (category_code)
 );
 
+-- ── P43: Batch Redispatch Job Tables ────────────────────────
+
+CREATE TABLE IF NOT EXISTS dispatch_redispatch_jobs (
+    id              INT AUTO_INCREMENT PRIMARY KEY,
+    category_code   VARCHAR(50)  NOT NULL,
+    skip_contained  TINYINT      NOT NULL DEFAULT 0 COMMENT '1=跳过最新已完成批次已含目标品类的文件',
+    status          VARCHAR(20)  NOT NULL DEFAULT 'pending' COMMENT 'pending/running/done/error',
+    total_batches   INT          NOT NULL DEFAULT 0,
+    done_batches    INT          NOT NULL DEFAULT 0,
+    success_batches INT          NOT NULL DEFAULT 0,
+    failed_batches  INT          NOT NULL DEFAULT 0,
+    skipped_batches INT          NOT NULL DEFAULT 0,
+    error_msg       TEXT,
+    created_by      VARCHAR(100),
+    created_at      DATETIME     DEFAULT CURRENT_TIMESTAMP,
+    finished_at     DATETIME,
+    INDEX ix_dispatch_redispatch_jobs_category_code (category_code)
+);
+
+CREATE TABLE IF NOT EXISTS dispatch_redispatch_job_items (
+    id              INT AUTO_INCREMENT PRIMARY KEY,
+    job_id          INT          NOT NULL,
+    batch_id        INT          NOT NULL,
+    file_id         INT,
+    status          VARCHAR(20)  NOT NULL DEFAULT 'pending' COMMENT 'pending/running/done/error/skipped',
+    new_batch_id    INT,
+    dispatched_rows INT,
+    unmatched_rows  INT,
+    error_msg       TEXT,
+    created_at      DATETIME     DEFAULT CURRENT_TIMESTAMP,
+    finished_at     DATETIME,
+    UNIQUE KEY uq_redispatch_job_batch (job_id, batch_id),
+    CONSTRAINT fk_rdj_item_job FOREIGN KEY (job_id) REFERENCES dispatch_redispatch_jobs(id) ON DELETE CASCADE,
+    INDEX ix_dispatch_redispatch_job_items_job_id (job_id),
+    INDEX ix_dispatch_redispatch_job_items_batch_id (batch_id)
+);
+
+
 -- clean_jobs dispatch columns (idempotent)
 ALTER TABLE clean_jobs
     ADD COLUMN IF NOT EXISTS dispatch_batch_id      INT  NULL,

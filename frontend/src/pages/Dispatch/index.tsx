@@ -14,8 +14,10 @@ import {
   getDispatchBatchStats, listDispatchUnmatched, listDispatchRules,
   createDispatchRule, updateDispatchRule, deleteDispatchRule,
   createDispatchExportJob, listDispatchExportJobs, deleteDispatchExportJob, downloadDispatchExport,
+  createDispatchRedispatchJob, listDispatchRedispatchJobs, getDispatchRedispatchJob,
   type DispatchBatchStatsResponse, type DispatchCategoryStat, type DispatchRuleStat,
-  type DispatchExportJob, type DispatchUnmatchedRow
+  type DispatchExportJob, type DispatchUnmatchedRow,
+  type DispatchRedispatchJob, type DispatchRedispatchItem
 } from '../../services/api'
 import { useCategoryOptions, type CategoryOption } from '../../hooks/useCategoryOptions'
 import { useAuth } from '../../auth/AuthContext'
@@ -775,7 +777,347 @@ function DispatchExportTab({ visibleCategories }: { visibleCategories: CategoryO
   )
 }
 
-// ─── Tab 3: 分发规则 ──────────────────────────────────────────
+// ─── Tab 3: 批量补分发 ────────────────────────────────────────
+function DispatchRedispatchTab({ visibleCategories }: { visibleCategories: CategoryOption[] }) {
+  const [selectedBatchIds, setSelectedBatchIds] = useState<number[]>([])
+  const [targetCategory, setTargetCategory] = useState<string | undefined>()
+  const [skipContained, setSkipContained] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [jobsPage, setJobsPage] = useState(1)
+  const [jobsPageSize, setJobsPageSize] = useState(20)
+  const [detailVisible, setDetailVisible] = useState(false)
+  const [detailJob, setDetailJob] = useState<DispatchRedispatchJob | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const categoryOptions = visibleCategories
+  const visibleCategoryCodes = useMemo(
+    () => new Set(categoryOptions.map(category => category.value)),
+    [categoryOptions],
+  )
+
+  const { data: filesData } = useRequest(() => listUploadFiles().then(r => r.data as UploadFile[]))
+  const { data: batchesData, loading: batchesLoading } = useRequest(
+    () => listDispatchBatches().then(r => r.data as DispatchBatch[])
+  )
+  const fileById = useMemo(() => {
+    const map = new Map<number, UploadFile>()
+    for (const file of filesData ?? []) map.set(file.id, file)
+    return map
+  }, [filesData])
+
+  const { data: jobsData, loading: jobsLoading, refresh: refreshJobs } = useRequest(
+    () => listDispatchRedispatchJobs({ page: jobsPage, page_size: jobsPageSize }).then(r => r.data),
+    { pollingInterval: 5000, refreshDeps: [jobsPage, jobsPageSize] }
+  )
+  const jobs = useMemo(
+    () => (jobsData?.items ?? []).filter(job => visibleCategoryCodes.has(job.category_code)),
+    [jobsData, visibleCategoryCodes],
+  )
+  const jobsInitialLoading = jobsLoading && !jobsData
+
+  useEffect(() => {
+    if (targetCategory && !visibleCategoryCodes.has(targetCategory)) {
+      setTargetCategory(undefined)
+    }
+  }, [targetCategory, visibleCategoryCodes])
+
+  const refreshFirstJobsPage = () => {
+    if (jobsPage === 1) refreshJobs()
+    else setJobsPage(1)
+  }
+
+  const handleCreate = async () => {
+    if (selectedBatchIds.length === 0) {
+      message.warning('请至少选择一个分发批次')
+      return
+    }
+    if (!targetCategory) {
+      message.warning('请选择目标品类')
+      return
+    }
+    Modal.confirm({
+      title: '确认创建补分发任务？',
+      content: `将针对「${categoryOptions.find(o => o.value === targetCategory)?.label ?? targetCategory}」对选中的 ${selectedBatchIds.length} 个分发批次对应文件重新分发，每个文件会生成新的分发批次，原批次不受影响。${skipContained ? '最新已完成批次已包含该品类的文件将跳过。' : ''}`,
+      okText: '创建',
+      cancelText: '取消',
+      onOk: async () => {
+        setCreating(true)
+        try {
+          await createDispatchRedispatchJob({
+            batch_ids: selectedBatchIds,
+            category_code: targetCategory,
+            skip_contained: skipContained,
+          })
+          message.success('补分发任务已创建，可在下方任务列表查看进度')
+          setSelectedBatchIds([])
+          refreshFirstJobsPage()
+        } catch {
+          // API interceptor already shows the backend error message.
+        } finally {
+          setCreating(false)
+        }
+      },
+    })
+  }
+
+  const handleShowDetail = async (job: DispatchRedispatchJob) => {
+    setDetailVisible(true)
+    setDetailJob(job)
+    await refreshDetail(job.id)
+  }
+
+  const refreshDetail = async (jobId: number) => {
+    setDetailLoading(true)
+    try {
+      const res = await getDispatchRedispatchJob(jobId)
+      setDetailJob(res.data)
+    } catch {
+      // ignore
+    } finally {
+      setDetailLoading(false)
+    }
+  }
+
+  const jobStatusMeta: Record<DispatchRedispatchJob['status'], { label: string; color: string }> = {
+    pending: { label: '等待中', color: 'default' },
+    running: { label: '执行中', color: 'processing' },
+    done: { label: '已完成', color: 'success' },
+    error: { label: '失败', color: 'error' },
+  }
+
+  const itemStatusMeta: Record<DispatchRedispatchItem['status'], { label: string; color: string }> = {
+    pending: { label: '等待中', color: 'default' },
+    running: { label: '执行中', color: 'processing' },
+    done: { label: '成功', color: 'success' },
+    error: { label: '失败', color: 'error' },
+    skipped: { label: '已跳过', color: 'warning' },
+  }
+
+  const batchColumns = [
+    { title: '批次ID', dataIndex: 'id', width: 80 },
+    {
+      title: '文件名', dataIndex: 'file_id', ellipsis: true,
+      render: (fileId: number | null) => {
+        if (!fileId) return '-'
+        const file = fileById.get(fileId)
+        return file?.filename ?? `文件 ${fileId}`
+      }
+    },
+    {
+      title: '平台', dataIndex: 'file_id', width: 80,
+      render: (fileId: number | null) => {
+        const file = fileId ? fileById.get(fileId) : undefined
+        return file?.platform ? <Tag color="blue">{file.platform}</Tag> : '-'
+      }
+    },
+    {
+      title: '月份范围', dataIndex: 'file_id', width: 120,
+      render: (fileId: number | null) => {
+        const file = fileId ? fileById.get(fileId) : undefined
+        return file?.month_range ?? '-'
+      }
+    },
+    {
+      title: '状态', dataIndex: 'status', width: 80,
+      render: (value: string) => value === 'done' ? <Tag color="green">已完成</Tag> : <Tag>{value}</Tag>
+    },
+    { title: '分发结果数', dataIndex: 'dispatched_rows', width: 100, render: (v: number | null) => v ?? 0 },
+    {
+      title: '创建时间', dataIndex: 'created_at', width: 170,
+      render: (value: string | null) => value ? dayjs(value).format('YYYY-MM-DD HH:mm:ss') : '-'
+    },
+  ]
+
+  const jobColumns = [
+    { title: '任务ID', dataIndex: 'id', width: 90 },
+    {
+      title: '品类', dataIndex: 'category_code', width: 130,
+      render: (value: string, row: DispatchRedispatchJob) => row.category_name ?? (categoryOptions.find(o => o.value === value)?.label ?? value)
+    },
+    {
+      title: '状态', dataIndex: 'status', width: 100,
+      render: (value: DispatchRedispatchJob['status']) => {
+        const meta = jobStatusMeta[value] ?? { label: value, color: 'default' }
+        return <Tag color={meta.color}>{meta.label}</Tag>
+      }
+    },
+    {
+      title: '进度', key: 'progress', width: 240,
+      render: (_: unknown, row: DispatchRedispatchJob) => {
+        const done = row.done_batches ?? 0
+        const total = row.total_batches ?? 0
+        const percent = total > 0 ? Math.round(done / total * 100) : 0
+        return (
+          <Space direction="vertical" size={0}>
+            <Progress percent={percent} size="small" status={row.status === 'error' ? 'exception' : row.status === 'done' ? 'success' : 'active'} />
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              成功 {row.success_batches ?? 0} / 失败 {row.failed_batches ?? 0} / 跳过 {row.skipped_batches ?? 0} / 共 {total}
+            </Text>
+          </Space>
+        )
+      }
+    },
+    {
+      title: '跳过已含品类', dataIndex: 'skip_contained', width: 100,
+      render: (v: number) => (v ? <Tag color="orange">是</Tag> : <Tag>否</Tag>)
+    },
+    { title: '创建人', dataIndex: 'created_by', width: 100, render: (v: string | null) => v || '-' },
+    {
+      title: '创建时间', dataIndex: 'created_at', width: 170,
+      render: (value: string | null) => value ? dayjs(value).format('YYYY-MM-DD HH:mm:ss') : '-'
+    },
+    {
+      title: '操作', key: 'action', width: 160, fixed: 'right' as const,
+      render: (_: unknown, row: DispatchRedispatchJob) => (
+        <Space>
+          <Button type="link" size="small" onClick={() => handleShowDetail(row)}>详情</Button>
+          {row.status === 'error' && row.error_msg && (
+            <Button type="link" size="small" danger onClick={() => Modal.error({ title: '任务失败', content: row.error_msg })}>原因</Button>
+          )}
+        </Space>
+      )
+    },
+  ]
+
+  const itemColumns = [
+    { title: '批次ID', dataIndex: 'batch_id', width: 90 },
+    { title: '文件名', dataIndex: 'filename', ellipsis: true, render: (v: string | null) => v || '-' },
+    {
+      title: '状态', dataIndex: 'status', width: 90,
+      render: (value: DispatchRedispatchItem['status']) => {
+        const meta = itemStatusMeta[value] ?? { label: value, color: 'default' }
+        return <Tag color={meta.color}>{meta.label}</Tag>
+      }
+    },
+    { title: '新批次ID', dataIndex: 'new_batch_id', width: 90, render: (v: number | null) => v ?? '-' },
+    { title: '分发结果数', dataIndex: 'dispatched_rows', width: 100, render: (v: number | null) => v ?? 0 },
+    { title: '未匹配数', dataIndex: 'unmatched_rows', width: 90, render: (v: number | null) => v ?? 0 },
+    {
+      title: '错误信息', dataIndex: 'error_msg', ellipsis: true,
+      render: (v: string | null) => v ? <Text type="danger">{v}</Text> : '-'
+    },
+    {
+      title: '完成时间', dataIndex: 'finished_at', width: 170,
+      render: (value: string | null) => value ? dayjs(value).format('YYYY-MM-DD HH:mm:ss') : '-'
+    },
+  ]
+
+  return (
+    <>
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 16 }}
+        message="新增品类并配置分发规则后，可勾选历史分发批次，针对目标品类批量补分发。补分发会生成新的分发批次，原批次及既有品类结果不受影响。"
+      />
+      <Space style={{ marginBottom: 12 }} wrap>
+        <Select
+          placeholder="选择目标品类"
+          showSearch
+          optionFilterProp="label"
+          style={{ width: 220 }}
+          value={targetCategory}
+          onChange={setTargetCategory}
+          options={categoryOptions}
+        />
+        <Switch
+          checked={skipContained}
+          onChange={setSkipContained}
+          checkedChildren="跳过已含该品类"
+          unCheckedChildren="不跳过"
+        />
+        <Button
+          type="primary"
+          icon={<PlayCircleOutlined />}
+          loading={creating}
+          disabled={selectedBatchIds.length === 0 || !targetCategory}
+          onClick={handleCreate}
+        >
+          创建补分发任务{selectedBatchIds.length > 0 ? `（已选 ${selectedBatchIds.length} 个批次）` : ''}
+        </Button>
+      </Space>
+      <Table
+        rowKey="id"
+        size="small"
+        bordered
+        loading={batchesLoading}
+        columns={batchColumns}
+        dataSource={batchesData ?? []}
+        rowSelection={{
+          selectedRowKeys: selectedBatchIds,
+          onChange: (keys) => setSelectedBatchIds(keys as number[]),
+        }}
+        pagination={{ pageSize: 10 }}
+        scroll={{ x: 1000 }}
+        locale={{ emptyText: '暂无分发批次' }}
+      />
+      <div style={{ marginTop: 24 }}>
+        <Space style={{ width: '100%', justifyContent: 'space-between', marginBottom: 12 }}>
+          <Text strong>补分发任务列表</Text>
+          <Button onClick={refreshFirstJobsPage} loading={jobsInitialLoading}>刷新列表</Button>
+        </Space>
+        <Table
+          rowKey="id"
+          size="small"
+          bordered
+          loading={jobsInitialLoading}
+          columns={jobColumns}
+          dataSource={jobs}
+          pagination={{
+            current: jobsPage,
+            pageSize: jobsPageSize,
+            total: jobsData?.total ?? 0,
+            showSizeChanger: true,
+            showTotal: total => `共 ${total} 条`,
+            onChange: (page, pageSize) => {
+              setJobsPage(page)
+              setJobsPageSize(pageSize)
+            },
+          }}
+          scroll={{ x: 1200 }}
+          locale={{ emptyText: '暂无补分发任务' }}
+        />
+      </div>
+      <Drawer
+        title={`补分发任务 #${detailJob?.id ?? ''} 详情`}
+        open={detailVisible}
+        onClose={() => setDetailVisible(false)}
+        width={960}
+        extra={detailJob ? <Button size="small" loading={detailLoading} onClick={() => refreshDetail(detailJob.id)}>刷新</Button> : null}
+      >
+        {detailJob && (
+          <>
+            <Descriptions size="small" column={3} style={{ marginBottom: 12 }}>
+              <Descriptions.Item label="品类">{detailJob.category_name ?? detailJob.category_code}</Descriptions.Item>
+              <Descriptions.Item label="状态">
+                {(() => {
+                  const meta = jobStatusMeta[detailJob.status] ?? { label: detailJob.status, color: 'default' }
+                  return <Tag color={meta.color}>{meta.label}</Tag>
+                })()}
+              </Descriptions.Item>
+              <Descriptions.Item label="创建人">{detailJob.created_by || '-'}</Descriptions.Item>
+              <Descriptions.Item label="成功">{detailJob.success_batches}</Descriptions.Item>
+              <Descriptions.Item label="失败">{detailJob.failed_batches}</Descriptions.Item>
+              <Descriptions.Item label="跳过">{detailJob.skipped_batches}</Descriptions.Item>
+            </Descriptions>
+            <Table
+              rowKey="id"
+              size="small"
+              bordered
+              loading={detailLoading}
+              columns={itemColumns}
+              dataSource={detailJob.items ?? []}
+              pagination={false}
+              scroll={{ x: 1000 }}
+              locale={{ emptyText: '暂无批次明细' }}
+            />
+          </>
+        )}
+      </Drawer>
+    </>
+  )
+}
+
+// ─── Tab 4: 分发规则 ──────────────────────────────────────────
 function DispatchRulesTab({ refreshVersion, visibleCategories }: { refreshVersion: number; visibleCategories: CategoryOption[] }) {
   const [filterPlatform, setFilterPlatform] = useState<string | undefined>()
   const [filterCategory, setFilterCategory] = useState<string | undefined>()
@@ -947,6 +1289,7 @@ export default function DispatchPage() {
       items={[
         { key: 'management', label: '分发管理', children: <DispatchManagementTab onRulesChanged={notifyRulesChanged} visibleCategories={visibleCategories} /> },
         { key: 'export', label: '分发结果下载', children: <DispatchExportTab visibleCategories={visibleCategories} /> },
+        { key: 'redispatch', label: '批量补分发', children: <DispatchRedispatchTab visibleCategories={visibleCategories} /> },
         { key: 'rules', label: '分发规则', children: <DispatchRulesTab refreshVersion={rulesRefreshVersion} visibleCategories={visibleCategories} /> },
       ]}
     />

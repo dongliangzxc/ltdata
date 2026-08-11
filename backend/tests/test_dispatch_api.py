@@ -1511,3 +1511,242 @@ def test_dispatch_export_jobs_are_scoped_to_visible_categories(client_and_db):
 
     download_response = client.get("/api/dispatch/export/download/speaker-token")
     assert download_response.status_code == 403
+
+
+# ─── 批量补分发 ──────────────────────────────────────────────
+
+class _SyncThread:
+    def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+        self._target = target
+        self._args = args
+        self._kwargs = kwargs or {}
+
+    def start(self):
+        self._target(*self._args, **self._kwargs)
+
+
+def _enable_sync_threads(monkeypatch):
+    monkeypatch.setattr(dispatch_api.threading, "Thread", _SyncThread)
+
+
+def _make_dispatch_file(db, *, filename, platform="JD", rows=None, row_count=None):
+    file_record = UploadFileRecord(filename=filename, platform=platform, row_count=row_count or len(rows or []), status="done")
+    db.add(file_record)
+    db.flush()
+    created = []
+    for idx, (category_lv1, item_name) in enumerate(rows or [], start=1):
+        raw = RawDataRecord(
+            file_id=file_record.id,
+            platform=platform.lower(),
+            month=202605,
+            item_id=f"{filename}-{idx}",
+            category_lv1=category_lv1,
+            item_name=item_name,
+        )
+        db.add(raw)
+        created.append(raw)
+    db.flush()
+    return file_record, created
+
+
+def _make_done_batch(db, file_record, *, category_code, raw_rows):
+    batch = DispatchBatch(file_id=file_record.id, status="done", total_rows=len(raw_rows), dispatched_rows=len(raw_rows), unmatched_rows=0)
+    db.add(batch)
+    db.flush()
+    for raw in raw_rows:
+        db.add(DispatchItem(batch_id=batch.id, raw_data_id=raw.id, category_code=category_code))
+    db.commit()
+    return batch
+
+
+def test_create_redispatch_job_validation_errors(client_and_db):
+    client, db = client_and_db
+    db.add_all([
+        Category(code="headphone", name="耳机", sort_order=1),
+        Category(code="speaker", name="音箱", sort_order=2),
+    ])
+    file_record, rows = _make_dispatch_file(db, filename="validation.xlsx", rows=[("手机配件", "商品 1")])
+    batch = _make_done_batch(db, file_record, category_code="headphone", raw_rows=rows)
+
+    assert client.post("/api/dispatch/redispatch", json={"batch_ids": [], "category_code": "speaker"}).status_code == 400
+    assert client.post("/api/dispatch/redispatch", json={"batch_ids": [batch.id], "category_code": ""}).status_code == 400
+
+    _set_dispatch_user(client, category_permissions=["headphone"])
+    forbidden = client.post("/api/dispatch/redispatch", json={"batch_ids": [batch.id], "category_code": "speaker"})
+    assert forbidden.status_code == 403
+
+    _set_dispatch_user(client)
+    missing = client.post("/api/dispatch/redispatch", json={"batch_ids": [99999], "category_code": "speaker"})
+    assert missing.status_code == 404
+
+    unfinished = DispatchBatch(file_id=file_record.id, status="running")
+    db.add(unfinished)
+    db.commit()
+    unfinished_resp = client.post(
+        "/api/dispatch/redispatch",
+        json={"batch_ids": [unfinished.id], "category_code": "speaker"},
+    )
+    assert unfinished_resp.status_code == 400
+
+    no_rule = client.post("/api/dispatch/redispatch", json={"batch_ids": [batch.id], "category_code": "speaker"})
+    assert no_rule.status_code == 400
+
+
+def test_redispatch_dispatches_target_category_and_preserves_others(client_and_db, monkeypatch):
+    client, db = client_and_db
+    _enable_sync_threads(monkeypatch)
+    db.add_all([
+        Category(code="headphone", name="耳机", sort_order=1),
+        Category(code="speaker", name="音箱", sort_order=2),
+    ])
+    db.add(DispatchRule(
+        category_code="headphone", platform="jd", field="category_lv1",
+        match_type="contains", value="耳机", priority=1, is_active=1,
+    ))
+    db.add(DispatchRule(
+        category_code="speaker", platform="jd", field="item_name",
+        match_type="contains", value="音箱", priority=1, is_active=1,
+    ))
+    db.commit()
+
+    file_record, rows = _make_dispatch_file(
+        db,
+        filename="history.xlsx",
+        rows=[("蓝牙耳机", "商品 A"), ("手机配件", "无线音箱"), ("手机配件", "普通商品")],
+    )
+    old_batch = _make_done_batch(db, file_record, category_code="headphone", raw_rows=[rows[0]])
+
+    response = client.post(
+        "/api/dispatch/redispatch",
+        json={"batch_ids": [old_batch.id], "category_code": "speaker", "skip_contained": False},
+    )
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+
+    job = db.query(dispatch_api.DispatchRedispatchJob).filter_by(id=job_id).one()
+    assert job.status == "done"
+    assert job.success_batches == 1
+    assert job.failed_batches == 0
+    assert job.total_batches == 1
+
+    item = db.query(dispatch_api.DispatchRedispatchJobItem).filter_by(job_id=job_id).one()
+    assert item.status == "done"
+    new_batch = db.query(DispatchBatch).filter_by(id=item.new_batch_id).one()
+    new_items = db.query(DispatchItem).filter_by(batch_id=new_batch.id).all()
+    assert sorted([i.category_code for i in new_items]) == ["headphone", "speaker"]
+    speaker_item = next(i for i in new_items if i.category_code == "speaker")
+    assert speaker_item.raw_data_id == rows[1].id
+
+
+def test_redispatch_skips_file_already_containing_target_category(client_and_db, monkeypatch):
+    client, db = client_and_db
+    _enable_sync_threads(monkeypatch)
+    db.add_all([
+        Category(code="headphone", name="耳机", sort_order=1),
+        Category(code="speaker", name="音箱", sort_order=2),
+    ])
+    db.add(DispatchRule(
+        category_code="speaker", platform="jd", field="item_name",
+        match_type="contains", value="音箱", priority=1, is_active=1,
+    ))
+    db.commit()
+
+    file_record, rows = _make_dispatch_file(db, filename="skip.xlsx", rows=[("手机配件", "无线音箱")])
+    old_batch = _make_done_batch(db, file_record, category_code="speaker", raw_rows=rows)
+
+    response = client.post(
+        "/api/dispatch/redispatch",
+        json={"batch_ids": [old_batch.id], "category_code": "speaker", "skip_contained": True},
+    )
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+
+    job = db.query(dispatch_api.DispatchRedispatchJob).filter_by(id=job_id).one()
+    assert job.status == "done"
+    assert job.success_batches == 0
+    assert job.skipped_batches == 1
+
+    item = db.query(dispatch_api.DispatchRedispatchJobItem).filter_by(job_id=job_id).one()
+    assert item.status == "skipped"
+    assert item.new_batch_id is None
+
+
+def test_redispatch_create_rejects_when_no_rule_for_category(client_and_db):
+    client, db = client_and_db
+    db.add(Category(code="speaker", name="音箱", sort_order=1))
+    db.commit()
+
+    file_record, rows = _make_dispatch_file(db, filename="norulex.xlsx", rows=[("手机配件", "商品 1")])
+    batch = _make_done_batch(db, file_record, category_code="headphone", raw_rows=rows)
+
+    response = client.post(
+        "/api/dispatch/redispatch",
+        json={"batch_ids": [batch.id], "category_code": "speaker"},
+    )
+    assert response.status_code == 400
+
+
+def test_redispatch_thread_item_errors_when_batch_has_no_file(client_and_db, monkeypatch):
+    client, db = client_and_db
+    _enable_sync_threads(monkeypatch)
+    db.add(Category(code="speaker", name="音箱", sort_order=1))
+    db.add(DispatchRule(
+        category_code="speaker", platform=None, field="item_name",
+        match_type="contains", value="音箱", priority=1, is_active=1,
+    ))
+    db.commit()
+    batch = DispatchBatch(file_id=None, status="done", total_rows=0, dispatched_rows=0, unmatched_rows=0)
+    db.add(batch)
+    db.commit()
+
+    response = client.post(
+        "/api/dispatch/redispatch",
+        json={"batch_ids": [batch.id], "category_code": "speaker"},
+    )
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+
+    job = db.query(dispatch_api.DispatchRedispatchJob).filter_by(id=job_id).one()
+    assert job.status == "done"
+    assert job.failed_batches == 1
+    item = db.query(dispatch_api.DispatchRedispatchJobItem).filter_by(job_id=job_id).one()
+    assert item.status == "error"
+    assert "无关联文件" in item.error_msg
+
+
+def test_list_and_get_redispatch_jobs_are_scoped(client_and_db, monkeypatch):
+    client, db = client_and_db
+    _enable_sync_threads(monkeypatch)
+    db.add_all([
+        Category(code="headphone", name="耳机", sort_order=1),
+        Category(code="speaker", name="音箱", sort_order=2),
+    ])
+    db.add(DispatchRule(
+        category_code="speaker", platform="jd", field="item_name",
+        match_type="contains", value="音箱", priority=1, is_active=1,
+    ))
+    db.commit()
+
+    file_record, rows = _make_dispatch_file(db, filename="scoped-redispatch.xlsx", rows=[("手机配件", "无线音箱")])
+    batch = _make_done_batch(db, file_record, category_code="headphone", raw_rows=rows)
+    response = client.post(
+        "/api/dispatch/redispatch",
+        json={"batch_ids": [batch.id], "category_code": "speaker"},
+    )
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+
+    _set_dispatch_user(client, category_permissions=["headphone"])
+    assert client.get("/api/dispatch/redispatch/jobs").json()["total"] == 0
+    assert client.get(f"/api/dispatch/redispatch/jobs/{job_id}").status_code == 403
+
+    _set_dispatch_user(client)
+    list_payload = client.get("/api/dispatch/redispatch/jobs").json()
+    assert list_payload["total"] == 1
+    assert list_payload["items"][0]["category_name"] == "音箱"
+    assert list_payload["items"][0]["status"] == "done"
+
+    detail_payload = client.get(f"/api/dispatch/redispatch/jobs/{job_id}").json()
+    assert detail_payload["success_batches"] == 1
+    assert len(detail_payload["items"]) == 1
+    assert detail_payload["items"][0]["filename"] == "scoped-redispatch.xlsx"

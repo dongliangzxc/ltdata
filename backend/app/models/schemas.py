@@ -1216,6 +1216,47 @@ class DispatchItem(Base):
     batch = relationship("DispatchBatch", back_populates="items")
 
 
+class DispatchRedispatchJob(Base):
+    __tablename__ = "dispatch_redispatch_jobs"
+
+    id              = Column(Integer, primary_key=True, index=True)
+    category_code   = Column(String(50), nullable=False, index=True)
+    skip_contained  = Column(SmallInteger, nullable=False, default=0)  # 1=跳过最新已完成批次已含目标品类的文件
+    status          = Column(String(20), nullable=False, default="pending")  # pending/running/done/error
+    total_batches   = Column(Integer, nullable=False, default=0)
+    done_batches    = Column(Integer, nullable=False, default=0)
+    success_batches = Column(Integer, nullable=False, default=0)
+    failed_batches  = Column(Integer, nullable=False, default=0)
+    skipped_batches = Column(Integer, nullable=False, default=0)
+    error_msg       = Column(Text, nullable=True)
+    created_by      = Column(String(100), nullable=True)
+    created_at      = Column(DateTime, default=datetime.utcnow)
+    finished_at     = Column(DateTime, nullable=True)
+
+    items = relationship("DispatchRedispatchJobItem", back_populates="job", cascade="all, delete-orphan")
+
+
+class DispatchRedispatchJobItem(Base):
+    __tablename__ = "dispatch_redispatch_job_items"
+    __table_args__ = (
+        UniqueConstraint('job_id', 'batch_id', name='uq_redispatch_job_batch'),
+    )
+
+    id              = Column(Integer, primary_key=True, index=True)
+    job_id          = Column(Integer, ForeignKey("dispatch_redispatch_jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    batch_id        = Column(Integer, nullable=False, index=True)
+    file_id         = Column(Integer, nullable=True, index=True)
+    status          = Column(String(20), nullable=False, default="pending")  # pending/running/done/error/skipped
+    new_batch_id    = Column(Integer, nullable=True)
+    dispatched_rows = Column(Integer, nullable=True)
+    unmatched_rows  = Column(Integer, nullable=True)
+    error_msg       = Column(Text, nullable=True)
+    created_at      = Column(DateTime, default=datetime.utcnow)
+    finished_at     = Column(DateTime, nullable=True)
+
+    job = relationship("DispatchRedispatchJob", back_populates="items")
+
+
 class CorrectionRuleIn(BaseModel):
     name:          str
     category_code: Optional[str] = None
@@ -1282,6 +1323,52 @@ class DispatchBatchOut(BaseModel):
     total_rows: Optional[int]
     dispatched_rows: Optional[int]
     unmatched_rows: Optional[int]
+    created_at: Optional[datetime]
+    finished_at: Optional[datetime]
+
+    @field_serializer("created_at", "finished_at")
+    def serialize_datetime(self, value: datetime | None):
+        return format_beijing_datetime(value)
+
+
+class DispatchRedispatchIn(BaseModel):
+    batch_ids: list[int]
+    category_code: str
+    skip_contained: bool = False
+
+
+class DispatchRedispatchItemOut(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: int
+    batch_id: int
+    file_id: Optional[int]
+    status: str
+    new_batch_id: Optional[int]
+    dispatched_rows: Optional[int]
+    unmatched_rows: Optional[int]
+    error_msg: Optional[str]
+    finished_at: Optional[datetime]
+
+    @field_serializer("finished_at")
+    def serialize_finished_at(self, value: datetime | None):
+        return format_beijing_datetime(value)
+
+
+class DispatchRedispatchJobOut(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: int
+    category_code: str
+    skip_contained: int
+    status: str
+    total_batches: int
+    done_batches: int
+    success_batches: int
+    failed_batches: int
+    skipped_batches: int
+    error_msg: Optional[str]
+    created_by: Optional[str]
     created_at: Optional[datetime]
     finished_at: Optional[datetime]
 

@@ -485,6 +485,56 @@ export const updateDispatchRule = (id: number, data: unknown) =>
 export const deleteDispatchRule = (id: number) =>
   api.delete(`/dispatch/rules/${id}`)
 
+// ─── Dispatch: 批量补分发 ────────────────────────────────────
+export interface DispatchRedispatchItem {
+  id: number
+  batch_id: number
+  file_id: number | null
+  filename: string | null
+  status: 'pending' | 'running' | 'done' | 'error' | 'skipped'
+  new_batch_id: number | null
+  dispatched_rows: number | null
+  unmatched_rows: number | null
+  error_msg: string | null
+  finished_at: string | null
+}
+
+export interface DispatchRedispatchJob {
+  id: number
+  category_code: string
+  category_name: string | null
+  skip_contained: number
+  status: 'pending' | 'running' | 'done' | 'error'
+  total_batches: number
+  done_batches: number
+  success_batches: number
+  failed_batches: number
+  skipped_batches: number
+  error_msg: string | null
+  created_by: string | null
+  created_at: string | null
+  finished_at: string | null
+  items?: DispatchRedispatchItem[]
+}
+
+export interface DispatchRedispatchJobsResponse {
+  total: number
+  items: DispatchRedispatchJob[]
+}
+
+export const createDispatchRedispatchJob = (params: { batch_ids: number[]; category_code: string; skip_contained?: boolean }) =>
+  api.post<{ job_id: number; status: string }>('/dispatch/redispatch', {
+    batch_ids: params.batch_ids,
+    category_code: params.category_code,
+    skip_contained: params.skip_contained ?? false,
+  })
+
+export const listDispatchRedispatchJobs = (params?: { page?: number; page_size?: number }) =>
+  api.get<DispatchRedispatchJobsResponse>('/dispatch/redispatch/jobs', { params })
+
+export const getDispatchRedispatchJob = (jobId: number) =>
+  api.get<DispatchRedispatchJob>(`/dispatch/redispatch/jobs/${jobId}`)
+
 // ─── Export ────────────────────────────────────────────────
 export type TriggerExportPayload =
   | { clean_job_id: number; filename_prefix: string }

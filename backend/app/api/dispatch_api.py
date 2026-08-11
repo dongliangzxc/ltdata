@@ -32,6 +32,7 @@ from app.models.database import get_db, SessionLocal
 from app.models.schemas import (
     Category, CleanJobItemRecord, DispatchRule, DispatchBatch, DispatchItem,
     DispatchRuleIn, DispatchRuleOut, DispatchBatchOut,
+    DispatchRedispatchIn, DispatchRedispatchJob, DispatchRedispatchJobItem,
     RawDataRecord, UploadFileRecord, ColumnTemplate, WorkbenchExportJob,
 )
 from app.services.export_guards import (
@@ -439,14 +440,13 @@ def _count_rule_matches_for_batch(db: Session, batch: DispatchBatch, rule_ids: l
     return counts
 
 
-@router.post("/run", response_model=DispatchBatchOut)
-def run_dispatch(payload: dict, db: Session = Depends(get_db)):
-    """对指定 file_id 执行分发，返回新建的 batch"""
-    file_id: int = payload.get("file_id")
-    category_code = (payload.get("category_code") or "").strip() or None
-    if not file_id:
-        raise HTTPException(status_code=400, detail="file_id 不能为空")
+def _execute_category_dispatch(db: Session, file_id: int, category_code: str | None) -> DispatchBatch:
+    """对指定 file_id 执行品类局部分发，返回新建的 batch。
 
+    category_code 为空时执行全量分发；非空时只跑该品类规则，
+    并把该文件最新已完成批次中其它品类的分发结果复制进新批次。
+    供 run_dispatch 与批量补分发后台线程共用。
+    """
     file_record = db.query(UploadFileRecord).filter(UploadFileRecord.id == file_id).first()
     if not file_record:
         raise HTTPException(status_code=404, detail="文件不存在")
@@ -593,6 +593,16 @@ def run_dispatch(payload: dict, db: Session = Depends(get_db)):
         raise
 
 
+@router.post("/run", response_model=DispatchBatchOut)
+def run_dispatch(payload: dict, db: Session = Depends(get_db)):
+    """对指定 file_id 执行分发，返回新建的 batch"""
+    file_id: int = payload.get("file_id")
+    category_code = (payload.get("category_code") or "").strip() or None
+    if not file_id:
+        raise HTTPException(status_code=400, detail="file_id 不能为空")
+    return _execute_category_dispatch(db, file_id, category_code)
+
+
 @router.get("/batches", response_model=list[DispatchBatchOut])
 def list_batches(
     file_id: Optional[int] = Query(None),
@@ -608,6 +618,226 @@ def list_batches(
         q = q.filter(DispatchBatch.file_id == file_id)
     return q.order_by(DispatchBatch.created_at.desc()).all()
 
+
+# ─── 批量补分发（按批次多选，针对目标品类异步批量重分发） ───────────
+
+def _latest_done_batch_id(db: Session, file_id: int) -> int | None:
+    return db.query(func.max(DispatchBatch.id)).filter(
+        DispatchBatch.file_id == file_id,
+        DispatchBatch.status == "done",
+    ).scalar()
+
+
+def _file_has_category(db: Session, file_id: int, category_code: str) -> bool:
+    latest_batch_id = _latest_done_batch_id(db, file_id)
+    if not latest_batch_id:
+        return False
+    return db.query(DispatchItem.id).filter(
+        DispatchItem.batch_id == latest_batch_id,
+        DispatchItem.category_code == category_code,
+    ).first() is not None
+
+
+def _redispatch_job_out(job: DispatchRedispatchJob, category_name: str | None = None) -> dict:
+    return {
+        "id": job.id,
+        "category_code": job.category_code,
+        "category_name": category_name,
+        "skip_contained": job.skip_contained,
+        "status": job.status,
+        "total_batches": job.total_batches,
+        "done_batches": job.done_batches,
+        "success_batches": job.success_batches,
+        "failed_batches": job.failed_batches,
+        "skipped_batches": job.skipped_batches,
+        "error_msg": job.error_msg,
+        "created_by": job.created_by,
+        "created_at": format_beijing_datetime(job.created_at) if job.created_at else None,
+        "finished_at": format_beijing_datetime(job.finished_at) if job.finished_at else None,
+    }
+
+
+def _redispatch_item_out(item: DispatchRedispatchJobItem, db: Session) -> dict:
+    filename = None
+    batch = db.get(DispatchBatch, item.batch_id)
+    if batch is not None and batch.file is not None:
+        filename = batch.file.filename
+    return {
+        "id": item.id,
+        "batch_id": item.batch_id,
+        "file_id": item.file_id,
+        "filename": filename,
+        "status": item.status,
+        "new_batch_id": item.new_batch_id,
+        "dispatched_rows": item.dispatched_rows,
+        "unmatched_rows": item.unmatched_rows,
+        "error_msg": item.error_msg,
+        "finished_at": format_beijing_datetime(item.finished_at) if item.finished_at else None,
+    }
+
+
+def _run_redispatch_thread(job_id: int):
+    db = SessionLocal()
+    try:
+        job = db.query(DispatchRedispatchJob).filter(DispatchRedispatchJob.id == job_id).first()
+        if not job:
+            return
+        job.status = "running"
+        db.commit()
+
+        items = (
+            db.query(DispatchRedispatchJobItem)
+            .filter(DispatchRedispatchJobItem.job_id == job_id)
+            .order_by(DispatchRedispatchJobItem.id)
+            .all()
+        )
+        done = 0
+        success = 0
+        failed = 0
+        skipped = 0
+        for item in items:
+            item.status = "running"
+            db.commit()
+            try:
+                if not item.file_id:
+                    raise HTTPException(status_code=400, detail="选中批次无关联文件，无法补分发")
+                if job.skip_contained and _file_has_category(db, item.file_id, job.category_code):
+                    item.status = "skipped"
+                    item.error_msg = "该文件最新已完成批次已包含目标品类，已跳过"
+                    skipped += 1
+                else:
+                    batch = _execute_category_dispatch(db, item.file_id, job.category_code)
+                    item.new_batch_id = batch.id
+                    item.dispatched_rows = batch.dispatched_rows
+                    item.unmatched_rows = batch.unmatched_rows
+                    item.status = "done"
+                    success += 1
+            except Exception as exc:
+                item.status = "error"
+                item.error_msg = str(exc) or "补分发失败"
+                failed += 1
+            item.finished_at = datetime.utcnow()
+            done += 1
+            job.done_batches = done
+            job.success_batches = success
+            job.failed_batches = failed
+            job.skipped_batches = skipped
+            db.commit()
+        job.status = "done"
+        job.finished_at = datetime.utcnow()
+        db.commit()
+    except Exception as exc:
+        try:
+            job = db.query(DispatchRedispatchJob).filter(DispatchRedispatchJob.id == job_id).first()
+            if job:
+                job.status = "error"
+                job.error_msg = str(exc)
+                job.finished_at = datetime.utcnow()
+                db.commit()
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
+@router.post("/redispatch", status_code=202)
+def create_redispatch_job(
+    payload: DispatchRedispatchIn,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """创建批量补分发任务：对选中批次对应文件按目标品类重新分发，异步后台执行。"""
+    category_code = (payload.category_code or "").strip()
+    if not payload.batch_ids:
+        raise HTTPException(status_code=400, detail="请至少选择一个分发批次")
+    if not category_code:
+        raise HTTPException(status_code=400, detail="请选择目标品类")
+    _ensure_category_in_scope(db, current_user, category_code)
+
+    batches = db.query(DispatchBatch).filter(DispatchBatch.id.in_(payload.batch_ids)).all()
+    found_ids = {b.id for b in batches}
+    missing = [bid for bid in payload.batch_ids if bid not in found_ids]
+    if missing:
+        raise HTTPException(status_code=404, detail=f"分发批次不存在: {missing}")
+    not_done = [b.id for b in batches if b.status != "done"]
+    if not_done:
+        raise HTTPException(status_code=400, detail=f"以下批次尚未完成分发: {not_done}")
+
+    platforms: set[str] = set()
+    for b in batches:
+        if b.file is not None and b.file.platform:
+            platforms.add(b.file.platform.lower())
+    rule_filters = [DispatchRule.is_active == 1, DispatchRule.category_code == category_code]
+    if platforms:
+        rule_filters.append(or_(DispatchRule.platform.is_(None), DispatchRule.platform.in_(list(platforms))))
+    if not db.query(DispatchRule.id).filter(*rule_filters).first():
+        raise HTTPException(status_code=400, detail="该品类没有可用分发规则")
+
+    job = DispatchRedispatchJob(
+        category_code=category_code,
+        skip_contained=1 if payload.skip_contained else 0,
+        status="pending",
+        total_batches=len(batches),
+        created_by=_current_downloader_name(current_user),
+    )
+    db.add(job)
+    db.flush()
+    for b in batches:
+        db.add(DispatchRedispatchJobItem(
+            job_id=job.id,
+            batch_id=b.id,
+            file_id=b.file_id,
+            status="pending",
+        ))
+    db.commit()
+    db.refresh(job)
+
+    thread = threading.Thread(target=_run_redispatch_thread, args=(job.id,), daemon=True)
+    thread.start()
+    return {"job_id": job.id, "status": "pending"}
+
+
+@router.get("/redispatch/jobs")
+def list_redispatch_jobs(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    scoped_codes = _category_scope_codes(db, current_user)
+    query = db.query(DispatchRedispatchJob).order_by(
+        DispatchRedispatchJob.created_at.desc(),
+        DispatchRedispatchJob.id.desc(),
+    )
+    visible = []
+    for job in query.all():
+        if scoped_codes is not None and job.category_code not in scoped_codes:
+            continue
+        category_name = db.query(Category.name).filter(Category.code == job.category_code).scalar()
+        visible.append(_redispatch_job_out(job, category_name))
+    total = len(visible)
+    start = (page - 1) * page_size
+    return {"total": total, "items": visible[start:start + page_size]}
+
+
+@router.get("/redispatch/jobs/{job_id}")
+def get_redispatch_job(job_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    job = db.query(DispatchRedispatchJob).filter(DispatchRedispatchJob.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="补分发任务不存在")
+    scoped_codes = _category_scope_codes(db, current_user)
+    if scoped_codes is not None and job.category_code not in scoped_codes:
+        raise HTTPException(status_code=403, detail="无权限访问该品类")
+    category_name = db.query(Category.name).filter(Category.code == job.category_code).scalar()
+    out = _redispatch_job_out(job, category_name)
+    items = (
+        db.query(DispatchRedispatchJobItem)
+        .filter(DispatchRedispatchJobItem.job_id == job_id)
+        .order_by(DispatchRedispatchJobItem.id)
+        .all()
+    )
+    out["items"] = [_redispatch_item_out(item, db) for item in items]
+    return out
 
 
 @router.post("/batches/{batch_id}/categories/{category_code}/enqueue-clean")

@@ -2,7 +2,7 @@ import { useMemo, useState, useEffect } from 'react'
 import {
   Tabs, Table, Button, Upload, Space, Select, Tag, Popconfirm, message, Input, Card, Statistic, Alert, Form
 } from 'antd'
-import { InboxOutlined, DeleteOutlined } from '@ant-design/icons'
+import { InboxOutlined, DeleteOutlined, DownloadOutlined } from '@ant-design/icons'
 import type { UploadProps } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
@@ -13,6 +13,7 @@ import {
   listHistoricalMappings,
   deleteHistoricalMapping,
   deleteHistoricalBatch,
+  exportHistoricalMappings,
   type HistoricalBatchItem,
   type HistoricalImportPreview,
   type HistoricalImportResult,
@@ -50,6 +51,7 @@ function ImportTab() {
   const [categoryCode, setCategoryCode] = useState<string | undefined>()
   const [result, setResult] = useState<HistoricalImportResult | null>(null)
   const [batches, setBatches] = useState<HistoricalBatchItem[]>([])
+  const [downloadingBatch, setDownloadingBatch] = useState<string>()
   const currentUser = readStoredUser()
   const { options: categoryOptions, loading: categoryLoading } = useCategoryOptions()
   const visibleCategoryOptions = useMemo(() => {
@@ -136,6 +138,25 @@ function ImportTab() {
     message.success('批次已删除')
     loadBatches()
     setResult(null)
+  }
+
+  const handleDownloadBatch = async (batch: string) => {
+    setDownloadingBatch(batch)
+    try {
+      const res = await exportHistoricalMappings({ import_batch: batch })
+      const url = window.URL.createObjectURL(new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
+      const a = document.createElement('a')
+      document.body.appendChild(a)
+      a.href = url
+      a.download = `historical_export_${batch}.xlsx`
+      a.click()
+      document.body.removeChild(a)
+      setTimeout(() => window.URL.revokeObjectURL(url), 100)
+    } catch {
+      message.error('下载失败，请重试')
+    } finally {
+      setDownloadingBatch(undefined)
+    }
   }
 
   const uploadProps: UploadProps = {
@@ -298,14 +319,25 @@ function ImportTab() {
           { title: '条数', dataIndex: 'count', key: 'count', width: 80 },
           { title: '更新时间', dataIndex: 'updated_at', key: 'updated_at', width: 180, render: formatDateTime },
           {
-            title: '操作', key: 'action', width: 120,
+            title: '操作', key: 'action', width: 200,
             render: (_: unknown, record: HistoricalBatchItem) => (
-              <Popconfirm
-                title="确认删除该批次所有历史结果？"
-                onConfirm={() => handleDeleteBatch(record.batch)}
-              >
-                <Button type="link" danger size="small" icon={<DeleteOutlined />}>删除批次</Button>
-              </Popconfirm>
+              <Space>
+                <Button
+                  type="link"
+                  size="small"
+                  icon={<DownloadOutlined />}
+                  loading={downloadingBatch === record.batch}
+                  onClick={() => handleDownloadBatch(record.batch)}
+                >
+                  下载
+                </Button>
+                <Popconfirm
+                  title="确认删除该批次所有历史结果？"
+                  onConfirm={() => handleDeleteBatch(record.batch)}
+                >
+                  <Button type="link" danger size="small" icon={<DeleteOutlined />}>删除批次</Button>
+                </Popconfirm>
+              </Space>
             ),
           },
         ]}

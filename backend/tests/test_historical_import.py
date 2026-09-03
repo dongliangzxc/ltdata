@@ -542,6 +542,103 @@ def test_list_history_filters_batches_by_category_permissions(db):
     assert [item["batch"] for item in resp.json()] == ["batch-tv"]
 
 
+def test_export_history_batch_returns_excel(db):
+    model = _seed_model(db, model_code="TV-1", model_name="电视型号", brand_code="TV")
+    db.add_all([
+        Category(code="TV", name="电视", sort_order=1),
+        HistoricalMapping(
+            import_batch="batch-tv",
+            platform="jd",
+            item_id="tv-item",
+            item_name="电视商品",
+            item_name_norm="电视商品",
+            year=2026,
+            month_num=6,
+            month="2026-06",
+            week="W23",
+            category_code="TV",
+            model_text="电视型号",
+            model_code="TV-1",
+            model_id=model.id,
+            sales_qty=10,
+            price=100.5,
+            sales_amount=1005,
+            match_key_type="manual",
+            raw_payload={"标题": "电视商品"},
+        ),
+        HistoricalMapping(
+            import_batch="batch-headphone",
+            platform="jd",
+            item_id="hp-item",
+            item_name="耳机商品",
+            item_name_norm="耳机商品",
+            year=2026,
+            month_num=6,
+            month="2026-06",
+            category_code="headphone",
+            match_key_type="manual",
+            raw_payload={"标题": "耳机商品"},
+        ),
+    ])
+    db.commit()
+    client = _client(db, DummyUser(category_permissions=["TV"]))
+
+    resp = client.get("/api/historical/export", params={"import_batch": "batch-tv"})
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    assert "batch-tv" in resp.headers["content-disposition"]
+    df = pd.read_excel(io.BytesIO(resp.content))
+    assert list(df.columns)[0] == "商场/平台"
+    assert len(df) == 1
+    assert df.iloc[0]["商品ID"] == "tv-item"
+    assert df.iloc[0]["标准型号"] == "电视型号"
+    assert df.iloc[0]["销量"] == 10
+
+
+def test_export_history_batch_respects_category_permissions(db):
+    db.add_all([
+        Category(code="TV", name="电视", sort_order=1),
+        Category(code="headphone", name="耳机", sort_order=2),
+        HistoricalMapping(
+            import_batch="batch-tv",
+            platform="jd",
+            item_id="tv-item",
+            item_name="电视商品",
+            item_name_norm="电视商品",
+            year=2026,
+            month_num=6,
+            month="2026-06",
+            category_code="TV",
+            match_key_type="manual",
+            raw_payload={"标题": "电视商品"},
+        ),
+        HistoricalMapping(
+            import_batch="batch-headphone",
+            platform="jd",
+            item_id="hp-item",
+            item_name="耳机商品",
+            item_name_norm="耳机商品",
+            year=2026,
+            month_num=6,
+            month="2026-06",
+            category_code="headphone",
+            match_key_type="manual",
+            raw_payload={"标题": "耳机商品"},
+        ),
+    ])
+    db.commit()
+    client = _client(db, DummyUser(category_permissions=["TV"]))
+
+    resp = client.get("/api/historical/export")
+
+    assert resp.status_code == 200
+    df = pd.read_excel(io.BytesIO(resp.content))
+    assert list(df["商品ID"]) == ["tv-item"]
+
+
 def test_delete_history_mapping_respects_category_permissions(db):
     db.add_all([
         Category(code="TV", name="电视", sort_order=1),

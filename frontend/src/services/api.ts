@@ -1114,6 +1114,9 @@ export const listHistoricalBatches = () =>
 export const listHistoricalMappings = (params?: HistoricalMappingParams) =>
   api.get<PaginatedResponse<HistoricalMappingItem>>('/historical/mappings', { params })
 
+export const exportHistoricalMappings = (params?: HistoricalMappingParams) =>
+  api.get('/historical/export', { params, responseType: 'blob' })
+
 export const deleteHistoricalMapping = (id: number) =>
   api.delete(`/historical/mappings/${id}`)
 

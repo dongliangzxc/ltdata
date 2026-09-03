@@ -2,17 +2,21 @@
 - POST   /api/historical/import           Excel 导入历史确认结果（upsert）
 - GET    /api/historical/batches          查询所有批次名称列表
 - GET    /api/historical/mappings         分页查询映射（platform / import_batch 筛选）
+- GET    /api/historical/export           按批次导出历史数据 Excel
 - DELETE /api/historical/mappings/batch   按批次批量删除（静态路由，必须在 /{id} 之前）
 - DELETE /api/historical/mappings/{id}    删除单条映射
 """
+import io
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Iterable, Optional
+from urllib.parse import quote
 from uuid import UUID
 
 import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import StreamingResponse
 from openpyxl import load_workbook
 from pydantic import BaseModel
 from sqlalchemy import func, or_, tuple_
@@ -23,6 +27,7 @@ from app.core.config import settings
 from app.core.permissions import visible_category_codes
 from app.models.database import get_db
 from app.models.schemas import Category, HistoricalMapping, ModelRecord, User
+from app.services.export_guards import MAX_SYNC_EXPORT_ROWS, ensure_export_row_limit
 from app.services.import_helper import save_tmp_file
 from app.utils.time_utils import format_beijing_datetime
 from app.utils.url_utils import extract_item_id
@@ -1409,6 +1414,64 @@ def list_batches(
         .all()
     )
     return [{"batch": r.import_batch, "count": r.count, "updated_at": format_beijing_datetime(r.updated_at)} for r in rows]
+
+
+@router.get("/export")
+def export_mappings(
+    import_batch: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    q = (
+        db.query(HistoricalMapping, ModelRecord)
+        .outerjoin(ModelRecord, HistoricalMapping.model_id == ModelRecord.id)
+    )
+    q = _filter_historical_visible_categories(q, db, current_user)
+    if import_batch:
+        q = q.filter(HistoricalMapping.import_batch == import_batch)
+
+    total = q.count()
+    ensure_export_row_limit(total, max_rows=MAX_SYNC_EXPORT_ROWS, label="历史库导出")
+    rows = q.order_by(HistoricalMapping.id).all()
+
+    data = [
+        {
+            "商场/平台": hm.platform,
+            "商品ID": hm.item_id,
+            "标题": hm.item_name,
+            "品牌": hm.brand_raw,
+            "品牌码": hm.brand_code_raw,
+            "型号": hm.model_text,
+            "标准型号": m.model_name if m else None,
+            "型号码": hm.model_code,
+            "品类": hm.category_name_raw,
+            "品类码": hm.category_code or hm.category_code_raw,
+            "年": hm.year,
+            "月": hm.month_num,
+            "年月": hm.month,
+            "周": hm.week,
+            "报告类型": hm.report_type,
+            "渠道": hm.channel,
+            "销量": hm.sales_qty,
+            "单价": float(hm.price) if hm.price is not None else None,
+            "销额": float(hm.sales_amount) if hm.sales_amount is not None else None,
+            "网址": hm.item_url,
+            "导入批次": hm.import_batch,
+            "匹配键": hm.match_key_type,
+        }
+        for hm, m in rows
+    ]
+    df = pd.DataFrame(data)
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="历史库")
+    buf.seek(0)
+    filename = f"historical_export_{import_batch or 'all'}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
 
 
 @router.get("/mappings")

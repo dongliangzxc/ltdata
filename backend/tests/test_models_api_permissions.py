@@ -117,7 +117,8 @@ def test_create_model_auto_hangs_brand_to_category(client):
     """新建型号时，品牌自动挂到该品类下（brand_categories），即使此前该品牌无此品类型号"""
     from app.models.schemas import BrandCategory
 
-    client.current_user = DummyUser(is_admin=1, category_permissions=[])
+    client.current_user.is_admin = 1
+    client.current_user.category_permissions = []
     with client.Session() as session:
         seed_categories(session)
         seed_brands(session)

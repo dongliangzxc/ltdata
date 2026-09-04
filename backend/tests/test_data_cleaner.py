@@ -472,6 +472,34 @@ def test_no_alias_keeps_original_brand_std(db):
     assert cleaned.brand_std == "未知品牌"
 
 
+def test_brand_alias_slash_separated_parts_match(db):
+    """别名用 / 分隔多个写法时，每个部分都能匹配对应的原始品牌文本"""
+    f = _make_file(db)
+    _make_raw(db, f.id, "汉王词典笔", brand_raw="汉王（Hanvon）")
+    db.add(BrandAlias(alias_name="汉王（Hanvon）/HANVON/汉王", brand_code="汉王"))
+    job = _make_job(db, f.id)
+    db.commit()
+
+    run_clean(db, job.id, [f.id], {"dedup": True})
+
+    cleaned = db.query(CleanedDataRecord).first()
+    assert cleaned.brand_std == "汉王"
+
+
+def test_brand_alias_full_string_with_slash_keeps_exact_match(db):
+    """含 / 的别名整串仍精确匹配（如 HANVON/汉王 是原始值本身）"""
+    f = _make_file(db)
+    _make_raw(db, f.id, "汉王路由器", brand_raw="HANVON/汉王")
+    db.add(BrandAlias(alias_name="HANVON/汉王", brand_code="汉王"))
+    job = _make_job(db, f.id)
+    db.commit()
+
+    run_clean(db, job.id, [f.id], {"dedup": True})
+
+    cleaned = db.query(CleanedDataRecord).first()
+    assert cleaned.brand_std == "汉王"
+
+
 def test_clean_preserves_week_from_raw_data(db):
     """清洗时保留 raw_data.week，供后续历史库按周匹配使用"""
     f = _make_file(db)

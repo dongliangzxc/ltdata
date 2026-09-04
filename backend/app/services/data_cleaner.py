@@ -29,9 +29,20 @@ def _load_intervention_rules(db: Session, category_code: str | None = None) -> l
 
 
 def _load_brand_alias_map(db: Session) -> dict[str, str]:
-    """返回 {alias_name_upper: brand_code} 只取 active"""
+    """返回 {写法大写: brand_code}，只取 active。
+
+    一条别名可写多个写法并用 `/` 分隔（如「汉王（Hanvon）/HANVON/汉王」），
+    这里拆成「整串 + 每个分隔部分」分别作为 key，便于对原始品牌文本做精确匹配。
+    """
+    result = {}
     rows = db.query(BrandAlias).filter(BrandAlias.is_active == 1).all()
-    return {r.alias_name.upper(): r.brand_code for r in rows}
+    for r in rows:
+        normalized = r.alias_name.strip().upper()
+        candidates = [normalized]
+        candidates.extend(part.strip() for part in normalized.split("/") if part.strip())
+        for candidate in candidates:
+            result[candidate] = r.brand_code
+    return result
 
 
 def _format_number(value: object) -> str:

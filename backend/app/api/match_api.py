@@ -20,12 +20,13 @@ from app.models.schemas import (
     CleanJobRecord, RawDataRecord, ModelRecord, BrandRecord,
     MatchResultAttr, MatchResultCandidate, MatchCandidateOut, ItemUrlMapping, Category,
     MetadataSpec, ModelSpec, CleanedDataRecord,
-    DispatchItem, BrandAlias,
+    DispatchItem,
     PaginatedResponse,
     MatchTransferLog,
     User,
 )
 from app.services.clean_task_snapshot import ACTIVE_TASK_STATUSES
+from app.services.data_cleaner import _load_brand_alias_map
 from app.services.matcher import run_match, run_match_for_result
 from app.services.price_auditor import audit_price
 from app.utils.time_utils import format_beijing_datetime
@@ -692,10 +693,7 @@ def get_match_review_detail(match_id: int, db: Session = Depends(get_db)):
     )
 
     # 实时读取品牌写法库映射，按 brand_raw 即时归一化（不依赖清洗时快照）
-    brand_alias_map = {
-        alias.alias_name.upper(): alias.brand_code
-        for alias in db.query(BrandAlias).filter(BrandAlias.is_active == 1).all()
-    }
+    brand_alias_map = _load_brand_alias_map(db)
     live_brand_std = brand_alias_map.get(rd.brand_raw.upper()) if rd.brand_raw else None
 
     category_code = model.category_code if model and model.category_code else None

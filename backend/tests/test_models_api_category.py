@@ -64,3 +64,35 @@ def test_list_models_returns_category_name(client):
     assert r.status_code == 200
     items = r.json()["items"]
     assert items[0]["category_name"] == "回音壁"
+
+
+def test_create_model_without_model_code_auto_generates_placeholder(client):
+    r = client.post("/api/models", json={
+        "brand_code": "SONY",
+        "model_code": "",
+        "category_code": "soundbar",
+        "model_name": "待补型号",
+    })
+    assert r.status_code == 200
+    assert r.json()["model_code"] == "待补型号-soundbar"
+
+
+def test_create_model_placeholder_code_unique_within_brand(client):
+    r1 = client.post("/api/models", json={"brand_code": "SONY", "model_code": None, "category_code": "soundbar"})
+    r2 = client.post("/api/models", json={"brand_code": "SONY", "model_code": None, "category_code": "soundbar"})
+    assert r1.status_code == 200
+    assert r2.status_code == 200
+    assert r1.json()["model_code"] == "待补型号-soundbar"
+    assert r2.json()["model_code"] == "待补型号-soundbar-2"
+
+
+def test_create_model_without_model_code_no_category_uses_unknown(client):
+    r = client.post("/api/models", json={"brand_code": "SONY", "model_code": None})
+    assert r.status_code == 200
+    assert r.json()["model_code"] == "待补型号-unknown"
+
+
+def test_create_model_duplicate_explicit_code_still_rejected(client):
+    client.post("/api/models", json={"brand_code": "SONY", "model_code": "XM5"})
+    r = client.post("/api/models", json={"brand_code": "SONY", "model_code": "XM5"})
+    assert r.status_code == 409

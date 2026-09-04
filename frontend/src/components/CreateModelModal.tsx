@@ -122,7 +122,7 @@ export default function CreateModelModal({
       const payload: CreateModelPayload = {
         brand_code: values.brand_code,
         brand_name: selectedBrand?.brand_name ?? null,
-        model_code: values.model_code.trim(),
+        model_code: (values.model_code ?? '').trim() || null,
         model_name: trimOrNull(values.model_name),
         category_code: selectedCategoryCode,
         launch_year: values.launch_year ?? null,
@@ -194,8 +194,8 @@ export default function CreateModelModal({
           <Divider orientation="left" plain style={{ fontSize: 13, color: '#666' }}>型号信息</Divider>
           <Row gutter={12}>
             <Col span={12}>
-              <Form.Item label="型号码" name="model_code" rules={[{ required: true, message: '请输入型号码' }]}>
-                <Input placeholder="如 OSMO-ACTION-4" />
+              <Form.Item label="型号码" name="model_code">
+                <Input placeholder="留空将自动生成待补型号码" />
               </Form.Item>
             </Col>
             <Col span={12}>

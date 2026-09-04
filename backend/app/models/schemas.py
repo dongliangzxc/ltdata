@@ -941,7 +941,7 @@ class PublishJobOut(BaseModel):
 
 class ModelIn(BaseModel):
     brand_code:    str
-    model_code:    str
+    model_code:    Optional[str] = None
     category_code: Optional[str] = None
     brand_name:    Optional[str] = None
     model_name:    Optional[str] = None

@@ -627,7 +627,7 @@ export type ModelItem = {
 
 export type CreateModelPayload = {
   brand_code: string
-  model_code: string
+  model_code?: string | null
   category_code?: string | null
   brand_name?: string | null
   model_name?: string | null

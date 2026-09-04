@@ -190,7 +190,7 @@ export default function BrandsPage() {
   const [editOpen, setEditOpen] = useState(false)
   const [editingBrand, setEditingBrand] = useState<BrandItem | null>(null)
   const [editSaving, setEditSaving] = useState(false)
-  const [editForm] = Form.useForm<{ brand_name: string }>()
+  const [editForm] = Form.useForm<{ brand_name: string; category_codes: string[] }>()
 
   const { data: brandPage, loading, refresh, mutate } = useRequest(
     () => listBrands({

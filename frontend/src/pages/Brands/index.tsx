@@ -8,21 +8,10 @@ import { useRequest } from 'ahooks'
 import {
   listBrands, listBrandAliasesByCode, createBrandAliasForCode, deleteBrandAliasById,
   updateBrand, updateBrandAliasForCode, setBrandCategories,
-  type BrandItem, type BrandAliasItem, type UserProfile,
+  type BrandItem, type BrandAliasItem,
 } from '../../services/api'
 import CreateBrandModal from '../../components/CreateBrandModal'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
-
-function readStoredUser(): UserProfile | null {
-  if (typeof localStorage === 'undefined') return null
-  const raw = localStorage.getItem('auth_user')
-  if (!raw) return null
-  try {
-    return JSON.parse(raw) as UserProfile
-  } catch {
-    return null
-  }
-}
 
 function AliasPanel({
   brandCode,
@@ -201,20 +190,12 @@ export default function BrandsPage() {
     }).then(r => r.data),
     { refreshDeps: [searchText, selectedCategoryCode, currentPage, pageSize] },
   )
-  const currentUser = readStoredUser()
   const { options: categoryOptions, loading: categoryLoading } = useCategoryOptions()
-  const visibleCategoryOptions = useMemo(() => {
-    if (!currentUser) return categoryOptions
-    if (currentUser.is_admin === 1) return categoryOptions
-    if (!currentUser.category_permissions?.length) return categoryOptions
-    const allowed = new Set(currentUser.category_permissions)
-    return categoryOptions.filter(c => allowed.has(c.value))
-  }, [categoryOptions, currentUser])
   const categoryLabelMap = useMemo(() => {
     const m = new Map<string, string>()
-    for (const c of visibleCategoryOptions) m.set(c.value, c.label)
+    for (const c of categoryOptions) m.set(c.value, c.label)
     return m
-  }, [visibleCategoryOptions])
+  }, [categoryOptions])
 
   const renderOptionalText = (v: string | null | undefined) =>
     v && v.trim() ? v : <span style={{ color: '#ccc' }}>—</span>
@@ -334,7 +315,7 @@ export default function BrandsPage() {
             setSelectedCategoryCode(value)
             setCurrentPage(1)
           }}
-          options={visibleCategoryOptions}
+          options={categoryOptions}
           showSearch
           optionFilterProp="label"
           style={{ width: 180 }}
@@ -387,7 +368,7 @@ export default function BrandsPage() {
               showSearch
               optionFilterProp="label"
               placeholder="选择该品牌所属品类"
-              options={visibleCategoryOptions}
+              options={categoryOptions}
             />
           </Form.Item>
         </Form>

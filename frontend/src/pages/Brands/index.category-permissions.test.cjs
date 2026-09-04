@@ -4,8 +4,8 @@ const assert = require('node:assert/strict')
 
 const source = fs.readFileSync(path.join(__dirname, 'index.tsx'), 'utf8')
 
-assert.match(source, /localStorage\.getItem\('auth_user'\)/, 'brands page should read the cached auth user')
-assert.match(source, /category_permissions/, 'brands page should inspect category permissions')
-assert.match(source, /visibleCategoryOptions/, 'brands page should derive a visible category option list')
-assert.match(source, /options=\{visibleCategoryOptions\}/, 'brand category filter should use filtered category options')
-assert.match(source, /for \(const c of visibleCategoryOptions\)/, 'brand category labels should use filtered category options')
+// 品牌管理为全局功能：品类筛选与标签使用全部品类，不再按用户品类权限过滤品牌
+assert.match(source, /useCategoryOptions\(\)/, 'brands page should load category options')
+assert.match(source, /options=\{categoryOptions\}/, 'brand category filter should use all categories')
+assert.match(source, /for \(const c of categoryOptions\)/, 'brand category labels should use all categories')
+assert.doesNotMatch(source, /visibleCategoryOptions/, 'brands page should not filter categories by user permission')

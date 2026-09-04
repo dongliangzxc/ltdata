@@ -7,7 +7,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.auth_deps import get_current_user
-from app.core.permissions import visible_category_codes
 from app.models.database import get_db
 from app.models.schemas import BrandRecord, ModelRecord, BrandAlias, BrandCategory, BrandIn, BrandOut, PaginatedResponse, Category, User
 
@@ -38,13 +37,6 @@ class BrandUpdate(BaseModel):
 
 class BrandCategoriesIn(BaseModel):
     category_codes: list[str]
-
-
-def _visible_brand_category_codes(db: Session, current_user: User) -> set[str] | None:
-    all_codes = [code for code, in db.query(Category.code).order_by(Category.sort_order, Category.name).all()]
-    if not all_codes:
-        return None
-    return set(visible_category_codes(current_user, all_codes))
 
 
 def _clean_brand_code(value: str | None) -> str:
@@ -180,7 +172,6 @@ def list_brands(
     current_user: User = Depends(get_current_user),
 ):
     """返回分页品牌主数据列表，附带型号数、别名数、覆盖品类。"""
-    visible_codes = _visible_brand_category_codes(db, current_user)
     normalized_model_brand_code = func.trim(ModelRecord.brand_code)
     query = db.query(BrandRecord)
 
@@ -200,33 +191,6 @@ def list_brands(
             BrandRecord.brand_name.ilike(pattern) |
             BrandRecord.original_brand_name.ilike(pattern) |
             BrandRecord.brand_code.in_(keyword_brand_codes)
-        )
-
-    if visible_codes is not None:
-        visible_brand_codes = (
-            db.query(normalized_model_brand_code)
-            .filter(
-                ModelRecord.brand_code.isnot(None),
-                ModelRecord.category_code.in_(visible_codes),
-            )
-            .distinct()
-        )
-        visible_assigned_brand_codes = (
-            db.query(BrandCategory.brand_code)
-            .filter(BrandCategory.category_code.in_(visible_codes))
-            .distinct()
-        )
-        modeled_brand_codes = (
-            db.query(normalized_model_brand_code)
-            .filter(ModelRecord.brand_code.isnot(None))
-            .distinct()
-        )
-        # 品牌可见范围 = 在可见品类下有型号的品牌 ∪ 指派了可见品类的品牌 ∪ 完全没有任何型号的品牌。
-        # 无型号品牌不归属于任何品类，若一律隐藏会导致「选不中、也建不了」（新建时后端报品牌已存在）。
-        query = query.filter(
-            BrandRecord.brand_code.in_(visible_brand_codes)
-            | BrandRecord.brand_code.in_(visible_assigned_brand_codes)
-            | ~BrandRecord.brand_code.in_(modeled_brand_codes)
         )
 
     cleaned_category_code = (category_code or "").strip()
@@ -260,7 +224,7 @@ def list_brands(
         total=total,
         page=page,
         page_size=page_size,
-        items=_build_brand_outs(db, brands, visible_codes),
+        items=_build_brand_outs(db, brands),
     )
 
 

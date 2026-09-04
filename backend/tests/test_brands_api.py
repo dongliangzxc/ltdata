@@ -220,8 +220,8 @@ def test_list_brands_includes_brands_without_models_when_categories_exist(client
     assert [b["brand_code"] for b in r.json()["items"]] == ["SONY"]
 
 
-def test_list_brands_shows_no_model_brands_to_scoped_users(client_and_db):
-    """无型号品牌不归属任何品类，应对所有非管理员用户可见。"""
+def test_list_brands_shows_all_brands_to_scoped_users(client_and_db):
+    """品牌管理为全局功能：受限品类用户也能看到全部品牌"""
     from app.models.schemas import Category
 
     class ScopedUser:
@@ -244,7 +244,7 @@ def test_list_brands_shows_no_model_brands_to_scoped_users(client_and_db):
     assert r.status_code == 200
     codes = [b["brand_code"] for b in r.json()["items"]]
     assert "SONY" in codes
-    assert "BOSE" not in codes
+    assert "BOSE" in codes
     assert "EMPTY" in codes
 
 

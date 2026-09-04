@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.core.auth_deps import get_current_user
 from app.core.permissions import visible_category_codes
 from app.models.database import get_db
-from app.models.schemas import BrandRecord, ModelRecord, BrandAlias, BrandIn, BrandOut, PaginatedResponse, Category, User
+from app.models.schemas import BrandRecord, ModelRecord, BrandAlias, BrandCategory, BrandIn, BrandOut, PaginatedResponse, Category, User
 
 router = APIRouter(prefix="/api/brands", tags=["brands"])
 
@@ -34,6 +34,10 @@ class BrandAliasUpdate(BaseModel):
 class BrandUpdate(BaseModel):
     brand_name: str | None = None
     alias_name: str | None = None
+
+
+class BrandCategoriesIn(BaseModel):
+    category_codes: list[str]
 
 
 def _visible_brand_category_codes(db: Session, current_user: User) -> set[str] | None:
@@ -138,6 +142,15 @@ def _build_brand_outs(db: Session, brands: list[BrandRecord], visible_codes: set
             model_brand_names[brand_code] = brand_name
         if category_code:
             category_map.setdefault(brand_code, set()).add(category_code)
+    # 直接指派的品类（品牌可对应多个品类）与型号推导取并集
+    assigned_category_query = db.query(BrandCategory.brand_code, BrandCategory.category_code).filter(
+        BrandCategory.brand_code.in_(brand_codes)
+    )
+    if visible_codes is not None:
+        assigned_category_query = assigned_category_query.filter(BrandCategory.category_code.in_(visible_codes))
+    for brand_code, category_code in assigned_category_query.all():
+        if category_code:
+            category_map.setdefault(brand_code, set()).add(category_code)
     category_codes_by_brand = {
         brand_code: sorted(codes)
         for brand_code, codes in category_map.items()
@@ -198,15 +211,21 @@ def list_brands(
             )
             .distinct()
         )
+        visible_assigned_brand_codes = (
+            db.query(BrandCategory.brand_code)
+            .filter(BrandCategory.category_code.in_(visible_codes))
+            .distinct()
+        )
         modeled_brand_codes = (
             db.query(normalized_model_brand_code)
             .filter(ModelRecord.brand_code.isnot(None))
             .distinct()
         )
-        # 品牌可见范围 = 在可见品类下有型号的品牌 ∪ 完全没有任何型号的品牌。
+        # 品牌可见范围 = 在可见品类下有型号的品牌 ∪ 指派了可见品类的品牌 ∪ 完全没有任何型号的品牌。
         # 无型号品牌不归属于任何品类，若一律隐藏会导致「选不中、也建不了」（新建时后端报品牌已存在）。
         query = query.filter(
             BrandRecord.brand_code.in_(visible_brand_codes)
+            | BrandRecord.brand_code.in_(visible_assigned_brand_codes)
             | ~BrandRecord.brand_code.in_(modeled_brand_codes)
         )
 
@@ -220,7 +239,15 @@ def list_brands(
             )
             .distinct()
         )
-        query = query.filter(BrandRecord.brand_code.in_(category_brand_codes))
+        assigned_category_brand_codes = (
+            db.query(BrandCategory.brand_code)
+            .filter(BrandCategory.category_code == cleaned_category_code)
+            .distinct()
+        )
+        query = query.filter(
+            BrandRecord.brand_code.in_(category_brand_codes)
+            | BrandRecord.brand_code.in_(assigned_category_brand_codes)
+        )
 
     total = query.count()
     brands = (
@@ -284,6 +311,36 @@ def update_brand(brand_code: str, payload: BrandUpdate, db: Session = Depends(ge
     out = _build_brand_outs(db, [brand])[0]
     out.brand_name = brand.brand_name
     return out
+
+
+@router.put("/{brand_code}/categories", response_model=BrandOut)
+def set_brand_categories(
+    brand_code: str,
+    payload: BrandCategoriesIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """设置品牌直接指派的品类（一个品牌可对应多个品类），与型号推导取并集展示。"""
+    brand = db.query(BrandRecord).filter(BrandRecord.brand_code == brand_code).first()
+    if not brand:
+        raise HTTPException(status_code=404, detail="品牌不存在")
+
+    cleaned_codes = []
+    for code in payload.category_codes or []:
+        cleaned = (code or "").strip()
+        if cleaned and cleaned not in cleaned_codes:
+            cleaned_codes.append(cleaned)
+
+    valid_codes = {code for code, in db.query(Category.code).all()}
+    for code in cleaned_codes:
+        if code not in valid_codes:
+            raise HTTPException(status_code=400, detail=f"品类「{code}」不存在")
+
+    db.query(BrandCategory).filter(BrandCategory.brand_code == brand_code).delete(synchronize_session=False)
+    for code in cleaned_codes:
+        db.add(BrandCategory(brand_code=brand_code, category_code=code))
+    db.commit()
+    return _build_brand_outs(db, [brand])[0]
 
 
 @router.get("/{brand_code}/aliases", response_model=list[BrandAliasOut])

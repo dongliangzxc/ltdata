@@ -248,6 +248,59 @@ def test_list_brands_shows_no_model_brands_to_scoped_users(client_and_db):
     assert "EMPTY" in codes
 
 
+def test_set_brand_categories(client_and_db):
+    """PUT /brands/{brand_code}/categories 可给品牌指派多个品类"""
+    from app.models.schemas import BrandCategory, Category
+
+    client, db = client_and_db
+    db.add(Category(code="HEADPHONE", name="耳机"))
+    db.add(Category(code="SPEAKER", name="音箱"))
+    db.add(BrandRecord(brand_code="SONY", brand_name="索尼"))
+    db.commit()
+
+    r = client.put("/api/brands/SONY/categories", json={"category_codes": ["HEADPHONE", "SPEAKER"]})
+
+    assert r.status_code == 200
+    assert r.json()["category_codes"] == ["HEADPHONE", "SPEAKER"]
+    assert db.query(BrandCategory).filter_by(brand_code="SONY").count() == 2
+
+
+def test_list_brands_filters_category_by_assigned_categories(client_and_db):
+    """品牌管理按品类筛选时，直接指派的品类也参与过滤"""
+    from app.models.schemas import BrandCategory, Category
+
+    client, db = client_and_db
+    db.add(Category(code="HEADPHONE", name="耳机"))
+    db.add(BrandRecord(brand_code="SONY", brand_name="索尼"))
+    db.add(BrandRecord(brand_code="BOSE", brand_name="博士"))
+    db.add(BrandCategory(brand_code="SONY", category_code="HEADPHONE"))
+    db.commit()
+
+    r = client.get("/api/brands", params={"category_code": "HEADPHONE"})
+
+    assert r.status_code == 200
+    assert [item["brand_code"] for item in r.json()["items"]] == ["SONY"]
+
+
+def test_brand_categories_union_assigned_and_model_derived(client_and_db):
+    """品牌品类 = 直接指派 ∪ 型号推导 的并集"""
+    from app.models.schemas import BrandCategory, Category
+
+    client, db = client_and_db
+    db.add(Category(code="HEADPHONE", name="耳机"))
+    db.add(Category(code="SPEAKER", name="音箱"))
+    db.add(BrandRecord(brand_code="SONY", brand_name="索尼"))
+    db.add(ModelRecord(brand_code="SONY", model_code="S1", category_code="HEADPHONE"))
+    db.add(BrandCategory(brand_code="SONY", category_code="SPEAKER"))
+    db.commit()
+
+    r = client.get("/api/brands")
+
+    assert r.status_code == 200
+    sony = next(b for b in r.json()["items"] if b["brand_code"] == "SONY")
+    assert sony["category_codes"] == ["HEADPHONE", "SPEAKER"]
+
+
 def test_list_brands_falls_back_original_name_from_models(client_and_db):
     """GET /brands fills uploaded brand name from model metadata when brand metadata is blank."""
     client, db = client_and_db

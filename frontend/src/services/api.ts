@@ -1317,6 +1317,9 @@ export const createBrand = (payload: CreateBrandPayload) =>
 export const updateBrand = (brandCode: string, payload: UpdateBrandPayload) =>
   api.patch<BrandItem>(`/brands/${encodeURIComponent(brandCode)}`, payload)
 
+export const setBrandCategories = (brandCode: string, categoryCodes: string[]) =>
+  api.put<BrandItem>(`/brands/${encodeURIComponent(brandCode)}/categories`, { category_codes: categoryCodes })
+
 export const listBrandAliasesByCode = (brandCode: string) =>
   api.get<BrandAliasItem[]>(`/brands/${brandCode}/aliases`)
 

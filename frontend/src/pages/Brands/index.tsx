@@ -7,7 +7,7 @@ import { PlusOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import {
   listBrands, listBrandAliasesByCode, createBrandAliasForCode, deleteBrandAliasById,
-  updateBrand, updateBrandAliasForCode,
+  updateBrand, updateBrandAliasForCode, setBrandCategories,
   type BrandItem, type BrandAliasItem, type UserProfile,
 } from '../../services/api'
 import CreateBrandModal from '../../components/CreateBrandModal'
@@ -223,6 +223,7 @@ export default function BrandsPage() {
     setEditingBrand(brand)
     editForm.setFieldsValue({
       brand_name: brand.brand_name || '',
+      category_codes: brand.category_codes || [],
     })
     setEditOpen(true)
   }
@@ -239,13 +240,14 @@ export default function BrandsPage() {
     const trimmedName = values.brand_name?.trim() || ''
     setEditSaving(true)
     try {
-      const { data: updatedBrand } = await updateBrand(editingBrand.brand_code, {
+      await updateBrand(editingBrand.brand_code, {
         brand_name: trimmedName || null,
       })
+      const { data: withCategories } = await setBrandCategories(editingBrand.brand_code, values.category_codes || [])
       mutate(currentPageData => (currentPageData ? {
         ...currentPageData,
         items: currentPageData.items.map(brand => (
-          brand.brand_code === updatedBrand.brand_code ? updatedBrand : brand
+          brand.brand_code === withCategories.brand_code ? withCategories : brand
         )),
       } : currentPageData))
       refresh()
@@ -377,6 +379,16 @@ export default function BrandsPage() {
           </Form.Item>
           <Form.Item name="brand_name" label="修改后名称">
             <Input placeholder="留空则恢复默认显示" />
+          </Form.Item>
+          <Form.Item name="category_codes" label="品类（可多选）">
+            <Select
+              mode="multiple"
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              placeholder="选择该品牌所属品类"
+              options={visibleCategoryOptions}
+            />
           </Form.Item>
         </Form>
         {editingBrand && (

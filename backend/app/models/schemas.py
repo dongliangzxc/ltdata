@@ -469,6 +469,19 @@ class BrandRecord(Base):
     updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class BrandCategory(Base):
+    """品牌直接指派的品类（一个品牌可对应多个品类）"""
+    __tablename__ = "brand_categories"
+    __table_args__ = (
+        UniqueConstraint("brand_code", "category_code", name="uq_brand_category"),
+    )
+
+    id            = Column(Integer, primary_key=True, autoincrement=True)
+    brand_code    = Column(String(100), nullable=False, index=True)
+    category_code = Column(String(50), nullable=False, index=True)
+    created_at    = Column(DateTime, default=datetime.utcnow)
+
+
 class ModelRecord(Base):
     __tablename__ = "models"
     __table_args__ = (

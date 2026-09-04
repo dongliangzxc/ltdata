@@ -563,7 +563,8 @@ def test_update_brand_saves_name_and_brand_alias(client_and_db):
     assert [alias.alias_name for alias in aliases] == ["SONY INC", "Sony Write Alias"]
 
 
-def test_update_brand_alias_allows_duplicate_alias_text(client_and_db):
+def test_update_brand_alias_rejects_duplicate_alias_text_owned_by_other_brand(client_and_db):
+    """品牌写法归属另一品牌时，设置到当前品牌应被拒绝（避免归一化冲突）"""
     client, db = client_and_db
     db.add(BrandRecord(brand_code="SONY", brand_name="索尼旧名"))
     db.add(BrandRecord(brand_code="BOSE", brand_name="博士", brand_alias_name="BOSE"))
@@ -572,11 +573,8 @@ def test_update_brand_alias_allows_duplicate_alias_text(client_and_db):
 
     resp = client.patch("/api/brands/SONY", json={"brand_name": "索尼新名", "alias_name": "BOSE"})
 
-    assert resp.status_code == 200
-    brand = db.query(BrandRecord).filter_by(brand_code="SONY").one()
-    assert brand.brand_name == "索尼新名"
-    assert brand.brand_alias_name == "BOSE"
-    assert db.query(BrandAlias).filter_by(brand_code="SONY").one().alias_name == "BOSE"
+    assert resp.status_code == 409
+    assert "BOSE" in resp.json()["detail"]
 
 
 def test_update_brand_saves_brand_alias_on_brand_record_when_missing(client_and_db):

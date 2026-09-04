@@ -196,6 +196,58 @@ def test_list_brands_filters_category_on_backend(client_and_db):
     assert [item["brand_code"] for item in body["items"]] == ["SONY"]
 
 
+def test_list_brands_includes_brands_without_models_when_categories_exist(client_and_db):
+    """生产场景：库里有品类时，无型号的品牌仍应可见（否则选不中、也建不了）。"""
+    from app.models.schemas import Category
+
+    client, db = client_and_db
+    db.add(Category(code="HEADPHONE", name="耳机"))
+    db.add(BrandRecord(brand_code="SONY", brand_name="索尼"))
+    db.add(BrandRecord(brand_code="EMPTY", brand_name="空品牌"))
+    db.add(ModelRecord(brand_code="SONY", model_code="WH1000XM5", category_code="HEADPHONE"))
+    db.commit()
+
+    r = client.get("/api/brands")
+
+    assert r.status_code == 200
+    codes = [b["brand_code"] for b in r.json()["items"]]
+    assert "SONY" in codes
+    assert "EMPTY" in codes
+
+    r = client.get("/api/brands", params={"category_code": "HEADPHONE"})
+
+    assert r.status_code == 200
+    assert [b["brand_code"] for b in r.json()["items"]] == ["SONY"]
+
+
+def test_list_brands_shows_no_model_brands_to_scoped_users(client_and_db):
+    """无型号品牌不归属任何品类，应对所有非管理员用户可见。"""
+    from app.models.schemas import Category
+
+    class ScopedUser:
+        is_admin = 0
+        category_permissions = ["HEADPHONE"]
+
+    client, db = client_and_db
+    db.add(Category(code="HEADPHONE", name="耳机"))
+    db.add(Category(code="SPEAKER", name="音箱"))
+    db.add(BrandRecord(brand_code="SONY", brand_name="索尼"))
+    db.add(BrandRecord(brand_code="BOSE", brand_name="博士"))
+    db.add(BrandRecord(brand_code="EMPTY", brand_name="空品牌"))
+    db.add(ModelRecord(brand_code="SONY", model_code="S1", category_code="HEADPHONE"))
+    db.add(ModelRecord(brand_code="BOSE", model_code="B1", category_code="SPEAKER"))
+    db.commit()
+    client.app.dependency_overrides[get_current_user] = lambda: ScopedUser()
+
+    r = client.get("/api/brands")
+
+    assert r.status_code == 200
+    codes = [b["brand_code"] for b in r.json()["items"]]
+    assert "SONY" in codes
+    assert "BOSE" not in codes
+    assert "EMPTY" in codes
+
+
 def test_list_brands_falls_back_original_name_from_models(client_and_db):
     """GET /brands fills uploaded brand name from model metadata when brand metadata is blank."""
     client, db = client_and_db

@@ -190,7 +190,17 @@ def list_brands(
             )
             .distinct()
         )
-        query = query.filter(BrandRecord.brand_code.in_(visible_brand_codes))
+        modeled_brand_codes = (
+            db.query(normalized_model_brand_code)
+            .filter(ModelRecord.brand_code.isnot(None))
+            .distinct()
+        )
+        # 品牌可见范围 = 在可见品类下有型号的品牌 ∪ 完全没有任何型号的品牌。
+        # 无型号品牌不归属于任何品类，若一律隐藏会导致「选不中、也建不了」（新建时后端报品牌已存在）。
+        query = query.filter(
+            BrandRecord.brand_code.in_(visible_brand_codes)
+            | ~BrandRecord.brand_code.in_(modeled_brand_codes)
+        )
 
     cleaned_category_code = (category_code or "").strip()
     if cleaned_category_code:

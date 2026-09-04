@@ -50,7 +50,7 @@ type UrlMapping = {
 type ModelOption = {
   id: number
   brand_code: string
-  model_code: string
+  model_code: string | null
   brand_name: string | null
   model_name: string | null
   category_code: string | null
@@ -340,7 +340,7 @@ export default function UrlMappingsPage() {
               }
               options={filteredModelOptions.map(m => ({
                 value: m.id,
-                label: `[${m.brand_code}] ${m.model_code}${m.model_name ? ' ' + m.model_name : ''}`,
+                label: `[${m.brand_code}] ${m.model_code || '-'}${m.model_name ? ' ' + m.model_name : ''}`,
               }))}
             />
           </Form.Item>

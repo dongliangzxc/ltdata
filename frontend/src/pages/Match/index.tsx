@@ -118,7 +118,7 @@ type DisabledItem = {
 type ModelOption = {
   id: number
   brand_code: string
-  model_code: string
+  model_code: string | null
   brand_name: string | null
   model_name: string | null
 }
@@ -1752,7 +1752,7 @@ export default function MatchPage() {
                             loading={modelSearchLoading}
                             options={modelOptions.map(m => ({
                               value: m.id,
-                              label: `[${m.brand_code}] ${m.model_code}${m.model_name ? ' ' + m.model_name : ''}`,
+                              label: `[${m.brand_code}] ${m.model_code || '-'}${m.model_name ? ' ' + m.model_name : ''}`,
                             }))}
                             value={selectedModels[reviewDetail.id]}
                             onChange={v => {

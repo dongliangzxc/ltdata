@@ -335,7 +335,7 @@ function MatchRuleTab() {
   const { data: modelsData } = useRequest(() => listModels({ page: 1, page_size: 500 }).then(r => r.data))
   const modelOptions = (modelsData?.items ?? []).map(m => ({
     value: m.id,
-    label: `[${m.brand_code}] ${m.model_code}${m.model_name ? ' ' + m.model_name : ''}`,
+    label: `[${m.brand_code}] ${m.model_code || '-'}${m.model_name ? ' ' + m.model_name : ''}`,
   }))
 
   const openCreate = () => { setEditingId(null); form.resetFields(); setModalOpen(true) }

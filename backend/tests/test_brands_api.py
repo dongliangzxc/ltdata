@@ -383,6 +383,43 @@ def test_create_brand_alias(client_and_db):
     assert body["brand_code"] == "SONY"
 
 
+def test_create_brand_alias_rejects_alias_owned_by_other_brand(client_and_db):
+    """同一写法只能归属一个品牌：跨品牌重复直接拒绝"""
+    client, db = client_and_db
+    db.add(BrandAlias(alias_name="Sony Inc", brand_code="SONY"))
+    db.commit()
+
+    r = client.post("/api/brands/BOSE/aliases", json={"alias_name": "Sony Inc"})
+
+    assert r.status_code == 409
+    assert "SONY" in r.json()["detail"]
+
+
+def test_update_brand_alias_rejects_renaming_to_other_brand_alias(client_and_db):
+    client, db = client_and_db
+    alias = BrandAlias(alias_name="Sony", brand_code="SONY")
+    db.add(alias)
+    db.add(BrandAlias(alias_name="Bose One", brand_code="BOSE"))
+    db.commit()
+
+    r = client.patch(f"/api/brands/SONY/aliases/{alias.id}", json={"alias_name": "Bose One"})
+
+    assert r.status_code == 409
+
+
+def test_update_brand_rejects_form_alias_owned_by_other_brand(client_and_db):
+    client, db = client_and_db
+    db.add(BrandRecord(brand_code="SONY", brand_name="索尼"))
+    db.add(BrandRecord(brand_code="BOSE", brand_name="博士", brand_alias_name="Bose One"))
+    db.add(BrandAlias(alias_name="Bose One", brand_code="BOSE"))
+    db.commit()
+
+    r = client.patch("/api/brands/SONY", json={"alias_name": "Bose One"})
+
+    assert r.status_code == 409
+    assert "BOSE" in r.json()["detail"]
+
+
 def test_delete_brand_alias_clears_linked_brand_alias_name(client_and_db):
     """DELETE /brands/{brand_code}/aliases/{alias_id} removes the alias."""
     client, db = client_and_db

@@ -76,6 +76,14 @@ def _sync_brand_form_alias(db: Session, brand: BrandRecord, alias_name: str | No
         brand.brand_alias_name = None
         return
 
+    # 与品牌写法库保持一致：同一写法只能归属一个品牌，跨品牌重复直接拒绝
+    other = db.query(BrandAlias).filter(
+        BrandAlias.alias_name == cleaned_alias_name,
+        BrandAlias.brand_code != brand.brand_code,
+    ).first()
+    if other:
+        raise HTTPException(status_code=409, detail=f"写法「{cleaned_alias_name}」已属于品牌「{other.brand_code}」")
+
     existing_alias = db.query(BrandAlias).filter(
         BrandAlias.brand_code == brand.brand_code,
         BrandAlias.alias_name == cleaned_alias_name,
@@ -293,6 +301,12 @@ def create_brand_alias(brand_code: str, payload: BrandAliasCreate, db: Session =
     cleaned_alias_name = payload.alias_name.strip()
     if not cleaned_alias_name:
         raise HTTPException(status_code=400, detail="别名不能为空")
+    other = db.query(BrandAlias).filter(
+        BrandAlias.alias_name == cleaned_alias_name,
+        BrandAlias.brand_code != brand_code,
+    ).first()
+    if other:
+        raise HTTPException(status_code=409, detail=f"写法「{cleaned_alias_name}」已属于品牌「{other.brand_code}」")
     if db.query(BrandAlias).filter(
         BrandAlias.brand_code == brand_code,
         BrandAlias.alias_name == cleaned_alias_name,
@@ -315,11 +329,18 @@ def update_brand_alias(brand_code: str, alias_id: int, payload: BrandAliasUpdate
     if not alias or alias.brand_code != brand_code:
         raise HTTPException(status_code=404, detail="别名不存在")
 
-    if cleaned_alias_name != alias.alias_name and db.query(BrandAlias).filter(
-        BrandAlias.brand_code == brand_code,
-        BrandAlias.alias_name == cleaned_alias_name,
-    ).first():
-        raise HTTPException(status_code=409, detail=f"别名 '{cleaned_alias_name}' 已存在")
+    if cleaned_alias_name != alias.alias_name:
+        other = db.query(BrandAlias).filter(
+            BrandAlias.alias_name == cleaned_alias_name,
+            BrandAlias.brand_code != brand_code,
+        ).first()
+        if other:
+            raise HTTPException(status_code=409, detail=f"写法「{cleaned_alias_name}」已属于品牌「{other.brand_code}」")
+        if db.query(BrandAlias).filter(
+            BrandAlias.brand_code == brand_code,
+            BrandAlias.alias_name == cleaned_alias_name,
+        ).first():
+            raise HTTPException(status_code=409, detail=f"别名 '{cleaned_alias_name}' 已存在")
 
     old_alias_name = alias.alias_name
     alias.alias_name = cleaned_alias_name

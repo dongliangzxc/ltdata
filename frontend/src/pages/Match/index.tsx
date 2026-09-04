@@ -1736,7 +1736,7 @@ export default function MatchPage() {
                       <Descriptions.Item label="商品名称" span={2}>{reviewDetail.item_name || '-'}</Descriptions.Item>
                       <Descriptions.Item label="原品牌">{reviewDetail.brand_raw || '-'}</Descriptions.Item>
                       <Descriptions.Item label="店铺">{reviewDetail.shop_name || '-'}</Descriptions.Item>
-                      <Descriptions.Item label="入库品牌">{reviewDetail.brand_code || reviewDetail.brand_raw || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="入库品牌">{reviewDetail.brand_code || reviewDetail.brand_std || reviewDetail.brand_raw || '-'}</Descriptions.Item>
                       <Descriptions.Item label="当前型号">
                         <Space wrap>
                           {hasDisplayModel(reviewDetail.brand_code, reviewDetail.model_code)

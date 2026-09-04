@@ -1232,6 +1232,7 @@ export interface MatchResultOut {
   item_name?: string | null
   item_url?: string | null
   brand_raw?: string | null
+  brand_std?: string | null
   model_code?: string | null
   brand_code?: string | null
   attr_count?: number

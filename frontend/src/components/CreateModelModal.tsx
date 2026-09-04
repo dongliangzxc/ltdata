@@ -195,7 +195,7 @@ export default function CreateModelModal({
           <Row gutter={12}>
             <Col span={12}>
               <Form.Item label="型号码" name="model_code">
-                <Input placeholder="留空将自动生成待补型号码" />
+                <Input placeholder="可留空（存空值）" />
               </Form.Item>
             </Col>
             <Col span={12}>

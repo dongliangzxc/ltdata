@@ -364,7 +364,7 @@ function MatchRuleTab() {
     { title: '匹配方式', dataIndex: 'match_type', width: 100,
       render: (v: string) => <Tag color={v === 'exact' ? 'blue' : 'cyan'}>{v === 'exact' ? '精准' : '包含'}</Tag> },
     { title: '品牌码', dataIndex: 'brand_code', width: 100 },
-    { title: '型号码', dataIndex: 'model_code', width: 120 },
+    { title: '型号码', dataIndex: 'model_code', width: 120, render: (v: string | null) => v || '-' },
     { title: '状态', dataIndex: 'is_active', width: 80,
       render: (v: number) => v ? <Tag color="green">启用</Tag> : <Tag color="default">禁用</Tag> },
     {

@@ -477,7 +477,7 @@ class ModelRecord(Base):
 
     id            = Column(Integer, primary_key=True, index=True)
     brand_code    = Column(String(100), nullable=False)
-    model_code    = Column(String(100), nullable=False)
+    model_code    = Column(String(100), nullable=True)
     category_code = Column(String(50), ForeignKey("categories.code", ondelete="SET NULL"), nullable=True)
     brand_name    = Column(String(200))
     model_name    = Column(String(200))
@@ -958,7 +958,7 @@ class ModelIn(BaseModel):
 class ModelOut(BaseModel):
     id:            int
     brand_code:    str
-    model_code:    str
+    model_code:    Optional[str]
     category_code: Optional[str]
     category_name: Optional[str] = None   # JOIN 后填充，API 返回用
     brand_name:    Optional[str]

@@ -765,28 +765,10 @@ def get_model(
     return out
 
 
-def _resolve_model_code(
-    db: Session,
-    *,
-    brand_code: str,
-    category_code: str | None,
-    model_code: str | None,
-) -> str:
-    """型号码留空时自动生成占位码（待补型号-品类），同品牌内追加序号保证不重复。"""
-    normalized = _normalize_code(model_code)
-    if normalized:
-        return normalized
-    suffix = (category_code or "unknown").strip() or "unknown"
-    base = f"待补型号-{suffix}"
-    candidate = base
-    counter = 2
-    while db.query(ModelRecord).filter(
-        ModelRecord.brand_code == brand_code,
-        ModelRecord.model_code == candidate,
-    ).first():
-        candidate = f"{base}-{counter}"
-        counter += 1
-    return candidate
+def _normalize_optional_model_code(value: str | None) -> str | None:
+    """型号码留空时存 NULL（不自动补齐占位码）。"""
+    normalized = _normalize_code(value)
+    return normalized or None
 
 
 @router.post("", response_model=ModelOut)
@@ -798,23 +780,19 @@ def create_model(
     _ensure_model_category_visible(db, current_user, payload.category_code)
 
     brand_code = _normalize_code(payload.brand_code)
-    model_code = _resolve_model_code(
-        db,
-        brand_code=brand_code,
-        category_code=payload.category_code,
-        model_code=payload.model_code,
-    )
+    model_code = _normalize_optional_model_code(payload.model_code)
 
     brand = db.query(BrandRecord).filter(BrandRecord.brand_code == brand_code).first()
     if _is_placeholder_code(brand_code) or not brand:
         raise HTTPException(status_code=400, detail="请先创建品牌或选择已有品牌")
 
-    existing = db.query(ModelRecord).filter(
-        ModelRecord.brand_code == brand_code,
-        ModelRecord.model_code == model_code,
-    ).first()
-    if existing:
-        raise HTTPException(status_code=409, detail="该品牌+型号已存在")
+    if model_code:
+        existing = db.query(ModelRecord).filter(
+            ModelRecord.brand_code == brand_code,
+            ModelRecord.model_code == model_code,
+        ).first()
+        if existing:
+            raise HTTPException(status_code=409, detail="该品牌+型号已存在")
 
     obj = ModelRecord(
         brand_code=brand_code,
@@ -859,19 +837,15 @@ def update_model(
     _ensure_model_category_visible(db, current_user, payload.category_code)
 
     brand_code = _normalize_code(payload.brand_code)
-    model_code = _resolve_model_code(
-        db,
-        brand_code=brand_code,
-        category_code=payload.category_code,
-        model_code=payload.model_code,
-    )
-    existing = db.query(ModelRecord).filter(
-        ModelRecord.brand_code == brand_code,
-        ModelRecord.model_code == model_code,
-        ModelRecord.id != model_id,
-    ).first()
-    if existing:
-        raise HTTPException(status_code=409, detail="该品牌+型号已存在")
+    model_code = _normalize_optional_model_code(payload.model_code)
+    if model_code:
+        existing = db.query(ModelRecord).filter(
+            ModelRecord.brand_code == brand_code,
+            ModelRecord.model_code == model_code,
+            ModelRecord.id != model_id,
+        ).first()
+        if existing:
+            raise HTTPException(status_code=409, detail="该品牌+型号已存在")
 
     obj.brand_code    = brand_code
     obj.model_code    = model_code

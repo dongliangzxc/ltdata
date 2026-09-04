@@ -189,7 +189,7 @@ export default function ModelsPage() {
   const columns = [
     { title: '品类', dataIndex: 'category_name', width: 110, render: (v: string | null) => v || '-' },
     { title: '品牌', dataIndex: 'brand_name', width: 120, render: (v: string | null) => v || '-' },
-    { title: '型号码', dataIndex: 'model_code', width: 130 },
+    { title: '型号码', dataIndex: 'model_code', width: 130, render: (v: string | null) => v || <Tag color="warning">待补</Tag> },
     { title: '型号别名', dataIndex: 'model_name', ellipsis: true, render: (v: string | null) => v || '-' },
     {
       title: '修改时间', dataIndex: 'updated_at', width: 140,

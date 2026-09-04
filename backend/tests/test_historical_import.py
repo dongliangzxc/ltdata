@@ -285,11 +285,10 @@ def test_headers_detects_detail_sheet_and_maps_door_lock_aliases(db, tmp_path, m
     assert data["issues"] == []
 
 
-def test_confirm_imports_old_router_alias_format_after_preview(db, tmp_path, monkeypatch):
+def test_confirm_imports_router_format_with_model_type(db, tmp_path, monkeypatch):
     monkeypatch.setattr("app.api.historical_api.settings.UPLOAD_DIR", str(tmp_path))
     db.add(Category(code="router", name="路由器"))
     db.commit()
-    _seed_model(db, model_code="ROUTER-B", model_name="Router B", brand_code="BRAND-B", category_code="router")
     client = _client(db)
     content = _history_excel([{
         "年度": 2025,
@@ -300,6 +299,7 @@ def test_confirm_imports_old_router_alias_format_after_preview(db, tmp_path, mon
         "商品网址": "https://item.jd.com/400001.html",
         "品牌": "品牌B",
         "产品系列": "Router B",
+        "品牌产品系列": "品牌BRouter B",
         "单价": 299,
         "销量": 3,
         "销额": 897,
@@ -310,6 +310,8 @@ def test_confirm_imports_old_router_alias_format_after_preview(db, tmp_path, mon
     )
     assert headers_resp.status_code == 200
     preview = headers_resp.json()
+    assert preview["mapping"]["model_text"] == "品牌产品系列"
+    assert preview["mapping"]["model_type"] == "产品系列"
 
     resp = client.post("/api/historical/confirm", json={
         "temp_file_id": preview["temp_file_id"],
@@ -325,7 +327,8 @@ def test_confirm_imports_old_router_alias_format_after_preview(db, tmp_path, mon
     assert row.item_id == "400001"
     assert row.category_code == "router"
     assert row.item_name == "路由器 商品"
-    assert row.model_text == "Router B"
+    assert row.model_text == "品牌BRouter B"
+    assert row.model_type == "Router B"
     assert row.sales_qty == 3
 
 
@@ -558,6 +561,7 @@ def test_export_history_batch_returns_excel(db):
             week="W23",
             category_code="TV",
             model_text="电视型号",
+            model_type="电视系列",
             model_code="TV-1",
             model_id=model.id,
             sales_qty=10,
@@ -595,6 +599,7 @@ def test_export_history_batch_returns_excel(db):
     assert len(df) == 1
     assert df.iloc[0]["商品ID"] == "tv-item"
     assert df.iloc[0]["标准型号"] == "电视型号"
+    assert df.iloc[0]["机型/系列"] == "电视系列"
     assert df.iloc[0]["销量"] == 10
 
 
@@ -1339,6 +1344,47 @@ def test_headers_parses_legacy_time_dimension_and_preview_stats(db, tmp_path, mo
     assert data["stats"]["auto_create_model_count"] == 0
 
 
+def test_import_laptop_splits_series_and_model_type(db, tmp_path, monkeypatch):
+    monkeypatch.setattr("app.api.historical_api.settings.UPLOAD_DIR", str(tmp_path))
+    db.add(Category(code="laptop", name="笔记本电脑"))
+    db.commit()
+    client = _client(db)
+    content = _history_excel([{
+        "年度": 2026,
+        "月度": 1,
+        "平台": "京东",
+        "商品名称": "微软 Surface Pro 12 商品",
+        "网址": "https://item.jd.com/100188063897.html",
+        "品牌": "微软",
+        "品牌+系列": "微软Surface Pro 12（二合一）",
+        "系列/机型": "Surface Pro 12（二合一）",
+        "销量": 305,
+        "单价": 6908.256,
+    }])
+    headers_resp = client.post(
+        "/api/historical/headers",
+        files={"file": ("【202601】洛图科技笔记本电脑线上数据库.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert headers_resp.status_code == 200
+    preview = headers_resp.json()
+    assert preview["mapping"]["model_text"] == "品牌+系列"
+    assert preview["mapping"]["model_type"] == "系列/机型"
+    assert preview["preview"][0]["型号"] == "微软Surface Pro 12（二合一）"
+    assert preview["preview"][0]["机型"] == "Surface Pro 12（二合一）"
+
+    resp = client.post("/api/historical/confirm", json={
+        "temp_file_id": preview["temp_file_id"],
+        "sheet_name": preview["sheet_name"],
+        "mapping": preview["mapping"],
+        "category_code": preview["category_code"],
+    })
+
+    assert resp.status_code == 200
+    row = db.query(HistoricalMapping).one()
+    assert row.model_text == "微软Surface Pro 12（二合一）"
+    assert row.model_type == "Surface Pro 12（二合一）"
+
+
 def test_headers_preview_stats_does_not_use_full_streaming_dataframe(db, tmp_path, monkeypatch):
     monkeypatch.setattr("app.api.historical_api.settings.UPLOAD_DIR", str(tmp_path))
     if db.query(Category).filter_by(code="router").first() is None:
@@ -1507,7 +1553,7 @@ def test_headers_uses_brand_name_as_brand_code_for_ambiguous_model_name(db, tmp_
         "商品名称": "品牌展示名商品",
         "商品网址": "https://detail.tmall.com/item.htm?id=1006960105592",
         "品牌": "BRAND-A",
-        "产品系列": "Shared Name",
+        "品牌产品系列": "Shared Name",
     }])
 
     resp = client.post(
@@ -1527,8 +1573,8 @@ def test_headers_counts_missing_model_rows_per_row_but_auto_create_candidates_di
     db.commit()
     client = _client(db)
     content = _history_excel([
-        {"年度": 2025, "月度": "2025.12", "平台": "天猫", "商品名称": "路由器 商品1", "商品网址": "https://detail.tmall.com/item.htm?id=1006960105587", "品牌": "追觅", "产品系列": "D70"},
-        {"年度": 2025, "月度": "2025.12", "平台": "天猫", "商品名称": "路由器 商品2", "商品网址": "https://detail.tmall.com/item.htm?id=1006960105588", "品牌": "追觅", "产品系列": "D70"},
+        {"年度": 2025, "月度": "2025.12", "平台": "天猫", "商品名称": "路由器 商品1", "商品网址": "https://detail.tmall.com/item.htm?id=1006960105587", "品牌": "追觅", "品牌产品系列": "D70"},
+        {"年度": 2025, "月度": "2025.12", "平台": "天猫", "商品名称": "路由器 商品2", "商品网址": "https://detail.tmall.com/item.htm?id=1006960105588", "品牌": "追觅", "品牌产品系列": "D70"},
     ])
 
     resp = client.post(
@@ -1579,12 +1625,14 @@ def test_confirm_auto_creates_missing_model_from_legacy_row(db, tmp_path, monkey
     assert resp.json()["success"] == 1
     model = db.query(ModelRecord).one()
     assert model.brand_code == "追觅"
-    assert model.model_code == "D70"
-    assert model.model_name == "D70"
+    assert model.model_code == "追觅D70"
+    assert model.model_name == "追觅D70"
     assert model.category_code == "router"
     row = db.query(HistoricalMapping).one()
     assert row.model_id == model.id
-    assert row.model_code == "D70"
+    assert row.model_text == "追觅D70"
+    assert row.model_type == "D70"
+    assert row.model_code == "追觅D70"
     assert row.category_code == "router"
 
 

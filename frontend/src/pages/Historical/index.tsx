@@ -185,7 +185,7 @@ function ImportTab() {
         <p className="ant-upload-drag-icon"><InboxOutlined /></p>
         <p>{uploading ? '正在导入历史库数据，请不要刷新页面' : '点击或拖拽 Excel 文件到此处导入历史库数据'}</p>
         <p style={{ color: '#888', fontSize: 12 }}>
-          必填列：商场或渠道 / 标题 / 年 / 月；推荐列：周 / 报告类型 / 品类 / 品牌 / 型号 / 品类码 / 品牌码 / 型号码 / 销额 / 销量 / 单价 / 网址。型号可为空，后续可补充。
+          必填列：商场或渠道 / 标题 / 年 / 月；推荐列：周 / 报告类型 / 品类 / 品牌 / 型号 / 机型或系列 / 品类码 / 品牌码 / 型号码 / 销额 / 销量 / 单价 / 网址。型号可为空，后续可补充。
         </p>
       </Dragger>
 
@@ -406,6 +406,7 @@ function MappingTab() {
     { title: '标题', dataIndex: 'item_name', key: 'item_name', ellipsis: true, width: 260 },
     { title: '品牌', dataIndex: 'brand_raw', key: 'brand_raw', width: 120, render: (v, r) => v || r.brand_code_raw || '-' },
     { title: '确认型号', dataIndex: 'model_text', key: 'model_text', width: 140, render: (v) => v || <Tag color="warning">待补</Tag> },
+    { title: '机型/系列', dataIndex: 'model_type', key: 'model_type', width: 130, render: (v) => v || '-' },
     {
       title: '标准型号', key: 'standard_model', width: 170,
       render: (_, r) => r.model_code ? (r.standard_model_name ? `${r.model_code} / ${r.standard_model_name}` : r.model_code) : <Tag color="warning">待补</Tag>,

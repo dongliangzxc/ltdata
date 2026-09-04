@@ -20,7 +20,7 @@ from app.models.schemas import (
     CleanJobRecord, RawDataRecord, ModelRecord, BrandRecord,
     MatchResultAttr, MatchResultCandidate, MatchCandidateOut, ItemUrlMapping, Category,
     MetadataSpec, ModelSpec, CleanedDataRecord,
-    DispatchItem,
+    DispatchItem, BrandAlias,
     PaginatedResponse,
     MatchTransferLog,
     User,
@@ -691,6 +691,13 @@ def get_match_review_detail(match_id: int, db: Session = Depends(get_db)):
         .first()
     )
 
+    # 实时读取品牌写法库映射，按 brand_raw 即时归一化（不依赖清洗时快照）
+    brand_alias_map = {
+        alias.alias_name.upper(): alias.brand_code
+        for alias in db.query(BrandAlias).filter(BrandAlias.is_active == 1).all()
+    }
+    live_brand_std = brand_alias_map.get(rd.brand_raw.upper()) if rd.brand_raw else None
+
     category_code = model.category_code if model and model.category_code else None
     if not category_code:
         clean_job = db.query(CleanJobRecord).filter(CleanJobRecord.id == mr.clean_job_id).first()
@@ -761,7 +768,7 @@ def get_match_review_detail(match_id: int, db: Session = Depends(get_db)):
         "platform": rd.platform,
         "item_id": rd.item_id,
         "brand_raw": rd.brand_raw,
-        "brand_std": (cleaned.brand_std if cleaned else None) or rd.brand_std,
+        "brand_std": live_brand_std or (cleaned.brand_std if cleaned else None) or rd.brand_std,
         "shop_name": rd.shop_name,
         "ref_price": float(rd.ref_price) if rd.ref_price is not None else None,
         "price": float(rd.price) if rd.price is not None else None,

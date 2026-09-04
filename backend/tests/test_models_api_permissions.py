@@ -111,3 +111,28 @@ def test_create_model_rejects_invisible_category(client):
 
     assert res.status_code == 403
     assert res.json()["detail"] == "无权限访问该品类"
+
+
+def test_create_model_auto_hangs_brand_to_category(client):
+    """新建型号时，品牌自动挂到该品类下（brand_categories），即使此前该品牌无此品类型号"""
+    from app.models.schemas import BrandCategory
+
+    client.current_user = DummyUser(is_admin=1, category_permissions=[])
+    with client.Session() as session:
+        seed_categories(session)
+        seed_brands(session)
+        session.commit()
+
+    res = client.post("/api/models", json={
+        "brand_code": "B1",
+        "model_code": "M1",
+        "category_code": "AC",
+        "brand_name": "品牌一",
+        "model_name": "型号一",
+        "specs": [],
+    })
+
+    assert res.status_code == 200
+    with client.Session() as session:
+        rows = session.query(BrandCategory).filter_by(brand_code="B1").all()
+        assert {r.category_code for r in rows} == {"AC"}

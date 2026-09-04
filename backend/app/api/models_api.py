@@ -19,7 +19,7 @@ from app.core.auth_deps import get_current_user
 from app.core.permissions import visible_category_codes
 from app.models.database import get_db
 from app.models.schemas import (
-    BrandRecord, ModelRecord, ModelSpec, ModelAlias,
+    BrandRecord, BrandCategory, ModelRecord, ModelSpec, ModelAlias,
     HistoricalMapping, ItemUrlMapping, MatchRule,
     ModelIn, ModelOut, ModelSpecOut, ModelAliasOut,
     PaginatedResponse, Category, User,
@@ -771,6 +771,21 @@ def _normalize_optional_model_code(value: str | None) -> str | None:
     return normalized or None
 
 
+def _ensure_brand_category(db: Session, brand_code: str, category_code: str | None) -> None:
+    """新建/更新型号时，把品牌自动挂到该品类下（brand_categories），缺则补写。
+
+    即使该品牌在该品类下暂无其他型号，也显式关联，保证品牌归属多个品类。
+    """
+    if not brand_code or not category_code:
+        return
+    existing = db.query(BrandCategory).filter_by(
+        brand_code=brand_code,
+        category_code=category_code,
+    ).first()
+    if not existing:
+        db.add(BrandCategory(brand_code=brand_code, category_code=category_code))
+
+
 @router.post("", response_model=ModelOut)
 def create_model(
     payload: ModelIn,
@@ -814,6 +829,7 @@ def create_model(
     for s in payload.specs:
         db.add(ModelSpec(model_id=obj.id, spec_name=s.spec_name, spec_value=s.spec_value))
 
+    _ensure_brand_category(db, brand_code, payload.category_code)
     db.commit()
     db.refresh(obj)
     cat = db.query(Category).filter(Category.code == obj.category_code).first() if obj.category_code else None
@@ -864,6 +880,7 @@ def update_model(
     for s in payload.specs:
         db.add(ModelSpec(model_id=model_id, spec_name=s.spec_name, spec_value=s.spec_value))
 
+    _ensure_brand_category(db, brand_code, payload.category_code)
     db.commit()
     db.refresh(obj)
     cat = db.query(Category).filter(Category.code == obj.category_code).first() if obj.category_code else None

@@ -198,15 +198,15 @@ def models_confirm(
     for i, row in enumerate(df.itertuples(index=False), start=2):
         row_dict = row._asdict()
 
-        brand_code = _normalize_code(row_dict.get("brand_code"))
-        model_code = _normalize_code(row_dict.get("model_code"))
+        brand_code = _normalize_code(_clean_val(row_dict.get("brand_code")))
+        model_code = _normalize_code(_clean_val(row_dict.get("model_code")))
         if _is_placeholder_code(brand_code) or not model_code:
             errors.append(f"Row {i}: missing brand_code or model_code")
             continue
 
         # category_code: 以第一步「选择品类」的所选品类为准做校验
         # Excel 品类列的值（品类码或品类名称）必须与所选品类一致，否则跳过该行
-        cat_val = str(row_dict.get("category_code") or "").strip()
+        cat_val = str(_clean_val(row_dict.get("category_code")) or "").strip()
         if cat_val:
             resolved = _resolve_category_code(db, cat_val)
             if resolved is None:
@@ -221,7 +221,7 @@ def models_confirm(
         _ensure_model_category_visible(db, current_user, category_code)
 
         optional_fields = {
-            k: str(row_dict.get(k) or "").strip() or None
+            k: str(_clean_val(row_dict.get(k)) or "").strip() or None
             for k in ["brand_name", "model_name", "url"]
         }
         existing = (
@@ -232,12 +232,12 @@ def models_confirm(
         _ensure_import_brand(db, brand_code, optional_fields.get("brand_name"))
         int_fields = {}
         for k in ["launch_year", "launch_month", "launch_week"]:
-            v = row_dict.get(k)
+            v = _clean_val(row_dict.get(k))
             try:
                 int_fields[k] = int(str(v).strip()) if v and str(v).strip() else None
             except (ValueError, TypeError):
                 int_fields[k] = None
-        price_raw = row_dict.get("launch_price")
+        price_raw = _clean_val(row_dict.get("launch_price"))
         try:
             launch_price = float(str(price_raw).strip()) if price_raw and str(price_raw).strip() else None
         except (ValueError, TypeError):

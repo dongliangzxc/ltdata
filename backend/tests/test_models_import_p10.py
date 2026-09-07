@@ -549,3 +549,49 @@ def test_models_confirm_skips_row_when_excel_category_unrecognized(client):
     assert data["models_inserted"] == 0
     assert len(data["errors"]) == 1
     assert "无法识别品类" in data["errors"][0]
+
+
+def test_models_confirm_handles_empty_price_and_url_cells(client):
+    """Excel 中空的「上市价格/网址」单元格（pandas 读为 nan）不得写入 MySQL，落库为 NULL。"""
+    xlsx_bytes = _make_models_template_xlsx(
+        model_rows=[["DJI", "OSMO-ACTION-4", "CAT001", "大疆", "Osmo Action 4", 2024, 9, None, None, None]],
+        spec_rows=[],
+    )
+    headers_resp = client.post(
+        "/api/models/headers",
+        files={"file": ("models.xlsx", xlsx_bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert headers_resp.status_code == 200
+
+    confirm_resp = client.post(
+        "/api/models/confirm",
+        json={
+            "temp_file_id": headers_resp.json()["temp_file_id"],
+            "mapping": {
+                "品牌码": "brand_code",
+                "型号码": "model_code",
+                "品类": "category_code",
+                "品牌名称": "brand_name",
+                "型号名称": "model_name",
+                "上市年": "launch_year",
+                "上市月": "launch_month",
+                "上市周": "launch_week",
+                "上市价格": "launch_price",
+                "网址": "url",
+            },
+            "ignore_columns": [],
+            "category_code": "CAT001",
+        },
+    )
+    assert confirm_resp.status_code == 200
+    data = confirm_resp.json()
+    assert data["models_inserted"] == 1
+    assert data["errors"] == []
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        model = db.query(ModelRecord).filter_by(brand_code="DJI", model_code="OSMO-ACTION-4").one()
+        assert model.launch_price is None
+        assert model.url is None
+    finally:
+        db.close()

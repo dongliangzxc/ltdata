@@ -56,6 +56,26 @@ def _ensure_model_rows_visible(db: Session, current_user: User, rows: list[dict]
             raise HTTPException(status_code=403, detail="无权限访问该品类")
 
 
+def _resolve_category_code(db: Session, raw_value: str | None) -> str | None:
+    """把 Excel 中的品类值解析为品类码：先按品类码精确匹配，再按品类名称匹配。
+
+    无法识别时返回 None（调用方自行处理）。
+    """
+    raw = (raw_value or "").strip()
+    if not raw:
+        return None
+    cat = db.query(Category).filter(Category.code == raw).first()
+    if cat:
+        return cat.code
+    cat = db.query(Category).filter(func.lower(Category.code) == raw.lower()).first()
+    if cat:
+        return cat.code
+    cat = db.query(Category).filter(Category.name == raw).first()
+    if cat:
+        return cat.code
+    return None
+
+
 _MODEL_TEMPLATE_MAPPING = {
     "品牌码": "brand_code",
     "型号码": "model_code",
@@ -184,9 +204,20 @@ def models_confirm(
             errors.append(f"Row {i}: missing brand_code or model_code")
             continue
 
-        # category_code: from Excel if present and non-empty, else fallback
+        # category_code: 以第一步「选择品类」的所选品类为准做校验
+        # Excel 品类列的值（品类码或品类名称）必须与所选品类一致，否则跳过该行
         cat_val = str(row_dict.get("category_code") or "").strip()
-        category_code = cat_val if cat_val else payload.category_code
+        if cat_val:
+            resolved = _resolve_category_code(db, cat_val)
+            if resolved is None:
+                errors.append(f"Row {i}: 无法识别品类「{cat_val}」，已跳过")
+                continue
+            if resolved != payload.category_code:
+                errors.append(f"Row {i}: 品类「{cat_val}」与所选品类不一致，已跳过")
+                continue
+            category_code = resolved
+        else:
+            category_code = payload.category_code
         _ensure_model_category_visible(db, current_user, category_code)
 
         optional_fields = {
@@ -571,10 +602,12 @@ async def import_models(
         if _is_placeholder_code(brand_code) or not model_code:
             continue
 
+        raw_cat = str(_clean_val(row.get("category_code")) or "") or None
+        resolved_cat = _resolve_category_code(db, raw_cat) if raw_cat else None
         vals = {
             "brand_code":    brand_code,
             "model_code":    model_code,
-            "category_code": str(_clean_val(row.get("category_code")) or "") or None,
+            "category_code": resolved_cat or raw_cat,
             "brand_name":    str(_clean_val(row.get("brand_name"))    or bc),
             "model_name":    str(_clean_val(row.get("model_name"))    or mc),
             "launch_year":   _to_int(_clean_val(row.get("launch_year"))),

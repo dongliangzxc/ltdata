@@ -2,6 +2,7 @@
 import io
 import os
 import tempfile
+from types import SimpleNamespace
 import openpyxl
 import pytest
 from pathlib import Path
@@ -14,6 +15,7 @@ from fastapi.testclient import TestClient
 from app.models.database import Base, get_db
 from app.models.schemas import Category, ModelRecord, ModelSpec
 from app.api.models_api import router
+from app.core.auth_deps import get_current_user
 
 
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -54,6 +56,7 @@ def client(tmp_upload):
     app = FastAPI()
     app.include_router(router)
     app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(is_admin=1, category_permissions=None)
     return TestClient(app)
 
 
@@ -193,7 +196,7 @@ def test_models_confirm_category_fallback(client):
         headers=["brand_code", "model_code"],
         data_rows=[["BR1", "M1"]],
         mapping={"brand_code": "brand_code", "model_code": "model_code"},
-        category_code="FALLBACK_CAT",
+        category_code="CAT001",
     )
     assert resp.status_code == 200
     d = resp.json()
@@ -432,3 +435,117 @@ def test_models_confirm_column_remapping(client):
     assert resp.status_code == 200
     data = resp.json()
     assert data["models_inserted"] == 1
+
+
+# ─── category validation against step-1 selected category ────────────────────
+
+def test_models_confirm_accepts_excel_category_name_matching_selected_category(client):
+    """Excel 品类列写中文品类名称且与第一步所选品类一致时，导入成功并解析为品类码。"""
+    xlsx_bytes = _make_models_template_xlsx(
+        model_rows=[["DJI", "OSMO-ACTION-4", "测试品类", "大疆", "Osmo Action 4"]],
+        spec_rows=[["DJI", "OSMO-ACTION-4", "产品形态", "OA传统"]],
+    )
+    headers_resp = client.post(
+        "/api/models/headers",
+        files={"file": ("models.xlsx", xlsx_bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert headers_resp.status_code == 200
+
+    confirm_resp = client.post(
+        "/api/models/confirm",
+        json={
+            "temp_file_id": headers_resp.json()["temp_file_id"],
+            "mapping": {
+                "品牌码": "brand_code",
+                "型号码": "model_code",
+                "品类": "category_code",
+                "品牌名称": "brand_name",
+                "型号名称": "model_name",
+            },
+            "ignore_columns": [],
+            "category_code": "CAT001",
+        },
+    )
+    assert confirm_resp.status_code == 200
+    data = confirm_resp.json()
+    assert data["models_inserted"] == 1
+    assert data["specs_inserted"] == 1
+    assert data["errors"] == []
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        model = db.query(ModelRecord).filter_by(brand_code="DJI", model_code="OSMO-ACTION-4").one()
+        assert model.category_code == "CAT001"
+    finally:
+        db.close()
+
+
+def test_models_confirm_skips_row_when_excel_category_mismatches_selected(client):
+    """Excel 品类列与第一步所选品类不一致时，该行跳过并写入 errors，不影响其他行。"""
+    xlsx_bytes = _make_models_template_xlsx(
+        model_rows=[
+            ["DJI", "OSMO-ACTION-4", "测试品类", "大疆", "Osmo Action 4"],
+            ["SONY", "WH1000XM5", "测试品类", "索尼", "WH1000XM5"],
+        ],
+        spec_rows=[["DJI", "OSMO-ACTION-4", "产品形态", "OA传统"]],
+    )
+    headers_resp = client.post(
+        "/api/models/headers",
+        files={"file": ("models.xlsx", xlsx_bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert headers_resp.status_code == 200
+
+    confirm_resp = client.post(
+        "/api/models/confirm",
+        json={
+            "temp_file_id": headers_resp.json()["temp_file_id"],
+            "mapping": {
+                "品牌码": "brand_code",
+                "型号码": "model_code",
+                "品类": "category_code",
+                "品牌名称": "brand_name",
+                "型号名称": "model_name",
+            },
+            "ignore_columns": [],
+            "category_code": "OTHER_CAT",
+        },
+    )
+    assert confirm_resp.status_code == 200
+    data = confirm_resp.json()
+    assert data["models_inserted"] == 0
+    assert len(data["errors"]) == 2
+    assert all("与所选品类不一致" in e for e in data["errors"])
+
+
+def test_models_confirm_skips_row_when_excel_category_unrecognized(client):
+    """Excel 品类列既不是品类码也不是品类名称时，该行跳过并写入 errors。"""
+    xlsx_bytes = _make_models_template_xlsx(
+        model_rows=[["DJI", "OSMO-ACTION-4", "不存在的品类", "大疆", "Osmo Action 4"]],
+        spec_rows=[["DJI", "OSMO-ACTION-4", "产品形态", "OA传统"]],
+    )
+    headers_resp = client.post(
+        "/api/models/headers",
+        files={"file": ("models.xlsx", xlsx_bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert headers_resp.status_code == 200
+
+    confirm_resp = client.post(
+        "/api/models/confirm",
+        json={
+            "temp_file_id": headers_resp.json()["temp_file_id"],
+            "mapping": {
+                "品牌码": "brand_code",
+                "型号码": "model_code",
+                "品类": "category_code",
+                "品牌名称": "brand_name",
+                "型号名称": "model_name",
+            },
+            "ignore_columns": [],
+            "category_code": "CAT001",
+        },
+    )
+    assert confirm_resp.status_code == 200
+    data = confirm_resp.json()
+    assert data["models_inserted"] == 0
+    assert len(data["errors"]) == 1
+    assert "无法识别品类" in data["errors"][0]

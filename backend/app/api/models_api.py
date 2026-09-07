@@ -226,7 +226,11 @@ def models_confirm(
         }
         existing = (
             db.query(ModelRecord)
-            .filter(ModelRecord.brand_code == brand_code, ModelRecord.model_code == model_code)
+            .filter(
+                ModelRecord.brand_code == brand_code,
+                ModelRecord.model_code == model_code,
+                ModelRecord.category_code == category_code,
+            )
             .first()
         )
         _ensure_import_brand(db, brand_code, optional_fields.get("brand_name"))
@@ -264,7 +268,7 @@ def models_confirm(
         db.flush()
 
         model_key_to_id = {
-            (record.brand_code, record.model_code): record.id
+            (record.brand_code, record.model_code, record.category_code): record.id
             for record in db.query(ModelRecord).all()
         }
 
@@ -298,7 +302,7 @@ def models_confirm(
                     spec_name = _clean_val(spec_row.get("spec_name"))
                     if not brand_code or not model_code or not spec_name:
                         continue
-                    model_id = model_key_to_id.get((str(brand_code), str(model_code)))
+                    model_id = model_key_to_id.get((str(brand_code), str(model_code), payload.category_code))
                     if model_id is None:
                         continue
                     affected_model_ids.add(model_id)
@@ -638,6 +642,7 @@ async def import_models(
             existing = db.query(ModelRecord).filter(
                 ModelRecord.brand_code == vals["brand_code"],
                 ModelRecord.model_code == vals["model_code"],
+                ModelRecord.category_code == vals["category_code"],
             ).first()
             if existing:
                 for k, v in vals.items():
@@ -649,9 +654,10 @@ async def import_models(
 
     db.flush()
 
-    # 建立 (brand_code, model_code) -> model_id 映射
+    # 建立 (brand_code, model_code) -> [model_id] 映射（同一品牌+型号可跨品类存在多条）
+    model_key_to_ids: dict[tuple, list[int]] = {}
     for record in db.query(ModelRecord).all():
-        model_key_to_id[(record.brand_code, record.model_code)] = record.id
+        model_key_to_ids.setdefault((record.brand_code, record.model_code), []).append(record.id)
 
     # 处理「型号规格」sheet
     upserted_specs = 0
@@ -665,15 +671,16 @@ async def import_models(
             sn = _clean_val(row.get("spec_name"))
             if not bc or not mc or not sn:
                 continue
-            model_id = model_key_to_id.get((str(bc), str(mc)))
-            if model_id is None:
+            model_ids = model_key_to_ids.get((str(bc), str(mc))) or []
+            if not model_ids:
                 continue
-            affected_model_ids.add(model_id)
-            spec_rows.append({
-                "model_id":   model_id,
-                "spec_name":  str(sn).strip(),
-                "spec_value": str(_clean_val(row.get("spec_value")) or "") or None,
-            })
+            for model_id in model_ids:
+                affected_model_ids.add(model_id)
+                spec_rows.append({
+                    "model_id":   model_id,
+                    "spec_name":  str(sn).strip(),
+                    "spec_value": str(_clean_val(row.get("spec_value")) or "") or None,
+                })
 
         if affected_model_ids:
             db.query(ModelSpec).filter(
@@ -698,16 +705,17 @@ async def import_models(
                 ac = _clean_val(arow.get("alias_code"))
                 if not bc or not mc or not ac:
                     continue
-                model_id = model_key_to_id.get((str(bc), str(mc)))
-                if model_id is None:
+                model_ids = model_key_to_ids.get((str(bc), str(mc))) or []
+                if not model_ids:
                     continue
                 ac_str = str(ac).strip()
                 if not ac_str:
                     continue
                 exists = db.query(ModelAlias).filter(ModelAlias.alias_code == ac_str).first()
                 if not exists:
-                    db.add(ModelAlias(model_id=model_id, alias_code=ac_str))
-                    upserted_aliases += 1
+                    for model_id in model_ids:
+                        db.add(ModelAlias(model_id=model_id, alias_code=ac_str))
+                        upserted_aliases += 1
     except Exception:
         pass  # 无「别名」sheet 时静默跳过
 
@@ -838,9 +846,10 @@ def create_model(
         existing = db.query(ModelRecord).filter(
             ModelRecord.brand_code == brand_code,
             ModelRecord.model_code == model_code,
+            ModelRecord.category_code == payload.category_code,
         ).first()
         if existing:
-            raise HTTPException(status_code=409, detail="该品牌+型号已存在")
+            raise HTTPException(status_code=409, detail="该品牌+型号+品类已存在")
 
     obj = ModelRecord(
         brand_code=brand_code,
@@ -891,10 +900,11 @@ def update_model(
         existing = db.query(ModelRecord).filter(
             ModelRecord.brand_code == brand_code,
             ModelRecord.model_code == model_code,
+            ModelRecord.category_code == payload.category_code,
             ModelRecord.id != model_id,
         ).first()
         if existing:
-            raise HTTPException(status_code=409, detail="该品牌+型号已存在")
+            raise HTTPException(status_code=409, detail="该品牌+型号+品类已存在")
 
     obj.brand_code    = brand_code
     obj.model_code    = model_code

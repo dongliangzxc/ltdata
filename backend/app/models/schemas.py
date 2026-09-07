@@ -485,7 +485,7 @@ class BrandCategory(Base):
 class ModelRecord(Base):
     __tablename__ = "models"
     __table_args__ = (
-        UniqueConstraint("brand_code", "model_code", name="uq_model"),
+        UniqueConstraint("brand_code", "model_code", "category_code", name="uq_model"),
     )
 
     id            = Column(Integer, primary_key=True, index=True)

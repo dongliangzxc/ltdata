@@ -595,3 +595,59 @@ def test_models_confirm_handles_empty_price_and_url_cells(client):
         assert model.url is None
     finally:
         db.close()
+
+
+def test_models_confirm_same_brand_model_can_exist_in_another_category(client):
+    """同一品牌+型号允许出现在另一个品类：导入时新增记录，而不是覆盖原品类的记录。"""
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        db.add(Category(code="CAT002", name="会议电视"))
+        db.add(ModelRecord(
+            brand_code="创维", model_code="100DSV5", category_code="CAT001",
+            brand_name="创维", model_name="100DSV5",
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    xlsx_bytes = _make_models_template_xlsx(
+        model_rows=[["创维", "100DSV5", "会议电视", "创维", "100DSV5"]],
+        spec_rows=[["创维", "100DSV5", "屏幕尺寸", "100英寸"]],
+    )
+    headers_resp = client.post(
+        "/api/models/headers",
+        files={"file": ("models.xlsx", xlsx_bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert headers_resp.status_code == 200
+
+    confirm_resp = client.post(
+        "/api/models/confirm",
+        json={
+            "temp_file_id": headers_resp.json()["temp_file_id"],
+            "mapping": {
+                "品牌码": "brand_code",
+                "型号码": "model_code",
+                "品类": "category_code",
+                "品牌名称": "brand_name",
+                "型号名称": "model_name",
+            },
+            "ignore_columns": [],
+            "category_code": "CAT002",
+        },
+    )
+    assert confirm_resp.status_code == 200
+    data = confirm_resp.json()
+    assert data["models_inserted"] == 1
+    assert data["models_updated"] == 0
+    assert data["specs_inserted"] == 1
+    assert data["errors"] == []
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        rows = db.query(ModelRecord).filter_by(brand_code="创维", model_code="100DSV5").all()
+        assert {r.category_code for r in rows} == {"CAT001", "CAT002"}
+        cat2 = next(r for r in rows if r.category_code == "CAT002")
+        specs = db.query(ModelSpec).filter_by(model_id=cat2.id).all()
+        assert [(s.spec_name, s.spec_value) for s in specs] == [("屏幕尺寸", "100英寸")]
+    finally:
+        db.close()

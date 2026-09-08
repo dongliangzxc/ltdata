@@ -926,7 +926,7 @@ function InterferenceLinkTab() {
     { title: '链接', dataIndex: 'url', ellipsis: true, render: (v: string) => <Text code style={{ wordBreak: 'break-all' }}>{v}</Text> },
     {
       title: '品类', dataIndex: 'category_code', width: 140,
-      render: (v: string | null, row: { category_code?: string | null; category_name?: string | null }) =>
+      render: (_: string | null, row: { category_code?: string | null; category_name?: string | null }) =>
         row.category_name ? `${row.category_name}（${row.category_code}）` : <Tag color="blue">全平台</Tag>,
     },
     { title: '备注', dataIndex: 'remark', width: 160, render: (v: string | null) => v || '-' },

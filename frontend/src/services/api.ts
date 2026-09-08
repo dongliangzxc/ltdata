@@ -354,12 +354,14 @@ export const deleteInterventionRule = (id: number) =>
 export interface InterferenceLinkItem {
   id: number
   url: string
+  category_code?: string | null
+  category_name?: string | null
   remark?: string | null
   created_by?: string | null
   created_at: string
 }
 
-export const listInterferenceLinks = (params?: { keyword?: string; page?: number; page_size?: number }) =>
+export const listInterferenceLinks = (params?: { keyword?: string; category_code?: string; page?: number; page_size?: number }) =>
   api.get<{ total: number; page: number; page_size: number; items: InterferenceLinkItem[] }>(
     '/rules/interference-links', { params }
   )

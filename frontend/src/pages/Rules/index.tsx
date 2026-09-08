@@ -869,11 +869,26 @@ function CorrectionRulesTab() {
 // ══════════════════════════════════════════════
 function InterferenceLinkTab() {
   const [keyword, setKeyword] = useState('')
+  const [filterCategory, setFilterCategory] = useState<string | undefined>()
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
+  const currentUser = readStoredUser()
+  const { options: categoryOptions } = useCategoryOptions()
+  const visibleCategoryOptions = useMemo(() => {
+    if (!currentUser) return categoryOptions
+    if (currentUser.is_admin === 1) return categoryOptions
+    if (!currentUser.category_permissions?.length) return categoryOptions
+    const allowed = new Set(currentUser.category_permissions)
+    return categoryOptions.filter(c => allowed.has(c.value))
+  }, [categoryOptions, currentUser])
   const { data, loading, refresh } = useRequest(
-    () => listInterferenceLinks({ keyword: keyword || undefined, page, page_size: pageSize }).then(r => r.data),
-    { refreshDeps: [keyword, page, pageSize] }
+    () => listInterferenceLinks({
+      keyword: keyword || undefined,
+      category_code: filterCategory || undefined,
+      page,
+      page_size: pageSize,
+    }).then(r => r.data),
+    { refreshDeps: [keyword, filterCategory, page, pageSize] }
   )
 
   const triggerDownload = (blob: Blob, filename: string) => {
@@ -909,7 +924,12 @@ function InterferenceLinkTab() {
   const columns = [
     { title: 'ID', dataIndex: 'id', width: 70 },
     { title: '链接', dataIndex: 'url', ellipsis: true, render: (v: string) => <Text code style={{ wordBreak: 'break-all' }}>{v}</Text> },
-    { title: '备注', dataIndex: 'remark', width: 180, render: (v: string | null) => v || '-' },
+    {
+      title: '品类', dataIndex: 'category_code', width: 140,
+      render: (v: string | null, row: { category_code?: string | null; category_name?: string | null }) =>
+        row.category_name ? `${row.category_name}（${row.category_code}）` : <Tag color="blue">全平台</Tag>,
+    },
+    { title: '备注', dataIndex: 'remark', width: 160, render: (v: string | null) => v || '-' },
     { title: '操作人', dataIndex: 'created_by', width: 100, render: (v: string | null) => v || '-' },
     { title: '导入时间', dataIndex: 'created_at', width: 160, render: (v: string) => (v || '').slice(0, 19).replace('T', ' ') },
     {
@@ -924,12 +944,20 @@ function InterferenceLinkTab() {
 
   return (
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
-      <Alert type="info" showIcon message="干扰链接库全平台生效：清洗时商品链接命中库中链接（包含匹配，大小写不敏感）即直接剔除，进入干扰项存档。" />
+      <Alert type="info" showIcon message="干扰链接库：带品类的链接仅在对应品类清洗时生效，品类留空（全平台）则在所有品类清洗时生效。商品链接命中（包含匹配，大小写不敏感）即直接剔除，进入干扰项存档。" />
       <Space wrap>
         <Button type="primary" icon={<UploadOutlined />} onClick={handleDownloadTemplate}>下载模板</Button>
         <Upload beforeUpload={handleImport} showUploadList={false} accept=".xlsx,.xls,.csv">
           <Button icon={<UploadOutlined />}>Excel 批量导入</Button>
         </Upload>
+        <Select
+          placeholder="品类筛选（空=全平台）"
+          allowClear
+          style={{ width: 200 }}
+          options={visibleCategoryOptions}
+          value={filterCategory}
+          onChange={v => { setFilterCategory(v); setPage(1) }}
+        />
         <Input placeholder="搜索链接" allowClear value={keyword} onChange={e => { setKeyword(e.target.value); setPage(1) }}
           style={{ width: 220 }} />
       </Space>

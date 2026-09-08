@@ -778,3 +778,57 @@ def test_intervention_shop_name_in_case_insensitive(db):
 
     assert out == 0
     assert db.query(FilteredItem).count() == 1
+
+
+def test_interference_link_scoped_to_category_only_filters_that_category(db):
+    from app.models.schemas import InterferenceLink
+    f = _make_file(db)
+    raw = RawDataRecord(
+        file_id=f.id, platform="jd", month=202507,
+        item_name="电视干扰商品", brand_raw="SONY",
+        item_id="cat-item-1", sales_qty=10, price=100,
+        item_url="https://item.jd.com/77777777.html",
+    )
+    db.add(raw)
+    db.flush()
+    job = _make_job(db, f.id)
+    db.add(InterferenceLink(url="https://item.jd.com/77777777.html", category_code="tv"))
+    db.commit()
+
+    # 在 tv 品类清洗：命中
+    out_tv = run_clean(db, job.id, [f.id], {}, dispatch_category_code="tv")
+    assert out_tv == 0
+    assert db.query(CleanedDataRecord).count() == 0
+    assert db.query(FilteredItem).count() == 1
+    db.query(FilteredItem).delete()
+    db.query(CleanedDataRecord).delete()
+
+    # 在其它品类（monitor）清洗：不命中，保留
+    out_other = run_clean(db, job.id, [f.id], {}, dispatch_category_code="monitor")
+    assert out_other == 1
+    assert db.query(FilteredItem).count() == 0
+
+
+def test_interference_link_global_and_category_both_apply(db):
+    from app.models.schemas import InterferenceLink
+    f = _make_file(db)
+    raw1 = RawDataRecord(
+        file_id=f.id, platform="jd", month=202507, item_name="全平台干扰", brand_raw="A",
+        item_id="g-item-1", sales_qty=1, price=1, item_url="https://item.jd.com/555.html",
+    )
+    raw2 = RawDataRecord(
+        file_id=f.id, platform="jd", month=202507, item_name="品类干扰", brand_raw="B",
+        item_id="g-item-2", sales_qty=1, price=1, item_url="https://item.jd.com/666.html",
+    )
+    db.add_all([raw1, raw2])
+    db.flush()
+    job = _make_job(db, f.id)
+    db.add(InterferenceLink(url="https://item.jd.com/555.html"))            # 全平台
+    db.add(InterferenceLink(url="https://item.jd.com/666.html", category_code="tv"))
+    db.commit()
+
+    out = run_clean(db, job.id, [f.id], {}, dispatch_category_code="tv")
+
+    assert out == 0
+    assert db.query(CleanedDataRecord).count() == 0
+    assert db.query(FilteredItem).count() == 2

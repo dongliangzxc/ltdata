@@ -29,24 +29,36 @@ def _load_intervention_rules(db: Session, category_code: str | None = None) -> l
     )
 
 
-def _load_interference_links(db: Session) -> dict[str, str]:
-    """返回 {链接(小写去空格): 原文}，用于清洗时全平台剔除。"""
-    result: dict[str, str] = {}
+def _load_interference_links(db: Session) -> dict[str | None, dict[str, str]]:
+    """返回 {品类码或None: {链接(小写去空格): 原文}}；None 表示全平台生效。"""
+    result: dict[str | None, dict[str, str]] = {}
     for row in db.query(InterferenceLink).all():
         normalized = (row.url or "").casefold().strip()
-        if normalized:
-            result[normalized] = row.url
+        if not normalized:
+            continue
+        bucket = result.setdefault(row.category_code, {})
+        bucket[normalized] = row.url
     return result
 
 
-def _matches_interference_links(record: RawDataRecord, links: dict[str, str]) -> str | None:
-    """商品链接包含库中任意链接（大小写不敏感）时返回命中的库中链接原文，否则 None。"""
+def _matches_interference_links(
+    record: RawDataRecord,
+    links: dict[str | None, dict[str, str]],
+    category_code: str | None = None,
+) -> str | None:
+    """商品链接包含当前品类或全平台库中的任意链接时返回命中的库中链接原文，否则 None。"""
     url = (record.item_url or "").casefold().strip()
     if not url:
         return None
-    for key, original in links.items():
-        if key and key in url:
-            return original
+    buckets = []
+    if None in links:
+        buckets.append(links[None])
+    if category_code and category_code in links:
+        buckets.append(links[category_code])
+    for bucket in buckets:
+        for key, original in bucket.items():
+            if key and key in url:
+                return original
     return None
 
 
@@ -239,8 +251,8 @@ def run_clean(
     seen_keys: set = set()
 
     for r in records:
-        # ── Step 1: 干扰链接库（全平台剔除）──────────────────────
-        hit_link = _matches_interference_links(r, interference_links)
+        # ── Step 1: 干扰链接库（全平台 + 当前品类剔除）────────────────
+        hit_link = _matches_interference_links(r, interference_links, dispatch_category_code)
         if hit_link is not None:
             filtered.append(FilteredItem(
                 raw_data_id=r.id,

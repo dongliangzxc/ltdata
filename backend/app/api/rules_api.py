@@ -258,10 +258,30 @@ def delete_intervention_rule(
 # 干扰链接库（全平台生效）
 # ═══════════════════════════════════════════════════════════
 
-def _interference_link_to_dict(link: InterferenceLink) -> dict:
+def _resolve_link_category_code(db: Session, raw_value: object) -> str | None:
+    """把 Excel 中的品类值（品类码或品类名称）解析为品类码；无法识别返回 None。"""
+    raw = str(raw_value or "").strip()
+    if not raw or raw.lower() in ("nan", "none"):
+        return None
+    cat = db.query(Category).filter(Category.code == raw).first()
+    if cat:
+        return cat.code
+    cat = db.query(Category).filter(Category.name == raw).first()
+    if cat:
+        return cat.code
+    return None
+
+
+def _interference_link_to_dict(db: Session, link: InterferenceLink) -> dict:
+    category_name = None
+    if link.category_code:
+        cat = db.query(Category).filter(Category.code == link.category_code).first()
+        category_name = cat.name if cat else None
     return {
         "id": link.id,
         "url": link.url,
+        "category_code": link.category_code,
+        "category_name": category_name,
         "remark": link.remark,
         "created_by": link.created_by,
         "created_at": format_beijing_datetime(link.created_at),
@@ -271,6 +291,7 @@ def _interference_link_to_dict(link: InterferenceLink) -> dict:
 @router.get("/interference-links")
 def list_interference_links(
     keyword: Optional[str] = Query(None),
+    category_code: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=2000),
     db: Session = Depends(get_db),
@@ -279,6 +300,8 @@ def list_interference_links(
     q = db.query(InterferenceLink)
     if keyword:
         q = q.filter(InterferenceLink.url.ilike(f"%{keyword}%"))
+    if category_code:
+        q = q.filter(InterferenceLink.category_code == category_code)
     total = q.count()
     rows = (
         q.order_by(InterferenceLink.id.desc())
@@ -290,7 +313,7 @@ def list_interference_links(
         "total": total,
         "page": page,
         "page_size": page_size,
-        "items": [_interference_link_to_dict(row) for row in rows],
+        "items": [_interference_link_to_dict(db, row) for row in rows],
     }
 
 
@@ -300,7 +323,7 @@ def import_interference_links(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """批量导入干扰链接。Excel/CSV 需包含「链接」列，可选「备注」列。"""
+    """批量导入干扰链接。Excel/CSV 需包含「链接」列，可选「品类」「备注」列（品类留空=全平台生效）。"""
     if not file.filename.lower().endswith((".xlsx", ".xls", ".csv")):
         raise HTTPException(400, "只支持 .xlsx / .xls / .csv 格式文件")
     content = file.file.read()
@@ -319,6 +342,10 @@ def import_interference_links(
     )
     if url_col is None:
         raise HTTPException(400, "未找到「链接」列，请使用列名：链接")
+    category_col = next(
+        (c for c in df.columns if c in ("品类", "品类码", "category", "category_code")),
+        None,
+    )
     remark_col = next((c for c in df.columns if c in ("备注", "remark", "说明")), None)
 
     existing = {row.url for row in db.query(InterferenceLink).all()}
@@ -334,10 +361,25 @@ def import_interference_links(
         if url in existing:
             skipped += 1
             continue
+
+        category_code = None
+        if category_col is not None:
+            resolved = _resolve_link_category_code(db, row.get(category_col))
+            if resolved is None and str(row.get(category_col) or "").strip().lower() not in ("", "nan", "none"):
+                errors.append(f"Row {i + 2}: 无法识别品类「{str(row.get(category_col)).strip()}」，已跳过")
+                skipped += 1
+                continue
+            category_code = resolved
+
         remark = None
         if remark_col is not None:
             remark = str(row.get(remark_col) or "").strip() or None
-        db.add(InterferenceLink(url=url, remark=remark, created_by=current_user.username))
+        db.add(InterferenceLink(
+            url=url,
+            category_code=category_code,
+            remark=remark,
+            created_by=current_user.username,
+        ))
         existing.add(url)
         imported += 1
 
@@ -369,8 +411,8 @@ def download_interference_link_template():
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "链接"
-    sheet.append(["链接", "备注"])
-    sheet.append(["https://item.jd.com/100123456.html", "示例备注"])
+    sheet.append(["链接", "品类", "备注"])
+    sheet.append(["https://item.jd.com/100123456.html", "tv", "示例备注（品类留空=全平台生效）"])
     output = io.BytesIO()
     workbook.save(output)
     quoted_filename = quote("干扰链接库导入模板.xlsx")

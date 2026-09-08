@@ -429,13 +429,15 @@ def test_import_interference_links_from_excel(db):
     from app.models.schemas import InterferenceLink
 
     client = _make_client(db)
+    db.add(Category(code="tv", name="电视"))
+    db.commit()
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "链接"
-    ws.append(["链接", "备注"])
-    ws.append(["https://item.jd.com/1001.html", "历史干扰"])
-    ws.append(["https://item.jd.com/1002.html"])
-    ws.append(["https://item.jd.com/1001.html"])  # 重复
+    ws.append(["链接", "品类", "备注"])
+    ws.append(["https://item.jd.com/1001.html", "tv", "历史干扰"])
+    ws.append(["https://item.jd.com/1002.html", "tv"])
+    ws.append(["https://item.jd.com/1001.html", "tv"])  # 重复
     buf = io.BytesIO()
     wb.save(buf)
 
@@ -455,6 +457,27 @@ def test_import_interference_links_from_excel(db):
         "https://item.jd.com/1002.html",
     ]
     assert rows[0].remark == "历史干扰"
+
+
+def test_import_interference_links_requires_category_column(db):
+    import io
+    import openpyxl
+
+    client = _make_client(db)
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["链接", "备注"])
+    ws.append(["https://item.jd.com/3000.html", "无品类列"])
+    buf = io.BytesIO()
+    wb.save(buf)
+
+    resp = client.post(
+        "/api/rules/interference-links/import",
+        files={"file": ("links.xlsx", buf.getvalue(),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert resp.status_code == 400
+    assert "品类" in resp.json()["detail"]
 
 
 def test_import_interference_links_requires_url_column(db):
@@ -482,8 +505,9 @@ def test_list_and_delete_interference_links(db):
     from app.models.schemas import InterferenceLink
 
     client = _make_client(db)
-    db.add(InterferenceLink(url="https://item.jd.com/2001.html", remark="备注A"))
-    db.add(InterferenceLink(url="https://item.jd.com/2002.html"))
+    db.add(Category(code="tv", name="电视"))
+    db.add(InterferenceLink(url="https://item.jd.com/2001.html", category_code="tv", remark="备注A"))
+    db.add(InterferenceLink(url="https://item.jd.com/2002.html", category_code="tv"))
     db.commit()
 
     resp = client.get("/api/rules/interference-links")
@@ -513,7 +537,7 @@ def test_import_interference_links_with_category_column(db):
     ws.append(["链接", "品类", "备注"])
     ws.append(["https://item.jd.com/3001.html", "tv", "电视专用"])
     ws.append(["https://item.jd.com/3002.html", "电视", "中文品类名"])  # 名称解析
-    ws.append(["https://item.jd.com/3003.html", "", "全平台"])          # 空品类=全平台
+    ws.append(["https://item.jd.com/3003.html", "", "空品类报错"])
     ws.append(["https://item.jd.com/3004.html", "不存在的品类", "报错"])
     buf = io.BytesIO()
     wb.save(buf)
@@ -525,16 +549,17 @@ def test_import_interference_links_with_category_column(db):
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert data["imported"] == 3
-    assert data["skipped"] == 1
-    assert len(data["errors"]) == 1
-    assert "无法识别品类" in data["errors"][0]
+    assert data["imported"] == 2
+    assert data["skipped"] == 2
+    assert len(data["errors"]) == 2
+    assert any("品类不能为空" in e for e in data["errors"])
+    assert any("无法识别品类" in e for e in data["errors"])
 
     rows = db.query(InterferenceLink).order_by(InterferenceLink.url).all()
     by_url = {r.url: r for r in rows}
     assert by_url["https://item.jd.com/3001.html"].category_code == "tv"
     assert by_url["https://item.jd.com/3002.html"].category_code == "tv"
-    assert by_url["https://item.jd.com/3003.html"].category_code is None
+    assert "https://item.jd.com/3003.html" not in by_url
     assert "https://item.jd.com/3004.html" not in by_url
 
 
@@ -543,15 +568,15 @@ def test_list_interference_links_includes_category_name(db):
 
     client = _make_client(db)
     db.add(Category(code="tv", name="电视"))
+    db.add(Category(code="monitor", name="显示器"))
     db.add(InterferenceLink(url="https://item.jd.com/4001.html", category_code="tv"))
-    db.add(InterferenceLink(url="https://item.jd.com/4002.html"))
+    db.add(InterferenceLink(url="https://item.jd.com/4002.html", category_code="monitor"))
     db.commit()
 
     data = client.get("/api/rules/interference-links").json()
     by_url = {i["url"]: i for i in data["items"]}
     assert by_url["https://item.jd.com/4001.html"]["category_name"] == "电视"
-    assert by_url["https://item.jd.com/4002.html"]["category_code"] is None
-    assert by_url["https://item.jd.com/4002.html"]["category_name"] is None
+    assert by_url["https://item.jd.com/4002.html"]["category_name"] == "显示器"
 
     filtered = client.get("/api/rules/interference-links", params={"category_code": "tv"}).json()
     assert filtered["total"] == 1

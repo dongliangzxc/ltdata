@@ -736,7 +736,7 @@ class InterferenceLink(Base):
 
     id            = Column(Integer, primary_key=True, index=True)
     url           = Column(String(500), nullable=False, unique=True, index=True)
-    category_code = Column(String(50), nullable=True, index=True)
+    category_code = Column(String(50), nullable=False, index=True)
     remark        = Column(String(200), nullable=True)
     created_by    = Column(String(50))
     created_at    = Column(DateTime, default=datetime.utcnow)

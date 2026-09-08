@@ -927,7 +927,7 @@ function InterferenceLinkTab() {
     {
       title: '品类', dataIndex: 'category_code', width: 140,
       render: (_: string | null, row: { category_code?: string | null; category_name?: string | null }) =>
-        row.category_name ? `${row.category_name}（${row.category_code}）` : <Tag color="blue">全平台</Tag>,
+        row.category_name ? `${row.category_name}（${row.category_code}）` : (row.category_code || '-'),
     },
     { title: '备注', dataIndex: 'remark', width: 160, render: (v: string | null) => v || '-' },
     { title: '操作人', dataIndex: 'created_by', width: 100, render: (v: string | null) => v || '-' },
@@ -944,14 +944,14 @@ function InterferenceLinkTab() {
 
   return (
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
-      <Alert type="info" showIcon message="干扰链接库：带品类的链接仅在对应品类清洗时生效，品类留空（全平台）则在所有品类清洗时生效。商品链接命中（包含匹配，大小写不敏感）即直接剔除，进入干扰项存档。" />
+      <Alert type="info" showIcon message="干扰链接库按品类生效（品类必填）：清洗时只应用当前品类的链接，商品链接命中（包含匹配，大小写不敏感）即直接剔除，进入干扰项存档。" />
       <Space wrap>
         <Button type="primary" icon={<UploadOutlined />} onClick={handleDownloadTemplate}>下载模板</Button>
         <Upload beforeUpload={handleImport} showUploadList={false} accept=".xlsx,.xls,.csv">
           <Button icon={<UploadOutlined />}>Excel 批量导入</Button>
         </Upload>
         <Select
-          placeholder="品类筛选（空=全平台）"
+          placeholder="品类筛选"
           allowClear
           style={{ width: 200 }}
           options={visibleCategoryOptions}

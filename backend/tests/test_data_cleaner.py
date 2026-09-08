@@ -687,7 +687,7 @@ def test_interference_link_contains_match_filters_item(db):
     db.add(raw)
     db.flush()
     job = _make_job(db, f.id)
-    db.add(InterferenceLink(url="https://item.jd.com/88888888.html", remark="历史干扰"))
+    db.add(InterferenceLink(url="https://item.jd.com/88888888.html", category_code="tv", remark="历史干扰"))
     db.commit()
 
     out = run_clean(db, job.id, [f.id], {}, dispatch_category_code="tv")
@@ -710,7 +710,7 @@ def test_interference_link_case_insensitive_contains(db):
     db.add(raw)
     db.flush()
     job = _make_job(db, f.id)
-    db.add(InterferenceLink(url="https://item.jd.com/99999999.html"))
+    db.add(InterferenceLink(url="https://item.jd.com/99999999.html", category_code="tv"))
     db.commit()
 
     out = run_clean(db, job.id, [f.id], {}, dispatch_category_code="tv")
@@ -732,7 +732,7 @@ def test_interference_link_non_matching_url_kept(db):
     db.add(raw)
     db.flush()
     job = _make_job(db, f.id)
-    db.add(InterferenceLink(url="https://item.jd.com/88888888.html"))
+    db.add(InterferenceLink(url="https://item.jd.com/88888888.html", category_code="tv"))
     db.commit()
 
     out = run_clean(db, job.id, [f.id], {}, dispatch_category_code="tv")
@@ -809,26 +809,34 @@ def test_interference_link_scoped_to_category_only_filters_that_category(db):
     assert db.query(FilteredItem).count() == 0
 
 
-def test_interference_link_global_and_category_both_apply(db):
+def test_interference_link_strictly_scoped_by_category(db):
+    """严格按品类：其它品类的链接不影响当前品类，同一品类的多条链接都生效。"""
     from app.models.schemas import InterferenceLink
     f = _make_file(db)
     raw1 = RawDataRecord(
-        file_id=f.id, platform="jd", month=202507, item_name="全平台干扰", brand_raw="A",
+        file_id=f.id, platform="jd", month=202507, item_name="tv干扰1", brand_raw="A",
         item_id="g-item-1", sales_qty=1, price=1, item_url="https://item.jd.com/555.html",
     )
     raw2 = RawDataRecord(
-        file_id=f.id, platform="jd", month=202507, item_name="品类干扰", brand_raw="B",
+        file_id=f.id, platform="jd", month=202507, item_name="tv干扰2", brand_raw="B",
         item_id="g-item-2", sales_qty=1, price=1, item_url="https://item.jd.com/666.html",
     )
-    db.add_all([raw1, raw2])
+    raw3 = RawDataRecord(
+        file_id=f.id, platform="jd", month=202507, item_name="monitor商品", brand_raw="C",
+        item_id="g-item-3", sales_qty=1, price=1, item_url="https://item.jd.com/777.html",
+    )
+    db.add_all([raw1, raw2, raw3])
     db.flush()
     job = _make_job(db, f.id)
-    db.add(InterferenceLink(url="https://item.jd.com/555.html"))            # 全平台
+    db.add(InterferenceLink(url="https://item.jd.com/555.html", category_code="tv"))
     db.add(InterferenceLink(url="https://item.jd.com/666.html", category_code="tv"))
+    db.add(InterferenceLink(url="https://item.jd.com/777.html", category_code="monitor"))
     db.commit()
 
+    # 在 tv 品类清洗：555/666 命中，777（monitor 链接）不受影响
     out = run_clean(db, job.id, [f.id], {}, dispatch_category_code="tv")
 
-    assert out == 0
-    assert db.query(CleanedDataRecord).count() == 0
+    assert out == 1
     assert db.query(FilteredItem).count() == 2
+    assert db.query(CleanedDataRecord).count() == 1
+    assert db.query(CleanedDataRecord).one().raw_data_id == raw3.id

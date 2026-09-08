@@ -323,7 +323,7 @@ def import_interference_links(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """批量导入干扰链接。Excel/CSV 需包含「链接」列，可选「品类」「备注」列（品类留空=全平台生效）。"""
+    """批量导入干扰链接。Excel/CSV 需包含「链接」「品类」列，可选「备注」列（品类必填）。"""
     if not file.filename.lower().endswith((".xlsx", ".xls", ".csv")):
         raise HTTPException(400, "只支持 .xlsx / .xls / .csv 格式文件")
     content = file.file.read()
@@ -346,6 +346,8 @@ def import_interference_links(
         (c for c in df.columns if c in ("品类", "品类码", "category", "category_code")),
         None,
     )
+    if category_col is None:
+        raise HTTPException(400, "未找到「品类」列，品类为必填，请使用列名：品类")
     remark_col = next((c for c in df.columns if c in ("备注", "remark", "说明")), None)
 
     existing = {row.url for row in db.query(InterferenceLink).all()}
@@ -362,14 +364,16 @@ def import_interference_links(
             skipped += 1
             continue
 
-        category_code = None
-        if category_col is not None:
-            resolved = _resolve_link_category_code(db, row.get(category_col))
-            if resolved is None and str(row.get(category_col) or "").strip().lower() not in ("", "nan", "none"):
-                errors.append(f"Row {i + 2}: 无法识别品类「{str(row.get(category_col)).strip()}」，已跳过")
-                skipped += 1
-                continue
-            category_code = resolved
+        raw_cat = str(row.get(category_col) or "").strip()
+        if not raw_cat or raw_cat.lower() in ("nan", "none"):
+            errors.append(f"Row {i + 2}: 品类不能为空，已跳过")
+            skipped += 1
+            continue
+        category_code = _resolve_link_category_code(db, raw_cat)
+        if category_code is None:
+            errors.append(f"Row {i + 2}: 无法识别品类「{raw_cat}」，已跳过")
+            skipped += 1
+            continue
 
         remark = None
         if remark_col is not None:
@@ -412,7 +416,7 @@ def download_interference_link_template():
     sheet = workbook.active
     sheet.title = "链接"
     sheet.append(["链接", "品类", "备注"])
-    sheet.append(["https://item.jd.com/100123456.html", "tv", "示例备注（品类留空=全平台生效）"])
+    sheet.append(["https://item.jd.com/100123456.html", "tv", "示例备注（品类必填）"])
     output = io.BytesIO()
     workbook.save(output)
     quoted_filename = quote("干扰链接库导入模板.xlsx")

@@ -29,9 +29,9 @@ def _load_intervention_rules(db: Session, category_code: str | None = None) -> l
     )
 
 
-def _load_interference_links(db: Session) -> dict[str | None, dict[str, str]]:
-    """返回 {品类码或None: {链接(小写去空格): 原文}}；None 表示全平台生效。"""
-    result: dict[str | None, dict[str, str]] = {}
+def _load_interference_links(db: Session) -> dict[str, dict[str, str]]:
+    """返回 {品类码: {链接(小写去空格): 原文}}，按品类严格隔离。"""
+    result: dict[str, dict[str, str]] = {}
     for row in db.query(InterferenceLink).all():
         normalized = (row.url or "").casefold().strip()
         if not normalized:
@@ -43,22 +43,19 @@ def _load_interference_links(db: Session) -> dict[str | None, dict[str, str]]:
 
 def _matches_interference_links(
     record: RawDataRecord,
-    links: dict[str | None, dict[str, str]],
+    links: dict[str, dict[str, str]],
     category_code: str | None = None,
 ) -> str | None:
-    """商品链接包含当前品类或全平台库中的任意链接时返回命中的库中链接原文，否则 None。"""
+    """商品链接包含当前品类库中的任意链接时返回命中的库中链接原文，否则 None。"""
     url = (record.item_url or "").casefold().strip()
-    if not url:
+    if not url or not category_code:
         return None
-    buckets = []
-    if None in links:
-        buckets.append(links[None])
-    if category_code and category_code in links:
-        buckets.append(links[category_code])
-    for bucket in buckets:
-        for key, original in bucket.items():
-            if key and key in url:
-                return original
+    bucket = links.get(category_code)
+    if not bucket:
+        return None
+    for key, original in bucket.items():
+        if key and key in url:
+            return original
     return None
 
 
@@ -251,7 +248,7 @@ def run_clean(
     seen_keys: set = set()
 
     for r in records:
-        # ── Step 1: 干扰链接库（全平台 + 当前品类剔除）────────────────
+        # ── Step 1: 干扰链接库（按品类剔除）────────────────────────
         hit_link = _matches_interference_links(r, interference_links, dispatch_category_code)
         if hit_link is not None:
             filtered.append(FilteredItem(

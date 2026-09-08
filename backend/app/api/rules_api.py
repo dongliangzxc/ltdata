@@ -6,14 +6,16 @@
 - /api/rules/filtered-items  干扰项存档（含恢复）
 - /api/rules/attr-rules      属性关键词规则（含 P10 批量导入）
 """
+import io
 import math
 import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
 import pandas as pd
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -26,7 +28,7 @@ from app.models.schemas import (
     RawDataRecord, CleanedDataRecord, ModelRecord,
     AttrRuleIn, AttrRuleOut,
     Category, InterventionRule, InterventionRuleIn,
-    InterventionRulePatch,
+    InterventionRulePatch, InterferenceLink,
     User,
 )
 from app.services.import_helper import save_tmp_file, read_columns, find_best_template, col_fingerprint
@@ -66,6 +68,7 @@ def _filter_rule_category(query, model, db: Session, current_user: User):
 ALLOWED_PRICE_OPS = {"gt", "gte", "lt", "lte", "between"}
 ALLOWED_CONDITION_KEYS = {
     "brand_in",
+    "shop_name_in",
     "item_name_contains_any",
     "item_name_not_contains_any",
     "reference_price",
@@ -99,7 +102,7 @@ def _validate_intervention_conditions(conditions: dict) -> dict:
         raise HTTPException(400, f"不支持的干预条件: {unknown_keys[0]}")
 
     cleaned: dict = {}
-    for key in ("brand_in", "item_name_contains_any", "item_name_not_contains_any"):
+    for key in ("brand_in", "shop_name_in", "item_name_contains_any", "item_name_not_contains_any"):
         values = _clean_string_list(conditions.get(key))
         if values:
             cleaned[key] = values
@@ -154,6 +157,8 @@ def _intervention_condition_summary(conditions: dict) -> str:
     parts = []
     if conditions.get("brand_in"):
         parts.append(f"入库品牌 in [{', '.join(conditions['brand_in'])}]")
+    if conditions.get("shop_name_in"):
+        parts.append(f"店铺名称 in [{', '.join(conditions['shop_name_in'])}]")
     if conditions.get("item_name_contains_any"):
         parts.append(f"商品名称包含 [{', '.join(conditions['item_name_contains_any'])}]")
     if conditions.get("item_name_not_contains_any"):
@@ -247,6 +252,134 @@ def delete_intervention_rule(
     _ensure_rule_category_visible(db, current_user, rule.category_code)
     db.delete(rule)
     db.commit()
+
+
+# ═══════════════════════════════════════════════════════════
+# 干扰链接库（全平台生效）
+# ═══════════════════════════════════════════════════════════
+
+def _interference_link_to_dict(link: InterferenceLink) -> dict:
+    return {
+        "id": link.id,
+        "url": link.url,
+        "remark": link.remark,
+        "created_by": link.created_by,
+        "created_at": format_beijing_datetime(link.created_at),
+    }
+
+
+@router.get("/interference-links")
+def list_interference_links(
+    keyword: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=2000),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    q = db.query(InterferenceLink)
+    if keyword:
+        q = q.filter(InterferenceLink.url.ilike(f"%{keyword}%"))
+    total = q.count()
+    rows = (
+        q.order_by(InterferenceLink.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "items": [_interference_link_to_dict(row) for row in rows],
+    }
+
+
+@router.post("/interference-links/import")
+def import_interference_links(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """批量导入干扰链接。Excel/CSV 需包含「链接」列，可选「备注」列。"""
+    if not file.filename.lower().endswith((".xlsx", ".xls", ".csv")):
+        raise HTTPException(400, "只支持 .xlsx / .xls / .csv 格式文件")
+    content = file.file.read()
+    try:
+        if file.filename.lower().endswith(".csv"):
+            df = pd.read_csv(io.BytesIO(content), dtype=str, encoding="utf-8-sig")
+        else:
+            df = pd.read_excel(io.BytesIO(content), dtype=str)
+    except Exception as e:
+        raise HTTPException(422, f"读取文件失败: {e}")
+    df.columns = [str(c).strip() for c in df.columns]
+
+    url_col = next(
+        (c for c in df.columns if c in ("链接", "链接地址", "商品链接", "url", "URL", "link", "Link")),
+        None,
+    )
+    if url_col is None:
+        raise HTTPException(400, "未找到「链接」列，请使用列名：链接")
+    remark_col = next((c for c in df.columns if c in ("备注", "remark", "说明")), None)
+
+    existing = {row.url for row in db.query(InterferenceLink).all()}
+    imported = 0
+    skipped = 0
+    errors = []
+    for i, row in df.iterrows():
+        raw_url = row.get(url_col)
+        url = str(raw_url or "").strip()
+        if not url or url.lower() in ("nan", "none"):
+            skipped += 1
+            continue
+        if url in existing:
+            skipped += 1
+            continue
+        remark = None
+        if remark_col is not None:
+            remark = str(row.get(remark_col) or "").strip() or None
+        db.add(InterferenceLink(url=url, remark=remark, created_by=current_user.username))
+        existing.add(url)
+        imported += 1
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(400, "部分链接写入失败（可能超长或重复），已回滚")
+    return {"imported": imported, "skipped": skipped, "errors": errors}
+
+
+@router.delete("/interference-links/{link_id}", status_code=204)
+def delete_interference_link(
+    link_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    link = db.query(InterferenceLink).filter(InterferenceLink.id == link_id).first()
+    if not link:
+        raise HTTPException(404, "干扰链接不存在")
+    db.delete(link)
+    db.commit()
+
+
+@router.get("/interference-links/template")
+def download_interference_link_template():
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "链接"
+    sheet.append(["链接", "备注"])
+    sheet.append(["https://item.jd.com/100123456.html", "示例备注"])
+    output = io.BytesIO()
+    workbook.save(output)
+    quoted_filename = quote("干扰链接库导入模板.xlsx")
+    headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{quoted_filename}"}
+    return Response(
+        content=output.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers,
+    )
 
 
 # ═══════════════════════════════════════════════════════════

@@ -1,7 +1,9 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from types import SimpleNamespace
 
 from app.api.rules_api import router
+from app.core.auth_deps import get_current_user
 from app.models.database import get_db
 from app.models.schemas import (
     Category,
@@ -21,6 +23,9 @@ def _make_client(db):
         yield db
 
     app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+        is_admin=1, category_permissions=None, username="tester",
+    )
     return TestClient(app)
 
 
@@ -393,3 +398,101 @@ def test_filtered_items_keyword_no_longer_matches_matched_keyword_or_rule_name(d
     )
     assert resp.status_code == 200
     assert resp.json()["total"] == 0
+
+
+# ── 店铺名称条件 ─────────────────────────────────────────────
+
+def test_intervention_rule_accepts_shop_name_condition(db):
+    client = _make_client(db)
+    db.add(Category(code="projector", name="投影"))
+    db.commit()
+
+    response = client.post("/api/rules/intervention-rules", json={
+        "name": "指定店铺过滤",
+        "category_code": "projector",
+        "action": "filter",
+        "priority": 1,
+        "conditions": {"shop_name_in": ["京东某专营店", "天猫某旗舰店"]},
+    })
+
+    assert response.status_code == 201
+    created = response.json()
+    assert created["conditions"]["shop_name_in"] == ["京东某专营店", "天猫某旗舰店"]
+    assert created["summary"] == "店铺名称 in [京东某专营店, 天猫某旗舰店]"
+
+
+# ── 干扰链接库 ───────────────────────────────────────────────
+
+def test_import_interference_links_from_excel(db):
+    import io
+    import openpyxl
+    from app.models.schemas import InterferenceLink
+
+    client = _make_client(db)
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "链接"
+    ws.append(["链接", "备注"])
+    ws.append(["https://item.jd.com/1001.html", "历史干扰"])
+    ws.append(["https://item.jd.com/1002.html"])
+    ws.append(["https://item.jd.com/1001.html"])  # 重复
+    buf = io.BytesIO()
+    wb.save(buf)
+
+    resp = client.post(
+        "/api/rules/interference-links/import",
+        files={"file": ("links.xlsx", buf.getvalue(),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["imported"] == 2
+    assert data["skipped"] == 1
+
+    rows = db.query(InterferenceLink).order_by(InterferenceLink.id).all()
+    assert [r.url for r in rows] == [
+        "https://item.jd.com/1001.html",
+        "https://item.jd.com/1002.html",
+    ]
+    assert rows[0].remark == "历史干扰"
+
+
+def test_import_interference_links_requires_url_column(db):
+    import io
+    import openpyxl
+
+    client = _make_client(db)
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["其他列"])
+    ws.append(["x"])
+    buf = io.BytesIO()
+    wb.save(buf)
+
+    resp = client.post(
+        "/api/rules/interference-links/import",
+        files={"file": ("links.xlsx", buf.getvalue(),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert resp.status_code == 400
+    assert "链接" in resp.json()["detail"]
+
+
+def test_list_and_delete_interference_links(db):
+    from app.models.schemas import InterferenceLink
+
+    client = _make_client(db)
+    db.add(InterferenceLink(url="https://item.jd.com/2001.html", remark="备注A"))
+    db.add(InterferenceLink(url="https://item.jd.com/2002.html"))
+    db.commit()
+
+    resp = client.get("/api/rules/interference-links")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 2
+    assert len(data["items"]) == 2
+
+    link_id = data["items"][0]["id"]
+    assert client.delete(f"/api/rules/interference-links/{link_id}").status_code == 204
+    remaining = db.query(InterferenceLink).count()
+    assert remaining == 1

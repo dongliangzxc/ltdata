@@ -671,3 +671,110 @@ def test_intervention_price_rule_falls_back_to_display_price_when_reference_pric
     filtered = db.query(FilteredItem).one()
     assert filtered.raw_data_id == raw.id
     assert filtered.intervention_rule_name == "运动相机低价过滤"
+
+
+# ── 干扰链接库 + 店铺名称条件 ─────────────────────────────────
+
+def test_interference_link_contains_match_filters_item(db):
+    from app.models.schemas import InterferenceLink
+    f = _make_file(db)
+    raw = RawDataRecord(
+        file_id=f.id, platform="jd", month=202507,
+        item_name="干扰商品", brand_raw="SONY",
+        item_id="link-item-1", sales_qty=10, price=100,
+        item_url="https://item.jd.com/88888888.html?sku=1&ex=1",
+    )
+    db.add(raw)
+    db.flush()
+    job = _make_job(db, f.id)
+    db.add(InterferenceLink(url="https://item.jd.com/88888888.html", remark="历史干扰"))
+    db.commit()
+
+    out = run_clean(db, job.id, [f.id], {}, dispatch_category_code="tv")
+
+    assert out == 0
+    assert db.query(CleanedDataRecord).count() == 0
+    filtered = db.query(FilteredItem).one()
+    assert filtered.matched_reason == "命中干扰链接库：https://item.jd.com/88888888.html"
+
+
+def test_interference_link_case_insensitive_contains(db):
+    from app.models.schemas import InterferenceLink
+    f = _make_file(db)
+    raw = RawDataRecord(
+        file_id=f.id, platform="jd", month=202507,
+        item_name="干扰商品", brand_raw="SONY",
+        item_id="link-item-2", sales_qty=10, price=100,
+        item_url="HTTPS://ITEM.JD.COM/99999999.HTML?sku=2",
+    )
+    db.add(raw)
+    db.flush()
+    job = _make_job(db, f.id)
+    db.add(InterferenceLink(url="https://item.jd.com/99999999.html"))
+    db.commit()
+
+    out = run_clean(db, job.id, [f.id], {}, dispatch_category_code="tv")
+
+    assert out == 0
+    assert db.query(CleanedDataRecord).count() == 0
+    assert db.query(FilteredItem).count() == 1
+
+
+def test_interference_link_non_matching_url_kept(db):
+    from app.models.schemas import InterferenceLink
+    f = _make_file(db)
+    raw = RawDataRecord(
+        file_id=f.id, platform="jd", month=202507,
+        item_name="正常商品", brand_raw="SONY",
+        item_id="normal-item", sales_qty=10, price=500,
+        item_url="https://item.jd.com/11111111.html",
+    )
+    db.add(raw)
+    db.flush()
+    job = _make_job(db, f.id)
+    db.add(InterferenceLink(url="https://item.jd.com/88888888.html"))
+    db.commit()
+
+    out = run_clean(db, job.id, [f.id], {}, dispatch_category_code="tv")
+
+    assert out == 1
+    assert db.query(FilteredItem).count() == 0
+
+
+def test_intervention_shop_name_in_condition_filters(db):
+    f = _make_file(db)
+    raw = _make_raw(db, f.id, "某店铺在售商品", brand_raw="SONY", shop_name="京东某专营店")
+    batch, job = _make_dispatch_job(db, f.id, raw)
+    db.add(InterventionRule(
+        name="指定店铺过滤",
+        category_code="projector",
+        action="filter",
+        priority=1,
+        conditions={"shop_name_in": ["京东某专营店", "天猫某旗舰店"]},
+    ))
+    db.commit()
+
+    out = run_clean(db, job.id, [f.id], {}, dispatch_batch_id=batch.id, dispatch_category_code="projector")
+
+    assert out == 0
+    filtered = db.query(FilteredItem).one()
+    assert filtered.intervention_rule_name == "指定店铺过滤"
+
+
+def test_intervention_shop_name_in_case_insensitive(db):
+    f = _make_file(db)
+    raw = _make_raw(db, f.id, "正常商品", brand_raw="SONY", shop_name="Jd SELF 旗舰店")
+    batch, job = _make_dispatch_job(db, f.id, raw)
+    db.add(InterventionRule(
+        name="店铺大小写",
+        category_code="projector",
+        action="filter",
+        priority=1,
+        conditions={"shop_name_in": ["jd self 旗舰店"]},
+    ))
+    db.commit()
+
+    out = run_clean(db, job.id, [f.id], {}, dispatch_batch_id=batch.id, dispatch_category_code="projector")
+
+    assert out == 0
+    assert db.query(FilteredItem).count() == 1

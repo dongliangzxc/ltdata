@@ -731,6 +731,16 @@ class FilteredItem(Base):
     created_at             = Column(DateTime, default=datetime.utcnow)
 
 
+class InterferenceLink(Base):
+    __tablename__ = "interference_links"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    url        = Column(String(500), nullable=False, unique=True, index=True)
+    remark     = Column(String(200), nullable=True)
+    created_by = Column(String(50))
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class BrandAlias(Base):
     __tablename__ = "brand_aliases"
 

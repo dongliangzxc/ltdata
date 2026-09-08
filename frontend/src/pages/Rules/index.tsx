@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import {
   Tabs, Card, Table, Button, Input, Select, Space, Popconfirm,
   Upload, Modal, Form, InputNumber, Tag, message, Alert, Switch,
+  Typography,
 } from 'antd'
 import {
   PlusOutlined, DeleteOutlined, UploadOutlined,
@@ -18,10 +19,13 @@ import {
   listAttrRuleCategories, listAttrRules, createAttrRule,
   updateAttrRule, deleteAttrRule,
   listCorrectionRules, createCorrectionRule, updateCorrectionRule, deleteCorrectionRule,
+  listInterferenceLinks, importInterferenceLinks, deleteInterferenceLink, downloadInterferenceLinkTemplate,
   type UserProfile,
 } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 import ImportMappingModal from '../../components/ImportMappingModal'
+
+const { Text } = Typography
 
 function readStoredUser(): UserProfile | null {
   if (typeof localStorage === 'undefined') return null
@@ -48,6 +52,7 @@ function conditionsToFormValues(conditions: Record<string, any>) {
   const price = conditions.reference_price ?? {}
   return {
     brand_in_text: (conditions.brand_in ?? []).join('\n'),
+    shop_name_in_text: (conditions.shop_name_in ?? []).join('\n'),
     item_name_contains_text: (conditions.item_name_contains_any ?? []).join('\n'),
     item_name_not_contains_text: (conditions.item_name_not_contains_any ?? []).join('\n'),
     price_enabled: Boolean(conditions.reference_price),
@@ -61,9 +66,11 @@ function conditionsToFormValues(conditions: Record<string, any>) {
 function buildConditions(values: Record<string, any>) {
   const conditions: Record<string, any> = {}
   const brandIn = splitLines(values.brand_in_text)
+  const shopNames = splitLines(values.shop_name_in_text)
   const nameContains = splitLines(values.item_name_contains_text)
   const nameNotContains = splitLines(values.item_name_not_contains_text)
   if (brandIn.length) conditions.brand_in = brandIn
+  if (shopNames.length) conditions.shop_name_in = shopNames
   if (nameContains.length) conditions.item_name_contains_any = nameContains
   if (nameNotContains.length) conditions.item_name_not_contains_any = nameNotContains
   if (values.price_enabled) {
@@ -216,6 +223,9 @@ function InterventionRuleTab() {
           </Space>
           <Form.Item label="宝贝品牌（多个品牌用换行或逗号分隔）" name="brand_in_text">
             <Input.TextArea rows={2} placeholder="海信&#10;Vidda" />
+          </Form.Item>
+          <Form.Item label="商品店铺名称（多个店铺用换行或逗号分隔，命中即剔除）" name="shop_name_in_text">
+            <Input.TextArea rows={2} placeholder="xxx官方旗舰店&#10;xxx专营店" />
           </Form.Item>
           <Form.Item label="商品名称包含任一关键词" name="item_name_contains_text">
             <Input.TextArea rows={2} placeholder="激光电视&#10;投影" />
@@ -855,9 +865,98 @@ function CorrectionRulesTab() {
 }
 
 // ══════════════════════════════════════════════
+// 干扰链接库（全平台生效）
+// ══════════════════════════════════════════════
+function InterferenceLinkTab() {
+  const [keyword, setKeyword] = useState('')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
+  const { data, loading, refresh } = useRequest(
+    () => listInterferenceLinks({ keyword: keyword || undefined, page, page_size: pageSize }).then(r => r.data),
+    { refreshDeps: [keyword, page, pageSize] }
+  )
+
+  const triggerDownload = (blob: Blob, filename: string) => {
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(url)
+  }
+
+  const handleDownloadTemplate = async () => {
+    try {
+      const res = await downloadInterferenceLinkTemplate()
+      triggerDownload(res.data, '干扰链接库导入模板.xlsx')
+    } catch { /* handled by interceptor */ }
+  }
+
+  const handleImport = async (file: File) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    try {
+      const res = await importInterferenceLinks(fd)
+      message.success(`导入完成：新增 ${res.data.imported} 条，跳过 ${res.data.skipped} 条`)
+      setPage(1)
+      refresh()
+    } catch { /* handled by interceptor */ }
+    return false
+  }
+
+  const columns = [
+    { title: 'ID', dataIndex: 'id', width: 70 },
+    { title: '链接', dataIndex: 'url', ellipsis: true, render: (v: string) => <Text code style={{ wordBreak: 'break-all' }}>{v}</Text> },
+    { title: '备注', dataIndex: 'remark', width: 180, render: (v: string | null) => v || '-' },
+    { title: '操作人', dataIndex: 'created_by', width: 100, render: (v: string | null) => v || '-' },
+    { title: '导入时间', dataIndex: 'created_at', width: 160, render: (v: string) => (v || '').slice(0, 19).replace('T', ' ') },
+    {
+      title: '操作', width: 90,
+      render: (_: unknown, row: { id: number }) => (
+        <Popconfirm title="确认删除该链接？" onConfirm={async () => { await deleteInterferenceLink(row.id); refresh() }}>
+          <Button size="small" danger icon={<DeleteOutlined />} />
+        </Popconfirm>
+      ),
+    },
+  ]
+
+  return (
+    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      <Alert type="info" showIcon message="干扰链接库全平台生效：清洗时商品链接命中库中链接（包含匹配，大小写不敏感）即直接剔除，进入干扰项存档。" />
+      <Space wrap>
+        <Button type="primary" icon={<UploadOutlined />} onClick={handleDownloadTemplate}>下载模板</Button>
+        <Upload beforeUpload={handleImport} showUploadList={false} accept=".xlsx,.xls,.csv">
+          <Button icon={<UploadOutlined />}>Excel 批量导入</Button>
+        </Upload>
+        <Input placeholder="搜索链接" allowClear value={keyword} onChange={e => { setKeyword(e.target.value); setPage(1) }}
+          style={{ width: 220 }} />
+      </Space>
+      <Table
+        dataSource={data?.items ?? []}
+        columns={columns}
+        rowKey="id"
+        size="small"
+        loading={loading}
+        scroll={{ x: 'max-content' }}
+        pagination={{
+          current: page,
+          pageSize,
+          total: data?.total ?? 0,
+          showSizeChanger: true,
+          showTotal: (t: number) => `共 ${t} 条`,
+          onChange: (p, ps) => { setPage(p); setPageSize(ps) },
+        }}
+      />
+    </Space>
+  )
+}
+
+// ══════════════════════════════════════════════
 // 主页面
 // ══════════════════════════════════════════════
-const RULE_TAB_KEYS = ['intervention', 'brand', 'rules', 'filtered', 'attr', 'correction']
+const RULE_TAB_KEYS = ['intervention', 'brand', 'rules', 'filtered', 'attr', 'correction', 'links']
 
 function normalizeRuleTab(tab: string | null) {
   if (!tab || tab === 'noise') return 'intervention'
@@ -884,6 +983,7 @@ export default function RulesPage() {
           { key: 'filtered',   label: '干扰项存档', children: <FilteredItemTab /> },
           { key: 'attr',       label: '属性规则',   children: <AttrRuleTab /> },
           { key: 'correction', label: '修正规则',   children: <CorrectionRulesTab /> },
+          { key: 'links',      label: '干扰链接库', children: <InterferenceLinkTab /> },
         ]}
       />
     </Card>

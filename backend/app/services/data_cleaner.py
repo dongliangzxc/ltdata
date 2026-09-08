@@ -1,15 +1,16 @@
 """
 数据清洗服务：
 1. 清洗干预规则（intervention_rules）→ 命中过滤规则写入 filtered_items，跳过
-2. 品牌写法标准化（brand_aliases）→ brand_raw 查表覆盖 brand_std
-3. 去重（同 item_id + month + shop_name 保留第一条）
-4. brand_std 兜底补全（无匹配时用 brand_raw）
+2. 干扰链接库（interference_links）→ 命中链接直接剔除（全平台生效）
+3. 品牌写法标准化（brand_aliases）→ brand_raw 查表覆盖 brand_std
+4. 去重（同 item_id + month + shop_name 保留第一条）
+5. brand_std 兜底补全（无匹配时用 brand_raw）
 """
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.models.schemas import (
     RawDataRecord, CleanedDataRecord, CleanJobRecord,
-    FilteredItem, BrandAlias, InterventionRule,
+    FilteredItem, BrandAlias, InterventionRule, InterferenceLink,
 )
 
 
@@ -26,6 +27,27 @@ def _load_intervention_rules(db: Session, category_code: str | None = None) -> l
         .order_by(InterventionRule.priority, InterventionRule.id)
         .all()
     )
+
+
+def _load_interference_links(db: Session) -> dict[str, str]:
+    """返回 {链接(小写去空格): 原文}，用于清洗时全平台剔除。"""
+    result: dict[str, str] = {}
+    for row in db.query(InterferenceLink).all():
+        normalized = (row.url or "").casefold().strip()
+        if normalized:
+            result[normalized] = row.url
+    return result
+
+
+def _matches_interference_links(record: RawDataRecord, links: dict[str, str]) -> str | None:
+    """商品链接包含库中任意链接（大小写不敏感）时返回命中的库中链接原文，否则 None。"""
+    url = (record.item_url or "").casefold().strip()
+    if not url:
+        return None
+    for key, original in links.items():
+        if key and key in url:
+            return original
+    return None
 
 
 def _load_brand_alias_map(db: Session) -> dict[str, str]:
@@ -60,6 +82,8 @@ def _intervention_condition_summary(conditions: dict) -> str:
     parts = []
     if conditions.get("brand_in"):
         parts.append(f"品牌 in [{', '.join(_stringify_list(conditions['brand_in']))}]")
+    if conditions.get("shop_name_in"):
+        parts.append(f"店铺名称 in [{', '.join(_stringify_list(conditions['shop_name_in']))}]")
     if conditions.get("item_name_contains_any"):
         parts.append(f"商品名称包含 [{', '.join(_stringify_list(conditions['item_name_contains_any']))}]")
     if conditions.get("item_name_not_contains_any"):
@@ -133,6 +157,13 @@ def _matches_intervention_rule(
         if not brand_candidates.intersection({str(value).casefold() for value in brand_values}):
             return False
 
+    shop_values = conditions.get("shop_name_in")
+    if shop_values:
+        has_recognized_condition = True
+        shop_name = (record.shop_name or "").casefold().strip()
+        if not shop_name or shop_name not in {str(value).casefold().strip() for value in shop_values}:
+            return False
+
     contains_values = conditions.get("item_name_contains_any")
     if contains_values:
         has_recognized_condition = True
@@ -181,6 +212,7 @@ def run_clean(
     # ── 加载规则表 ─────────────────────────────────────────────
     intervention_rules = _load_intervention_rules(db, dispatch_category_code)
     brand_alias_map = _load_brand_alias_map(db)
+    interference_links = _load_interference_links(db)
 
     # ── 数据源选取 ─────────────────────────────────────────────
     from app.models.schemas import CleanJobItemRecord
@@ -207,7 +239,20 @@ def run_clean(
     seen_keys: set = set()
 
     for r in records:
-        # ── Step 1: 清洗干预规则 ─────────────────────────────────
+        # ── Step 1: 干扰链接库（全平台剔除）──────────────────────
+        hit_link = _matches_interference_links(r, interference_links)
+        if hit_link is not None:
+            filtered.append(FilteredItem(
+                raw_data_id=r.id,
+                clean_job_id=clean_job_id,
+                matched_keyword="干扰链接库",
+                intervention_rule_id=None,
+                intervention_rule_name="干扰链接库",
+                matched_reason=f"命中干扰链接库：{hit_link}",
+            ))
+            continue
+
+        # ── Step 2: 清洗干预规则 ─────────────────────────────────
         matched_rule = _first_matching_intervention_rule(r, intervention_rules, brand_alias_map)
         if matched_rule is not None:
             if matched_rule.action == "filter":
@@ -226,14 +271,14 @@ def run_clean(
             if matched_rule.action == "allow":
                 pass
 
-        # ── Step 2: 去重 ─────────────────────────────────────────
+        # ── Step 3: 去重 ─────────────────────────────────────────
         if dedup:
             key = (r.item_id, r.month, r.shop_name)
             if key in seen_keys:
                 continue
             seen_keys.add(key)
 
-        # ── Step 3: 品牌写法标准化 ───────────────────────────────
+        # ── Step 4: 品牌写法标准化 ───────────────────────────────
         brand_std = r.brand_std  # 原始已有标准品牌码（上传时从 Excel 读取）
         if r.brand_raw:
             alias_hit = brand_alias_map.get(r.brand_raw.upper())

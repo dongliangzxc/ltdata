@@ -350,6 +350,32 @@ export const updateInterventionRule = (id: number, payload: UpdateInterventionRu
 export const deleteInterventionRule = (id: number) =>
   api.delete(`/rules/intervention-rules/${id}`)
 
+// ─── Rules - Interference Links ─────────────────────────────
+export interface InterferenceLinkItem {
+  id: number
+  url: string
+  remark?: string | null
+  created_by?: string | null
+  created_at: string
+}
+
+export const listInterferenceLinks = (params?: { keyword?: string; page?: number; page_size?: number }) =>
+  api.get<{ total: number; page: number; page_size: number; items: InterferenceLinkItem[] }>(
+    '/rules/interference-links', { params }
+  )
+
+export const importInterferenceLinks = (formData: FormData) =>
+  api.post<{ imported: number; skipped: number; errors: string[] }>(
+    '/rules/interference-links/import', formData,
+    { headers: { 'Content-Type': 'multipart/form-data' } }
+  )
+
+export const deleteInterferenceLink = (id: number) =>
+  api.delete(`/rules/interference-links/${id}`)
+
+export const downloadInterferenceLinkTemplate = () =>
+  api.get('/rules/interference-links/template', { responseType: 'blob' })
+
 // ─── Dispatch ──────────────────────────────────────────────
 export interface DispatchCategoryPlatformStat {
   platform: string | null

@@ -285,6 +285,62 @@ def test_headers_detects_detail_sheet_and_maps_door_lock_aliases(db, tmp_path, m
     assert data["issues"] == []
 
 
+def test_headers_defaults_model_text_to_product_series_when_model_is_storage(db):
+    """平板格式：同时有「产品系列」和「机型」列时，「机型」实为存储配置。
+
+    默认映射应把「产品系列」提升为型号、把「机型」落到机型/系列，
+    避免用存储配置（如 16+512G）当型号去匹配导致「匹配到多个型号」。
+    """
+    db.add(Category(code="tablet", name="智能平板"))
+    db.commit()
+    client = _client(db)
+    content = _history_excel([{
+        "年度": 2026,
+        "月度": "202606",
+        "五大电商": "京东",
+        "电商类型": "垂直电商",
+        "商品名称": "宏碁平板",
+        "商品网址": "https://item.jd.com/1001.html",
+        "品牌": "宏碁",
+        "产品系列": "N150",
+        "机型": "16+512G",
+    }])
+
+    resp = client.post(
+        "/api/historical/headers",
+        files={"file": ("智能平板数据库数据-Harry.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["mapping"]["model_text"] == "产品系列"
+    assert data["mapping"]["model_type"] == "机型"
+
+
+def test_headers_keeps_model_text_when_product_series_not_present(db):
+    """只有「机型」列（门锁格式）时，仍保持「机型→型号」，不触发提升规则。"""
+    db.add(Category(code="door_lock", name="门锁"))
+    db.commit()
+    client = _client(db)
+    content = _history_excel([{
+        "年度": 2026,
+        "月度": 4,
+        "平台": "京东",
+        "宝贝名称": "门锁 商品",
+        "品牌": "品牌A",
+        "机型": "Lock A",
+    }])
+
+    resp = client.post(
+        "/api/historical/headers",
+        files={"file": ("2023-2026.04门锁-传统+新兴.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["mapping"]["model_text"] == "机型"
+
+
 def test_confirm_imports_router_format_with_model_type(db, tmp_path, monkeypatch):
     monkeypatch.setattr("app.api.historical_api.settings.UPLOAD_DIR", str(tmp_path))
     db.add(Category(code="router", name="路由器"))

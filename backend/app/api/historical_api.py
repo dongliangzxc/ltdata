@@ -256,7 +256,24 @@ def _build_mapping(columns: list[str]) -> dict[str, str]:
             used.add(field)
         elif field == "item_url" and col == "网址":
             mapping[field] = col
+    _apply_model_text_preference(columns, mapping)
     return mapping
+
+
+def _apply_model_text_preference(columns: list[str], mapping: dict[str, str]) -> None:
+    """后置补充规则（优先级靠后，不覆盖已有型号/机型映射）。
+
+    当「型号」默认取自「机型」列、且表中另有「产品系列」列时，说明该表的
+    「机型」列实际装的是存储配置等规格值，真正的机型在「产品系列」列。
+    此时把「产品系列」提升为「型号」，「机型」改映射到「机型/系列」。
+
+    触发条件限定了「型号」当前恰好取自「机型」列，因此不影响路由器
+    （品牌产品系列→型号、产品系列→机型）、笔记本（品牌+系列→型号）等
+    已有文件的默认映射，也不影响只有「机型」列的门锁文件。
+    """
+    if mapping.get("model_text") == "机型" and "产品系列" in columns:
+        mapping["model_text"] = "产品系列"
+        mapping["model_type"] = "机型"
 
 
 def _read_sheet_preview(

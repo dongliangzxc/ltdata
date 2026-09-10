@@ -97,3 +97,20 @@ def test_models_template_download_returns_two_sheet_workbook(monkeypatch):
         "规格名称",
         "规格值",
     ]
+
+
+def test_historical_template_download_returns_workbook_with_standard_headers(monkeypatch):
+    client = _client(monkeypatch)
+    resp = client.get("/api/historical/template", headers={"Authorization": "Bearer test_token"})
+
+    assert resp.status_code == 200
+    assert resp.content
+    assert "spreadsheetml.sheet" in resp.headers["content-type"]
+    assert "历史库映射导入模板.xlsx" in resp.headers["content-disposition"]
+
+    workbook = load_workbook(io.BytesIO(resp.content))
+    assert workbook.sheetnames == ["历史库"]
+    headers = [cell.value for cell in workbook["历史库"][1]]
+    for required in ("年", "月", "商场", "标题"):
+        assert required in headers
+    assert workbook["历史库"].max_row == 2

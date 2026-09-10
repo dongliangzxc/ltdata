@@ -16,8 +16,8 @@ from uuid import UUID
 
 import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from fastapi.responses import StreamingResponse
-from openpyxl import load_workbook
+from fastapi.responses import Response, StreamingResponse
+from openpyxl import Workbook, load_workbook
 from pydantic import BaseModel
 from sqlalchemy import func, or_, tuple_
 from sqlalchemy.orm import Session
@@ -1302,6 +1302,46 @@ def _import_historical_stream(
         models_by_code_unbranded=models_by_code_unbranded,
         models_by_name=models_by_name,
         ambiguous_model_codes=ambiguous_model_codes,
+    )
+
+
+@router.get("/template")
+def download_historical_template():
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "历史库"
+    headers = [
+        HISTORICAL_STANDARD_FIELDS["year"],
+        HISTORICAL_STANDARD_FIELDS["month_num"],
+        HISTORICAL_STANDARD_FIELDS["week"],
+        HISTORICAL_STANDARD_FIELDS["report_type"],
+        HISTORICAL_STANDARD_FIELDS["channel"],
+        HISTORICAL_STANDARD_FIELDS["platform"],
+        HISTORICAL_STANDARD_FIELDS["category_name_raw"],
+        HISTORICAL_STANDARD_FIELDS["brand_raw"],
+        HISTORICAL_STANDARD_FIELDS["model_text"],
+        HISTORICAL_STANDARD_FIELDS["model_type"],
+        HISTORICAL_STANDARD_FIELDS["category_code_raw"],
+        HISTORICAL_STANDARD_FIELDS["brand_code_raw"],
+        HISTORICAL_STANDARD_FIELDS["model_code_raw"],
+        HISTORICAL_STANDARD_FIELDS["item_name"],
+        HISTORICAL_STANDARD_FIELDS["sales_amount"],
+        HISTORICAL_STANDARD_FIELDS["sales_qty"],
+        HISTORICAL_STANDARD_FIELDS["price"],
+        HISTORICAL_STANDARD_FIELDS["item_url"],
+    ]
+    sheet.append(headers)
+    sheet.append(["2026", "9", "周36", "月报", "京东自营", "京东", "电视", "索尼", "XR-77A95L", "XR系列", "tv", "SONY", "X95L", "索尼 77 英寸 4K OLED 电视 XR-77A95L", "12999", "10", "1299.9", "https://item.jd.com/100123456.html"])
+    output = io.BytesIO()
+    workbook.save(output)
+    quoted_filename = quote("历史库映射导入模板.xlsx")
+    headers_ = {"Content-Disposition": f"attachment; filename*=UTF-8''{quoted_filename}"}
+    return Response(
+        content=output.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers_,
     )
 
 

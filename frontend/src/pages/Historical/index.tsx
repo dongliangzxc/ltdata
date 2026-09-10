@@ -14,6 +14,7 @@ import {
   deleteHistoricalMapping,
   deleteHistoricalBatch,
   exportHistoricalMappings,
+  downloadHistoricalTemplate,
   type HistoricalBatchItem,
   type HistoricalImportPreview,
   type HistoricalImportResult,
@@ -89,6 +90,22 @@ function ImportTab() {
       setUploading(false)
     }
     return false
+  }
+
+  const handleDownloadTemplate = async () => {
+    try {
+      const res = await downloadHistoricalTemplate()
+      const url = window.URL.createObjectURL(new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
+      const a = document.createElement('a')
+      document.body.appendChild(a)
+      a.href = url
+      a.download = '历史库映射导入模板.xlsx'
+      a.click()
+      document.body.removeChild(a)
+      setTimeout(() => window.URL.revokeObjectURL(url), 100)
+    } catch {
+      message.error('模板下载失败，请重试')
+    }
   }
 
   const refreshPreview = async (nextSheetName = sheetName, nextMapping = mapping, nextCategoryCode = categoryCode) => {
@@ -181,6 +198,9 @@ function ImportTab() {
 
   return (
     <Space direction="vertical" style={{ width: '100%' }} size="large">
+      <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
+        <Button icon={<DownloadOutlined />} onClick={handleDownloadTemplate}>下载导入模板</Button>
+      </Space>
       <Dragger {...uploadProps}>
         <p className="ant-upload-drag-icon"><InboxOutlined /></p>
         <p>{uploading ? '正在导入历史库数据，请不要刷新页面' : '点击或拖拽 Excel 文件到此处导入历史库数据'}</p>

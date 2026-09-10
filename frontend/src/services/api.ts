@@ -1146,6 +1146,9 @@ export const listHistoricalMappings = (params?: HistoricalMappingParams) =>
 export const exportHistoricalMappings = (params?: HistoricalMappingParams) =>
   api.get('/historical/export', { params, responseType: 'blob' })
 
+export const downloadHistoricalTemplate = () =>
+  api.get('/historical/template', { responseType: 'blob' })
+
 export const deleteHistoricalMapping = (id: number) =>
   api.delete(`/historical/mappings/${id}`)
 

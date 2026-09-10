@@ -209,7 +209,7 @@ def url_mapping_confirm(
         brand_code = str(row_dict.get("brand_code") or "").strip()
         model_code = str(row_dict.get("model_code") or "").strip()
 
-        if not platform_raw or not item_url or not brand_code or not model_code:
+        if not platform_raw or not item_url or not brand_code:
             errors.append(f"Row {i}: missing required field")
             continue
 
@@ -225,32 +225,35 @@ def url_mapping_confirm(
 
         # Lookup model — 优先匹配所选品类下的型号，匹配不到再回退其他品类
         model = None
-        if payload.category_code:
-            model = (
-                db.query(ModelORM)
-                .filter(
-                    ModelORM.brand_code == brand_code,
-                    ModelORM.model_code == model_code,
-                    ModelORM.category_code == payload.category_code,
+        if model_code not in ("", "-", "—", "--", "未知"):
+            if payload.category_code:
+                model = (
+                    db.query(ModelORM)
+                    .filter(
+                        ModelORM.brand_code == brand_code,
+                        ModelORM.model_code == model_code,
+                        ModelORM.category_code == payload.category_code,
+                    )
+                    .first()
                 )
-                .first()
-            )
-        if not model:
-            model = (
-                db.query(ModelORM)
-                .filter(ModelORM.brand_code == brand_code, ModelORM.model_code == model_code)
-                .first()
-            )
-        if not model:
-            errors.append(f"Row {i}: model ({brand_code}, {model_code}) not found")
-            continue
+            if not model:
+                model = (
+                    db.query(ModelORM)
+                    .filter(ModelORM.brand_code == brand_code, ModelORM.model_code == model_code)
+                    .first()
+                )
+            if not model:
+                errors.append(f"Row {i}: model ({brand_code}, {model_code}) not found")
+                continue
 
-        # Category mismatch warning (non-blocking)
-        if model.category_code and payload.category_code and model.category_code != payload.category_code:
-            errors.append(
-                f"Row {i}: warning — model category ({model.category_code}) "
-                f"differs from selected ({payload.category_code})"
-            )
+            # Category mismatch warning (non-blocking)
+            if model.category_code and payload.category_code and model.category_code != payload.category_code:
+                errors.append(
+                    f"Row {i}: warning — model category ({model.category_code}) "
+                    f"differs from selected ({payload.category_code})"
+                )
+        else:
+            model = None
 
         price_raw = row_dict.get("price")
         try:
@@ -264,7 +267,8 @@ def url_mapping_confirm(
             .first()
         )
         if existing:
-            existing.model_id = model.id
+            existing.model_id = model.id if model else None
+            existing.brand_code = brand_code
             if price is not None:
                 existing.price = price
             existing.source = 'url_import'
@@ -278,7 +282,8 @@ def url_mapping_confirm(
                 platform=url_platform,
                 item_id=item_id,
                 item_url=item_url,
-                model_id=model.id,
+                brand_code=brand_code,
+                model_id=model.id if model else None,
                 price=price,
                 source='url_import',
                 data_year=payload.data_year,

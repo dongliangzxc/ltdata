@@ -182,3 +182,23 @@ def test_confirm_blocks_when_selected_category_not_visible(client):
 
     assert res.status_code == 403
     assert res.json()["detail"] == "无权限访问该品类"
+
+
+def test_confirm_allows_placeholder_model_dash(client):
+    """型号为 -（匹配不到型号）时允许占位导入，model_id 留空、保留品牌。"""
+    with client.Session() as session:
+        seed_data(session)
+        session.commit()
+
+    res = _upload_and_confirm(client, category_code="TV", brand_code="360", model_code="-")
+
+    assert res.status_code == 200
+    data = res.json()
+    assert data["inserted"] == 1
+    assert not data["errors"]
+
+    with client.Session() as session:
+        row = session.query(ItemUrlMapping).filter_by(item_id="360--", platform="jd").first()
+        assert row is not None
+        assert row.brand_code == "360"
+        assert row.model_id is None

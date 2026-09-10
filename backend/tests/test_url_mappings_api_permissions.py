@@ -185,7 +185,7 @@ def test_confirm_blocks_when_selected_category_not_visible(client):
 
 
 def test_confirm_allows_placeholder_model_dash(client):
-    """型号为 -（匹配不到型号）时允许占位导入，model_id 留空、保留品牌。"""
+    """型号为 -（匹配不到型号）时允许占位导入，model_id 留空、保留品牌、记录所选品类。"""
     with client.Session() as session:
         seed_data(session)
         session.commit()
@@ -202,3 +202,23 @@ def test_confirm_allows_placeholder_model_dash(client):
         assert row is not None
         assert row.brand_code == "360"
         assert row.model_id is None
+        assert row.category_code == "TV"
+
+
+def test_list_url_mappings_shows_placeholder_category_from_record(client):
+    """占位导入的记录按自身 category_code 展示品类，不受型号归属影响。"""
+    with client.Session() as session:
+        seed_data(session)
+        placeholder = ItemUrlMapping(
+            platform="jd", item_id="360--", item_url="https://item.jd.com/360--.html",
+            brand_code="360", model_id=None, category_code="TV",
+        )
+        session.add(placeholder)
+        session.commit()
+
+    res = client.get("/api/url-mappings")
+
+    assert res.status_code == 200
+    items = res.json()["items"]
+    row = next(item for item in items if item["item_id"] == "360--")
+    assert row["category_code"] == "TV"

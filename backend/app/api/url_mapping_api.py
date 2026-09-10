@@ -80,6 +80,7 @@ def _to_out(m: ItemUrlMapping) -> ItemUrlMappingOut:
     model = m.model
     category = getattr(model, "category", None) if model else None
     fallback_category_code, fallback_category_name = _legacy_headphone_category(m)
+    category_code = m.category_code or (model.category_code if model else None) or fallback_category_code
     return ItemUrlMappingOut(
         id=m.id,
         platform=m.platform,
@@ -91,8 +92,8 @@ def _to_out(m: ItemUrlMapping) -> ItemUrlMappingOut:
         model_code=model.model_code if model else None,
         brand_name=model.brand_name if model else None,
         model_name=model.model_name if model else None,
-        category_code=model.category_code if model else fallback_category_code,
-        category_name=category.name if category else fallback_category_name,
+        category_code=category_code,
+        category_name=(category.name if category and category.code == category_code else None) or fallback_category_name,
         item_name=None,
         source=m.source,
         data_year=m.data_year,
@@ -269,6 +270,8 @@ def url_mapping_confirm(
         if existing:
             existing.model_id = model.id if model else None
             existing.brand_code = brand_code
+            if payload.category_code:
+                existing.category_code = payload.category_code
             if price is not None:
                 existing.price = price
             existing.source = 'url_import'
@@ -283,6 +286,7 @@ def url_mapping_confirm(
                 item_id=item_id,
                 item_url=item_url,
                 brand_code=brand_code,
+                category_code=payload.category_code,
                 model_id=model.id if model else None,
                 price=price,
                 source='url_import',
@@ -454,7 +458,8 @@ def list_url_mappings(
         )
         q = q.filter(or_(
             ModelRecord.category_code.in_(visible_codes),
-            and_(ItemUrlMapping.model_id.is_(None), ~legacy_headphone_filter),
+            ItemUrlMapping.category_code.in_(visible_codes),
+            and_(ItemUrlMapping.model_id.is_(None), ItemUrlMapping.category_code.is_(None), ~legacy_headphone_filter),
             and_(legacy_headphone_filter, "headphone" in visible_codes),
         ))
     if platform:
@@ -473,7 +478,10 @@ def list_url_mappings(
             )
         )
     if category_code:
-        q = q.filter(ModelRecord.category_code == category_code)
+        q = q.filter(or_(
+            ModelRecord.category_code == category_code,
+            ItemUrlMapping.category_code == category_code,
+        ))
     total = q.count()
     rows = (
         q.options(joinedload(ItemUrlMapping.model).joinedload(ModelRecord.category))
@@ -509,6 +517,7 @@ def create_url_mapping(
         item_url=payload.item_url,
         brand_code=model_for_brand.brand_code if model_for_brand else payload.brand_code,
         model_id=payload.model_id,
+        category_code=payload.category_code or (model_for_brand.category_code if model_for_brand else None),
         price=payload.price,
         source='manual',
     )
@@ -539,6 +548,7 @@ def update_url_mapping(
     m.item_url = payload.item_url
     m.brand_code = model_for_brand.brand_code if model_for_brand else payload.brand_code
     m.model_id = payload.model_id
+    m.category_code = payload.category_code or (model_for_brand.category_code if model_for_brand else None)
     m.price = payload.price
     m.updated_at = datetime.utcnow()
     db.commit()

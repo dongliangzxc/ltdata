@@ -8,7 +8,9 @@ from pathlib import Path
 
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from fastapi.responses import Response
 from pydantic import BaseModel
+from urllib.parse import quote
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session, joinedload
 import openpyxl
@@ -95,6 +97,26 @@ class UrlMappingConfirmPayload(BaseModel):
     save_template_name: Optional[str] = None
     data_year: Optional[int] = None
     data_month: Optional[int] = None
+
+
+@router.get("/template")
+def download_url_mapping_template():
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "URL映射"
+    sheet.append(["platform", "item_url", "brand_code", "model_code", "price"])
+    sheet.append(["jd", "https://item.jd.com/100123456.html", "SONY", "X95L", 1299.9])
+    output = io.BytesIO()
+    workbook.save(output)
+    quoted_filename = quote("URL映射导入模板.xlsx")
+    headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{quoted_filename}"}
+    return Response(
+        content=output.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers,
+    )
 
 
 @router.post("/headers")

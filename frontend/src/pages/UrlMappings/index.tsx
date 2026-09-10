@@ -7,7 +7,7 @@ import { PlusOutlined, UploadOutlined, EditOutlined, DeleteOutlined } from '@ant
 import { useRequest } from 'ahooks'
 import {
   listUrlMappings, createUrlMapping, updateUrlMapping,
-  deleteUrlMapping, listModels,
+  deleteUrlMapping, listModels, downloadUrlMappingTemplate,
 } from '../../services/api'
 import type { UserProfile } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
@@ -159,6 +159,22 @@ export default function UrlMappingsPage() {
     refresh()
   }
 
+  const handleDownloadTemplate = async () => {
+    try {
+      const res = await downloadUrlMappingTemplate()
+      const url = window.URL.createObjectURL(new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
+      const a = document.createElement('a')
+      document.body.appendChild(a)
+      a.href = url
+      a.download = 'URL映射导入模板.xlsx'
+      a.click()
+      document.body.removeChild(a)
+      setTimeout(() => window.URL.revokeObjectURL(url), 100)
+    } catch {
+      message.error('模板下载失败，请重试')
+    }
+  }
+
   const filteredModelOptions = modalCategoryCode
     ? visibleModelOptions.filter(m => m.category_code === modalCategoryCode)
     : visibleModelOptions
@@ -264,6 +280,7 @@ export default function UrlMappingsPage() {
           />
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增</Button>
           <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>导入 Excel</Button>
+          <Button icon={<DownloadOutlined />} onClick={handleDownloadTemplate}>下载导入模板</Button>
         </Space>
       </Card>
 

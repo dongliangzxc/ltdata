@@ -935,6 +935,9 @@ export const updateUrlMapping = (id: number, data: { platform: string; item_id: 
 export const deleteUrlMapping = (id: number) =>
   api.delete(`/url-mappings/${id}`)
 
+export const downloadUrlMappingTemplate = () =>
+  api.get('/url-mappings/template', { responseType: 'blob' })
+
 // ─── Rules - Noise Words ────────────────────────────────────
 export const listNoiseWords = (params?: { category_code?: string }) =>
   api.get('/rules/noise-words', { params })

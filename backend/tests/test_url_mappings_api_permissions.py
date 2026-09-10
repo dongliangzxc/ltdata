@@ -123,3 +123,62 @@ def test_list_url_mappings_hides_legacy_headphone_rows_outside_scope(client):
     data = res.json()
     assert data["total"] == 0
     assert data["items"] == []
+
+
+def _upload_and_confirm(client, *, category_code, brand_code, model_code, platform="jd", item_url=None):
+    import io as _io
+    import tempfile
+    from openpyxl import Workbook
+    from pathlib import Path
+
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["platform", "item_url", "brand_code", "model_code"])
+    ws.append([platform, item_url or f"https://item.jd.com/{brand_code}-{model_code}.html", brand_code, model_code])
+    buf = _io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp.write(buf.getvalue())
+        tmp_path = tmp.name
+
+    try:
+        headers = client.post(
+            "/api/url-mappings/headers",
+            files={"file": ("test.xlsx", open(tmp_path, "rb"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+        assert headers.status_code == 200, headers.text
+        temp_file_id = headers.json()["temp_file_id"]
+        return client.post("/api/url-mappings/confirm", json={
+            "temp_file_id": temp_file_id,
+            "mapping": {"platform": "platform", "item_url": "item_url", "brand_code": "brand_code", "model_code": "model_code"},
+            "ignore_columns": [],
+            "category_code": category_code,
+        })
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
+def test_confirm_checks_selected_category_permission_not_model_category(client):
+    """型号归属品类在用户可见范围外时，只要导入所选品类可见即可通过（按所选品类校验）。"""
+    with client.Session() as session:
+        _, ac = seed_data(session)  # ac 归属 AC 品类，当前用户不可见
+        session.commit()
+
+    res = _upload_and_confirm(client, category_code="TV", brand_code="GREE", model_code="AC-1")
+
+    assert res.status_code == 200
+    assert res.json()["inserted"] == 1
+
+
+def test_confirm_blocks_when_selected_category_not_visible(client):
+    """导入所选品类本身不可见时仍应 403。"""
+    with client.Session() as session:
+        _, ac = seed_data(session)
+        session.commit()
+
+    res = _upload_and_confirm(client, category_code="AC", brand_code="GREE", model_code="AC-1")
+
+    assert res.status_code == 403
+    assert res.json()["detail"] == "无权限访问该品类"

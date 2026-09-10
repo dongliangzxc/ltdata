@@ -47,7 +47,21 @@ def _visible_url_mapping_category_codes(db: Session, current_user: User) -> set[
     return set(visible_category_codes(current_user, all_codes))
 
 
+def _ensure_url_mapping_category_visible(db: Session, current_user: User, selected_category_code: str | None) -> None:
+    """按导入时选择的品类校验权限（不按型号归属品类拦截）。
+
+    用户选择了自己有权限的品类即可导入；型号归属品类仅作参考，
+    避免一个品牌跨多个品类时（如 360 门锁/摄像头）被型号品类拦截。
+    """
+    if not selected_category_code:
+        return
+    visible_codes = _visible_url_mapping_category_codes(db, current_user)
+    if visible_codes is not None and selected_category_code not in visible_codes:
+        raise HTTPException(status_code=403, detail="无权限访问该品类")
+
+
 def _ensure_url_mapping_model_visible(db: Session, current_user: User, model: ModelRecord | None) -> None:
+    """手动新增/编辑/删除单条映射时，校验型号归属品类在用户可见范围内。"""
     if not model or not model.category_code:
         return
     visible_codes = _visible_url_mapping_category_codes(db, current_user)
@@ -151,6 +165,8 @@ def url_mapping_confirm(
     """P10: Step 2 — parse file with mapping, upsert item_url_mappings."""
     from app.models.schemas import ItemUrlMapping, ModelRecord as ModelORM
 
+    _ensure_url_mapping_category_visible(db, current_user, payload.category_code)
+
     tmp_dir = Path(UPLOAD_DIR) / "tmp"
     candidates = list(tmp_dir.glob(f"*{payload.temp_file_id}*")) if tmp_dir.exists() else []
     if not candidates:
@@ -207,16 +223,27 @@ def url_mapping_confirm(
             continue
         url_platform, item_id = url_info
 
-        # Lookup model
-        model = (
-            db.query(ModelORM)
-            .filter(ModelORM.brand_code == brand_code, ModelORM.model_code == model_code)
-            .first()
-        )
+        # Lookup model — 优先匹配所选品类下的型号，匹配不到再回退其他品类
+        model = None
+        if payload.category_code:
+            model = (
+                db.query(ModelORM)
+                .filter(
+                    ModelORM.brand_code == brand_code,
+                    ModelORM.model_code == model_code,
+                    ModelORM.category_code == payload.category_code,
+                )
+                .first()
+            )
+        if not model:
+            model = (
+                db.query(ModelORM)
+                .filter(ModelORM.brand_code == brand_code, ModelORM.model_code == model_code)
+                .first()
+            )
         if not model:
             errors.append(f"Row {i}: model ({brand_code}, {model_code}) not found")
             continue
-        _ensure_url_mapping_model_visible(db, current_user, model)
 
         # Category mismatch warning (non-blocking)
         if model.category_code and payload.category_code and model.category_code != payload.category_code:

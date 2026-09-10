@@ -3,7 +3,7 @@ import {
   Card, Table, Button, Input, Select, Space, Typography,
   Modal, Form, InputNumber, message, Popconfirm, Tag,
 } from 'antd'
-import { PlusOutlined, UploadOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
+import { PlusOutlined, UploadOutlined, EditOutlined, DeleteOutlined, DownloadOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import {
   listUrlMappings, createUrlMapping, updateUrlMapping,

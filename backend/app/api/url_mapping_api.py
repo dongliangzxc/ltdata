@@ -76,11 +76,13 @@ def _legacy_headphone_category(m: ItemUrlMapping) -> tuple[str | None, str | Non
     return None, None
 
 
-def _to_out(m: ItemUrlMapping) -> ItemUrlMappingOut:
+def _to_out(m: ItemUrlMapping, category: Category | None = None) -> ItemUrlMappingOut:
     model = m.model
-    category = getattr(model, "category", None) if model else None
+    model_category = getattr(model, "category", None) if model else None
     fallback_category_code, fallback_category_name = _legacy_headphone_category(m)
     category_code = m.category_code or (model.category_code if model else None) or fallback_category_code
+    if category is None:
+        category = model_category if (model_category and model_category.code == category_code) else None
     return ItemUrlMappingOut(
         id=m.id,
         platform=m.platform,
@@ -93,7 +95,7 @@ def _to_out(m: ItemUrlMapping) -> ItemUrlMappingOut:
         brand_name=model.brand_name if model else None,
         model_name=model.model_name if model else None,
         category_code=category_code,
-        category_name=(category.name if category and category.code == category_code else None) or fallback_category_name,
+        category_name=category.name if category else None,
         item_name=None,
         source=m.source,
         data_year=m.data_year,
@@ -490,9 +492,14 @@ def list_url_mappings(
         .limit(page_size)
         .all()
     )
+    record_category_codes = {m.category_code for m in rows if m.category_code}
+    category_by_code = {
+        c.code: c
+        for c in db.query(Category).filter(Category.code.in_(record_category_codes)).all()
+    } if record_category_codes else {}
     return PaginatedResponse(
         total=total, page=page, page_size=page_size,
-        items=[_to_out(r) for r in rows],
+        items=[_to_out(r, category_by_code.get(r.category_code)) for r in rows],
     )
 
 

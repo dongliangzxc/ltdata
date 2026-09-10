@@ -7,7 +7,7 @@ import { PlusOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import {
   listBrands, listBrandAliasesByCode, createBrandAliasForCode, deleteBrandAliasById,
-  updateBrand, updateBrandAliasForCode, setBrandCategories,
+  updateBrand, updateBrandAliasForCode, setBrandCategories, fetchAllCategories,
   type BrandItem, type BrandAliasItem,
 } from '../../services/api'
 import CreateBrandModal from '../../components/CreateBrandModal'
@@ -191,11 +191,13 @@ export default function BrandsPage() {
     { refreshDeps: [searchText, selectedCategoryCode, currentPage, pageSize] },
   )
   const { options: categoryOptions, loading: categoryLoading } = useCategoryOptions()
+  const { data: allCategories } = useRequest(() => fetchAllCategories().catch(() => []), {})
   const categoryLabelMap = useMemo(() => {
     const m = new Map<string, string>()
     for (const c of categoryOptions) m.set(c.value, c.label)
+    for (const c of (allCategories ?? [])) m.set(c.code, c.name)
     return m
-  }, [categoryOptions])
+  }, [categoryOptions, allCategories])
 
   const renderOptionalText = (v: string | null | undefined) =>
     v && v.trim() ? v : <span style={{ color: '#ccc' }}>—</span>

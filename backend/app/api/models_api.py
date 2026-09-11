@@ -44,8 +44,21 @@ def _visible_model_category_codes(db: Session, current_user: User) -> list[str]:
 def _ensure_model_category_visible(db: Session, current_user: User, category_code: str | None) -> None:
     if not category_code:
         return
-    if category_code not in _visible_model_category_codes(db, current_user):
+    normalized = category_code.strip().lower()
+    visible_codes = {c.lower() for c in _visible_model_category_codes(db, current_user)}
+    if normalized not in visible_codes:
         raise HTTPException(status_code=403, detail="无权限访问该品类")
+
+
+def _canonical_category_code(db: Session, category_code: str | None) -> str | None:
+    """把传入的品类码规范化为 categories 表的标准 code（按大小写不敏感匹配）。"""
+    if not category_code:
+        return None
+    normalized = category_code.strip().lower()
+    category = db.query(Category).filter(Category.code == normalized).first()
+    if category:
+        return category.code
+    return normalized
 
 
 def _ensure_model_rows_visible(db: Session, current_user: User, rows: list[dict]) -> None:
@@ -834,6 +847,7 @@ def create_model(
     current_user: User = Depends(get_current_user),
 ):
     _ensure_model_category_visible(db, current_user, payload.category_code)
+    category_code = _canonical_category_code(db, payload.category_code)
 
     brand_code = _normalize_code(payload.brand_code)
     model_code = _normalize_optional_model_code(payload.model_code)
@@ -846,7 +860,7 @@ def create_model(
         existing = db.query(ModelRecord).filter(
             ModelRecord.brand_code == brand_code,
             ModelRecord.model_code == model_code,
-            ModelRecord.category_code == payload.category_code,
+            ModelRecord.category_code == category_code,
         ).first()
         if existing:
             raise HTTPException(status_code=409, detail="该品牌+型号+品类已存在")
@@ -854,7 +868,7 @@ def create_model(
     obj = ModelRecord(
         brand_code=brand_code,
         model_code=model_code,
-        category_code=payload.category_code,
+        category_code=category_code,
         brand_name=_normalize_optional_text(payload.brand_name) or brand.brand_name,
         model_name=_normalize_optional_text(payload.model_name),
         launch_year=payload.launch_year,
@@ -871,7 +885,7 @@ def create_model(
     for s in payload.specs:
         db.add(ModelSpec(model_id=obj.id, spec_name=s.spec_name, spec_value=s.spec_value))
 
-    _ensure_brand_category(db, brand_code, payload.category_code)
+    _ensure_brand_category(db, brand_code, category_code)
     db.commit()
     db.refresh(obj)
     cat = db.query(Category).filter(Category.code == obj.category_code).first() if obj.category_code else None
@@ -893,6 +907,7 @@ def update_model(
 
     _ensure_model_category_visible(db, current_user, obj.category_code)
     _ensure_model_category_visible(db, current_user, payload.category_code)
+    category_code = _canonical_category_code(db, payload.category_code)
 
     brand_code = _normalize_code(payload.brand_code)
     model_code = _normalize_optional_model_code(payload.model_code)
@@ -900,7 +915,7 @@ def update_model(
         existing = db.query(ModelRecord).filter(
             ModelRecord.brand_code == brand_code,
             ModelRecord.model_code == model_code,
-            ModelRecord.category_code == payload.category_code,
+            ModelRecord.category_code == category_code,
             ModelRecord.id != model_id,
         ).first()
         if existing:
@@ -908,7 +923,7 @@ def update_model(
 
     obj.brand_code    = brand_code
     obj.model_code    = model_code
-    obj.category_code = payload.category_code
+    obj.category_code = category_code
     obj.brand_name    = payload.brand_name
     obj.model_name    = payload.model_name
     obj.launch_year   = payload.launch_year
@@ -923,7 +938,7 @@ def update_model(
     for s in payload.specs:
         db.add(ModelSpec(model_id=model_id, spec_name=s.spec_name, spec_value=s.spec_value))
 
-    _ensure_brand_category(db, brand_code, payload.category_code)
+    _ensure_brand_category(db, brand_code, category_code)
     db.commit()
     db.refresh(obj)
     cat = db.query(Category).filter(Category.code == obj.category_code).first() if obj.category_code else None

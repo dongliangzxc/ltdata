@@ -90,3 +90,15 @@ def test_create_model_duplicate_explicit_code_still_rejected(client):
     client.post("/api/models", json={"brand_code": "SONY", "model_code": "XM5"})
     r = client.post("/api/models", json={"brand_code": "SONY", "model_code": "XM5"})
     assert r.status_code == 409
+
+
+def test_create_model_canonicalizes_category_case(client):
+    """大写品类码应规范化为 categories 表的标准小写 code 再入库。"""
+    r = client.post("/api/models", json={
+        "brand_code": "SONY", "model_code": "HT-A9000",
+        "category_code": "SOUNDBAR",
+    })
+    assert r.status_code == 200
+    data = r.json()
+    assert data["category_code"] == "soundbar"
+    assert data["category_name"] == "回音壁"

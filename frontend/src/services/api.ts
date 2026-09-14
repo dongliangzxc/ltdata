@@ -1633,3 +1633,5 @@ export const listMatchResults = (params: MatchResultsQuery) =>
       indexes: null,
     },
   })
+export const listMatchSeries = (params?: { category_code?: string }) =>
+  api.get<string[]>('/match/series', { params })

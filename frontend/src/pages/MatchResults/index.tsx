@@ -4,7 +4,7 @@ import {
 } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
-import { listCleanJobs, updateMatchCoefficient, updateMatchPrice, listModelExtraFields, listCategories,
+import { listCleanJobs, updateMatchCoefficient, updateMatchPrice, listModelExtraFields, listCategories, listMatchSeries,
          type CleanJobItem, type ReviewedMatchResultOut,
          type MatchResultsTab } from '../../services/api'
 import { buildMatchResultsColumns } from './columns'
@@ -166,12 +166,10 @@ export default function MatchResultsPage() {
       setSeriesOptions([])
       return
     }
-    const all: string[] = []
-    for (const item of data?.items ?? []) {
-      if (item.series && !all.includes(item.series)) all.push(item.series)
-    }
-    setSeriesOptions(all.sort())
-  }, [showSeriesFilter, data?.items])
+    listMatchSeries({ category_code: state.categoryCode })
+      .then(r => setSeriesOptions(r.data ?? []))
+      .catch(() => setSeriesOptions([]))
+  }, [showSeriesFilter, state.categoryCode])
 
   const columns = useMemo(
     () => buildMatchResultsColumns({

@@ -1586,6 +1586,18 @@ def list_disabled(
 
 from typing import Literal
 
+@router.get("/series")
+def list_reviewed_series(
+    category_code: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """按品类返回型号库中全部不重复的产品系列（用于匹配结果筛选下拉）。"""
+    q = db.query(ModelRecord.series).filter(ModelRecord.series.isnot(None), ModelRecord.series != "")
+    if category_code:
+        q = q.filter(ModelRecord.category_code == category_code)
+    return sorted({s for (s,) in q.all()})
+
+
 @router.get("/reviewed", response_model=None)  # 使用 dict 返回以携带 counts
 def list_reviewed_global(
     page: int = Query(1, ge=1),

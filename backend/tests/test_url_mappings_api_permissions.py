@@ -160,6 +160,43 @@ def _upload_and_confirm(client, *, category_code, brand_code, model_code, platfo
         Path(tmp_path).unlink(missing_ok=True)
 
 
+def _upload_rows_and_confirm(client, *, category_code, rows):
+    """rows: list of [platform, item_url, brand_code, model_code, price]"""
+    import io as _io
+    import tempfile
+    from openpyxl import Workbook
+    from pathlib import Path
+
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["platform", "item_url", "brand_code", "model_code", "price"])
+    for r in rows:
+        ws.append(r)
+    buf = _io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp.write(buf.getvalue())
+        tmp_path = tmp.name
+
+    try:
+        headers = client.post(
+            "/api/url-mappings/headers",
+            files={"file": ("test.xlsx", open(tmp_path, "rb"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+        assert headers.status_code == 200, headers.text
+        temp_file_id = headers.json()["temp_file_id"]
+        return client.post("/api/url-mappings/confirm", json={
+            "temp_file_id": temp_file_id,
+            "mapping": {"platform": "platform", "item_url": "item_url", "brand_code": "brand_code", "model_code": "model_code", "price": "price"},
+            "ignore_columns": [],
+            "category_code": category_code,
+        })
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
 def test_confirm_checks_selected_category_permission_not_model_category(client):
     """型号归属品类在用户可见范围外时，只要导入所选品类可见即可通过（按所选品类校验）。"""
     with client.Session() as session:
@@ -247,3 +284,26 @@ def test_confirm_auto_creates_model_when_not_found(client):
         assert row is not None
         assert row.model_id == model.id
         assert session.query(BrandCategory).filter_by(brand_code="LENOVO", category_code="TV").first() is not None
+
+
+def test_confirm_duplicate_item_id_in_same_file_no_conflict(client):
+    """同一导入文件内出现重复 (platform, item_id) 时不应触发唯一约束冲突。"""
+    with client.Session() as session:
+        seed_data(session)
+        session.commit()
+
+    url = "https://detail.tmall.com/item.htm?id=915690762696"
+    res = _upload_rows_and_confirm(client, category_code="TV", rows=[
+        ["suning", url, "ASZUNE", "BT55", 24],
+        ["tmall", "https://detail.tmall.com/item.htm?id=871825828486", "KUESEE", "L1", 28],
+        ["suning", url, "ASZUNE", "BT55", 23.86525938],
+    ])
+
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert data["inserted"] >= 1
+    assert not data["errors"]
+
+    with client.Session() as session:
+        rows = session.query(ItemUrlMapping).filter_by(item_id="915690762696").all()
+        assert len(rows) == 1

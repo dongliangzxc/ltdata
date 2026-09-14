@@ -255,6 +255,7 @@ def url_mapping_confirm(
     skipped = 0
     errors = []
     payload_fields = getattr(payload, "model_fields_set", getattr(payload, "__fields_set__", set()))
+    seen_keys: dict[tuple[str, str], ItemUrlMapping] = {}
 
     for i, row in enumerate(df.itertuples(index=False), start=2):
         row_dict = row._asdict()
@@ -321,11 +322,14 @@ def url_mapping_confirm(
         except (ValueError, TypeError):
             price = None
 
-        existing = (
-            db.query(ItemUrlMapping)
-            .filter(ItemUrlMapping.platform == url_platform, ItemUrlMapping.item_id == item_id)
-            .first()
-        )
+        key = (url_platform, item_id)
+        existing = seen_keys.get(key)
+        if existing is None:
+            existing = (
+                db.query(ItemUrlMapping)
+                .filter(ItemUrlMapping.platform == url_platform, ItemUrlMapping.item_id == item_id)
+                .first()
+            )
         if existing:
             existing.model_id = model.id if model else None
             existing.brand_code = brand_code
@@ -338,9 +342,10 @@ def url_mapping_confirm(
                 existing.data_year = payload.data_year
             if "data_month" in payload_fields:
                 existing.data_month = payload.data_month
+            seen_keys[key] = existing
             updated += 1
         else:
-            db.add(ItemUrlMapping(
+            new_mapping = ItemUrlMapping(
                 platform=url_platform,
                 item_id=item_id,
                 item_url=item_url,
@@ -351,7 +356,9 @@ def url_mapping_confirm(
                 source='url_import',
                 data_year=payload.data_year,
                 data_month=payload.data_month,
-            ))
+            )
+            db.add(new_mapping)
+            seen_keys[key] = new_mapping
             inserted += 1
 
     if inserted > 0 or updated > 0:

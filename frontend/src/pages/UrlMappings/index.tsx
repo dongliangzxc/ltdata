@@ -7,7 +7,7 @@ import { PlusOutlined, UploadOutlined, EditOutlined, DeleteOutlined, DownloadOut
 import { useRequest } from 'ahooks'
 import {
   listUrlMappings, createUrlMapping, updateUrlMapping,
-  deleteUrlMapping, listModels, downloadUrlMappingTemplate,
+  deleteUrlMapping, listModels, getModelDetail, downloadUrlMappingTemplate,
 } from '../../services/api'
 import type { UserProfile } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
@@ -74,6 +74,7 @@ export default function UrlMappingsPage() {
   const [saving, setSaving] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [modalCategoryCode, setModalCategoryCode] = useState<string | undefined>()
+  const [editModelOption, setEditModelOption] = useState<ModelOption | null>(null)
 
   const [filterYear, setFilterYear] = useState<number | undefined>()
   const [filterMonth, setFilterMonth] = useState<number | undefined>()
@@ -132,6 +133,22 @@ export default function UrlMappingsPage() {
       price: record.price,
     })
     setModalCategoryCode(undefined)
+    setEditModelOption(null)
+    if (record.model_id != null) {
+      getModelDetail(record.model_id)
+        .then(res => {
+          const m = res.data
+          setEditModelOption({
+            id: m.id,
+            brand_code: m.brand_code,
+            model_code: m.model_code,
+            brand_name: m.brand_name ?? null,
+            model_name: m.model_name ?? null,
+            category_code: m.category_code ?? null,
+          })
+        })
+        .catch(() => {})
+    }
     setModalOpen(true)
   }
 
@@ -175,9 +192,15 @@ export default function UrlMappingsPage() {
     }
   }
 
-  const filteredModelOptions = modalCategoryCode
-    ? visibleModelOptions.filter(m => m.category_code === modalCategoryCode)
-    : visibleModelOptions
+  const filteredModelOptions = useMemo(() => {
+    const base = modalCategoryCode
+      ? visibleModelOptions.filter(m => m.category_code === modalCategoryCode)
+      : visibleModelOptions
+    const seen = new Set(base.map(m => m.id))
+    const extra: ModelOption[] = []
+    if (editModelOption && !seen.has(editModelOption.id)) extra.push(editModelOption)
+    return [...base, ...extra]
+  }, [modalCategoryCode, visibleModelOptions, editModelOption])
 
   const columns = [
     {

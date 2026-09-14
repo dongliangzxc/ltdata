@@ -159,17 +159,26 @@ export default function MatchResultsPage() {
   const seriesCategories = useMemo(() => new Set(
     (extraFieldsData ?? []).filter(f => f.field_key === 'series').map(f => f.category_code)
   ), [extraFieldsData])
-  const showSeriesFilter = state.categoryCode != null && seriesCategories.has(state.categoryCode)
+  // 有效品类：优先用筛选的品类，否则用所选任务的品类（任务未选时取全局）
+  const effectiveCategoryCode = useMemo(() => {
+    if (state.categoryCode) return state.categoryCode
+    if (state.cleanJobId != null) {
+      const job = (jobsData ?? []).find(j => j.id === state.cleanJobId)
+      return job?.category_code || job?.dispatch_category_code || undefined
+    }
+    return undefined
+  }, [state.categoryCode, state.cleanJobId, jobsData])
+  const showSeriesFilter = effectiveCategoryCode != null && seriesCategories.has(effectiveCategoryCode)
   const [seriesOptions, setSeriesOptions] = useState<string[]>([])
   useEffect(() => {
     if (!showSeriesFilter) {
       setSeriesOptions([])
       return
     }
-    listMatchSeries({ category_code: state.categoryCode })
+    listMatchSeries({ category_code: effectiveCategoryCode })
       .then(r => setSeriesOptions(r.data ?? []))
       .catch(() => setSeriesOptions([]))
-  }, [showSeriesFilter, state.categoryCode])
+  }, [showSeriesFilter, effectiveCategoryCode])
 
   const columns = useMemo(
     () => buildMatchResultsColumns({

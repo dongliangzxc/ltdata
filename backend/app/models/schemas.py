@@ -705,6 +705,7 @@ class ItemUrlMappingOut(BaseModel):
     model_code:    Optional[str] = None
     brand_name:    Optional[str] = None
     model_name:    Optional[str] = None
+    series:        Optional[str] = None
     category_code: Optional[str] = None
     category_name: Optional[str] = None
     item_name:     Optional[str] = None

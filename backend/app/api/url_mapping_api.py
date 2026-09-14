@@ -146,6 +146,7 @@ def _to_out(m: ItemUrlMapping, category: Category | None = None) -> ItemUrlMappi
         model_code=model.model_code if model else None,
         brand_name=model.brand_name if model else None,
         model_name=model.model_name if model else None,
+        series=model.series if model else None,
         category_code=category_code,
         category_name=category.name if category else None,
         item_name=None,

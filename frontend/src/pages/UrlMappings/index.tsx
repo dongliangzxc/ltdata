@@ -8,6 +8,7 @@ import { useRequest } from 'ahooks'
 import {
   listUrlMappings, createUrlMapping, updateUrlMapping,
   deleteUrlMapping, listModels, getModelDetail, downloadUrlMappingTemplate,
+  listModelExtraFields,
 } from '../../services/api'
 import type { UserProfile } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
@@ -37,6 +38,7 @@ type UrlMapping = {
   model_code: string | null
   brand_name: string | null
   model_name: string | null
+  series: string | null
   category_code: string | null
   category_name: string | null
   item_name: string | null
@@ -89,6 +91,20 @@ export default function UrlMappingsPage() {
     return categoryOptions.filter(c => allowed.has(c.value))
   }, [categoryOptions, currentUser])
   const visibleCategoryCodes = useMemo(() => new Set(visibleCategoryOptions.map(c => c.value)), [visibleCategoryOptions])
+
+  const { data: extraFieldsData } = useRequest(() => listModelExtraFields().then(r => r.data))
+  const extraFieldKeysByCategory = useMemo(() => {
+    const map: Record<string, string[]> = {}
+    for (const f of extraFieldsData ?? []) {
+      if (!map[f.category_code]) map[f.category_code] = []
+      map[f.category_code].push(f.field_key)
+    }
+    return map
+  }, [extraFieldsData])
+  const showSeriesColumn = useMemo(() => {
+    if (categoryCode) return (extraFieldKeysByCategory[categoryCode] ?? []).includes('series')
+    return Object.values(extraFieldKeysByCategory).some(keys => keys.includes('series'))
+  }, [categoryCode, extraFieldKeysByCategory])
 
   const { data: modelsData } = useRequest(
     () => listModels({ page: 1, page_size: 500 }).then(r => r.data)
@@ -219,6 +235,10 @@ export default function UrlMappingsPage() {
       title: '型号别名', dataIndex: 'model_name', width: 160,
       render: (v: string | null) => v || '-'
     },
+    ...(showSeriesColumn ? [{
+      title: '产品系列', dataIndex: 'series', width: 140, ellipsis: true,
+      render: (v: string | null) => v || '-',
+    }] : []),
     {
       title: '宝贝名称', dataIndex: 'item_name', ellipsis: true, width: 240,
       render: (v: string | null) => v || '-'
@@ -314,7 +334,7 @@ export default function UrlMappingsPage() {
           rowKey="id"
           size="small"
           loading={loading}
-          scroll={{ x: 1250 }}
+          scroll={{ x: showSeriesColumn ? 1390 : 1250 }}
           pagination={{
             current: page,
             pageSize: 20,

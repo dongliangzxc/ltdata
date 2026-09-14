@@ -662,7 +662,7 @@ def test_models_confirm_imports_series(client):
     try:
         from app.models.schemas import CategoryExtraField
         db.add(Category(code="tablet", name="智能平板"))
-        db.add(CategoryExtraField(category_code="tablet", field_key="series", field_label="产品系列", field_type="text", sort_order=1))
+        db.add(CategoryExtraField(category_code="tablet", field_key="series", field_label="产品系列", field_type="text", required=1, sort_order=1))
         db.commit()
     finally:
         db.close()
@@ -738,6 +738,83 @@ def test_models_confirm_series_omitted_when_column_missing(client):
         db.close()
 
 
+def test_models_confirm_skips_row_when_required_series_empty(client):
+    """产品系列为必填品类时，series 为空的行应跳过并写入 errors。"""
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        from app.models.schemas import CategoryExtraField
+        db.add(Category(code="tablet", name="智能平板"))
+        db.add(CategoryExtraField(category_code="tablet", field_key="series", field_label="产品系列", field_type="text", required=1, sort_order=1))
+        db.commit()
+    finally:
+        db.close()
+
+    xlsx_bytes = _make_models_template_xlsx(
+        model_rows=[
+            ["华为", "MATE-PAD", "tablet", "华为", "MatePad", None, None, None, None, None, ""],
+        ],
+        spec_rows=[],
+    )
+    headers_resp = client.post(
+        "/api/models/headers",
+        files={"file": ("models.xlsx", xlsx_bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert headers_resp.status_code == 200
+
+    confirm_resp = client.post(
+        "/api/models/confirm",
+        json={
+            "temp_file_id": headers_resp.json()["temp_file_id"],
+            "mapping": {
+                "品牌码": "brand_code",
+                "型号码": "model_code",
+                "品类": "category_code",
+                "品牌名称": "brand_name",
+                "型号名称": "model_name",
+                "产品系列": "series",
+            },
+            "ignore_columns": [],
+            "category_code": "tablet",
+        },
+    )
+    assert confirm_resp.status_code == 200
+    data = confirm_resp.json()
+    assert data["models_inserted"] == 0
+    assert len(data["errors"]) == 1
+    assert "产品系列" in data["errors"][0] and "为空" in data["errors"][0]
+
+
+def test_create_model_rejects_empty_series_for_required_category(client):
+    """产品系列为必填品类时，新建型号 series 为空应返回 422。"""
+    from app.models.schemas import BrandRecord, Category, CategoryExtraField
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        db.add(Category(code="tablet", name="智能平板"))
+        db.add(BrandRecord(brand_code="华为", brand_name="华为"))
+        db.add(CategoryExtraField(category_code="tablet", field_key="series", field_label="产品系列", field_type="text", required=1, sort_order=1))
+        db.commit()
+    finally:
+        db.close()
+
+    resp = client.post("/api/models", json={
+        "brand_code": "华为",
+        "model_code": "MATE-PAD",
+        "category_code": "tablet",
+        "series": "",
+    })
+    assert resp.status_code == 422
+    assert "产品系列" in resp.json()["detail"]
+
+    resp_ok = client.post("/api/models", json={
+        "brand_code": "华为",
+        "model_code": "MATE-PAD-2",
+        "category_code": "tablet",
+        "series": "MatePad 系列",
+    })
+    assert resp_ok.status_code == 200
+    assert resp_ok.json()["series"] == "MatePad 系列"
+
+
 def test_extra_fields_endpoint_returns_config(client):
     db = next(client.app.dependency_overrides[get_db]())
     try:
@@ -746,8 +823,8 @@ def test_extra_fields_endpoint_returns_config(client):
         db.add(Category(code="tv", name="电视"))
         from app.models.schemas import CategoryExtraField
         db.add_all([
-            CategoryExtraField(category_code="tablet", field_key="series", field_label="产品系列", field_type="text", sort_order=1),
-            CategoryExtraField(category_code="edu_tablet", field_key="series", field_label="产品系列", field_type="text", sort_order=1),
+            CategoryExtraField(category_code="tablet", field_key="series", field_label="产品系列", field_type="text", required=1, sort_order=1),
+            CategoryExtraField(category_code="edu_tablet", field_key="series", field_label="产品系列", field_type="text", required=1, sort_order=1),
         ])
         db.commit()
     finally:
@@ -759,6 +836,7 @@ def test_extra_fields_endpoint_returns_config(client):
     assert len(data) == 2
     assert all(f["field_key"] == "series" for f in data)
     assert all(f["field_label"] == "产品系列" for f in data)
+    assert all(f["required"] is True for f in data)
 
     resp_tv = client.get("/api/models/extra-fields", params={"category_code": "tv"})
     assert resp_tv.status_code == 200

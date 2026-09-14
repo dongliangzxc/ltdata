@@ -169,8 +169,8 @@ CREATE TABLE IF NOT EXISTS category_extra_fields (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='品类扩展字段配置';
 
 INSERT IGNORE INTO category_extra_fields (category_code, field_key, field_label, field_type, required, sort_order) VALUES
-    ('tablet',    'series', '产品系列', 'text', 0, 1),
-    ('edu_tablet', 'series', '产品系列', 'text', 0, 1);
+    ('tablet',    'series', '产品系列', 'text', 1, 1),
+    ('edu_tablet', 'series', '产品系列', 'text', 1, 1);
 
 -- 从型号主信息回填品牌主数据
 INSERT IGNORE INTO brands (brand_code, brand_name, status)

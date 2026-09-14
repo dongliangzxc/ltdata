@@ -212,6 +212,7 @@ def models_confirm(
     errors = []
     # 本次导入所选品类已配置的扩展字段（如 {'series'}），用于决定是否写入扩展字段值
     configured_extra_keys = _configured_extra_field_keys(db, _canonical_category_code(db, payload.category_code))
+    required_extra_keys = _required_extra_field_keys(db, _canonical_category_code(db, payload.category_code))
 
     for i, row in enumerate(df.itertuples(index=False), start=2):
         row_dict = row._asdict()
@@ -245,6 +246,9 @@ def models_confirm(
         series = str(_clean_val(row_dict.get("series")) or "").strip() or None
         if "series" not in configured_extra_keys:
             series = None
+        if "series" in required_extra_keys and not series:
+            errors.append(f"Row {i}: 品类「{category_code}」必填字段「产品系列」为空，已跳过")
+            continue
         existing = (
             db.query(ModelRecord)
             .filter(
@@ -388,6 +392,21 @@ def _configured_extra_field_keys(db: Session, category_code: str | None) -> set[
     rows = (
         db.query(CategoryExtraField.field_key)
         .filter(CategoryExtraField.category_code == category_code)
+        .all()
+    )
+    return {key for key, in rows}
+
+
+def _required_extra_field_keys(db: Session, category_code: str | None) -> set[str]:
+    """返回某品类必填的扩展字段键集合（如 {'series'}）。"""
+    if not category_code:
+        return set()
+    rows = (
+        db.query(CategoryExtraField.field_key)
+        .filter(
+            CategoryExtraField.category_code == category_code,
+            CategoryExtraField.required == 1,
+        )
         .all()
     )
     return {key for key, in rows}
@@ -897,6 +916,10 @@ def create_model(
     _ensure_model_category_visible(db, current_user, payload.category_code)
     category_code = _canonical_category_code(db, payload.category_code)
 
+    required_extra = _required_extra_field_keys(db, category_code)
+    if "series" in required_extra and not _normalize_optional_text(payload.series):
+        raise HTTPException(status_code=422, detail="该品类必填字段「产品系列」不能为空")
+
     brand_code = _normalize_code(payload.brand_code)
     model_code = _normalize_optional_model_code(payload.model_code)
 
@@ -957,6 +980,10 @@ def update_model(
     _ensure_model_category_visible(db, current_user, obj.category_code)
     _ensure_model_category_visible(db, current_user, payload.category_code)
     category_code = _canonical_category_code(db, payload.category_code)
+
+    required_extra = _required_extra_field_keys(db, category_code)
+    if "series" in required_extra and not _normalize_optional_text(payload.series):
+        raise HTTPException(status_code=422, detail="该品类必填字段「产品系列」不能为空")
 
     brand_code = _normalize_code(payload.brand_code)
     model_code = _normalize_optional_model_code(payload.model_code)

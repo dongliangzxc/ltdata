@@ -645,6 +645,7 @@ export type ModelItem = {
   launch_week?: number | null
   launch_price?: number | null
   url?: string | null
+  series?: string | null
   status: string
   operator?: string | null
   specs: ModelSpecPayload[]
@@ -664,6 +665,7 @@ export type CreateModelPayload = {
   launch_week?: number | null
   launch_price?: number | null
   url?: string | null
+  series?: string | null
   status?: string
   operator?: string | null
   specs?: ModelSpecPayload[]
@@ -682,6 +684,19 @@ export const updateModel = (id: number, data: CreateModelPayload) => api.put<Mod
 export const deleteModel = (id: number) => api.delete(`/models/${id}`)
 export const downloadModelTemplate = () =>
   api.get('/models/template', { responseType: 'blob' })
+
+export type ModelExtraField = {
+  id: number
+  category_code: string
+  field_key: string
+  field_label: string
+  field_type: string
+  required: boolean
+  sort_order: number
+}
+
+export const listModelExtraFields = (params?: { category_code?: string }) =>
+  api.get<ModelExtraField[]>('/models/extra-fields', { params })
 export const listModelAliases = (modelId: number) =>
   api.get(`/models/${modelId}/aliases`)
 export const addModelAlias = (modelId: number, aliasCode: string) =>

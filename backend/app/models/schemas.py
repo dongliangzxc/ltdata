@@ -453,6 +453,44 @@ class MetadataSpecOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# ─────────────────────────── 品类扩展字段配置 ───────────────────────────
+
+class CategoryExtraField(Base):
+    """品类扩展字段配置：定义哪些品类额外展示/维护哪些字段（如智能平板/学习平板的产品系列）。"""
+    __tablename__ = "category_extra_fields"
+    __table_args__ = (
+        UniqueConstraint("category_code", "field_key", name="uq_category_extra_field"),
+    )
+
+    id            = Column(Integer, primary_key=True, index=True)
+    category_code = Column(String(50), nullable=False, comment='品类码')
+    field_key     = Column(String(100), nullable=False, comment='字段键，对应 models 列（如 series）')
+    field_label   = Column(String(200), nullable=False, comment='字段展示名（如 产品系列）')
+    field_type    = Column(String(50), nullable=False, default='text', comment='字段类型（text/select 等）')
+    required      = Column(Integer, nullable=False, default=0, comment='是否必填 0/1')
+    sort_order    = Column(Integer, nullable=False, default=0, comment='排序值，越小越靠前')
+    created_at    = Column(DateTime, default=datetime.utcnow)
+    updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class CategoryExtraFieldOut(BaseModel):
+    id:            int
+    category_code: str
+    field_key:     str
+    field_label:   str
+    field_type:    str
+    required:      bool
+    sort_order:    int
+    created_at:    datetime
+    updated_at:    datetime
+
+    @field_serializer("created_at", "updated_at")
+    def serialize_datetime(self, value: datetime | None):
+        return format_beijing_datetime(value)
+
+    model_config = {"from_attributes": True}
+
+
 # ─────────────────────────── 型号主信息 ───────────────────────────
 
 class BrandRecord(Base):
@@ -499,6 +537,7 @@ class ModelRecord(Base):
     launch_week   = Column(Integer)
     launch_price  = Column(Numeric(12, 2))
     url           = Column(Text)
+    series        = Column(String(200), nullable=True, comment='产品系列（品类扩展字段）')
     status    = Column(String(20), nullable=False, default='active')
     operator  = Column(String(100), nullable=True)
     created_at    = Column(DateTime, default=datetime.utcnow)
@@ -976,6 +1015,7 @@ class ModelIn(BaseModel):
     launch_week:   Optional[int] = None
     launch_price:  Optional[float] = None
     url:           Optional[str] = None
+    series:        Optional[str] = None
     status:        str = 'active'
     operator:      Optional[str] = None
     specs:         list[ModelSpecIn] = []
@@ -994,6 +1034,7 @@ class ModelOut(BaseModel):
     launch_week:   Optional[int]
     launch_price:  Optional[float]
     url:           Optional[str]
+    series:        Optional[str]
     status:        str
     operator:      Optional[str]
     specs:         list[ModelSpecOut] = []

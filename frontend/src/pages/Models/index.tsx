@@ -11,7 +11,7 @@ import { useRequest } from 'ahooks'
 import {
   listModels, getModelDetail, createModel, updateModel, deleteModel,
   listModelAliases, addModelAlias, deleteModelAlias,
-  listCategories, downloadModelTemplate,
+  listCategories, downloadModelTemplate, listModelExtraFields,
 } from '../../services/api'
 import type { ModelItem as ApiModelItem, UserProfile } from '../../services/api'
 import ImportMappingModal from '../../components/ImportMappingModal'
@@ -52,6 +52,7 @@ export default function ModelsPage() {
   const [importOpen, setImportOpen] = useState(false)
   const [expandedSpecs, setExpandedSpecs] = useState<Record<number, ModelSpec[]>>({})
   const [form] = Form.useForm()
+  const watchedCategoryCode = Form.useWatch('category_code', form)
 
   const triggerDownload = (blob: Blob, filename: string) => {
     const url = window.URL.createObjectURL(blob)
@@ -90,6 +91,34 @@ export default function ModelsPage() {
     return categoryOptions.filter((option: { value: string; label: string }) => allowed.has(option.value))
   }, [categoryOptions, currentUser])
 
+  const { data: extraFieldsData } = useRequest(() => listModelExtraFields().then(r => r.data))
+  const extraFieldsByCategory = useMemo(() => {
+    const map: Record<string, { field_key: string; field_label: string; required: boolean }[]> = {}
+    for (const f of extraFieldsData ?? []) {
+      if (!map[f.category_code]) map[f.category_code] = []
+      map[f.category_code].push({ field_key: f.field_key, field_label: f.field_label, required: f.required })
+    }
+    return map
+  }, [extraFieldsData])
+  const visibleExtraFields = useMemo(() => {
+    if (search.category_code) {
+      return extraFieldsByCategory[search.category_code] ?? []
+    }
+    const seen = new Set<string>()
+    const result: { field_key: string; field_label: string; required: boolean }[] = []
+    for (const f of extraFieldsData ?? []) {
+      if (seen.has(f.field_key)) continue
+      seen.add(f.field_key)
+      result.push({ field_key: f.field_key, field_label: f.field_label, required: f.required })
+    }
+    return result
+  }, [search.category_code, extraFieldsByCategory, extraFieldsData])
+
+  const editExtraFields = useMemo(() => {
+    const code = watchedCategoryCode ?? editingItem?.category_code
+    return code ? extraFieldsByCategory[code] ?? [] : []
+  }, [watchedCategoryCode, editingItem, extraFieldsByCategory])
+
   const queryParams = { ...search, page, page_size: pageSize }
   const { data, loading, refresh } = useRequest(
     () => listModels(queryParams).then(r => r.data),
@@ -116,6 +145,7 @@ export default function ModelsPage() {
         launch_week:   full.launch_week,
         launch_price:  full.launch_price,
         url:           full.url,
+        series:        full.series,
         status:        full.status ?? 'active',
         operator:      full.operator,
         specs:         full.specs,
@@ -191,6 +221,13 @@ export default function ModelsPage() {
     { title: '品牌', dataIndex: 'brand_name', width: 120, render: (v: string | null) => v || '-' },
     { title: '型号码', dataIndex: 'model_code', width: 130, render: (v: string | null) => v || <Tag color="warning">待补</Tag> },
     { title: '型号别名', dataIndex: 'model_name', ellipsis: true, render: (v: string | null) => v || '-' },
+    ...visibleExtraFields.map(f => ({
+      title: f.field_label,
+      dataIndex: f.field_key,
+      width: 120,
+      ellipsis: true,
+      render: (v: string | null) => v || '-',
+    })),
     {
       title: '修改时间', dataIndex: 'updated_at', width: 140,
       render: (v: string | null) => v || '-'
@@ -324,6 +361,7 @@ export default function ModelsPage() {
           { value: 'launch_week', label: '上市周' },
           { value: 'launch_price', label: '上市价' },
           { value: 'url', label: '链接' },
+          { value: 'series', label: '产品系列' },
         ]}
         headersUrl="/models/headers"
         confirmUrl="/models/confirm"
@@ -382,6 +420,18 @@ export default function ModelsPage() {
               </Form.Item>
             </Col>
           </Row>
+          {editExtraFields.length > 0 ? (
+            <Row gutter={12}>
+              {editExtraFields.map(f => (
+                <Col span={12} key={f.field_key}>
+                  <Form.Item label={f.field_label} name={f.field_key} preserve={false}
+                    rules={f.required ? [{ required: true, message: `请填写${f.field_label}` }] : []}>
+                    <Input placeholder={`请填写${f.field_label}`} />
+                  </Form.Item>
+                </Col>
+              ))}
+            </Row>
+          ) : null}
           <Row gutter={12}>
             <Col span={6}>
               <Form.Item label="上市年" name="launch_year">

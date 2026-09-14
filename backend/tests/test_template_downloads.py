@@ -90,6 +90,7 @@ def test_models_template_download_returns_two_sheet_workbook(monkeypatch):
         "上市周",
         "上市价格",
         "网址",
+        "产品系列",
     ]
     assert [cell.value for cell in workbook["型号规格"][1]] == [
         "品牌码",

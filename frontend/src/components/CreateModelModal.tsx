@@ -4,12 +4,15 @@ import {
   Modal, Row, Select, Typography,
 } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
+import { useRequest } from 'ahooks'
 import {
   createModel,
   listBrands,
+  listModelExtraFields,
   type BrandItem,
   type CreateModelPayload,
   type MatchMetadataSpec,
+  type ModelExtraField,
   type ModelItem,
   type ModelSpecPayload,
 } from '../services/api'
@@ -30,6 +33,7 @@ type CreateModelFormValues = {
   url?: string | null
   operator?: string | null
   spec_values?: Record<string, string | undefined>
+  extra_values?: Record<string, string | undefined>
 }
 
 type CategoryOption = {
@@ -69,10 +73,25 @@ export default function CreateModelModal({
   const [saving, setSaving] = useState(false)
   const [brandModalOpen, setBrandModalOpen] = useState(false)
 
+  const { data: extraFieldsData } = useRequest(() => listModelExtraFields().then(r => r.data))
+  const extraFieldsByCategory = useMemo(() => {
+    const map: Record<string, ModelExtraField[]> = {}
+    for (const f of extraFieldsData ?? []) {
+      if (!map[f.category_code]) map[f.category_code] = []
+      map[f.category_code].push(f)
+    }
+    return map
+  }, [extraFieldsData])
+
   const selectedBrandCode = Form.useWatch('brand_code', form)
   const selectedBrand = useMemo(
     () => brands.find(brand => brand.brand_code === selectedBrandCode),
     [brands, selectedBrandCode]
+  )
+  const selectedCategoryCode = Form.useWatch('category_code', form) ?? defaultCategoryCode ?? null
+  const selectedExtraFields = useMemo(
+    () => (selectedCategoryCode ? extraFieldsByCategory[selectedCategoryCode] ?? [] : []),
+    [selectedCategoryCode, extraFieldsByCategory]
   )
 
   const requiredSpecs = useMemo(
@@ -97,7 +116,7 @@ export default function CreateModelModal({
   useEffect(() => {
     if (!open) return
     form.resetFields()
-    form.setFieldsValue({ status: 'active', spec_values: {} })
+    form.setFieldsValue({ status: 'active', spec_values: {}, extra_values: {} })
     loadBrands()
   }, [form, open])
 
@@ -130,6 +149,7 @@ export default function CreateModelModal({
         launch_week: values.launch_week ?? null,
         launch_price: values.launch_price ?? null,
         url: trimOrNull(values.url),
+        series: trimOrNull(values.extra_values?.series),
         operator: trimOrNull(values.operator),
         status: values.status || 'active',
         specs,
@@ -228,6 +248,26 @@ export default function CreateModelModal({
               </Form.Item>
             </Col>
           </Row>
+
+          {selectedExtraFields.length > 0 && (
+            <>
+              <Divider orientation="left" plain style={{ fontSize: 13, color: '#666' }}>品类扩展字段</Divider>
+              <Row gutter={12}>
+                {selectedExtraFields.map(field => (
+                  <Col span={12} key={field.id}>
+                    <Form.Item
+                      label={field.field_label}
+                      name={['extra_values', field.field_key]}
+                      preserve={false}
+                      rules={field.required ? [{ required: true, message: `请填写${field.field_label}` }] : []}
+                    >
+                      <Input placeholder={`请填写${field.field_label}`} />
+                    </Form.Item>
+                  </Col>
+                ))}
+              </Row>
+            </>
+          )}
 
           <Divider orientation="left" plain style={{ fontSize: 13, color: '#666' }}>品类属性 / 品类字段要求</Divider>
           {metadataSpecs.length === 0 ? (

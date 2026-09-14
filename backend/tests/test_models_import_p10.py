@@ -88,7 +88,7 @@ def _make_models_template_xlsx(model_rows, spec_rows) -> bytes:
     wb = openpyxl.Workbook()
     model_ws = wb.active
     model_ws.title = "型号"
-    model_ws.append(["品牌码", "型号码", "品类", "品牌名称", "型号名称", "上市年", "上市月", "上市周", "上市价格", "网址"])
+    model_ws.append(["品牌码", "型号码", "品类", "品牌名称", "型号名称", "上市年", "上市月", "上市周", "上市价格", "网址", "产品系列"])
     for row in model_rows:
         model_ws.append(row)
 
@@ -246,11 +246,12 @@ def test_models_headers_suggests_builtin_template_mapping_for_downloaded_templat
         "上市周": "launch_week",
         "上市价格": "launch_price",
         "网址": "url",
+        "产品系列": "series",
     }
 
     xlsx_bytes = _make_models_template_xlsx(
         model_rows=[
-            ["DJI", "OSMO-ACTION-4", "CAT001", "大疆", "Osmo Action 4", 2024, 9, None, 2999, "https://example.com/product"],
+            ["DJI", "OSMO-ACTION-4", "CAT001", "大疆", "Osmo Action 4", 2024, 9, None, 2999, "https://example.com/product", "OSMO 系列"],
         ],
         spec_rows=[
             ["DJI", "OSMO-ACTION-4", "产品形态", "OA传统"],
@@ -651,3 +652,114 @@ def test_models_confirm_same_brand_model_can_exist_in_another_category(client):
         assert [(s.spec_name, s.spec_value) for s in specs] == [("屏幕尺寸", "100英寸")]
     finally:
         db.close()
+
+
+# ─── 品类扩展字段：产品系列 series ─────────────────────────────────────────────
+
+def test_models_confirm_imports_series(client):
+    """导入模板含「产品系列」列时，series 应写入型号记录。"""
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        from app.models.schemas import CategoryExtraField
+        db.add(Category(code="tablet", name="智能平板"))
+        db.add(CategoryExtraField(category_code="tablet", field_key="series", field_label="产品系列", field_type="text", sort_order=1))
+        db.commit()
+    finally:
+        db.close()
+
+    xlsx_bytes = _make_models_template_xlsx(
+        model_rows=[
+            ["华为", "MATE-PAD", "tablet", "华为", "MatePad", 2025, 3, None, 2999, "https://example.com/matepad", "MatePad 系列"],
+            ["小米", "PAD-6", "tablet", "小米", "小米平板 6", None, None, None, None, None, "小米平板系列"],
+        ],
+        spec_rows=[],
+    )
+    headers_resp = client.post(
+        "/api/models/headers",
+        files={"file": ("models.xlsx", xlsx_bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert headers_resp.status_code == 200
+
+    confirm_resp = client.post(
+        "/api/models/confirm",
+        json={
+            "temp_file_id": headers_resp.json()["temp_file_id"],
+            "mapping": {
+                "品牌码": "brand_code",
+                "型号码": "model_code",
+                "品类": "category_code",
+                "品牌名称": "brand_name",
+                "型号名称": "model_name",
+                "上市年": "launch_year",
+                "上市月": "launch_month",
+                "上市周": "launch_week",
+                "上市价格": "launch_price",
+                "网址": "url",
+                "产品系列": "series",
+            },
+            "ignore_columns": [],
+            "category_code": "tablet",
+        },
+    )
+    assert confirm_resp.status_code == 200
+    data = confirm_resp.json()
+    assert data["models_inserted"] == 2
+    assert data["errors"] == []
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        m1 = db.query(ModelRecord).filter_by(brand_code="华为", model_code="MATE-PAD").one()
+        assert m1.series == "MatePad 系列"
+        m2 = db.query(ModelRecord).filter_by(brand_code="小米", model_code="PAD-6").one()
+        assert m2.series == "小米平板系列"
+    finally:
+        db.close()
+
+
+def test_models_confirm_series_omitted_when_column_missing(client):
+    """Excel 无「产品系列」列时导入不报错，series 为空。"""
+    resp = _headers_then_confirm(
+        client,
+        headers=["品牌码", "型号码"],
+        data_rows=[["BRAND_A", "MODEL_X"]],
+        mapping={"品牌码": "brand_code", "型号码": "model_code"},
+        category_code="CAT001",
+    )
+    assert resp.status_code == 200
+    d = resp.json()
+    assert d["models_inserted"] == 1
+    assert d["errors"] == []
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        m = db.query(ModelRecord).filter_by(brand_code="BRAND_A", model_code="MODEL_X").one()
+        assert m.series is None
+    finally:
+        db.close()
+
+
+def test_extra_fields_endpoint_returns_config(client):
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        db.add(Category(code="tablet", name="智能平板"))
+        db.add(Category(code="edu_tablet", name="学习平板"))
+        db.add(Category(code="tv", name="电视"))
+        from app.models.schemas import CategoryExtraField
+        db.add_all([
+            CategoryExtraField(category_code="tablet", field_key="series", field_label="产品系列", field_type="text", sort_order=1),
+            CategoryExtraField(category_code="edu_tablet", field_key="series", field_label="产品系列", field_type="text", sort_order=1),
+        ])
+        db.commit()
+    finally:
+        db.close()
+
+    resp = client.get("/api/models/extra-fields")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 2
+    assert all(f["field_key"] == "series" for f in data)
+    assert all(f["field_label"] == "产品系列" for f in data)
+
+    resp_tv = client.get("/api/models/extra-fields", params={"category_code": "tv"})
+    assert resp_tv.status_code == 200
+    assert resp_tv.json() == []

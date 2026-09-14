@@ -147,10 +147,30 @@ CREATE TABLE IF NOT EXISTS models (
     launch_week   INT                             COMMENT '上市周',
     launch_price  DECIMAL(12,2)                   COMMENT '上市价格',
     url           TEXT                            COMMENT '网址',
+    series        VARCHAR(200)                    COMMENT '产品系列（品类扩展字段，如智能平板/学习平板）',
     created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uq_model (brand_code, model_code)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='型号主信息';
+
+-- 品类扩展字段配置：按品类定义需要额外维护的字段
+CREATE TABLE IF NOT EXISTS category_extra_fields (
+    id            INT AUTO_INCREMENT PRIMARY KEY,
+    category_code VARCHAR(50)  NOT NULL COMMENT '品类码',
+    field_key     VARCHAR(100) NOT NULL COMMENT '字段键，对应 models 列（如 series）',
+    field_label   VARCHAR(200) NOT NULL COMMENT '字段展示名（如 产品系列）',
+    field_type    VARCHAR(50)  NOT NULL DEFAULT 'text' COMMENT '字段类型（text/select 等）',
+    required      TINYINT(1)   NOT NULL DEFAULT 0 COMMENT '是否必填 1=是 0=否',
+    sort_order    INT          NOT NULL DEFAULT 0 COMMENT '排序值，越小越靠前',
+    created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_category_extra_field (category_code, field_key),
+    KEY ix_category_extra_fields_category (category_code)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='品类扩展字段配置';
+
+INSERT IGNORE INTO category_extra_fields (category_code, field_key, field_label, field_type, required, sort_order) VALUES
+    ('tablet',    'series', '产品系列', 'text', 0, 1),
+    ('edu_tablet', 'series', '产品系列', 'text', 0, 1);
 
 -- 从型号主信息回填品牌主数据
 INSERT IGNORE INTO brands (brand_code, brand_name, status)

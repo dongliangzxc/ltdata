@@ -22,6 +22,7 @@ from app.models.schemas import (
     BrandRecord, BrandCategory, ModelRecord, ModelSpec, ModelAlias,
     HistoricalMapping, ItemUrlMapping, MatchRule,
     ModelIn, ModelOut, ModelSpecOut, ModelAliasOut,
+    CategoryExtraField, CategoryExtraFieldOut,
     PaginatedResponse, Category, User,
 )
 from app.services.import_helper import save_tmp_file, read_columns, find_best_template, col_fingerprint
@@ -32,7 +33,7 @@ UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "./uploads")
 
 _MODEL_TEMPLATE_FILENAME = "产品属性导入模板.xlsx"
 _MODEL_TEMPLATE_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-_MODEL_TEMPLATE_HEADERS = ["品牌码", "型号码", "品类", "品牌名称", "型号名称", "上市年", "上市月", "上市周", "上市价格", "网址"]
+_MODEL_TEMPLATE_HEADERS = ["品牌码", "型号码", "品类", "品牌名称", "型号名称", "上市年", "上市月", "上市周", "上市价格", "网址", "产品系列"]
 _MODEL_SPEC_TEMPLATE_HEADERS = ["品牌码", "型号码", "规格名称", "规格值"]
 
 
@@ -100,6 +101,7 @@ _MODEL_TEMPLATE_MAPPING = {
     "上市周": "launch_week",
     "上市价格": "launch_price",
     "网址": "url",
+    "产品系列": "series",
 }
 
 
@@ -110,7 +112,7 @@ def _build_model_template_bytes() -> bytes:
     model_sheet = workbook.active
     model_sheet.title = "型号"
     model_sheet.append(_MODEL_TEMPLATE_HEADERS)
-    model_sheet.append(["DJI", "OSMO-ACTION-4", "action_camera", "大疆", "Osmo Action 4", 2024, 9, None, 2999, "https://example.com/product"])
+    model_sheet.append(["DJI", "OSMO-ACTION-4", "action_camera", "大疆", "Osmo Action 4", 2024, 9, None, 2999, "https://example.com/product", None])
 
     spec_sheet = workbook.create_sheet("型号规格")
     spec_sheet.append(_MODEL_SPEC_TEMPLATE_HEADERS)
@@ -137,7 +139,8 @@ async def models_headers(
     """P10: Step 1 — read columns from model sheet, suggest template."""
     temp_file_id, save_path, filename = await save_tmp_file(file, UPLOAD_DIR)
     columns = read_columns(save_path)
-    if columns == _MODEL_TEMPLATE_HEADERS:
+    # 兼容旧版模板（不含「产品系列」列）：核心列一致即视为内置模板
+    if columns == _MODEL_TEMPLATE_HEADERS or columns == _MODEL_TEMPLATE_HEADERS[:-1]:
         best_tmpl = None
         score = 100
         suggested_template = {
@@ -207,6 +210,8 @@ def models_confirm(
     models_inserted = 0
     models_updated = 0
     errors = []
+    # 本次导入所选品类已配置的扩展字段（如 {'series'}），用于决定是否写入扩展字段值
+    configured_extra_keys = _configured_extra_field_keys(db, _canonical_category_code(db, payload.category_code))
 
     for i, row in enumerate(df.itertuples(index=False), start=2):
         row_dict = row._asdict()
@@ -237,6 +242,9 @@ def models_confirm(
             k: str(_clean_val(row_dict.get(k)) or "").strip() or None
             for k in ["brand_name", "model_name", "url"]
         }
+        series = str(_clean_val(row_dict.get("series")) or "").strip() or None
+        if "series" not in configured_extra_keys:
+            series = None
         existing = (
             db.query(ModelRecord)
             .filter(
@@ -261,7 +269,7 @@ def models_confirm(
             launch_price = None
 
         if existing:
-            for attr, val in {**optional_fields, **int_fields, "launch_price": launch_price, "category_code": category_code}.items():
+            for attr, val in {**optional_fields, **int_fields, "launch_price": launch_price, "category_code": category_code, "series": series}.items():
                 if val is not None:
                     setattr(existing, attr, val)
             models_updated += 1
@@ -273,6 +281,7 @@ def models_confirm(
                 **optional_fields,
                 **int_fields,
                 launch_price=launch_price,
+                series=series,
             ))
             models_inserted += 1
 
@@ -372,6 +381,18 @@ def _is_placeholder_code(value: str) -> bool:
     return not value or set(value) == {"-"}
 
 
+def _configured_extra_field_keys(db: Session, category_code: str | None) -> set[str]:
+    """返回某品类配置的扩展字段键集合（如 {'series'}），未配置返回空集。"""
+    if not category_code:
+        return set()
+    rows = (
+        db.query(CategoryExtraField.field_key)
+        .filter(CategoryExtraField.category_code == category_code)
+        .all()
+    )
+    return {key for key, in rows}
+
+
 def _ensure_import_brand(db: Session, brand_code: str, brand_name: str | None = None) -> None:
     """Keep batch import compatible by creating missing brand master rows."""
     normalized_code = _normalize_code(brand_code)
@@ -453,7 +474,7 @@ def _parse_models_file(content: bytes) -> dict:
         other    = {
             "品类": "category_code", "品牌名称": "brand_name", "型号名称": "model_name",
             "上市年": "launch_year", "上市月": "launch_month", "上市周": "launch_week",
-            "上市价格": "launch_price", "网址": "url",
+            "上市价格": "launch_price", "网址": "url", "产品系列": "series",
             "规格名称": "spec_name", "规格值": "spec_value",
         }
         rename = {}
@@ -574,7 +595,7 @@ async def import_models(
         other    = {
             "品类": "category_code", "品牌名称": "brand_name", "型号名称": "model_name",
             "上市年": "launch_year", "上市月": "launch_month", "上市周": "launch_week",
-            "上市价格": "launch_price", "网址": "url",
+            "上市价格": "launch_price", "网址": "url", "产品系列": "series",
             "规格名称": "spec_name", "规格值": "spec_value",
             "别名": "alias_code",
         }
@@ -607,6 +628,7 @@ async def import_models(
 
     upserted_models = 0
     model_key_to_id: dict[tuple, int] = {}
+    extra_keys_cache: dict[str | None, set[str]] = {}
 
     # 检测数据库方言，决定是否使用 MySQL ON DUPLICATE KEY UPDATE
     dialect_name = db.bind.dialect.name if hasattr(db, "bind") and db.bind else db.get_bind().dialect.name
@@ -621,10 +643,16 @@ async def import_models(
 
         raw_cat = str(_clean_val(row.get("category_code")) or "") or None
         resolved_cat = _resolve_category_code(db, raw_cat) if raw_cat else None
+        category_code = resolved_cat or raw_cat
+        series = str(_clean_val(row.get("series")) or "") or None
+        if category_code not in extra_keys_cache:
+            extra_keys_cache[category_code] = _configured_extra_field_keys(db, category_code)
+        if "series" not in extra_keys_cache[category_code]:
+            series = None
         vals = {
             "brand_code":    brand_code,
             "model_code":    model_code,
-            "category_code": resolved_cat or raw_cat,
+            "category_code": category_code,
             "brand_name":    str(_clean_val(row.get("brand_name"))    or bc),
             "model_name":    str(_clean_val(row.get("model_name"))    or mc),
             "launch_year":   _to_int(_clean_val(row.get("launch_year"))),
@@ -632,6 +660,7 @@ async def import_models(
             "launch_week":   _to_int(_clean_val(row.get("launch_week"))),
             "launch_price":  _to_float(_clean_val(row.get("launch_price"))),
             "url":           str(_clean_val(row.get("url")) or "") or None,
+            "series":        series,
         }
 
         _ensure_model_category_visible(db, current_user, vals["category_code"])
@@ -648,6 +677,7 @@ async def import_models(
                 launch_week=stmt.inserted.launch_week,
                 launch_price=stmt.inserted.launch_price,
                 url=stmt.inserted.url,
+                series=stmt.inserted.series,
                 updated_at=func.now(),
             )
             db.execute(stmt)
@@ -742,6 +772,24 @@ def download_model_template():
     quoted_filename = quote(_MODEL_TEMPLATE_FILENAME)
     headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{quoted_filename}"}
     return Response(content=content, media_type=_MODEL_TEMPLATE_MEDIA_TYPE, headers=headers)
+
+
+@router.get("/extra-fields", response_model=list[CategoryExtraFieldOut])
+def list_extra_fields(
+    category_code: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """品类扩展字段配置：按品类返回需要额外维护的字段（如智能平板/学习平板的产品系列）。
+
+    仅返回当前用户有权限的品类。不传 category_code 时返回全部可见品类的配置。
+    """
+    visible_codes = set(_visible_model_category_codes(db, current_user))
+    q = db.query(CategoryExtraField)
+    if category_code:
+        q = q.filter(CategoryExtraField.category_code == category_code)
+    rows = q.order_by(CategoryExtraField.category_code, CategoryExtraField.sort_order, CategoryExtraField.id).all()
+    return [r for r in rows if r.category_code in visible_codes]
 
 
 @router.get("", response_model=PaginatedResponse)
@@ -876,6 +924,7 @@ def create_model(
         launch_week=payload.launch_week,
         launch_price=payload.launch_price,
         url=payload.url,
+        series=_normalize_optional_text(payload.series) if "series" in _configured_extra_field_keys(db, category_code) else None,
         status=payload.status,
         operator=payload.operator,
     )
@@ -931,6 +980,7 @@ def update_model(
     obj.launch_week   = payload.launch_week
     obj.launch_price  = payload.launch_price
     obj.url           = payload.url
+    obj.series        = _normalize_optional_text(payload.series) if "series" in _configured_extra_field_keys(db, category_code) else None
     obj.status        = payload.status
     obj.operator      = payload.operator
 

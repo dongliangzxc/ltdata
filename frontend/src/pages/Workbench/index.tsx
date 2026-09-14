@@ -9,7 +9,7 @@ import { useSearchParams } from 'react-router-dom'
 import {
   getWorkbenchFilters, queryWorkbenchData,
   getWorkbenchExportJob,
-  exportWorkbench, fetchItemAttrs, listModelExtraFields,
+  exportWorkbench, fetchItemAttrs, listModelExtraFields, listMatchSeries,
 } from '../../services/api'
 import type { UserProfile } from '../../services/api'
 import ProgressModal from '../../components/ProgressModal'
@@ -147,7 +147,7 @@ export default function WorkbenchPage({ mode = 'default' }: WorkbenchPageProps) 
       .catch(() => setFiltersLoaded(true))
   }, [])
 
-  // 选择品类后拉取该品类下的产品系列枚举
+  // 选择品类后拉取该品类下型号库全量产品系列枚举
   const watchedCategoryName = Form.useWatch('category_name', form)
   const [seriesOptions, setSeriesOptions] = useState<string[]>([])
   const [extraFieldsData, setExtraFieldsData] = useState<{ category_code: string; field_key: string }[]>([])
@@ -158,15 +158,19 @@ export default function WorkbenchPage({ mode = 'default' }: WorkbenchPageProps) 
     const codes = new Set((extraFieldsData ?? []).filter(f => f.field_key === 'series').map(f => f.category_code))
     return new Set(categoryOptions.filter(c => codes.has(c.value)).map(c => c.label))
   }, [extraFieldsData, categoryOptions])
+  const watchedCategoryCode = useMemo(
+    () => categoryOptions.find(c => c.label === watchedCategoryName)?.value,
+    [categoryOptions, watchedCategoryName],
+  )
   useEffect(() => {
-    if (!watchedCategoryName) {
+    if (!watchedCategoryCode) {
       setSeriesOptions([])
       return
     }
-    getWorkbenchFilters({ category_name: watchedCategoryName })
-      .then(r => setSeriesOptions(r.data.series ?? []))
+    listMatchSeries({ category_code: watchedCategoryCode })
+      .then(r => setSeriesOptions(r.data ?? []))
       .catch(() => setSeriesOptions([]))
-  }, [watchedCategoryName])
+  }, [watchedCategoryCode])
 
   // 查询
   useEffect(() => {

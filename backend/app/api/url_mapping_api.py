@@ -20,7 +20,7 @@ from app.core.permissions import visible_category_codes
 from app.models.database import get_db
 from app.models.schemas import (
     ItemUrlMapping, ItemUrlMappingIn, ItemUrlMappingOut,
-    ModelRecord, PaginatedResponse, Category, User,
+    ModelRecord, BrandRecord, BrandCategory, PaginatedResponse, Category, User,
 )
 from app.utils.url_utils import extract_item_id
 from app.services.import_helper import save_tmp_file, read_columns, find_best_template, col_fingerprint
@@ -67,6 +67,58 @@ def _ensure_url_mapping_model_visible(db: Session, current_user: User, model: Mo
     visible_codes = _visible_url_mapping_category_codes(db, current_user)
     if visible_codes is not None and model.category_code not in visible_codes:
         raise HTTPException(status_code=403, detail="无权限访问该品类")
+
+
+def _get_or_create_url_import_model(
+    db: Session,
+    *,
+    brand_code: str,
+    model_code: str,
+    category_code: str | None,
+) -> ModelRecord | None:
+    """型号匹配不到时自动创建型号记录（复用品牌主数据，品牌自动挂到所选品类）。
+
+    返回创建的型号；品牌为空/占位或缺少所选品类时返回 None（无法创建）。
+    """
+    if _is_unusable_brand_code(brand_code):
+        return None
+    if not category_code or not model_code or model_code in ("-", "—", "--", "未知"):
+        return None
+    # 品牌主数据不存在时补建（品牌码即品牌名兜底）
+    brand = db.query(BrandRecord).filter(BrandRecord.brand_code == brand_code).first()
+    if not brand:
+        db.add(BrandRecord(brand_code=brand_code, brand_name=brand_code))
+        db.flush()
+
+    # 品牌挂到所选品类（品牌可归属多品类）
+    if not db.query(BrandCategory).filter_by(brand_code=brand_code, category_code=category_code).first():
+        db.add(BrandCategory(brand_code=brand_code, category_code=category_code))
+
+    existing = db.query(ModelRecord).filter(
+        ModelRecord.brand_code == brand_code,
+        ModelRecord.model_code == model_code,
+        ModelRecord.category_code == category_code,
+    ).first()
+    if existing:
+        return existing
+
+    model = ModelRecord(
+        brand_code=brand_code,
+        model_code=model_code,
+        category_code=category_code,
+        brand_name=brand.brand_name if brand else brand_code,
+        status="active",
+    )
+    db.add(model)
+    db.flush()
+    return model
+
+
+def _is_unusable_brand_code(value: str | None) -> bool:
+    text = (value or "").strip()
+    if not text:
+        return True
+    return text.upper() in {"-", "—", "--", "UNKNOWN", "未知"}
 
 
 def _legacy_headphone_category(m: ItemUrlMapping) -> tuple[str | None, str | None]:
@@ -246,8 +298,13 @@ def url_mapping_confirm(
                     .first()
                 )
             if not model:
-                errors.append(f"Row {i}: model ({brand_code}, {model_code}) not found")
-                continue
+                model = _get_or_create_url_import_model(
+                    db, brand_code=brand_code, model_code=model_code,
+                    category_code=payload.category_code,
+                )
+                if model is None:
+                    errors.append(f"Row {i}: model ({brand_code}, {model_code}) not found")
+                    continue
 
             # Category mismatch warning (non-blocking)
             if model.category_code and payload.category_code and model.category_code != payload.category_code:

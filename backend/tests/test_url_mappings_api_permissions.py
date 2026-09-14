@@ -222,3 +222,28 @@ def test_list_url_mappings_shows_placeholder_category_from_record(client):
     items = res.json()["items"]
     row = next(item for item in items if item["item_id"] == "360--")
     assert row["category_code"] == "TV"
+
+
+def test_confirm_auto_creates_model_when_not_found(client):
+    """型号匹配不到时自动创建型号（品牌+型号+所选品类），并建立映射。"""
+    from app.models.schemas import ModelRecord as ModelORM, BrandRecord, BrandCategory
+
+    with client.Session() as session:
+        seed_data(session)
+        session.add(BrandRecord(brand_code="LENOVO", brand_name="联想"))
+        session.commit()
+
+    res = _upload_and_confirm(client, category_code="TV", brand_code="LENOVO", model_code="A300")
+
+    assert res.status_code == 200
+    data = res.json()
+    assert data["inserted"] == 1
+    assert not data["errors"]
+
+    with client.Session() as session:
+        model = session.query(ModelORM).filter_by(brand_code="LENOVO", model_code="A300", category_code="TV").first()
+        assert model is not None
+        row = session.query(ItemUrlMapping).filter_by(platform="jd", item_id="LENOVO-A300").first()
+        assert row is not None
+        assert row.model_id == model.id
+        assert session.query(BrandCategory).filter_by(brand_code="LENOVO", category_code="TV").first() is not None

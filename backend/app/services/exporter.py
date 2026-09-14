@@ -49,12 +49,32 @@ BASE_COLS = [
 BASE_FIELD_NAMES = [f for f, _ in BASE_COLS]
 BASE_CN_NAMES    = [cn for _, cn in BASE_COLS]
 
-# 「已处理」Sheet 在基础列之后追加的品类扩展字段列（取 models 对应列）
+# 「已处理」Sheet 的品类扩展字段列（取 models 对应列）
 MATCHED_EXTRA_COLS = [
     ("series", "产品系列"),
 ]
 MATCHED_EXTRA_FIELD_NAMES = [f for f, _ in MATCHED_EXTRA_COLS]
 MATCHED_EXTRA_CN_NAMES    = [cn for _, cn in MATCHED_EXTRA_COLS]
+
+
+def _matched_base_field_names() -> list[str]:
+    """「已处理」Sheet 列顺序：品牌 → 产品系列 → 机型（系列插在「型号」之前）。"""
+    names = []
+    for f in BASE_FIELD_NAMES:
+        if f == "model_name":
+            names.extend(MATCHED_EXTRA_FIELD_NAMES)
+        names.append(f)
+    return names
+
+
+def _matched_base_cn_names() -> list[str]:
+    names = []
+    for cn in BASE_CN_NAMES:
+        if cn == "型号":
+            names.extend(MATCHED_EXTRA_CN_NAMES)
+        names.append(cn)
+    return names
+
 
 PAGE_SIZE = 5000
 EXPORTABLE_CLEAN_JOB_STATUSES = ("reviewing", "done", "published")
@@ -287,7 +307,7 @@ def _export_match_jobs(
                 if sn not in MATCHED_EXTRA_CN_NAMES
             ]
             worksheet = workbook.create_sheet(title=_sheet_name(f"{cat}-已处理", used_sheet_names))
-            worksheet.append(BASE_CN_NAMES + MATCHED_EXTRA_CN_NAMES + spec_names)
+            worksheet.append(_matched_base_cn_names() + spec_names)
             category_sheets[cat] = (worksheet, spec_names)
         return category_sheets[cat]
 
@@ -308,8 +328,7 @@ def _export_match_jobs(
             worksheet, spec_names = get_category_sheet(cat, cat_code)
             model_specs = spec_map.get(mr.model_id, {})
             worksheet.append(
-                [row.get(field) for field in BASE_FIELD_NAMES]
-                + [row.get(field) for field in MATCHED_EXTRA_FIELD_NAMES]
+                [row.get(field) for field in _matched_base_field_names()]
                 + [model_specs.get(sn, "") for sn in spec_names]
             )
 

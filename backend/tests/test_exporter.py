@@ -98,12 +98,13 @@ def test_brand_name_and_model_name_in_export(db):
 
 
 def test_series_column_after_model_in_matched_sheet(db):
-    """产品系列列应位于基础列之后（型号列紧邻其后）。"""
+    """已处理 Sheet 列顺序应为 品牌 → 产品系列 → 型号（产品系列在「型号」之前）。"""
     clean_job_id = _seed(db)
     result = export_match_job(db, clean_job_id)
     xl = pd.read_excel(result[0]["path"], sheet_name="耳机-已处理")
     cols = list(xl.columns)
-    assert cols[cols.index("型号") + 1] == "产品系列"
+    assert cols[cols.index("入库品牌") + 1] == "产品系列"
+    assert cols[cols.index("产品系列") + 1] == "型号"
 
 
 def test_text_only_export_sheet_uses_url_mapping_pending_label(db):

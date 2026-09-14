@@ -381,9 +381,28 @@ export default function MatchPage() {
       const exists = prev.some(item => item.id === model.id)
       return exists ? prev : [option, ...prev]
     })
-    setSelectedModels(prev => ({ ...prev, [reviewDetail.id]: model.id }))
     setCreateModelOpen(false)
-    message.success('型号已创建并选中')
+
+    const modelLabel = `[${model.brand_code}] ${model.model_code || ''}${model.model_name ? ' ' + model.model_name : ''}`
+    Modal.confirm({
+      title: '选用新创建的型号并完成？',
+      content: `新创建的型号 ${modelLabel} 已入库。是否将该记录选用为当前型号并直接处理完成？`,
+      okText: '选用并完成',
+      cancelText: '仅选中',
+      onOk: async () => {
+        try {
+          await confirmMatch(reviewDetail.id, { model_id: model.id })
+          message.success('已选用新创建的型号，处理完成')
+          refreshReviewWorkbench(reviewDetail.id)
+        } catch {
+          // handled by interceptor
+        }
+      },
+      onCancel: () => {
+        setSelectedModels(prev => ({ ...prev, [reviewDetail.id]: model.id }))
+        message.success('型号已创建并选中')
+      },
+    })
   }
 
   const { data: pendingData, loading: pendingLoading, refresh: refreshPending, refreshAsync: refreshPendingAsync } = useRequest(

@@ -893,8 +893,8 @@ export const exportAnalyticsDetail = (params: AnalyticsSummaryParams & { fields?
 export const getAnalyticsDownloadUrl = (token: string) => `/api/analytics/download/${token}`
 
 // ─── Workbench ──────────────────────────────────────────────
-export const getWorkbenchFilters = () =>
-  api.get('/workbench/filters')
+export const getWorkbenchFilters = (params?: Record<string, unknown>) =>
+  api.get('/workbench/filters', { params })
 export const queryWorkbenchData = (params: Record<string, unknown>) =>
   api.get('/workbench/data', { params })
 export const exportWorkbenchData = (params: Record<string, unknown>) =>
@@ -912,6 +912,7 @@ export interface WorkbenchExportParams {
   platform?: string
   brand_code?: string
   model_code?: string
+  series?: string
   item_url?: string
   keyword?: string
   statuses?: string[]

@@ -58,6 +58,7 @@ class WorkbenchExportParams(BaseModel):
     platform:      Optional[str] = None
     brand_code:    Optional[str] = None
     model_code:    Optional[str] = None
+    series:        Optional[str] = None
     item_url:      Optional[str] = None
     keyword:       Optional[str] = None
     clean_job_id:  Optional[int] = None
@@ -92,10 +93,23 @@ def _year_from_month(month: int | None) -> int | None:
     return month // 100
 
 
-def _load_workbench_context(rows: list[PublishedItem]) -> tuple[dict[int, tuple[MatchResult, RawDataRecord]], dict[str, list[str]]]:
+def _series_by_match_result(luotu_db: Session, match_result_ids: list[int]) -> dict[int, str]:
+    """按 match_result_id 取关联型号的产品系列（models.series），无系列不返回。"""
+    if not match_result_ids:
+        return {}
+    rows = (
+        luotu_db.query(MatchResult.id, ModelRecord.series)
+        .join(ModelRecord, ModelRecord.id == MatchResult.model_id)
+        .filter(MatchResult.id.in_(match_result_ids), ModelRecord.series.isnot(None), ModelRecord.series != "")
+        .all()
+    )
+    return {mr_id: series for mr_id, series in rows}
+
+
+def _load_workbench_context(rows: list[PublishedItem]) -> tuple[dict[int, tuple[MatchResult, RawDataRecord]], dict[str, list[str]], dict[int, str]]:
     match_result_ids = [r.match_result_id for r in rows if r.match_result_id]
     if not match_result_ids:
-        return {}, {}
+        return {}, {}, {}
 
     luotu_db = SessionLocal()
     try:
@@ -122,14 +136,21 @@ def _load_workbench_context(rows: list[PublishedItem]) -> tuple[dict[int, tuple[
                 model_code = model_id_to_code.get(model_id)
                 if model_code and alias_code:
                     alias_index.setdefault(model_code, []).append(alias_code)
-        return match_index, alias_index
+        series_index = _series_by_match_result(luotu_db, match_result_ids)
+        return match_index, alias_index, series_index
     finally:
         luotu_db.close()
 
 
-def _build_query(db: Session, params: dict, visible_category_names: set[str] | None = None):
+def _build_query(db: Session, params: dict, visible_category_names: set[str] | None = None, series_match_ids: list[int] | None = None):
     q = db.query(PublishedItem)
     q = _filter_workbench_visible_categories(q, visible_category_names)
+
+    if series_match_ids is not None:
+        if series_match_ids:
+            q = q.filter(PublishedItem.match_result_id.in_(series_match_ids))
+        else:
+            q = q.filter(False)
 
     if params.get("year") and params.get("quarter"):
         year = int(params["year"])
@@ -181,7 +202,17 @@ def _run_wb_export_thread(job_id: int, params: dict):
 
         # 1. 查询 PublishedItems（5→10%）
         visible_category_names = params.get("visible_category_names")
-        q = _build_query(adb, params, visible_category_names).order_by(PublishedItem.id.desc())
+        series_match_ids = None
+        if params.get("series"):
+            all_match_ids = [
+                r[0] for r in adb.query(distinct(PublishedItem.match_result_id)).filter(PublishedItem.match_result_id.isnot(None)).all()
+            ]
+            series_match_ids = [
+                mr_id
+                for mr_id, s in _series_by_match_result(db, all_match_ids).items()
+                if s == params.get("series")
+            ]
+        q = _build_query(adb, params, visible_category_names, series_match_ids).order_by(PublishedItem.id.desc())
 
         total = q.count()
         if total == 0:
@@ -214,7 +245,7 @@ def _run_wb_export_thread(job_id: int, params: dict):
 
         attr_columns = [f"attr_{name}" for name in sorted(all_attr_names)]
         base_columns = [
-            "月份", "平台", "宝贝名称", "品牌代码", "品牌名称", "型号代码", "型号名称", "店铺",
+            "月份", "平台", "宝贝名称", "品牌代码", "品牌名称", "型号代码", "产品系列", "型号名称", "店铺",
             "参考价格", "销量", "计算价格", "修正销量", "修正销售额", "一级类目", "二级类目", "三级类目", "宝贝链接",
         ]
         _wb_progress[job_id] = 35
@@ -232,6 +263,7 @@ def _run_wb_export_thread(job_id: int, params: dict):
         for offset in range(0, total, page_size):
             page_rows = q.offset(offset).limit(page_size).all()
             item_ids = [r.id for r in page_rows]
+            series_index = _series_by_match_result(db, [r.match_result_id for r in page_rows if r.match_result_id])
             spec_index: dict[int, dict[str, str]] = {}
             for i in range(0, len(item_ids), spec_batch_size):
                 batch = item_ids[i: i + spec_batch_size]
@@ -253,6 +285,7 @@ def _run_wb_export_thread(job_id: int, params: dict):
                     r.brand_code,
                     r.brand_name,
                     r.model_code,
+                    series_index.get(r.match_result_id) or "",
                     r.model_name,
                     r.shop_name,
                     float(r.ref_price) if r.ref_price is not None else None,
@@ -303,6 +336,7 @@ def _run_wb_export_thread(job_id: int, params: dict):
 
 @router.get("/filters")
 def get_filters(
+    category_name: Optional[str] = Query(None),
     db: Session = Depends(get_analytics_db),
     luotu_db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -324,6 +358,22 @@ def get_filters(
         [r[0] for r in month_query.all() if r[0]],
         reverse=True,
     )
+
+    # 产品系列枚举：按所选品类（中文名）定位该品类下已发布数据的关联型号 series
+    series_options: list[str] = []
+    if category_name:
+        cat = luotu_db.query(Category).filter(Category.name == category_name).first()
+        cat_code = cat.code if cat else None
+        if cat_code:
+            mr_ids = [
+                r[0] for r in db.query(distinct(PublishedItem.match_result_id))
+                .filter(PublishedItem.match_result_id.isnot(None))
+                .all()
+            ]
+            series_options = sorted({
+                s for mr_id, s in _series_by_match_result(luotu_db, mr_ids).items()
+                if s
+            })
     return {
         "years": sorted({m // 100 for m in months}, reverse=True),
         "months": months,
@@ -331,6 +381,7 @@ def get_filters(
         "brands": _vals(PublishedItem.brand_code),
         "models": _vals(PublishedItem.model_code),
         "categories": _vals(PublishedItem.category_name),
+        "series": series_options,
     }
 
 
@@ -342,6 +393,7 @@ def query_data(
     platform: Optional[str] = Query(None),
     brand_code: Optional[str] = Query(None),
     model_code: Optional[str] = Query(None),
+    series: Optional[str] = Query(None),
     item_url: Optional[str] = Query(None),
     category_lv1: Optional[str] = Query(None),
     category_lv2: Optional[str] = Query(None),
@@ -363,7 +415,19 @@ def query_data(
     )
     visible_category_names = _visible_workbench_category_names(luotu_db, current_user)
     _ensure_workbench_category_visible(visible_category_names, category_name)
-    q = _build_query(db, params, visible_category_names)
+
+    series_match_ids = None
+    if series:
+        # 产品系列：按 match_result 定位关联型号的 series，再过滤 published_items
+        all_match_ids = [
+            r[0] for r in db.query(distinct(PublishedItem.match_result_id)).filter(PublishedItem.match_result_id.isnot(None)).all()
+        ]
+        series_match_ids = [
+            mr_id
+            for mr_id, s in _series_by_match_result(luotu_db, all_match_ids).items()
+            if s == series
+        ]
+    q = _build_query(db, params, visible_category_names, series_match_ids)
     total = q.count()
     rows = (
         q.order_by(PublishedItem.id.desc())
@@ -372,7 +436,7 @@ def query_data(
         .all()
     )
 
-    match_index, alias_index = _load_workbench_context(rows)
+    match_index, alias_index, series_index = _load_workbench_context(rows)
 
     items = []
     for index, r in enumerate(rows, start=(page - 1) * page_size + 1):
@@ -393,6 +457,7 @@ def query_data(
             "brand_name": r.brand_name,
             "model_code": r.model_code,
             "model_name": r.model_name,
+            "series": series_index.get(r.match_result_id),
             "model_aliases": alias_index.get(r.model_code or "", []),
             "judgement_type": _match_source_label(match_result.match_source if match_result else None),
             "operator": "-",
@@ -428,6 +493,7 @@ def export_data(
         "platform":      payload.platform,
         "brand_code":    payload.brand_code,
         "model_code":    payload.model_code,
+        "series":        payload.series,
         "item_url":      payload.item_url,
         "keyword":       payload.keyword,
         "clean_job_id":  payload.clean_job_id,

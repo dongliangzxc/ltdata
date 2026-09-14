@@ -9,7 +9,7 @@ import { useSearchParams } from 'react-router-dom'
 import {
   getWorkbenchFilters, queryWorkbenchData,
   getWorkbenchExportJob,
-  exportWorkbench, fetchItemAttrs
+  exportWorkbench, fetchItemAttrs, listModelExtraFields,
 } from '../../services/api'
 import type { UserProfile } from '../../services/api'
 import ProgressModal from '../../components/ProgressModal'
@@ -24,6 +24,7 @@ type FilterOptions = {
   brands: string[]
   models: string[]
   categories: string[]
+  series: string[]
 }
 
 type WorkbenchPageProps = {
@@ -56,6 +57,7 @@ type DataRow = {
   brand_name: string | null
   model_code: string | null
   model_name: string | null
+  series: string | null
   model_aliases: string[]
   judgement_type: string | null
   sales_qty: number | null
@@ -102,7 +104,7 @@ export default function WorkbenchPage({ mode = 'default' }: WorkbenchPageProps) 
   const currentUser = readStoredUser()
   const { options: categoryOptions } = useCategoryOptions()
   const [filters, setFilters] = useState<FilterOptions>({
-    years: [], months: [], platforms: [], brands: [], models: [], categories: [],
+    years: [], months: [], platforms: [], brands: [], models: [], categories: [], series: [],
   })
   const [filtersLoaded, setFiltersLoaded] = useState(false)
   const [page, setPage] = useState(1)
@@ -144,6 +146,27 @@ export default function WorkbenchPage({ mode = 'default' }: WorkbenchPageProps) 
       .then(r => { setFilters(r.data); setFiltersLoaded(true) })
       .catch(() => setFiltersLoaded(true))
   }, [])
+
+  // 选择品类后拉取该品类下的产品系列枚举
+  const watchedCategoryName = Form.useWatch('category_name', form)
+  const [seriesOptions, setSeriesOptions] = useState<string[]>([])
+  const [extraFieldsData, setExtraFieldsData] = useState<{ category_code: string; field_key: string }[]>([])
+  useEffect(() => {
+    listModelExtraFields().then(r => setExtraFieldsData(r.data)).catch(() => {})
+  }, [])
+  const seriesCategoryNames = useMemo(() => {
+    const codes = new Set((extraFieldsData ?? []).filter(f => f.field_key === 'series').map(f => f.category_code))
+    return new Set(categoryOptions.filter(c => codes.has(c.value)).map(c => c.label))
+  }, [extraFieldsData, categoryOptions])
+  useEffect(() => {
+    if (!watchedCategoryName) {
+      setSeriesOptions([])
+      return
+    }
+    getWorkbenchFilters({ category_name: watchedCategoryName })
+      .then(r => setSeriesOptions(r.data.series ?? []))
+      .catch(() => setSeriesOptions([]))
+  }, [watchedCategoryName])
 
   // 查询
   useEffect(() => {
@@ -208,6 +231,7 @@ export default function WorkbenchPage({ mode = 'default' }: WorkbenchPageProps) 
         platform: vals.platform,
         brand_code: vals.brand_code,
         model_code: vals.model_code,
+        series: vals.series,
         item_url: vals.item_url,
         keyword: vals.keyword,
         statuses: exportStatuses,
@@ -296,6 +320,10 @@ export default function WorkbenchPage({ mode = 'default' }: WorkbenchPageProps) 
         </span>
       ),
     },
+    ...(watchedCategoryName && seriesCategoryNames.has(watchedCategoryName) ? [{
+      title: '产品系列', dataIndex: 'series', width: 120, ellipsis: true,
+      render: (v: string | null) => v || '-',
+    }] : []),
     {
       title: '型号别名', dataIndex: 'model_aliases', width: 150, ellipsis: true,
       render: (v: string[]) => v?.length ? v.join('、') : '-',
@@ -378,6 +406,20 @@ export default function WorkbenchPage({ mode = 'default' }: WorkbenchPageProps) 
               }
             />
           </Form.Item>
+          {watchedCategoryName && seriesCategoryNames.has(watchedCategoryName) && (
+            <Form.Item name="series" style={{ marginBottom: 8 }}>
+              <Select
+                showSearch
+                placeholder="产品系列"
+                allowClear
+                style={{ width: 150 }}
+                options={seriesOptions.map(s => ({ value: s, label: s }))}
+                filterOption={(input, option) =>
+                  (option?.label as string ?? '').toLowerCase().includes(input.toLowerCase())
+                }
+              />
+            </Form.Item>
+          )}
           <Form.Item name="item_url" style={{ marginBottom: 8 }}>
             <Input
               placeholder="网址"

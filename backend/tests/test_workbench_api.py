@@ -124,7 +124,7 @@ def test_query_data_filters_by_clean_job_id(client_and_db):
     _seed_published(db)
     monkeypatch.setattr(
         "app.api.workbench_api._load_workbench_context",
-        lambda rows: ({}, {}),
+        lambda rows: ({}, {}, {}),
     )
 
     response = client.get("/api/workbench/data?clean_job_id=101")
@@ -180,7 +180,7 @@ def test_workbench_data_respects_category_permissions(client_and_db):
     client, db, monkeypatch = client_and_db
     _seed_category_permission_items(db)
     client.current_user["value"] = DummyUser(category_permissions=["rice_cooker"])
-    monkeypatch.setattr("app.api.workbench_api._load_workbench_context", lambda rows: ({}, {}))
+    monkeypatch.setattr("app.api.workbench_api._load_workbench_context", lambda rows: ({}, {}, {}))
 
     response = client.get("/api/workbench/data")
 

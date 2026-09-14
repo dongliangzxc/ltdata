@@ -376,6 +376,7 @@ export default function WorkbenchPage({ mode = 'default' }: WorkbenchPageProps) 
               filterOption={(input, option) =>
                 (option?.label as string ?? '').toLowerCase().includes(input.toLowerCase())
               }
+              onChange={() => form.setFieldValue('series', undefined)}
             />
           </Form.Item>
           <Form.Item name="platform" style={{ marginBottom: 8 }}>

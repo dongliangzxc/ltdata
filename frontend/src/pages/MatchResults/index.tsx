@@ -230,7 +230,7 @@ export default function MatchResultsPage() {
                 value={state.cleanJobId}
                 options={jobOptions}
                 optionFilterProp="label"
-                onChange={v => setState({ cleanJobId: v ?? undefined })}
+                onChange={v => setState({ cleanJobId: v ?? undefined, series: undefined })}
               />
             </Space>
           </Col>
@@ -279,7 +279,7 @@ export default function MatchResultsPage() {
               value={state.categoryCode}
               options={categoryOptions}
               optionFilterProp="label"
-              onChange={categoryCode => setState({ categoryCode })}
+              onChange={categoryCode => setState({ categoryCode, series: undefined })}
             />
           </Col>
           {showSeriesFilter && (

@@ -16,6 +16,8 @@ export interface MatchResultsState {
   platform?: string
   brandKeyword: string
   modelKeyword: string
+  categoryCode?: string
+  series?: string
   coefficientFilter?: CoefficientFilter
 }
 
@@ -43,6 +45,8 @@ function readState(params: URLSearchParams): MatchResultsState {
     platform: params.get('platform') || undefined,
     brandKeyword: params.get('brand_keyword') ?? '',
     modelKeyword: params.get('model_keyword') ?? '',
+    categoryCode: params.get('category_code') || undefined,
+    series: params.get('series') || undefined,
     coefficientFilter: rawCoefficientFilter && VALID_COEFFICIENT_FILTER.includes(rawCoefficientFilter) ? rawCoefficientFilter : undefined,
   }
 }
@@ -57,6 +61,8 @@ function writeState(state: MatchResultsState): URLSearchParams {
   if (state.platform) p.set('platform', state.platform)
   if (state.brandKeyword) p.set('brand_keyword', state.brandKeyword)
   if (state.modelKeyword) p.set('model_keyword', state.modelKeyword)
+  if (state.categoryCode) p.set('category_code', state.categoryCode)
+  if (state.series) p.set('series', state.series)
   if (state.coefficientFilter) p.set('coefficient_filter', state.coefficientFilter)
   if (state.page > 1) p.set('page', String(state.page))
   return p
@@ -88,6 +94,8 @@ export function useMatchResultsQuery() {
       platform: state.platform,
       brand_keyword: state.brandKeyword || undefined,
       model_keyword: state.modelKeyword || undefined,
+      category_code: state.categoryCode,
+      series: state.series,
       coefficient_filter: state.coefficientFilter,
     }).then(r => r.data as MatchResultsResponse),
     {
@@ -101,6 +109,8 @@ export function useMatchResultsQuery() {
         state.platform,
         state.brandKeyword,
         state.modelKeyword,
+        state.categoryCode,
+        state.series,
         state.coefficientFilter,
       ],
     }

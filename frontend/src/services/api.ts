@@ -1285,6 +1285,7 @@ export interface MatchResultOut {
   brand_std?: string | null
   model_code?: string | null
   brand_code?: string | null
+  series?: string | null
   attr_count?: number
   candidates?: MatchCandidateOut[]
   sales_qty?: number | null
@@ -1603,6 +1604,8 @@ export interface MatchResultsQuery {
   platform?: string
   brand_keyword?: string
   model_keyword?: string
+  category_code?: string
+  series?: string
   coefficient_filter?: CoefficientFilter
 }
 export type MatchResultsSummary = {

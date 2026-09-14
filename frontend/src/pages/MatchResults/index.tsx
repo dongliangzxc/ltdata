@@ -4,7 +4,8 @@ import {
 } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
-import { listCleanJobs, updateMatchCoefficient, updateMatchPrice, type CleanJobItem, type ReviewedMatchResultOut,
+import { listCleanJobs, updateMatchCoefficient, updateMatchPrice, listModelExtraFields, listCategories,
+         type CleanJobItem, type ReviewedMatchResultOut,
          type MatchResultsTab } from '../../services/api'
 import { buildMatchResultsColumns } from './columns'
 import { useMatchResultsQuery } from './useMatchResultsQuery'
@@ -149,6 +150,29 @@ export default function MatchResultsPage() {
     (jobsData ?? []).map((job: CleanJobItem) => job.platform).filter(Boolean) as string[]
   )).sort((a, b) => a.localeCompare(b)).map(platform => ({ value: platform, label: platform })), [jobsData])
 
+  const { data: categoriesData } = useRequest(() => listCategories().then(r => r.data))
+  const categoryOptions = useMemo(
+    () => (categoriesData ?? []).map((c: { code: string; name: string }) => ({ value: c.code, label: `${c.name}（${c.code}）` })),
+    [categoriesData],
+  )
+  const { data: extraFieldsData } = useRequest(() => listModelExtraFields().then(r => r.data))
+  const seriesCategories = useMemo(() => new Set(
+    (extraFieldsData ?? []).filter(f => f.field_key === 'series').map(f => f.category_code)
+  ), [extraFieldsData])
+  const showSeriesFilter = state.categoryCode != null && seriesCategories.has(state.categoryCode)
+  const [seriesOptions, setSeriesOptions] = useState<string[]>([])
+  useEffect(() => {
+    if (!showSeriesFilter) {
+      setSeriesOptions([])
+      return
+    }
+    const all: string[] = []
+    for (const item of data?.items ?? []) {
+      if (item.series && !all.includes(item.series)) all.push(item.series)
+    }
+    setSeriesOptions(all.sort())
+  }, [showSeriesFilter, data?.items])
+
   const columns = useMemo(
     () => buildMatchResultsColumns({
       coefficientDrafts,
@@ -161,6 +185,7 @@ export default function MatchResultsPage() {
       onSaveCoefficient: handleSaveCoefficient,
       onPriceCoefficientChange: handlePriceCoefficientChange,
       onSavePrice: handleSavePrice,
+      showSeriesColumn: showSeriesFilter,
       onReselect: (row: ReviewedMatchResultOut) => {
         setReselectMatchId(row.id)
         setReselectOpen(true)
@@ -169,6 +194,7 @@ export default function MatchResultsPage() {
     [
       coefficientDrafts, editedCoefficientIds, savingCoefficientIds,
       priceCoefficientDrafts, editedPriceIds, savingPriceIds,
+      showSeriesFilter,
     ],
   )
 
@@ -237,6 +263,32 @@ export default function MatchResultsPage() {
               onChange={platform => setState({ platform })}
             />
           </Col>
+          <Col>
+            <Select
+              allowClear
+              showSearch
+              style={{ width: 180 }}
+              placeholder="品类"
+              value={state.categoryCode}
+              options={categoryOptions}
+              optionFilterProp="label"
+              onChange={categoryCode => setState({ categoryCode })}
+            />
+          </Col>
+          {showSeriesFilter && (
+            <Col>
+              <Select
+                allowClear
+                showSearch
+                style={{ width: 160 }}
+                placeholder="产品系列"
+                value={state.series}
+                options={seriesOptions.map(s => ({ value: s, label: s }))}
+                optionFilterProp="label"
+                onChange={series => setState({ series })}
+              />
+            </Col>
+          )}
           <Col>
             <Input.Search
               allowClear

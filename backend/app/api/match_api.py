@@ -1598,6 +1598,8 @@ def list_reviewed_global(
     platform: Optional[str] = None,
     brand_keyword: Optional[str] = None,
     model_keyword: Optional[str] = None,
+    category_code: Optional[str] = None,
+    series: Optional[str] = None,
     coefficient_filter: Optional[Literal["with", "without"]] = None,
     db: Session = Depends(get_db),
 ):
@@ -1621,7 +1623,7 @@ def list_reviewed_global(
                 q = q.filter(MatchResult.price_flag == price_flag_map[price_flag])
         if keyword:
             q = q.filter(RawDataRecord.item_name.like(f"%{keyword}%"))
-        needs_model_join = bool(brand_keyword or model_keyword)
+        needs_model_join = bool(brand_keyword or model_keyword or category_code or series)
         if needs_model_join and join_model:
             q = q.outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
         if platform:
@@ -1639,6 +1641,10 @@ def list_reviewed_global(
                 ModelRecord.model_code.ilike(pattern),
                 ModelRecord.model_name.ilike(pattern),
             ))
+        if category_code:
+            q = q.filter(ModelRecord.category_code == category_code)
+        if series:
+            q = q.filter(ModelRecord.series == series)
         if coefficient_filter == "with":
             q = q.filter(MatchResult.sales_coefficient.isnot(None))
         elif coefficient_filter == "without":
@@ -1720,6 +1726,7 @@ def list_reviewed_global(
             item_name=rd.item_name, item_url=rd.item_url, brand_raw=rd.brand_raw,
             model_code=model.model_code if model else None,
             brand_code=model.brand_code if model else None,
+            series=model.series if model else None,
             sales_qty=rd.sales_qty,
         ))
 

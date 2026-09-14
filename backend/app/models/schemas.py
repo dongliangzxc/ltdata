@@ -947,6 +947,7 @@ class MatchResultOut(BaseModel):
     brand_raw:     Optional[str] = None
     model_code:    Optional[str] = None
     brand_code:    Optional[str] = None
+    series:        Optional[str] = None
     attr_count:    int = 0
     candidates:    list[MatchCandidateOut] = []
     sales_qty:     Optional[int] = None

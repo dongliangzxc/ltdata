@@ -16,6 +16,7 @@ export type BuildMatchResultsColumnsOptions = {
   onPriceCoefficientChange?: (matchId: number, value: number | null) => void
   onSavePrice?: (matchId: number) => void
   onReselect: (row: ReviewedMatchResultOut) => void
+  showSeriesColumn?: boolean
 }
 
 const priceFlagMeta: Record<PriceFlag, { label: string; color: string }> = {
@@ -79,6 +80,10 @@ export function buildMatchResultsColumns(
           ? <Text code style={{ fontSize: 12 }}>[{row.brand_code}] {row.model_code}</Text>
           : <Text type="secondary">-</Text>,
     },
+    ...(options.showSeriesColumn ? [{
+      title: '产品系列', dataIndex: 'series', width: 120, ellipsis: true,
+      render: (value: string | null) => value ?? '-',
+    }] : []),
     {
       title: '价格预警', width: 100,
       render: (_: unknown, row: ReviewedMatchResultOut) => {

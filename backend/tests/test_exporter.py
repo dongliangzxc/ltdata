@@ -52,6 +52,7 @@ def _seed(db):
         brand_code="sony", model_code="WH-1000XM5",
         category_code="headphone",
         brand_name="索尼", model_name="WH-1000XM5降噪耳机",
+        series="XM5 系列",
     )
     db.add(model)
     db.flush()
@@ -88,10 +89,21 @@ def test_brand_name_and_model_name_in_export(db):
     xl = pd.read_excel(result[0]["path"], sheet_name="耳机-已处理")
     assert "入库品牌" in xl.columns, "缺少入库品牌列"
     assert "型号" in xl.columns, "缺少型号列"
+    assert "产品系列" in xl.columns, "缺少产品系列列"
     assert "品牌名称" not in xl.columns
     assert "型号名称" not in xl.columns
     assert xl["入库品牌"].iloc[0] == "索尼"
     assert xl["型号"].iloc[0] == "WH-1000XM5降噪耳机"
+    assert xl["产品系列"].iloc[0] == "XM5 系列"
+
+
+def test_series_column_after_model_in_matched_sheet(db):
+    """产品系列列应位于基础列之后（型号列紧邻其后）。"""
+    clean_job_id = _seed(db)
+    result = export_match_job(db, clean_job_id)
+    xl = pd.read_excel(result[0]["path"], sheet_name="耳机-已处理")
+    cols = list(xl.columns)
+    assert cols[cols.index("型号") + 1] == "产品系列"
 
 
 def test_text_only_export_sheet_uses_url_mapping_pending_label(db):

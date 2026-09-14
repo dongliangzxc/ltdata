@@ -48,6 +48,14 @@ BASE_COLS = [
 
 BASE_FIELD_NAMES = [f for f, _ in BASE_COLS]
 BASE_CN_NAMES    = [cn for _, cn in BASE_COLS]
+
+# 「已处理」Sheet 在基础列之后追加的品类扩展字段列（取 models 对应列）
+MATCHED_EXTRA_COLS = [
+    ("series", "产品系列"),
+]
+MATCHED_EXTRA_FIELD_NAMES = [f for f, _ in MATCHED_EXTRA_COLS]
+MATCHED_EXTRA_CN_NAMES    = [cn for _, cn in MATCHED_EXTRA_COLS]
+
 PAGE_SIZE = 5000
 EXPORTABLE_CLEAN_JOB_STATUSES = ("reviewing", "done", "published")
 
@@ -66,7 +74,7 @@ def _sheet_name(name: str, used_names: set[str]) -> str:
 
 def _base_row(rd: RawDataRecord, model: ModelRecord | None = None) -> dict:
     row = {}
-    for field in BASE_FIELD_NAMES:
+    for field in BASE_FIELD_NAMES + MATCHED_EXTRA_FIELD_NAMES:
         if field == "brand_std":
             row[field] = rd.brand_std or rd.brand_raw or ""
         elif field == "model_code":
@@ -75,6 +83,8 @@ def _base_row(rd: RawDataRecord, model: ModelRecord | None = None) -> dict:
             row[field] = model.brand_name if model else ""
         elif field == "model_name":
             row[field] = model.model_name if model else ""
+        elif field == "series":
+            row[field] = model.series if model else ""
         else:
             row[field] = getattr(rd, field, None)
     return row
@@ -272,9 +282,12 @@ def _export_match_jobs(
 
     def get_category_sheet(cat: str, cat_code: str):
         if cat not in category_sheets:
-            spec_names = category_spec_names.get(cat_code, [])
+            spec_names = [
+                sn for sn in category_spec_names.get(cat_code, [])
+                if sn not in MATCHED_EXTRA_CN_NAMES
+            ]
             worksheet = workbook.create_sheet(title=_sheet_name(f"{cat}-已处理", used_sheet_names))
-            worksheet.append(BASE_CN_NAMES + spec_names)
+            worksheet.append(BASE_CN_NAMES + MATCHED_EXTRA_CN_NAMES + spec_names)
             category_sheets[cat] = (worksheet, spec_names)
         return category_sheets[cat]
 
@@ -294,7 +307,11 @@ def _export_match_jobs(
             cat = cat_map.get(cat_code, cat_code) or "未知品类"
             worksheet, spec_names = get_category_sheet(cat, cat_code)
             model_specs = spec_map.get(mr.model_id, {})
-            worksheet.append([row.get(field) for field in BASE_FIELD_NAMES] + [model_specs.get(sn, "") for sn in spec_names])
+            worksheet.append(
+                [row.get(field) for field in BASE_FIELD_NAMES]
+                + [row.get(field) for field in MATCHED_EXTRA_FIELD_NAMES]
+                + [model_specs.get(sn, "") for sn in spec_names]
+            )
 
     pending_sheet = None
     for offset in range(0, pending_total, PAGE_SIZE):

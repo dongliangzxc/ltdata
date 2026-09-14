@@ -21,7 +21,7 @@ from app.core.auth_deps import get_current_user
 from app.core.permissions import visible_category_codes
 from app.models.analytics_db import get_analytics_db, AnalyticsSession, PublishedItem, PublishedItemSpec
 from app.models.database import get_db, SessionLocal
-from app.models.schemas import Category, MatchResult, ModelAlias, RawDataRecord, User, WorkbenchExportJob
+from app.models.schemas import Category, MatchResult, ModelAlias, ModelRecord, RawDataRecord, User, WorkbenchExportJob
 from app.utils.time_utils import format_beijing_datetime
 from app.services.export_guards import reserve_async_export_capacity
 

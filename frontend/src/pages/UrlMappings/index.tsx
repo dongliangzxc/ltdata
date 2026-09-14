@@ -102,8 +102,8 @@ export default function UrlMappingsPage() {
     return map
   }, [extraFieldsData])
   const showSeriesColumn = useMemo(() => {
-    if (categoryCode) return (extraFieldKeysByCategory[categoryCode] ?? []).includes('series')
-    return Object.values(extraFieldKeysByCategory).some(keys => keys.includes('series'))
+    if (!categoryCode) return false
+    return (extraFieldKeysByCategory[categoryCode] ?? []).includes('series')
   }, [categoryCode, extraFieldKeysByCategory])
 
   const { data: modelsData } = useRequest(

@@ -722,8 +722,8 @@ export const runMatch = (clean_job_id: number) =>
   api.post('/match/run', { clean_job_id })
 export const getMatchProgress = (clean_job_id: number) =>
   api.get(`/match/progress/${clean_job_id}`)
-export const getMatchSummary = (clean_job_id: number) =>
-  api.get(`/match/${clean_job_id}/summary`)
+export const getMatchSummary = (clean_job_id: number, params?: Record<string, unknown>) =>
+  api.get(`/match/${clean_job_id}/summary`, { params })
 export const listPendingMatches = (clean_job_id: number, params?: Record<string, unknown>) =>
   api.get(`/match/${clean_job_id}/pending`, { params })
 export const listReviewedMatches = (clean_job_id: number, params?: Record<string, unknown>) =>

@@ -605,8 +605,7 @@ export default function MatchPage() {
   // 选任务后自动拉取摘要 + 发布历史；若后台匹配正在运行则自动恢复轮询
   useEffect(() => {
     if (!selectedJobId) return
-    getMatchSummary(selectedJobId)
-      .then(r => setSummary(r.data))
+    fetchSummary()
       .catch(() => setSummary(null))
     listPublishJobs(selectedJobId)
       .then(r => setPublishJobs(r.data.data ?? []))
@@ -621,7 +620,7 @@ export default function MatchPage() {
         startPolling(selectedJobId)
       }
     }).catch(() => {})
-  }, [selectedJobId])
+  }, [selectedJobId, topBrandsOnly, isPowerBankJob])
 
   const startPolling = (jobId: number) => {
     if (pollTimerRef.current) clearInterval(pollTimerRef.current)
@@ -635,7 +634,7 @@ export default function MatchPage() {
           pollTimerRef.current = null
           setRunning(false)
           message.success(`匹配完成：已匹配 ${p.matched} 条，待确认 ${p.total - p.matched} 条`)
-          getMatchSummary(jobId).then(r => setSummary(r.data))
+          fetchSummary(jobId)
           refreshPending()
         } else if (p.status === 'error') {
           clearInterval(pollTimerRef.current!)
@@ -681,7 +680,7 @@ export default function MatchPage() {
   const refreshReviewWorkbench = (matchId: number) => {
     selectNextReview(matchId)
     refreshPending()
-    getMatchSummary(selectedJobId!).then(r => setSummary(r.data))
+    fetchSummary()
   }
 
   const doSearchCleanTasks = (keyword: string, overrideFilters?: TransferFilters) => {
@@ -751,7 +750,7 @@ export default function MatchPage() {
 
   const refreshReviewDetailInPlace = async (matchId: number) => {
     refreshPending()
-    if (selectedJobId) getMatchSummary(selectedJobId).then(r => setSummary(r.data))
+    fetchSummary()
     setReviewDetailLoading(true)
     try {
       const res = await getMatchReviewDetail(matchId)
@@ -773,7 +772,7 @@ export default function MatchPage() {
     setSelectedModels({})
     setPage(1)
     refreshJobs()
-    getMatchSummary(selectedJobId).then(r => setSummary(r.data))
+    fetchSummary()
     refreshPending()
     loadDisabled()
   }
@@ -783,7 +782,7 @@ export default function MatchPage() {
     const jobId = selectedJobId
     try {
       const [summaryResp] = await Promise.all([
-        getMatchSummary(jobId),
+        getMatchSummary(jobId, topBrandsOnly && isPowerBankJob ? { top_brands: TOP_BRANDS_LIMIT } : undefined),
         refreshJobsAsync(),
         refreshPendingAsync(),
         loadDisabled(),
@@ -901,7 +900,7 @@ export default function MatchPage() {
       showBatchResult(data)
       setBatchConfirmModalOpen(false)
       refreshPending()
-      if (selectedJobId) getMatchSummary(selectedJobId).then(r => setSummary(r.data))
+      fetchSummary()
     } catch (err: any) {
       message.error(err?.response?.data?.detail || '批量确认失败')
     } finally {
@@ -985,7 +984,7 @@ export default function MatchPage() {
       setFilteredDetail(null)
       refreshFiltered()
       refreshJobs()
-      if (selectedJobId) getMatchSummary(selectedJobId).then(r => setSummary(r.data))
+      fetchSummary()
     } finally {
       setRecoveringFilteredIds(prev => { const s = new Set(prev); s.delete(item.id); return s })
     }
@@ -1128,6 +1127,12 @@ export default function MatchPage() {
   const currentQueueTitle = queueTabs.find(tab => tab.key === activeTab)?.label ?? '复核'
   const selectedJob = (jobsData ?? []).find((job: CleanJobItem) => job.id === selectedJobId)
   const isPowerBankJob = selectedJob?.category_code === POWER_BANK_CATEGORY || selectedJob?.dispatch_category_code === POWER_BANK_CATEGORY
+  const fetchSummary = (jobId?: number) => {
+    const id = jobId ?? selectedJobId
+    if (!id) return Promise.resolve()
+    const params = topBrandsOnly && isPowerBankJob ? { top_brands: TOP_BRANDS_LIMIT } : undefined
+    return getMatchSummary(id, params).then(r => setSummary(r.data))
+  }
   const cleanJobs = jobsData ?? []
   const canRetryMatch = selectedJob?.status === 'failed' || selectedJob?.status === 'error'
   const metadataPendingCount = summary
@@ -1263,7 +1268,7 @@ export default function MatchPage() {
                 if (!selectedJobId) return
                 const res = await avgPriceDisable(selectedJobId, avgPriceThreshold)
                 message.success(`均价禁用完成，共禁用 ${res.data.disabled_count} 条`)
-                getMatchSummary(selectedJobId).then(r => setSummary(r.data))
+                fetchSummary()
                       loadDisabled()
               }}
             >
@@ -1979,7 +1984,7 @@ export default function MatchPage() {
                       await enableMatch(record.id)
                       message.success('已启用')
                       loadDisabled(disabledPage)
-                      getMatchSummary(selectedJobId!).then(r => setSummary(r.data))
+                      fetchSummary()
                     }}
                   >
                     <Button size="small" type="link">启用</Button>

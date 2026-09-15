@@ -325,12 +325,16 @@ def get_match_progress(clean_job_id: int):
 @router.get("/{clean_job_id}/summary", response_model=MatchSummary)
 def get_match_summary(
     clean_job_id: int,
+    top_brands: Optional[int] = Query(None, ge=1, le=500, description="统计仅限当前任务内销量前 N 品牌"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """查看某次清洗任务的匹配统计，无记录时返回全零（不报错）"""
     _get_visible_match_clean_job_or_404(db, current_user, clean_job_id)
-    rows = db.query(MatchResult).filter(MatchResult.clean_job_id == clean_job_id).all()
+    q = db.query(MatchResult).filter(MatchResult.clean_job_id == clean_job_id)
+    if top_brands and top_brands > 0:
+        q = _apply_top_brands_filter(db, q, clean_job_id, top_brands)
+    rows = q.all()
     if not rows:
         return MatchSummary(
             clean_job_id=clean_job_id,

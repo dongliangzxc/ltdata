@@ -239,6 +239,14 @@ export default function MatchPage() {
   const [interventionModalOpen, setInterventionModalOpen] = useState(false)
   const [rerunningRules, setRerunningRules] = useState(false)
   const { data: jobsData, refresh: refreshJobs, refreshAsync: refreshJobsAsync } = useRequest(() => listCleanJobs().then(r => r.data))
+  const selectedJob = (jobsData ?? []).find((job: CleanJobItem) => job.id === selectedJobId)
+  const isPowerBankJob = selectedJob?.category_code === POWER_BANK_CATEGORY || selectedJob?.dispatch_category_code === POWER_BANK_CATEGORY
+  const fetchSummary = (jobId?: number) => {
+    const id = jobId ?? selectedJobId
+    if (!id) return Promise.resolve()
+    const params = topBrandsOnly && isPowerBankJob ? { top_brands: TOP_BRANDS_LIMIT } : undefined
+    return getMatchSummary(id, params).then(r => setSummary(r.data))
+  }
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
   const [modelSearchLoading, setModelSearchLoading] = useState(false)
   const [createModelOpen, setCreateModelOpen] = useState(false)
@@ -1125,14 +1133,6 @@ export default function MatchPage() {
   ]
 
   const currentQueueTitle = queueTabs.find(tab => tab.key === activeTab)?.label ?? '复核'
-  const selectedJob = (jobsData ?? []).find((job: CleanJobItem) => job.id === selectedJobId)
-  const isPowerBankJob = selectedJob?.category_code === POWER_BANK_CATEGORY || selectedJob?.dispatch_category_code === POWER_BANK_CATEGORY
-  const fetchSummary = (jobId?: number) => {
-    const id = jobId ?? selectedJobId
-    if (!id) return Promise.resolve()
-    const params = topBrandsOnly && isPowerBankJob ? { top_brands: TOP_BRANDS_LIMIT } : undefined
-    return getMatchSummary(id, params).then(r => setSummary(r.data))
-  }
   const cleanJobs = jobsData ?? []
   const canRetryMatch = selectedJob?.status === 'failed' || selectedJob?.status === 'error'
   const metadataPendingCount = summary

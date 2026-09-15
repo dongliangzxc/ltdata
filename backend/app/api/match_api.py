@@ -381,20 +381,20 @@ def get_match_summary(
 
 
 def _top_brand_stds(db: Session, clean_job_id: int, top_n: int) -> list[str]:
-    """当前清洗任务内按标准品牌码汇总销量，返回销量前 top_n 的品牌码列表。
+    """当前清洗任务内按清洗后标准品牌码汇总销量，返回销量前 top_n 的品牌码列表。
 
+    品牌标准码取 cleaned_data.brand_std（清洗时由品牌写法库标准化，无命中回退品牌原名）；
     销量为空的品牌按 0 计；brand_std 为空 / 为 None 的行不参与排名。
     """
-    sum_expr = func.coalesce(func.sum(RawDataRecord.sales_qty), 0)
+    sum_expr = func.coalesce(func.sum(CleanedDataRecord.sales_qty), 0)
     rows = (
-        db.query(RawDataRecord.brand_std, sum_expr.label("total_sales"))
-        .join(MatchResult, MatchResult.raw_data_id == RawDataRecord.id)
+        db.query(CleanedDataRecord.brand_std, sum_expr.label("total_sales"))
         .filter(
-            MatchResult.clean_job_id == clean_job_id,
-            RawDataRecord.brand_std.isnot(None),
-            RawDataRecord.brand_std != "",
+            CleanedDataRecord.clean_job_id == clean_job_id,
+            CleanedDataRecord.brand_std.isnot(None),
+            CleanedDataRecord.brand_std != "",
         )
-        .group_by(RawDataRecord.brand_std)
+        .group_by(CleanedDataRecord.brand_std)
         .order_by(sum_expr.desc())
         .limit(top_n)
         .all()
@@ -408,11 +408,22 @@ def _apply_top_brands_filter(
     clean_job_id: int,
     top_brands: int,
 ):
-    """给复核队列查询追加「仅看销量前 top_brands 品牌」过滤。"""
+    """给复核队列查询追加「仅看销量前 top_brands 品牌」过滤。
+
+    raw_data.brand_std 全库为 NULL（品牌标准化写 cleaned_data.brand_std），
+    故通过 cleaned_data 子查询取出前 N 品牌对应的 raw_data_id 再过滤。
+    """
     top_stds = _top_brand_stds(db, clean_job_id, top_brands)
     if not top_stds:
         return q.filter(RawDataRecord.id == -1)
-    return q.filter(RawDataRecord.brand_std.in_(top_stds))
+    subq = (
+        db.query(CleanedDataRecord.raw_data_id)
+        .filter(
+            CleanedDataRecord.clean_job_id == clean_job_id,
+            CleanedDataRecord.brand_std.in_(top_stds),
+        )
+    )
+    return q.filter(MatchResult.raw_data_id.in_(subq))
 
 
 def _build_review_queue_query(

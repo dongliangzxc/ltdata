@@ -380,6 +380,41 @@ def get_match_summary(
     )
 
 
+def _top_brand_stds(db: Session, clean_job_id: int, top_n: int) -> list[str]:
+    """当前清洗任务内按标准品牌码汇总销量，返回销量前 top_n 的品牌码列表。
+
+    销量为空的品牌按 0 计；brand_std 为空 / 为 None 的行不参与排名。
+    """
+    sum_expr = func.coalesce(func.sum(RawDataRecord.sales_qty), 0)
+    rows = (
+        db.query(RawDataRecord.brand_std, sum_expr.label("total_sales"))
+        .join(MatchResult, MatchResult.raw_data_id == RawDataRecord.id)
+        .filter(
+            MatchResult.clean_job_id == clean_job_id,
+            RawDataRecord.brand_std.isnot(None),
+            RawDataRecord.brand_std != "",
+        )
+        .group_by(RawDataRecord.brand_std)
+        .order_by(sum_expr.desc())
+        .limit(top_n)
+        .all()
+    )
+    return [r[0] for r in rows if r[0]]
+
+
+def _apply_top_brands_filter(
+    db: Session,
+    q,
+    clean_job_id: int,
+    top_brands: int,
+):
+    """给复核队列查询追加「仅看销量前 top_brands 品牌」过滤。"""
+    top_stds = _top_brand_stds(db, clean_job_id, top_brands)
+    if not top_stds:
+        return q.filter(RawDataRecord.id == -1)
+    return q.filter(RawDataRecord.brand_std.in_(top_stds))
+
+
 def _build_review_queue_query(
     db: Session,
     clean_job_id: int,
@@ -388,6 +423,7 @@ def _build_review_queue_query(
     search_by: str,
     category_name: Optional[str],
     sort_by: str,
+    top_brands: Optional[int] = None,
 ):
     """构造复核队列基础查询（与 list_pending 使用相同过滤）。返回未 count/paginate 的 Query。"""
     if tab not in _BATCH_ALLOWED_STATUSES:
@@ -431,6 +467,8 @@ def _build_review_queue_query(
             q = q.filter(RawDataRecord.item_name.ilike(pattern))
     if category_name:
         q = q.filter(Category.code == category_name)
+    if top_brands and top_brands > 0:
+        q = _apply_top_brands_filter(db, q, clean_job_id, top_brands)
 
     # DispatchItem is joined only for category filtering. A raw row may have
     # multiple dispatch_items in the same batch, so collapse duplicated matches
@@ -455,6 +493,7 @@ def list_pending(
     brand_identified: Optional[int] = Query(None),
     category_name: Optional[str] = Query(None),
     sort_by: str = Query("default"),
+    top_brands: Optional[int] = Query(None, ge=1, le=500, description="仅展示当前任务内销量前 N 品牌"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -516,6 +555,8 @@ def list_pending(
         q = q.filter(MatchResult.brand_identified == brand_identified)
     if category_name:
         q = q.filter(Category.code == category_name)
+    if top_brands and top_brands > 0:
+        q = _apply_top_brands_filter(db, q, clean_job_id, top_brands)
 
     if sort_by == "sales_qty_desc":
         # MySQL 旧版不支持 NULLS LAST 语法，用 ISNULL() 模拟（NULL 排末尾）
@@ -1154,6 +1195,7 @@ def batch_confirm(clean_job_id: int, payload: dict, db: Session = Depends(get_db
             search_by=f.get("search_by") or "item_name",
             category_name=(f.get("category_name") or None),
             sort_by=f.get("sort_by") or "default",
+            top_brands=(f.get("top_brands") or None),
         )
         matched_total = q.count()
         truncated = matched_total > _BATCH_FILTER_LIMIT
@@ -1180,11 +1222,12 @@ def batch_confirm_preview(
     search_by: str = Query("item_name"),
     category_name: Optional[str] = Query(None),
     sort_by: str = Query("default"),
+    top_brands: Optional[int] = Query(None, ge=1, le=500),
     db: Session = Depends(get_db),
 ):
     q = _build_review_queue_query(
         db, clean_job_id, tab=tab, keyword=keyword, search_by=search_by,
-        category_name=category_name, sort_by=sort_by,
+        category_name=category_name, sort_by=sort_by, top_brands=top_brands,
     )
     rows = q.all()  # preview 不做上限（只统计），若 review 反馈慢再加
 

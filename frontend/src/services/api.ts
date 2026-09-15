@@ -743,6 +743,7 @@ export type BatchConfirmFilter = {
   search_by?: 'item_name' | 'brand_raw' | 'brand_code'
   category_name?: string | null
   sort_by?: 'default' | 'sales_qty_desc' | 'sales_qty_asc'
+  top_brands?: number | null
 }
 
 export type BatchConfirmPayload =

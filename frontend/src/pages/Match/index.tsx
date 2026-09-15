@@ -2,7 +2,7 @@ import { useMemo, useState, useEffect, useRef } from 'react'
 import {
   Card, Select, Button, Table, Tag, Space, Typography, Input,
   message, Row, Col, Statistic, Tooltip, Progress, Alert, Popconfirm, InputNumber, Tabs,
-  List, Descriptions, Empty, Modal, Image, Checkbox,
+  List, Descriptions, Empty, Modal, Image, Checkbox, Switch,
 } from 'antd'
 import { AimOutlined, StopOutlined, CloudUploadOutlined, LoadingOutlined, LinkOutlined, DownloadOutlined, PlusOutlined, UndoOutlined, SwapOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
@@ -29,6 +29,9 @@ import { buildTransferFilterState, getDefaultTransferFilters, shouldClearTransfe
 import type { TransferFilters, TransferSelectOption } from './utils/transferFilters'
 
 const { Text } = Typography
+
+const POWER_BANK_CATEGORY = 'power_bank'
+const TOP_BRANDS_LIMIT = 40
 
 
 const formatNumber = (value?: number | null) => (
@@ -208,6 +211,7 @@ export default function MatchPage() {
   const [searchBy, setSearchBy] = useState<SearchBy>('item_name')
   const [categoryName, setCategoryName] = useState<string | undefined>()
   const [sortBy, setSortBy] = useState<string>('default')
+  const [topBrandsOnly, setTopBrandsOnly] = useState(false)
   const [page, setPage] = useState(1)
   const [confirmingIds, setConfirmingIds] = useState<Set<number>>(new Set())
   const [recoveringFilteredIds, setRecoveringFilteredIds] = useState<Set<number>>(new Set())
@@ -415,10 +419,11 @@ export default function MatchPage() {
       ...(activeTab === 'unidentified_brand' ? { brand_identified: 0 } : {}),
       category_name: categoryName || undefined,
       sort_by: sortBy !== 'default' ? sortBy : undefined,
+      top_brands: topBrandsOnly && isPowerBankJob ? TOP_BRANDS_LIMIT : undefined,
     }).then(r => r.data),
     {
       ready: selectedJobId != null && summary != null && summary.total > 0 && activeTab !== 'filtered',
-      refreshDeps: [selectedJobId, keyword, searchBy, page, activeTab, categoryName, sortBy],
+      refreshDeps: [selectedJobId, keyword, searchBy, page, activeTab, categoryName, sortBy, topBrandsOnly],
     }
   )
 
@@ -830,6 +835,7 @@ export default function MatchPage() {
       search_by: searchBy,
       category_name: categoryName ?? null,
       sort_by: sortBy as BatchConfirmFilter['sort_by'],
+      top_brands: topBrandsOnly && isPowerBankJob ? TOP_BRANDS_LIMIT : null,
     }
     let distributionLines: string[] = []
     let processCount = 0
@@ -1121,6 +1127,7 @@ export default function MatchPage() {
 
   const currentQueueTitle = queueTabs.find(tab => tab.key === activeTab)?.label ?? '复核'
   const selectedJob = (jobsData ?? []).find((job: CleanJobItem) => job.id === selectedJobId)
+  const isPowerBankJob = selectedJob?.category_code === POWER_BANK_CATEGORY || selectedJob?.dispatch_category_code === POWER_BANK_CATEGORY
   const cleanJobs = jobsData ?? []
   const canRetryMatch = selectedJob?.status === 'failed' || selectedJob?.status === 'error'
   const metadataPendingCount = summary
@@ -1371,6 +1378,16 @@ export default function MatchPage() {
               >
                 应用规则并重新处理当前任务
               </Button>
+              {isPowerBankJob && (
+                <Space size={4}>
+                  <Switch
+                    size="small"
+                    checked={topBrandsOnly}
+                    onChange={v => { setTopBrandsOnly(v); setPage(1); resetBatchSelection() }}
+                  />
+                  <Text style={{ fontSize: 12, color: '#8c8c8c' }}>仅看销量前40品牌</Text>
+                </Space>
+              )}
               <Select
                 placeholder="品类筛选"
                 allowClear

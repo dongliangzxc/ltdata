@@ -896,6 +896,30 @@ def test_import_rejects_ambiguous_model_name_without_brand_code(db):
     assert "匹配到多个型号" in data["errors"][0]["reason"]
 
 
+def test_import_auto_creates_model_when_filled_model_code_not_in_library(db):
+    _seed_model(db, model_code="H3-DJI", model_name="H3", brand_code="DJI")
+    _seed_model(db, model_code="H3-INSTA", model_name="H3", brand_code="INSTA")
+    client = _client(db)
+    content = _history_excel([{
+        "年": 2026, "月": 5, "商场": "JD", "标题": "洛图测试商品",
+        "型号": "H3", "品牌码": "ROCK", "型号码": "H3"
+    }])
+
+    resp = client.post(
+        "/api/historical/import",
+        files={"file": ("history.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] == 1
+    assert data["errors"] == []
+    model = db.query(ModelRecord).filter(ModelRecord.brand_code == "ROCK").one()
+    assert model.model_code == "H3"
+    assert model.model_name == "H3"
+    assert db.query(HistoricalMapping).one().model_id == model.id
+
+
 def test_import_auto_creates_unknown_model(db):
     client = _client(db)
     content = _history_excel([{

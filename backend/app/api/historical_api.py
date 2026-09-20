@@ -615,8 +615,7 @@ def _resolve_model(
                 return models_by_code_list[0], None
             if len(models_by_code_list) > 1:
                 return None, f"型号码「{model_code_raw}」匹配到多个品牌，请填写品牌码"
-        if not model_text:
-            return None, f"型号码「{model_code_raw}」在型号库中不存在"
+        return None, f"型号码「{model_code_raw}」在型号库中不存在"
 
     if not model_text:
         return None, None

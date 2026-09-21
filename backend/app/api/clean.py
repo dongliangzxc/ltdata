@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from app.core.auth_deps import get_current_user
 from app.core.permissions import visible_category_codes
 from app.models.database import get_db
+from app.models.analytics_db import AnalyticsSession
 from app.models.schemas import (
     CleanJobRecord,
     CleanedDataRecord,
@@ -36,6 +37,8 @@ from app.models.schemas import (
 )
 from app.services.clean_task_snapshot import (
     ACTIVE_TASK_STATUSES,
+    _find_monthly_job,
+    _has_reviewed_or_published_state,
     create_category_task_snapshot,
     get_clean_pool_summary,
     get_monthly_clean_pool,
@@ -43,6 +46,7 @@ from app.services.clean_task_snapshot import (
 )
 from app.services.data_cleaner import run_clean
 from app.services.matcher import run_match
+from app.services.publisher import delete_published_data
 from app.utils.time_utils import format_beijing_datetime
 
 router = APIRouter(prefix="/api/clean", tags=["clean"])
@@ -219,6 +223,34 @@ def _clean_job_to_dict(
         "created_at": format_beijing_datetime(job.created_at),
         "scope_desc": _build_clean_scope_desc(db, job, category_names),
     }
+
+
+def _reset_clean_job_downstream(db: Session, clean_job_id: int) -> None:
+    """强制重建前清除任务的全部下游记录：发布数据（含分析库）、人工处理结果、清洗产物。"""
+    old_match_result_ids = [
+        row.id
+        for row in db.query(MatchResult.id)
+        .filter(MatchResult.clean_job_id == clean_job_id)
+        .all()
+    ]
+    if old_match_result_ids:
+        db.query(MatchResultAttr).filter(
+            MatchResultAttr.match_result_id.in_(old_match_result_ids)
+        ).delete(synchronize_session=False)
+        db.query(MatchResultCandidate).filter(
+            MatchResultCandidate.match_result_id.in_(old_match_result_ids)
+        ).delete(synchronize_session=False)
+    db.query(MatchResult).filter(MatchResult.clean_job_id == clean_job_id).delete(synchronize_session=False)
+    db.query(FilteredItem).filter(FilteredItem.clean_job_id == clean_job_id).delete(synchronize_session=False)
+    db.query(CleanedDataRecord).filter(CleanedDataRecord.clean_job_id == clean_job_id).delete(synchronize_session=False)
+    db.query(PublishJob).filter(PublishJob.clean_job_id == clean_job_id).delete(synchronize_session=False)
+    analytics_db = AnalyticsSession()
+    try:
+        delete_published_data(analytics_db, clean_job_id)
+        analytics_db.commit()
+    finally:
+        analytics_db.close()
+    db.flush()
 
 
 def _clear_clean_job_outputs(db: Session, clean_job_id: int) -> None:
@@ -529,6 +561,15 @@ def upsert_monthly_clean_task(
 ):
     _ensure_clean_category_visible(db, current_user, payload.category_code)
     try:
+        if payload.force_rebuild:
+            existing = _find_monthly_job(
+                db,
+                category_code=payload.category_code,
+                platform=payload.platform,
+                month=payload.month,
+            )
+            if existing and _has_reviewed_or_published_state(db, existing.id):
+                _reset_clean_job_downstream(db, existing.id)
         job, snapshot_count, action, _new_snapshot_ids = upsert_monthly_task_snapshot(
             db,
             category_code=payload.category_code,
@@ -536,6 +577,7 @@ def upsert_monthly_clean_task(
             month=payload.month,
             rules=payload.rules,
             force_reclean=payload.force_reclean,
+            force_rebuild=payload.force_rebuild,
         )
         _run_clean_and_match_for_job(db, job, commit=False)
         db.commit()

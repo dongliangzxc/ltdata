@@ -200,6 +200,9 @@ const getQueueAction = (row: CleanMonthlyPoolItem) => {
   if ((row.pending_count ?? 0) === 0 && (row.queued_count ?? 0) > 0) {
     return { label: '重新清洗', disabled: false, action: 'recleaned' as const }
   }
+  if (row.existing_job_status === 'archived' && row.has_reviewed_or_published) {
+    return { label: '强制重建', disabled: false, action: 'rebuild' as const }
+  }
   if (!row.existing_job_id) return { label: '创建任务', disabled: false, action: 'created' as const }
   if (row.existing_job_status && appendableStatuses.has(row.existing_job_status)) {
     return { label: '追加到任务', disabled: false, action: 'appended' as const }
@@ -321,7 +324,7 @@ export default function CleanPage() {
   const monthlyPool = monthlyPoolData ?? []
   const selectedMonthlyRowKeySet = useMemo(() => new Set(selectedMonthlyRowKeys), [selectedMonthlyRowKeys])
   const selectedActionableRows = useMemo(
-    () => monthlyPool.filter(row => selectedMonthlyRowKeySet.has(getMonthlyQueueRowKey(row)) && !getQueueAction(row).disabled && row.platform),
+    () => monthlyPool.filter(row => selectedMonthlyRowKeySet.has(getMonthlyQueueRowKey(row)) && !getQueueAction(row).disabled && getQueueAction(row).action !== 'rebuild' && row.platform),
     [monthlyPool, selectedMonthlyRowKeySet]
   )
   const monthOptions = useMemo(() => collectMonths(monthlyPool, jobsData ?? []), [monthlyPool, jobsData])
@@ -342,12 +345,27 @@ export default function CleanPage() {
       setUpsertingRowKey(rowKey)
       try {
         const action = getQueueAction(row).action
+        if (action === 'rebuild') {
+          const confirmed = await new Promise<boolean>(resolve => {
+            Modal.confirm({
+              title: '强制重建清洗任务？',
+              content: '该任务已有人工处理或发布记录。重建将删除已发布的分析数据（分析库）、人工处理结果和清洗产物，并从原始数据重新清洗匹配。此操作不可撤销。',
+              okText: '强制重建',
+              okType: 'danger',
+              cancelText: '取消',
+              onOk: () => resolve(true),
+              onCancel: () => resolve(false),
+            })
+          })
+          if (!confirmed) return
+        }
         const response = await upsertMonthlyCleanTask({
           category_code: row.category_code,
           platform: row.platform!,
           month: row.month,
           rules: { dedup: true },
           force_reclean: action === 'recleaned',
+          force_rebuild: action === 'rebuild',
         })
         message.success(action === 'appended' || response.data.action === 'appended' ? '已追加到清洗任务' : '已创建清洗任务')
         refreshMonthlyPool()
@@ -419,7 +437,7 @@ export default function CleanPage() {
       setSelectedMonthlyRowKeys(keys)
     },
     getCheckboxProps: (row: CleanMonthlyPoolItem) => ({
-      disabled: getQueueAction(row).disabled || !!upsertingRowKey || batchUpserting,
+      disabled: getQueueAction(row).disabled || getQueueAction(row).action === 'rebuild' || !!upsertingRowKey || batchUpserting,
     }),
   }
 

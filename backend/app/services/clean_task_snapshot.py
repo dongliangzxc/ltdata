@@ -329,6 +329,24 @@ def get_monthly_clean_pool(
         job = jobs_by_scope.get((row.category_code, normalized_platform, row_month))
         if job:
             continue
+        archived_job = _monthly_archived_job_with_downstream(db, category_code=row.category_code, platform=row.platform, month=row_month)
+        if archived_job:
+            archived_job_obj, has_downstream = archived_job
+            if has_downstream:
+                result.append({
+                    "category_code": row.category_code,
+                    "category_name": row.category_name,
+                    "platform": normalized_platform,
+                    "month": row_month,
+                    "dispatched_count": row.dispatched_count,
+                    "pending_count": row.pending_count,
+                    "queued_count": row.queued_count,
+                    "existing_job_id": archived_job_obj.id,
+                    "existing_job_name": archived_job_obj.task_name,
+                    "existing_job_status": "archived",
+                    "has_reviewed_or_published": True,
+                })
+                continue
         result.append({
             "category_code": row.category_code,
             "category_name": row.category_name,
@@ -340,6 +358,7 @@ def get_monthly_clean_pool(
             "existing_job_id": None,
             "existing_job_name": None,
             "existing_job_status": None,
+            "has_reviewed_or_published": False,
         })
     return result
 
@@ -476,6 +495,33 @@ def _has_reviewed_or_published_state(db: Session, clean_job_id: int) -> bool:
     return db.query(PublishJob.id).filter(PublishJob.clean_job_id == clean_job_id).first() is not None
 
 
+def _monthly_archived_job_with_downstream(
+    db: Session,
+    *,
+    category_code: str,
+    platform: str | None,
+    month: int,
+) -> tuple[CleanJobRecord, bool] | None:
+    normalized_platform = normalize_platform(platform)
+    platform_aliases = platform_aliases_for(normalized_platform)
+    if not platform_aliases:
+        return None
+    candidates = (
+        db.query(CleanJobRecord)
+        .filter(
+            CleanJobRecord.category_code == category_code,
+            CleanJobRecord.status == "archived",
+            func.lower(CleanJobRecord.platform).in_(platform_aliases),
+        )
+        .order_by(CleanJobRecord.id.desc())
+        .all()
+    )
+    for job in candidates:
+        if month in _job_months(job):
+            return job, _has_reviewed_or_published_state(db, job.id)
+    return None
+
+
 def upsert_monthly_task_snapshot(
     db: Session,
     *,
@@ -484,6 +530,7 @@ def upsert_monthly_task_snapshot(
     month: int,
     rules: dict | None,
     force_reclean: bool = False,
+    force_rebuild: bool = False,
 ):
     normalized_platform = normalize_platform(platform)
     rows = (
@@ -507,13 +554,14 @@ def upsert_monthly_task_snapshot(
         month=month,
     )
     action = "appended" if job else "created"
-    if job and job.status == "archived":
+    if job and not force_rebuild:
+        if job.status not in APPENDABLE_TASK_STATUSES:
+            raise ValueError(f"任务状态为 {job.status}，不能追加数据")
+        if _has_reviewed_or_published_state(db, job.id):
+            raise ValueError("任务已有人工处理或发布记录，不能直接追加数据")
+    if job and (force_rebuild or job.status == "archived"):
         db.query(CleanJobItemRecord).filter(CleanJobItemRecord.clean_job_id == job.id).delete(synchronize_session=False)
         job.status = "reviewing"
-    if job and job.status not in APPENDABLE_TASK_STATUSES:
-        raise ValueError(f"任务状态为 {job.status}，不能追加数据")
-    if job and _has_reviewed_or_published_state(db, job.id):
-        raise ValueError("任务已有人工处理或发布记录，不能直接追加数据")
 
     file_ids = sorted({raw.file_id for _, raw in rows if raw.file_id is not None})
     dispatch_batch_ids = sorted({dispatch_item.batch_id for dispatch_item, _ in rows if dispatch_item.batch_id is not None})

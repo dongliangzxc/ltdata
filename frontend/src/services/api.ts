@@ -216,6 +216,7 @@ export interface CleanMonthlyPoolItem {
   existing_job_id: number | null
   existing_job_name: string | null
   existing_job_status: string | null
+  has_reviewed_or_published: boolean
 }
 
 export interface UpsertMonthlyCleanTaskPayload {
@@ -224,6 +225,7 @@ export interface UpsertMonthlyCleanTaskPayload {
   month: number
   rules?: Record<string, unknown>
   force_reclean?: boolean
+  force_rebuild?: boolean
 }
 
 export interface UpsertMonthlyCleanTaskResponse {

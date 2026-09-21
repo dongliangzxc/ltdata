@@ -1084,6 +1084,114 @@ def test_upsert_monthly_clean_task_rejects_existing_publish_history(db):
     assert db.query(CleanJobItemRecord).filter_by(clean_job_id=job.id).count() == 1
 
 
+def test_upsert_monthly_clean_task_force_rebuild_clears_downstream_and_rebuilds(db, monkeypatch):
+    client = _make_client(db)
+    first_raw, first_batch, first_upload = _create_monthly_pending_row(db, item_id="sb-1")
+    job = CleanJobRecord(
+        file_ids=[first_upload.id],
+        rules={"dedup": True},
+        status="archived",
+        row_in=1,
+        row_out=1,
+        task_name="回音壁 / jd / 202605",
+        category_code="soundbar",
+        platform="jd",
+        source_scope={"months": [202605], "platforms": ["jd"], "dispatch_batch_ids": [first_batch.id], "file_ids": [first_upload.id]},
+    )
+    db.add(job)
+    db.flush()
+    db.add(CleanJobItemRecord(clean_job_id=job.id, raw_data_id=first_raw.id, category_code="soundbar", platform="jd", dispatch_batch_id=first_batch.id))
+    match_result = MatchResult(clean_job_id=job.id, raw_data_id=first_raw.id, match_status="confirmed", review_note="已确认")
+    db.add(match_result)
+    db.flush()
+    db.add(MatchResultAttr(match_result_id=match_result.id, attr_name="尺寸", attr_value="65寸", rule_id=None))
+    db.add(MatchResultCandidate(match_result_id=match_result.id, model_id=1, score=100, rank=1, match_source="test"))
+    db.add(CleanedDataRecord(clean_job_id=job.id, raw_data_id=first_raw.id))
+    db.add(FilteredItem(clean_job_id=job.id, raw_data_id=first_raw.id))
+    db.add(PublishJob(clean_job_id=job.id, status="done", published_count=1))
+    db.commit()
+    _create_monthly_pending_row(db, item_id="sb-2")
+
+    deleted_analytics = []
+    monkeypatch.setattr("app.api.clean.delete_published_data", lambda analytics_db, clean_job_id: deleted_analytics.append(clean_job_id))
+    monkeypatch.setattr("app.api.clean.run_clean", lambda *args, **kwargs: 1)
+    monkeypatch.setattr("app.api.clean.run_match", lambda match_db, clean_job_id, **kwargs: {"total": 1, "matched": 0})
+
+    response = client.post("/api/clean/tasks/upsert-monthly", json={
+        "category_code": "soundbar",
+        "platform": "jd",
+        "month": 202605,
+        "force_rebuild": True,
+    })
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["job"]["id"] == job.id
+    assert payload["job"]["status"] == "reviewing"
+    assert db.query(PublishJob).filter_by(clean_job_id=job.id).count() == 0
+    assert db.query(MatchResult).filter_by(clean_job_id=job.id).count() == 0
+    assert db.query(MatchResultAttr).filter_by(match_result_id=match_result.id).count() == 0
+    assert db.query(MatchResultCandidate).filter_by(match_result_id=match_result.id).count() == 0
+    assert db.query(CleanedDataRecord).filter_by(clean_job_id=job.id).count() == 0
+    assert db.query(FilteredItem).filter_by(clean_job_id=job.id).count() == 0
+    assert deleted_analytics == [job.id]
+
+
+def test_monthly_pool_exposes_archived_job_with_downstream_for_rebuild(db):
+    client = _make_client(db)
+    raw, batch, upload = _create_monthly_pending_row(db, item_id="sb-1")
+    job = CleanJobRecord(
+        file_ids=[upload.id],
+        rules={"dedup": True},
+        status="archived",
+        task_name="回音壁 / jd / 202605",
+        category_code="soundbar",
+        platform="jd",
+        source_scope={"months": [202605], "platforms": ["jd"], "dispatch_batch_ids": [batch.id], "file_ids": [upload.id]},
+    )
+    db.add(job)
+    db.flush()
+    db.add(CleanJobItemRecord(clean_job_id=job.id, raw_data_id=raw.id, category_code="soundbar", platform="jd", dispatch_batch_id=batch.id))
+    db.add(PublishJob(clean_job_id=job.id, status="done", published_count=1))
+    db.commit()
+
+    response = client.get("/api/clean/pool/monthly?category_code=soundbar&platform=jd&month=202605")
+
+    assert response.status_code == 200
+    items = response.json()
+    assert len(items) == 1
+    assert items[0]["existing_job_id"] == job.id
+    assert items[0]["existing_job_status"] == "archived"
+    assert items[0]["has_reviewed_or_published"] is True
+
+
+def test_monthly_pool_skips_archived_job_without_downstream(db):
+    client = _make_client(db)
+    raw, batch, upload = _create_monthly_pending_row(db, item_id="sb-1")
+    job = CleanJobRecord(
+        file_ids=[upload.id],
+        rules={"dedup": True},
+        status="archived",
+        task_name="回音壁 / jd / 202605",
+        category_code="soundbar",
+        platform="jd",
+        source_scope={"months": [202605], "platforms": ["jd"], "dispatch_batch_ids": [batch.id], "file_ids": [upload.id]},
+    )
+    db.add(job)
+    db.flush()
+    db.add(CleanJobItemRecord(clean_job_id=job.id, raw_data_id=raw.id, category_code="soundbar", platform="jd", dispatch_batch_id=batch.id))
+    db.commit()
+
+    response = client.get("/api/clean/pool/monthly?category_code=soundbar&platform=jd&month=202605")
+
+    assert response.status_code == 200
+    items = response.json()
+    assert len(items) == 1
+    assert items[0]["existing_job_id"] is None
+    assert items[0]["existing_job_status"] is None
+    assert items[0]["has_reviewed_or_published"] is False
+
+
 @pytest.mark.parametrize("status", ["matching", "processing"])
 def test_upsert_monthly_clean_task_rejects_processing_existing_task(db, status):
     client = _make_client(db)

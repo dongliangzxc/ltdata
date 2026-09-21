@@ -256,6 +256,7 @@ class CleanMonthlyPoolOut(BaseModel):
     existing_job_id: Optional[int] = None
     existing_job_name: Optional[str] = None
     existing_job_status: Optional[str] = None
+    has_reviewed_or_published: bool = False
 
 
 class UpsertMonthlyCleanTaskIn(BaseModel):
@@ -264,6 +265,7 @@ class UpsertMonthlyCleanTaskIn(BaseModel):
     month: int
     rules: Optional[dict] = None
     force_reclean: bool = False
+    force_rebuild: bool = False
 
     @field_validator("category_code", "platform")
     @classmethod

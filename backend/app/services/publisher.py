@@ -24,6 +24,25 @@ def _count_unique_published_items(items: list[dict]) -> int:
     return len({(item["platform"], item["item_id"], item["month"]) for item in items})
 
 
+def delete_published_data(analytics_db: Session, clean_job_id: int) -> None:
+    """删除指定清洗任务在分析库中的已发布数据（含属性表）。"""
+    old_ids_sql = text(
+        "SELECT id FROM published_items WHERE clean_job_id = :cjid"
+    )
+    old_ids = [r[0] for r in analytics_db.execute(old_ids_sql, {"cjid": clean_job_id}).fetchall()]
+    if old_ids:
+        placeholders = ",".join([f":oid{i}" for i in range(len(old_ids))])
+        bind_params = {f"oid{i}": oid for i, oid in enumerate(old_ids)}
+        analytics_db.execute(
+            text(f"DELETE FROM published_item_specs WHERE published_item_id IN ({placeholders})"),
+            bind_params
+        )
+        analytics_db.execute(
+            text("DELETE FROM published_items WHERE clean_job_id = :cjid"),
+            {"cjid": clean_job_id}
+        )
+
+
 def _build_published_item_params(r, clean_job_id: int, published_at: datetime) -> dict:
     base_corrected_qty = r["corrected_sales_qty"] if r["corrected_sales_qty"] is not None else r["sales_qty"]
     if r["sales_coefficient"] is not None:
@@ -156,21 +175,7 @@ def run_publish(luotu_db: Session, analytics_db: Session, clean_job_id: int) -> 
             attrs_map.setdefault(ar["match_result_id"], {})[ar["attr_name"]] = ar["attr_value"]
 
     # 3. 先删除同 clean_job_id 的旧发布数据（支持重复发布）
-    old_ids_sql = text(
-        "SELECT id FROM published_items WHERE clean_job_id = :cjid"
-    )
-    old_ids = [r[0] for r in analytics_db.execute(old_ids_sql, {"cjid": clean_job_id}).fetchall()]
-    if old_ids:
-        placeholders = ",".join([f":oid{i}" for i in range(len(old_ids))])
-        bind_params = {f"oid{i}": oid for i, oid in enumerate(old_ids)}
-        analytics_db.execute(
-            text(f"DELETE FROM published_item_specs WHERE published_item_id IN ({placeholders})"),
-            bind_params
-        )
-        analytics_db.execute(
-            text("DELETE FROM published_items WHERE clean_job_id = :cjid"),
-            {"cjid": clean_job_id}
-        )
+    delete_published_data(analytics_db, clean_job_id)
 
     # 4. 批量写入 published_items，使用 upsert（ON DUPLICATE KEY UPDATE）
     #    uq_published_item: UNIQUE(platform, item_id, month)

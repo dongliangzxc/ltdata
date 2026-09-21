@@ -554,14 +554,14 @@ def upsert_monthly_task_snapshot(
         month=month,
     )
     action = "appended" if job else "created"
+    if job and (force_rebuild or job.status == "archived"):
+        db.query(CleanJobItemRecord).filter(CleanJobItemRecord.clean_job_id == job.id).delete(synchronize_session=False)
+        job.status = "reviewing"
     if job and not force_rebuild:
         if job.status not in APPENDABLE_TASK_STATUSES:
             raise ValueError(f"任务状态为 {job.status}，不能追加数据")
         if _has_reviewed_or_published_state(db, job.id):
             raise ValueError("任务已有人工处理或发布记录，不能直接追加数据")
-    if job and (force_rebuild or job.status == "archived"):
-        db.query(CleanJobItemRecord).filter(CleanJobItemRecord.clean_job_id == job.id).delete(synchronize_session=False)
-        job.status = "reviewing"
 
     file_ids = sorted({raw.file_id for _, raw in rows if raw.file_id is not None})
     dispatch_batch_ids = sorted({dispatch_item.batch_id for dispatch_item, _ in rows if dispatch_item.batch_id is not None})

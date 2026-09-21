@@ -48,6 +48,26 @@ def _make_client(db, *, current_user=None, raise_server_exceptions=True):
     return TestClient(app, raise_server_exceptions=raise_server_exceptions)
 
 
+def _create_monthly_pending_row(db, item_id="sb-1", month=202605):
+    category = db.query(Category).filter_by(code="soundbar").first()
+    if not category:
+        category = Category(code="soundbar", name="回音壁")
+        db.add(category)
+        db.flush()
+    upload = UploadFileRecord(filename=f"{item_id}.xlsx", platform="jd", row_count=1, status="done")
+    db.add(upload)
+    db.flush()
+    raw = RawDataRecord(file_id=upload.id, platform="jd", month=month, item_id=item_id, item_name=f"商品{item_id}")
+    db.add(raw)
+    db.flush()
+    batch = DispatchBatch(file_id=upload.id, status="done", total_rows=1, dispatched_rows=1, unmatched_rows=0)
+    db.add(batch)
+    db.flush()
+    db.add(DispatchItem(batch_id=batch.id, raw_data_id=raw.id, category_code="soundbar"))
+    db.commit()
+    return raw, batch, upload
+
+
 def test_run_dispatch_batch_clean_creates_one_job_per_category(db):
     client = _make_client(db)
     file_record = UploadFileRecord(filename="dispatch-clean.xlsx", platform="jd", row_count=2, status="done")
@@ -1104,8 +1124,9 @@ def test_upsert_monthly_clean_task_force_rebuild_clears_downstream_and_rebuilds(
     match_result = MatchResult(clean_job_id=job.id, raw_data_id=first_raw.id, match_status="confirmed", review_note="已确认")
     db.add(match_result)
     db.flush()
-    db.add(MatchResultAttr(match_result_id=match_result.id, attr_name="尺寸", attr_value="65寸", rule_id=None))
-    db.add(MatchResultCandidate(match_result_id=match_result.id, model_id=1, score=100, rank=1, match_source="test"))
+    match_result_id = match_result.id
+    db.add(MatchResultAttr(match_result_id=match_result_id, attr_name="尺寸", attr_value="65寸", rule_id=None))
+    db.add(MatchResultCandidate(match_result_id=match_result_id, model_id=1, score=100, rank=1, match_source="test"))
     db.add(CleanedDataRecord(clean_job_id=job.id, raw_data_id=first_raw.id))
     db.add(FilteredItem(clean_job_id=job.id, raw_data_id=first_raw.id))
     db.add(PublishJob(clean_job_id=job.id, status="done", published_count=1))
@@ -1130,8 +1151,8 @@ def test_upsert_monthly_clean_task_force_rebuild_clears_downstream_and_rebuilds(
     assert payload["job"]["status"] == "reviewing"
     assert db.query(PublishJob).filter_by(clean_job_id=job.id).count() == 0
     assert db.query(MatchResult).filter_by(clean_job_id=job.id).count() == 0
-    assert db.query(MatchResultAttr).filter_by(match_result_id=match_result.id).count() == 0
-    assert db.query(MatchResultCandidate).filter_by(match_result_id=match_result.id).count() == 0
+    assert db.query(MatchResultAttr).filter_by(match_result_id=match_result_id).count() == 0
+    assert db.query(MatchResultCandidate).filter_by(match_result_id=match_result_id).count() == 0
     assert db.query(CleanedDataRecord).filter_by(clean_job_id=job.id).count() == 0
     assert db.query(FilteredItem).filter_by(clean_job_id=job.id).count() == 0
     assert deleted_analytics == [job.id]

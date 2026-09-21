@@ -557,6 +557,7 @@ def test_get_monthly_clean_pool_groups_pending_by_category_platform_month(db):
             "existing_job_id": None,
             "existing_job_name": None,
             "existing_job_status": None,
+            "has_reviewed_or_published": False,
         },
         {
             "category_code": "soundbar",
@@ -565,9 +566,11 @@ def test_get_monthly_clean_pool_groups_pending_by_category_platform_month(db):
             "month": 202606,
             "dispatched_count": 1,
             "pending_count": 1,
+            "queued_count": 0,
             "existing_job_id": None,
             "existing_job_name": None,
             "existing_job_status": None,
+            "has_reviewed_or_published": False,
         },
     ]
 
@@ -698,6 +701,7 @@ def test_get_monthly_clean_pool_shows_scope_with_archived_monthly_job(db):
             "existing_job_id": None,
             "existing_job_name": None,
             "existing_job_status": None,
+            "has_reviewed_or_published": False,
         }
     ]
 

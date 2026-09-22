@@ -22,7 +22,7 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     op.add_column("clean_jobs", sa.Column("updated_at", sa.DateTime, nullable=True))
     op.execute("UPDATE clean_jobs SET updated_at = created_at WHERE updated_at IS NULL")
-    op.alter_column("clean_jobs", "updated_at", nullable=False)
+    op.alter_column("clean_jobs", "updated_at", type_=sa.DateTime(), nullable=False)
 
 
 def downgrade() -> None:

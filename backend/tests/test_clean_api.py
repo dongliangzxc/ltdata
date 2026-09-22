@@ -1162,6 +1162,46 @@ def test_upsert_monthly_clean_task_force_rebuild_clears_downstream_and_rebuilds(
     assert deleted_analytics == [job.id]
 
 
+def test_upsert_monthly_clean_task_force_rebuild_recaptures_old_snapshot_rows(db, monkeypatch):
+    client = _make_client(db)
+    first_raw, first_batch, first_upload = _create_monthly_pending_row(db, item_id="sb-1")
+    second_raw, second_batch, second_upload = _create_monthly_pending_row(db, item_id="sb-2")
+    job = CleanJobRecord(
+        file_ids=[first_upload.id],
+        rules={"dedup": True},
+        status="archived",
+        row_in=1,
+        row_out=1,
+        task_name="回音壁 / jd / 202605",
+        category_code="soundbar",
+        platform="jd",
+        source_scope={"months": [202605], "platforms": ["jd"], "dispatch_batch_ids": [first_batch.id], "file_ids": [first_upload.id]},
+    )
+    db.add(job)
+    db.flush()
+    db.add(CleanJobItemRecord(clean_job_id=job.id, raw_data_id=first_raw.id, category_code="soundbar", platform="jd", dispatch_batch_id=first_batch.id))
+    db.add(MatchResult(clean_job_id=job.id, raw_data_id=first_raw.id, match_status="confirmed", review_note="已确认"))
+    db.commit()
+
+    monkeypatch.setattr("app.api.clean.delete_published_data", lambda analytics_db, clean_job_id: None)
+    monkeypatch.setattr("app.api.clean.run_clean", lambda *args, **kwargs: 2)
+    monkeypatch.setattr("app.api.clean.run_match", lambda match_db, clean_job_id, **kwargs: {"total": 2, "matched": 0})
+
+    response = client.post("/api/clean/tasks/upsert-monthly", json={
+        "category_code": "soundbar",
+        "platform": "jd",
+        "month": 202605,
+        "force_rebuild": True,
+    })
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["snapshot_count"] == 2
+    assert db.query(CleanJobItemRecord).filter_by(clean_job_id=job.id).count() == 2
+    item_raw_ids = {row.raw_data_id for row in db.query(CleanJobItemRecord).filter_by(clean_job_id=job.id).all()}
+    assert item_raw_ids == {first_raw.id, second_raw.id}
+
+
 def test_monthly_pool_exposes_archived_job_with_downstream_for_rebuild(db):
     client = _make_client(db)
     raw, batch, upload = _create_monthly_pending_row(db, item_id="sb-1")

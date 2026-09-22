@@ -533,20 +533,6 @@ def upsert_monthly_task_snapshot(
     force_rebuild: bool = False,
 ):
     normalized_platform = normalize_platform(platform)
-    rows = (
-        _monthly_pending_rows(
-            db,
-            category_code=category_code,
-            platform=normalized_platform,
-            month=month,
-            include_queued=force_reclean,
-        )
-        .order_by(DispatchItem.id)
-        .all()
-    )
-    if not rows:
-        raise ValueError("该任务范围没有可清洗的数据")
-
     job = _find_monthly_job(
         db,
         category_code=category_code,
@@ -562,6 +548,20 @@ def upsert_monthly_task_snapshot(
             raise ValueError(f"任务状态为 {job.status}，不能追加数据")
         if _has_reviewed_or_published_state(db, job.id):
             raise ValueError("任务已有人工处理或发布记录，不能直接追加数据")
+
+    rows = (
+        _monthly_pending_rows(
+            db,
+            category_code=category_code,
+            platform=normalized_platform,
+            month=month,
+            include_queued=force_reclean,
+        )
+        .order_by(DispatchItem.id)
+        .all()
+    )
+    if not rows:
+        raise ValueError("该任务范围没有可清洗的数据")
 
     file_ids = sorted({raw.file_id for _, raw in rows if raw.file_id is not None})
     dispatch_batch_ids = sorted({dispatch_item.batch_id for dispatch_item, _ in rows if dispatch_item.batch_id is not None})

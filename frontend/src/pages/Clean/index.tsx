@@ -197,11 +197,11 @@ const getMonthlyQueueRowKey = (row: CleanMonthlyPoolItem) => `${row.category_cod
 
 const getQueueAction = (row: CleanMonthlyPoolItem) => {
   if (!row.platform) return { label: '缺少平台', disabled: true, action: 'blocked' as const }
-  if ((row.pending_count ?? 0) === 0 && (row.queued_count ?? 0) > 0) {
-    return { label: '重新清洗', disabled: false, action: 'recleaned' as const }
-  }
   if (row.existing_job_status === 'archived' && row.has_reviewed_or_published) {
     return { label: '强制重建', disabled: false, action: 'rebuild' as const }
+  }
+  if ((row.pending_count ?? 0) === 0 && (row.queued_count ?? 0) > 0) {
+    return { label: '重新清洗', disabled: false, action: 'recleaned' as const }
   }
   if (!row.existing_job_id) return { label: '创建任务', disabled: false, action: 'created' as const }
   if (row.existing_job_status && appendableStatuses.has(row.existing_job_status)) {

@@ -312,7 +312,10 @@ export default function CleanPage() {
 
   const requestParams = useMemo(() => cleanParams(filters), [filters])
   const monthlyPoolRequestParams = useMemo(() => ({ ...requestParams, limit: 50 }), [requestParams])
-  const jobRequestParams = useMemo(() => ({ ...requestParams, view: jobView, sort_by: jobSortBy, order: 'desc' }), [requestParams, jobView, jobSortBy])
+  const jobRequestParams = useMemo(
+    () => ({ ...requestParams, view: jobView, sort_by: jobSortBy, order: 'desc' as const }),
+    [requestParams, jobView, jobSortBy]
+  )
 
   const {
     data: monthlyPoolData,

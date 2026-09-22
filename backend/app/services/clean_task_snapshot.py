@@ -495,6 +495,13 @@ def _has_reviewed_or_published_state(db: Session, clean_job_id: int) -> bool:
     return db.query(PublishJob.id).filter(PublishJob.clean_job_id == clean_job_id).first() is not None
 
 
+def touch_clean_job(db: Session, clean_job_id: int) -> None:
+    """更新清洗任务的最近处理时间（清洗/匹配/复核/发布等操作时调用）。"""
+    db.query(CleanJobRecord).filter(CleanJobRecord.id == clean_job_id).update(
+        {CleanJobRecord.updated_at: datetime.utcnow()}
+    )
+
+
 def _monthly_archived_job_with_downstream(
     db: Session,
     *,

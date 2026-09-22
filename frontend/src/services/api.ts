@@ -192,6 +192,7 @@ export interface CleanJobItem {
   publishable_count?: number | null
   scope_desc?: string | null
   created_at: string
+  updated_at?: string | null
 }
 
 export type CleanJobListView = 'active' | 'archived' | 'all'
@@ -294,6 +295,8 @@ export const listCleanJobs = (params?: {
   platform?: string
   month?: number
   view?: CleanJobListView
+  sort_by?: 'created_at' | 'updated_at'
+  order?: 'asc' | 'desc'
   limit?: number
   offset?: number
 }) => api.get<CleanJobItem[]>('/clean/jobs', { params })

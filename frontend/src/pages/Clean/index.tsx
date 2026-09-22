@@ -168,6 +168,10 @@ const jobColumns = (
     render: formatText,
   },
   {
+    title: '最近处理', dataIndex: 'updated_at', width: 170,
+    render: (v?: string | null) => v || '-',
+  },
+  {
     title: '操作', width: 300, fixed: 'right',
     render: (_: unknown, row) => (
       <Space size={4}>
@@ -299,6 +303,7 @@ export default function CleanPage() {
   }, [categoryOptions, currentUser])
   const [filters, setFilters] = useState<FilterState>({})
   const [jobView, setJobView] = useState<CleanJobListView>('active')
+  const [jobSortBy, setJobSortBy] = useState<'created_at' | 'updated_at'>('created_at')
   const [previewJobId, setPreviewJobId] = useState<number | null>(null)
   const [previewPage, setPreviewPage] = useState(1)
   const [upsertingRowKey, setUpsertingRowKey] = useState<string | null>(null)
@@ -307,7 +312,7 @@ export default function CleanPage() {
 
   const requestParams = useMemo(() => cleanParams(filters), [filters])
   const monthlyPoolRequestParams = useMemo(() => ({ ...requestParams, limit: 50 }), [requestParams])
-  const jobRequestParams = useMemo(() => ({ ...requestParams, view: jobView }), [requestParams, jobView])
+  const jobRequestParams = useMemo(() => ({ ...requestParams, view: jobView, sort_by: jobSortBy, order: 'desc' }), [requestParams, jobView, jobSortBy])
 
   const {
     data: monthlyPoolData,
@@ -524,6 +529,17 @@ export default function CleanPage() {
         <Tabs
           activeKey={jobView}
           onChange={key => setJobView(key as CleanJobListView)}
+          tabBarExtraContent={
+            <Select
+              style={{ width: 180 }}
+              value={jobSortBy}
+              onChange={value => setJobSortBy(value)}
+              options={[
+                { value: 'created_at', label: '按创建时间排序' },
+                { value: 'updated_at', label: '按最近处理排序' },
+              ]}
+            />
+          }
           items={[
             { key: 'active', label: '清洗任务' },
             { key: 'archived', label: '已删除' },

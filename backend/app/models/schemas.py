@@ -95,6 +95,7 @@ class CleanJobRecord(Base):
     platform = Column(String(50), nullable=True, index=True)
     source_scope = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     cleaned_data = relationship("CleanedDataRecord", back_populates="job", cascade="all, delete-orphan")
     snapshot_items = relationship("CleanJobItemRecord", back_populates="job", cascade="all, delete-orphan")
@@ -228,8 +229,9 @@ class CleanJobOut(BaseModel):
     month: Optional[int] = None
     source_scope: Optional[dict] = None
     created_at: datetime
+    updated_at: Optional[datetime] = None
 
-    @field_serializer("created_at")
+    @field_serializer("created_at", "updated_at")
     def serialize_created_at(self, value: datetime | None):
         return format_beijing_datetime(value)
 

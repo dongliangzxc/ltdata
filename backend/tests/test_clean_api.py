@@ -158,6 +158,35 @@ def test_list_clean_jobs_returns_beijing_time_and_scope_description(db):
     )
 
 
+def test_list_clean_jobs_sorts_by_updated_at(db):
+    client = _make_client(db)
+    category = Category(code="projector", name="投影仪")
+    db.add(category)
+    db.flush()
+    first = CleanJobRecord(
+        file_ids=[], rules={"dedup": True}, status="reviewing",
+        category_code="projector", platform="jd",
+        created_at=datetime(2026, 5, 1), updated_at=datetime(2026, 5, 2),
+    )
+    second = CleanJobRecord(
+        file_ids=[], rules={"dedup": True}, status="reviewing",
+        category_code="projector", platform="jd",
+        created_at=datetime(2026, 5, 3), updated_at=datetime(2026, 5, 1),
+    )
+    db.add_all([first, second])
+    db.commit()
+
+    response = client.get("/api/clean/jobs?sort_by=updated_at&order=desc")
+    assert response.status_code == 200
+    ids = [item["id"] for item in response.json()]
+    assert ids == [first.id, second.id]
+    assert response.json()[0]["updated_at"] == "2026-05-02 08:00:00"
+
+    response = client.get("/api/clean/jobs?sort_by=created_at&order=desc")
+    ids = [item["id"] for item in response.json()]
+    assert ids == [second.id, first.id]
+
+
 def test_list_clean_jobs_uses_legacy_scope_when_category_code_without_snapshot_markers(db):
     client = _make_client(db)
     category = Category(code="router", name="路由器")

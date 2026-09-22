@@ -4,6 +4,7 @@ from app.models.database import get_db
 from app.models.analytics_db import get_analytics_db
 from app.models.schemas import PublishJob, PublishJobOut
 from app.services.publisher import run_publish
+from app.services.clean_task_snapshot import touch_clean_job
 
 router = APIRouter(prefix="/api/publish", tags=["publish"])
 
@@ -40,6 +41,10 @@ def publish_run(
         {"jid": job.id, "cjid": clean_job_id}
     )
     analytics_db.commit()
+
+    # 更新清洗任务最近处理时间
+    touch_clean_job(db, clean_job_id)
+    db.commit()
 
     return {
         "code": 0,

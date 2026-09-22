@@ -25,7 +25,7 @@ from app.models.schemas import (
     MatchTransferLog,
     User,
 )
-from app.services.clean_task_snapshot import ACTIVE_TASK_STATUSES
+from app.services.clean_task_snapshot import ACTIVE_TASK_STATUSES, touch_clean_job
 from app.services.data_cleaner import _load_brand_alias_map
 from app.services.matcher import run_match, run_match_for_result
 from app.services.price_auditor import audit_price
@@ -682,6 +682,7 @@ def confirm_same_title_matches(match_id: int, payload: dict, db: Session = Depen
             url_mapping_count += 1
 
     attr_result = _run_post_confirm_hooks(db, affected_ids)
+    touch_clean_job(db, _current_mr.clean_job_id)
     db.commit()
     return {
         "affected_count": len(affected_ids),
@@ -710,6 +711,7 @@ def exclude_same_title_matches(match_id: int, payload: dict, db: Session = Depen
         mr.reviewed_at = now
         affected_ids.append(mr.id)
 
+    touch_clean_job(db, _current_mr.clean_job_id)
     db.commit()
     return {"affected_count": len(affected_ids)}
 
@@ -964,6 +966,9 @@ def confirm_match(
 
     db.refresh(mr)
 
+    touch_clean_job(db, mr.clean_job_id)
+    db.commit()
+
     rd = db.query(RawDataRecord).filter(RawDataRecord.id == mr.raw_data_id).first()
     model_info = db.query(ModelRecord).filter(ModelRecord.id == mr.model_id).first() if mr.model_id else None
 
@@ -1195,6 +1200,8 @@ def batch_confirm(clean_job_id: int, payload: dict, db: Session = Depends(get_db
         for i in missing:
             result["failures"].append({"id": i, "item_name": None, "reason": "状态已变更"})
             result["failed"] += 1
+        touch_clean_job(db, clean_job_id)
+        db.commit()
         return {
             "total": len(ids),
             "matched_total": len(ids),
@@ -1220,6 +1227,8 @@ def batch_confirm(clean_job_id: int, payload: dict, db: Session = Depends(get_db
         # 仅跳过未识别品牌，避免把不可确认品牌直接批量落库。
         targets = [mr for mr in candidates if getattr(mr, "brand_identified", 1) != 0]
         result = _run_batch_confirm(db, clean_job_id, targets, selected_model)
+        touch_clean_job(db, clean_job_id)
+        db.commit()
         return {
             "total": len(targets),
             "matched_total": matched_total,
@@ -1309,6 +1318,7 @@ def revert_match(match_id: int, db: Session = Depends(get_db)):
 
     # 撤销后如果又回到有 model_id 的 matched/confirmed，可以重新跑属性匹配；
     # 但为了避免撤销引起额外副作用，这里保持简单：不重跑属性/价格审核。
+    touch_clean_job(db, mr.clean_job_id)
     db.commit()
     db.refresh(mr)
 
@@ -1516,6 +1526,7 @@ def update_sales_coefficient(match_id: int, payload: _CoefficientIn, db: Session
         raise HTTPException(status_code=404, detail="匹配记录不存在")
 
     mr.sales_coefficient = coefficient
+    touch_clean_job(db, mr.clean_job_id)
     db.commit()
     db.refresh(mr)
 
@@ -1552,6 +1563,7 @@ def disable_match(match_id: int, payload: _DisableIn, db: Session = Depends(get_
         raise HTTPException(status_code=404, detail="匹配记录不存在")
     mr.is_disabled = 1
     mr.disable_reason = payload.reason
+    touch_clean_job(db, mr.clean_job_id)
     db.commit()
     db.refresh(mr)
     rd = db.query(RawDataRecord).filter(RawDataRecord.id == mr.raw_data_id).first()
@@ -1573,6 +1585,7 @@ def enable_match(match_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="匹配记录不存在")
     mr.is_disabled = 0
     mr.disable_reason = None
+    touch_clean_job(db, mr.clean_job_id)
     db.commit()
     db.refresh(mr)
     rd = db.query(RawDataRecord).filter(RawDataRecord.id == mr.raw_data_id).first()
@@ -1607,6 +1620,7 @@ def avg_price_disable(
     for mr in rows:
         mr.is_disabled = 1
         mr.disable_reason = "avg_price"
+    touch_clean_job(db, clean_job_id)
     db.commit()
     return {"disabled_count": len(rows)}
 
@@ -1929,6 +1943,8 @@ def transfer_match(match_id: int, payload: TransferPayload, db: Session = Depend
         operator=None,
     ))
 
+    touch_clean_job(db, from_job_id)
+    touch_clean_job(db, target_id)
     db.commit()
     db.refresh(mr)
 

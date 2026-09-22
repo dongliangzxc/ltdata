@@ -221,6 +221,7 @@ def _clean_job_to_dict(
         "confirmed_count": confirmed_count,
         "publishable_count": publishable_count,
         "created_at": format_beijing_datetime(job.created_at),
+        "updated_at": format_beijing_datetime(job.updated_at),
         "scope_desc": _build_clean_scope_desc(db, job, category_names),
     }
 
@@ -764,6 +765,8 @@ def list_clean_jobs(
     platform: Optional[str] = Query(None),
     month: Optional[int] = Query(None),
     view: str = Query("active", pattern="^(active|archived|all)$"),
+    sort_by: str = Query("created_at", pattern="^(created_at|updated_at)$"),
+    order: str = Query("desc", pattern="^(asc|desc)$"),
     limit: Optional[int] = Query(None, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
@@ -780,7 +783,8 @@ def list_clean_jobs(
         q = q.filter(CleanJobRecord.category_code == category_code)
     if platform:
         q = q.filter(func.lower(CleanJobRecord.platform) == platform.lower())
-    q = q.order_by(CleanJobRecord.created_at.desc())
+    sort_col = CleanJobRecord.updated_at if sort_by == "updated_at" else CleanJobRecord.created_at
+    q = q.order_by(sort_col.desc() if order == "desc" else sort_col.asc())
     if month is None:
         if offset:
             q = q.offset(offset)

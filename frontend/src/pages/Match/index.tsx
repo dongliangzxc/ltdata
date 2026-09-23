@@ -1408,6 +1408,8 @@ export default function MatchPage() {
                   { value: 'default', label: '默认排序' },
                   { value: 'sales_qty_desc', label: '销量从高到低' },
                   { value: 'sales_qty_asc', label: '销量从低到高' },
+                  { value: 'updated_at_desc', label: '处理时间从近到远' },
+                  { value: 'updated_at_asc', label: '处理时间从远到近' },
                 ]}
               />
               <Select

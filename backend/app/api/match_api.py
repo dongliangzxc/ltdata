@@ -494,6 +494,10 @@ def _build_review_queue_query(
         q = q.order_by(func.isnull(RawDataRecord.sales_qty).asc(), RawDataRecord.sales_qty.desc())
     elif sort_by == "sales_qty_asc":
         q = q.order_by(func.isnull(RawDataRecord.sales_qty).asc(), RawDataRecord.sales_qty.asc())
+    elif sort_by == "updated_at_desc":
+        q = q.order_by(func.isnull(MatchResult.updated_at).asc(), MatchResult.updated_at.desc())
+    elif sort_by == "updated_at_asc":
+        q = q.order_by(func.isnull(MatchResult.updated_at).asc(), MatchResult.updated_at.asc())
     else:
         q = q.order_by(MatchResult.id.asc())
     return q

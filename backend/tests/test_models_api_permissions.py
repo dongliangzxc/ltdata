@@ -143,15 +143,20 @@ def test_batch_update_model_category_moves_selected_models(client):
     client.current_user.is_admin = 1
     client.current_user.category_permissions = []
     with client.Session() as session:
-        seed_categories(session)
-        seed_brands(session)
-        seed_models(session)
+        session.add_all([
+            Category(code="tv", name="电视", sort_order=1),
+            Category(code="ac", name="空调", sort_order=2),
+        ])
+        session.add_all([
+            ModelRecord(brand_code="B1", model_code="TV-1", category_code="tv", brand_name="品牌一", model_name="电视一"),
+            ModelRecord(brand_code="B2", model_code="AC-1", category_code="ac", brand_name="品牌二", model_name="空调一"),
+        ])
         session.commit()
         model_ids = [m.id for m in session.query(ModelRecord).order_by(ModelRecord.id).all()]
 
     resp = client.post("/api/models/batch-category", json={
         "model_ids": model_ids,
-        "category_code": "AC",
+        "category_code": "ac",
     })
 
     assert resp.status_code == 200
@@ -160,26 +165,27 @@ def test_batch_update_model_category_moves_selected_models(client):
     assert data["errors"] == []
     with client.Session() as session:
         categories = {m.category_code for m in session.query(ModelRecord).all()}
-        assert categories == {"AC"}
+        assert categories == {"ac"}
 
 
 def test_batch_update_model_category_reports_conflict_per_row(client):
     client.current_user.is_admin = 1
     client.current_user.category_permissions = []
     with client.Session() as session:
-        seed_categories(session)
-        seed_brands(session)
-        seed_models(session)
-        session.add(ModelRecord(
-            brand_code="B1", model_code="TV-1", category_code="AC",
-            brand_name="品牌一", model_name="电视一(AC)",
-        ))
+        session.add_all([
+            Category(code="tv", name="电视", sort_order=1),
+            Category(code="ac", name="空调", sort_order=2),
+        ])
+        session.add_all([
+            ModelRecord(brand_code="B1", model_code="TV-1", category_code="tv", brand_name="品牌一", model_name="电视一"),
+            ModelRecord(brand_code="B1", model_code="TV-1", category_code="ac", brand_name="品牌一", model_name="电视一(AC)"),
+        ])
         session.commit()
-        target_id = session.query(ModelRecord).filter_by(category_code="TV").first().id
+        target_id = session.query(ModelRecord).filter_by(category_code="tv").first().id
 
     resp = client.post("/api/models/batch-category", json={
         "model_ids": [target_id],
-        "category_code": "AC",
+        "category_code": "ac",
     })
 
     assert resp.status_code == 200
@@ -191,16 +197,20 @@ def test_batch_update_model_category_reports_conflict_per_row(client):
 
 def test_batch_update_model_category_rejects_invisible_target(client):
     client.current_user.is_admin = 0
-    client.current_user.category_permissions = ["TV"]
+    client.current_user.category_permissions = ["tv"]
     with client.Session() as session:
-        seed_categories(session)
-        seed_brands(session)
-        seed_models(session)
+        session.add_all([
+            Category(code="tv", name="电视", sort_order=1),
+            Category(code="ac", name="空调", sort_order=2),
+        ])
+        session.add_all([
+            ModelRecord(brand_code="B1", model_code="TV-1", category_code="tv", brand_name="品牌一", model_name="电视一"),
+        ])
         session.commit()
 
     resp = client.post("/api/models/batch-category", json={
         "model_ids": [1],
-        "category_code": "AC",
+        "category_code": "ac",
     })
 
     assert resp.status_code == 403

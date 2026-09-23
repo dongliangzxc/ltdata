@@ -1050,6 +1050,61 @@ def delete_model(
     return {"message": "已删除"}
 
 
+class _BatchCategoryIn(BaseModel):
+    model_ids: list[int]
+    category_code: str
+
+
+@router.post("/batch-category", response_model=dict)
+def batch_update_model_category(
+    payload: _BatchCategoryIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """批量修改型号品类：选中多条统一改为目标品类。逐条校验，部分失败不影响其他。"""
+    if not payload.model_ids:
+        raise HTTPException(status_code=400, detail="未选择任何型号")
+    category_code = _canonical_category_code(db, payload.category_code)
+    if not category_code:
+        raise HTTPException(status_code=422, detail="品类不能为空")
+    _ensure_model_category_visible(db, current_user, category_code)
+    configured_extra = _configured_extra_field_keys(db, category_code)
+    required_extra = _required_extra_field_keys(db, category_code)
+
+    updated = 0
+    errors: list[dict] = []
+    for mid in payload.model_ids:
+        obj = db.query(ModelRecord).filter(ModelRecord.id == mid).first()
+        if not obj:
+            errors.append({"model_id": mid, "reason": "型号不存在"})
+            continue
+        try:
+            _ensure_model_category_visible(db, current_user, obj.category_code)
+        except HTTPException as e:
+            errors.append({"model_id": mid, "reason": str(e.detail)})
+            continue
+        if "series" in required_extra and not _normalize_optional_text(obj.series):
+            errors.append({"model_id": mid, "reason": "目标品类必填「产品系列」，该型号缺少系列字段"})
+            continue
+        if obj.model_code:
+            dup = db.query(ModelRecord).filter(
+                ModelRecord.brand_code == obj.brand_code,
+                ModelRecord.model_code == obj.model_code,
+                ModelRecord.category_code == category_code,
+                ModelRecord.id != mid,
+            ).first()
+            if dup:
+                errors.append({"model_id": mid, "reason": f"该品牌+型号在目标品类已存在（型号ID={dup.id}）"})
+                continue
+        obj.category_code = category_code
+        if "series" not in configured_extra:
+            obj.series = None
+        _ensure_brand_category(db, obj.brand_code, category_code)
+        updated += 1
+    db.commit()
+    return {"updated": updated, "errors": errors}
+
+
 # ─── 别名 CRUD ────────────────────────────────────────────────
 
 class _AliasIn(BaseModel):

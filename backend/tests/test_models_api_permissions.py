@@ -137,3 +137,70 @@ def test_create_model_auto_hangs_brand_to_category(client):
     with client.Session() as session:
         rows = session.query(BrandCategory).filter_by(brand_code="B1").all()
         assert {r.category_code for r in rows} == {"AC"}
+
+
+def test_batch_update_model_category_moves_selected_models(client):
+    client.current_user.is_admin = 1
+    client.current_user.category_permissions = []
+    with client.Session() as session:
+        seed_categories(session)
+        seed_brands(session)
+        seed_models(session)
+        session.commit()
+        model_ids = [m.id for m in session.query(ModelRecord).order_by(ModelRecord.id).all()]
+
+    resp = client.post("/api/models/batch-category", json={
+        "model_ids": model_ids,
+        "category_code": "AC",
+    })
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["updated"] == 2
+    assert data["errors"] == []
+    with client.Session() as session:
+        categories = {m.category_code for m in session.query(ModelRecord).all()}
+        assert categories == {"AC"}
+
+
+def test_batch_update_model_category_reports_conflict_per_row(client):
+    client.current_user.is_admin = 1
+    client.current_user.category_permissions = []
+    with client.Session() as session:
+        seed_categories(session)
+        seed_brands(session)
+        seed_models(session)
+        session.add(ModelRecord(
+            brand_code="B1", model_code="TV-1", category_code="AC",
+            brand_name="品牌一", model_name="电视一(AC)",
+        ))
+        session.commit()
+        target_id = session.query(ModelRecord).filter_by(category_code="TV").first().id
+
+    resp = client.post("/api/models/batch-category", json={
+        "model_ids": [target_id],
+        "category_code": "AC",
+    })
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["updated"] == 0
+    assert len(data["errors"]) == 1
+    assert "已存在" in data["errors"][0]["reason"]
+
+
+def test_batch_update_model_category_rejects_invisible_target(client):
+    client.current_user.is_admin = 0
+    client.current_user.category_permissions = ["TV"]
+    with client.Session() as session:
+        seed_categories(session)
+        seed_brands(session)
+        seed_models(session)
+        session.commit()
+
+    resp = client.post("/api/models/batch-category", json={
+        "model_ids": [1],
+        "category_code": "AC",
+    })
+
+    assert resp.status_code == 403

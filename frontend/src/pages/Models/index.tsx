@@ -5,13 +5,14 @@ import {
 } from 'antd'
 import {
   PlusOutlined, UploadOutlined, DownloadOutlined, EditOutlined, DeleteOutlined,
-  MinusCircleOutlined,
+  MinusCircleOutlined, SwapOutlined,
 } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import {
   listModels, getModelDetail, createModel, updateModel, deleteModel,
   listModelAliases, addModelAlias, deleteModelAlias,
   listCategories, downloadModelTemplate, listModelExtraFields,
+  batchUpdateModelsCategory,
 } from '../../services/api'
 import type { ModelItem as ApiModelItem, UserProfile } from '../../services/api'
 import ImportMappingModal from '../../components/ImportMappingModal'
@@ -50,6 +51,10 @@ export default function ModelsPage() {
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [editingItem, setEditingItem] = useState<ModelItem | null>(null)
   const [importOpen, setImportOpen] = useState(false)
+  const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([])
+  const [batchCategoryOpen, setBatchCategoryOpen] = useState(false)
+  const [batchCategory, setBatchCategory] = useState<string | undefined>()
+  const [batchSubmitting, setBatchSubmitting] = useState(false)
   const [expandedSpecs, setExpandedSpecs] = useState<Record<number, ModelSpec[]>>({})
   const [form] = Form.useForm()
   const watchedCategoryCode = Form.useWatch('category_code', form)
@@ -216,6 +221,28 @@ export default function ModelsPage() {
     }
   }
 
+  const handleBatchCategory = async () => {
+    if (!batchCategory || selectedRowKeys.length === 0) return
+    setBatchSubmitting(true)
+    try {
+      const res = await batchUpdateModelsCategory({ model_ids: selectedRowKeys, category_code: batchCategory })
+      const { updated, errors } = res.data
+      if (errors.length > 0) {
+        message.warning(`已更新 ${updated} 条；${errors.length} 条失败：${errors.map(e => e.reason).join('；')}`)
+      } else {
+        message.success(`已更新 ${updated} 条型号的品类`)
+      }
+      setBatchCategoryOpen(false)
+      setBatchCategory(undefined)
+      setSelectedRowKeys([])
+      refresh()
+    } catch {
+      // handled by interceptor
+    } finally {
+      setBatchSubmitting(false)
+    }
+  }
+
   const columns = [
     { title: '品类', dataIndex: 'category_name', width: 110, render: (v: string | null) => v || '-' },
     { title: '品牌', dataIndex: 'brand_name', width: 120, render: (v: string | null) => v || '-' },
@@ -307,6 +334,13 @@ export default function ModelsPage() {
           <Space>
             <Button icon={<DownloadOutlined />} onClick={handleDownloadTemplate}>下载模板</Button>
             <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>Excel 导入</Button>
+            <Button
+              icon={<SwapOutlined />}
+              disabled={selectedRowKeys.length === 0}
+              onClick={() => { setBatchCategoryOpen(true); setBatchCategory(undefined) }}
+            >
+              批量改品类{selectedRowKeys.length > 0 ? `（${selectedRowKeys.length}）` : ''}
+            </Button>
             <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增型号</Button>
           </Space>
         </Col>
@@ -319,6 +353,10 @@ export default function ModelsPage() {
         size="small"
         loading={loading}
         scroll={{ x: 'max-content' }}
+        rowSelection={{
+          selectedRowKeys,
+          onChange: keys => setSelectedRowKeys(keys as number[]),
+        }}
         expandable={{
           onExpand: handleExpand,
           expandedRowRender: (record: ModelItem) => {
@@ -378,6 +416,32 @@ export default function ModelsPage() {
           refresh()
         }}
       />
+
+      <Modal
+        title={`批量修改品类（已选 ${selectedRowKeys.length} 条）`}
+        open={batchCategoryOpen}
+        onOk={handleBatchCategory}
+        onCancel={() => setBatchCategoryOpen(false)}
+        okText="确定修改"
+        cancelText="取消"
+        confirmLoading={batchSubmitting}
+        okButtonProps={{ disabled: !batchCategory }}
+        width={440}
+      >
+        <Form layout="vertical" style={{ marginTop: 8 }}>
+          <Form.Item label="目标品类" required>
+            <Select
+              placeholder="请选择目标品类"
+              showSearch
+              style={{ width: '100%' }}
+              options={visibleCategoryOptions}
+              value={batchCategory}
+              onChange={setBatchCategory}
+              filterOption={(input, opt) => (opt?.label as string ?? '').toLowerCase().includes(input.toLowerCase())}
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
 
       <Modal
         title="编辑型号"

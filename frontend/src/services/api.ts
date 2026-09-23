@@ -686,6 +686,8 @@ export const listModels = (params: Record<string, unknown>) =>
 export const getModelDetail = (id: number) => api.get<ModelItem>(`/models/${id}`)
 export const createModel = (data: CreateModelPayload) => api.post<ModelItem>('/models', data)
 export const updateModel = (id: number, data: CreateModelPayload) => api.put<ModelItem>(`/models/${id}`, data)
+export const batchUpdateModelsCategory = (data: { model_ids: number[]; category_code: string }) =>
+  api.post<{ updated: number; errors: { model_id: number; reason: string }[] }>('/models/batch-category', data)
 export const deleteModel = (id: number) => api.delete(`/models/${id}`)
 export const downloadModelTemplate = () =>
   api.get('/models/template', { responseType: 'blob' })

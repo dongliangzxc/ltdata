@@ -582,6 +582,10 @@ def list_pending(
         q = q.order_by(func.isnull(RawDataRecord.sales_qty).asc(), RawDataRecord.sales_qty.desc())
     elif sort_by == "sales_qty_asc":
         q = q.order_by(func.isnull(RawDataRecord.sales_qty).asc(), RawDataRecord.sales_qty.asc())
+    elif sort_by == "updated_at_desc":
+        q = q.order_by(func.isnull(MatchResult.updated_at).asc(), MatchResult.updated_at.desc())
+    elif sort_by == "updated_at_asc":
+        q = q.order_by(func.isnull(MatchResult.updated_at).asc(), MatchResult.updated_at.asc())
 
     total = q.count()
     rows = q.offset((page - 1) * page_size).limit(page_size).all()
@@ -893,6 +897,10 @@ def list_missing_attrs(
         q = q.order_by(func.isnull(RawDataRecord.sales_qty).asc(), RawDataRecord.sales_qty.desc())
     elif sort_by == "sales_qty_asc":
         q = q.order_by(func.isnull(RawDataRecord.sales_qty).asc(), RawDataRecord.sales_qty.asc())
+    elif sort_by == "updated_at_desc":
+        q = q.order_by(func.isnull(MatchResult.updated_at).asc(), MatchResult.updated_at.desc())
+    elif sort_by == "updated_at_asc":
+        q = q.order_by(func.isnull(MatchResult.updated_at).asc(), MatchResult.updated_at.asc())
 
     total = q.count()
     rows = q.offset((page - 1) * page_size).limit(page_size).all()

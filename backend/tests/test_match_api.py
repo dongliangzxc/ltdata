@@ -684,6 +684,36 @@ def test_pending_endpoint_supports_reviewed_and_excluded_statuses(db, match_clie
     assert excluded_response.json()["items"][0]["id"] == excluded.id
 
 
+def test_pending_endpoint_sorts_by_updated_at(db, match_client):
+    """处理时间从近到远/从远到近应真正生效，而不是被忽略。"""
+    upload = UploadFileRecord(filename="sort-queue.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+    clean_job = CleanJobRecord(file_ids=[upload.id], status="done")
+    db.add(clean_job)
+    db.flush()
+
+    older = _seed_review_row(db, clean_job_id=clean_job.id, upload_id=upload.id, status="pending", item_name="older")
+    newer = _seed_review_row(db, clean_job_id=clean_job.id, upload_id=upload.id, status="pending", item_name="newer")
+    older.updated_at = datetime(2026, 1, 1, 8, 0, 0)
+    newer.updated_at = datetime(2026, 1, 2, 8, 0, 0)
+    db.commit()
+
+    desc = match_client.get(
+        f"/api/match/{clean_job.id}/pending",
+        params={"status": "pending", "sort_by": "updated_at_desc"},
+    )
+    assert desc.status_code == 200
+    assert [item["id"] for item in desc.json()["items"]] == [newer.id, older.id]
+
+    asc = match_client.get(
+        f"/api/match/{clean_job.id}/pending",
+        params={"status": "pending", "sort_by": "updated_at_asc"},
+    )
+    assert asc.status_code == 200
+    assert [item["id"] for item in asc.json()["items"]] == [older.id, newer.id]
+
+
 def test_review_detail_returns_category_model_specs_and_match_attrs(db, match_client):
     category = Category(code="headphone", name="耳机")
     model = ModelRecord(brand_code="Sony", model_code="WH-1000XM5", category_code="headphone")

@@ -2583,3 +2583,80 @@ def test_run_dispatch_batch_clean_only_creates_visible_category_jobs(db, monkeyp
     assert response.status_code == 200
     assert created_categories == ["TV"]
     assert [job["category_code"] for job in response.json()["jobs"]] == ["TV"]
+
+
+def test_list_clean_job_matched_returns_separated_groups(db):
+    client = _make_client(db)
+    soundbar = Category(code="soundbar", name="回音壁")
+    db.add(soundbar)
+    db.flush()
+    upload = UploadFileRecord(filename="matched.xlsx", platform="jd", row_count=4, status="done")
+    db.add(upload)
+    db.flush()
+    raw1 = RawDataRecord(file_id=upload.id, platform="jd", item_id="m1", item_name="映射商品A", brand_raw="SONY")
+    raw2 = RawDataRecord(file_id=upload.id, platform="jd", item_id="m2", item_name="映射商品B")
+    raw3 = RawDataRecord(file_id=upload.id, platform="jd", item_id="m3", item_name="干扰链接商品C")
+    raw4 = RawDataRecord(file_id=upload.id, platform="jd", item_id="m4", item_name="干扰规则商品D")
+    db.add_all([raw1, raw2, raw3, raw4])
+    db.flush()
+    job = CleanJobRecord(file_ids=[upload.id], rules={"dedup": True}, status="reviewing", row_in=4, row_out=2)
+    db.add(job)
+    db.flush()
+    model = ModelRecord(brand_code="SONY", model_code="HT-A7000", category_code="soundbar")
+    db.add(model)
+    db.flush()
+    rule = InterventionRule(name="赠品规则", category_code="soundbar", action="filter", conditions={"item_name_contains_any": ["赠品"]})
+    db.add(rule)
+    db.flush()
+    db.add_all([
+        MatchResult(clean_job_id=job.id, raw_data_id=raw1.id, model_id=model.id, match_status="url_matched", match_source="s0"),
+        MatchResult(clean_job_id=job.id, raw_data_id=raw2.id, model_id=model.id, match_status="matched", match_source="s1"),
+        MatchResult(clean_job_id=job.id, raw_data_id=raw3.id, model_id=None, match_status="pending", match_source=None),
+        FilteredItem(
+            clean_job_id=job.id,
+            raw_data_id=raw3.id,
+            matched_keyword="干扰链接库",
+            intervention_rule_id=None,
+            intervention_rule_name="干扰链接库",
+            matched_reason="命中干扰链接库：https://example.com/bad",
+        ),
+        FilteredItem(
+            clean_job_id=job.id,
+            raw_data_id=raw4.id,
+            matched_keyword="赠品规则",
+            intervention_rule_id=rule.id,
+            intervention_rule_name="赠品规则",
+            matched_reason="命中规则「赠品规则」",
+        ),
+    ])
+    db.commit()
+
+    response = client.get(f"/api/clean/jobs/{job.id}/matched", params={"group": "mapping"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["counts"]["mapping"] == 2
+    assert payload["counts"]["interference_link"] == 1
+    assert payload["counts"]["interference_archive"] == 1
+    assert payload["total"] == 2
+    assert {item["match_status"] for item in payload["items"]} == {"url_matched", "matched"}
+    assert {item["item_name"] for item in payload["items"]} == {"映射商品A", "映射商品B"}
+
+    response = client.get(f"/api/clean/jobs/{job.id}/matched", params={"group": "interference_link"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert payload["items"][0]["item_name"] == "干扰链接商品C"
+    assert payload["items"][0]["intervention_rule_name"] == "干扰链接库"
+
+    response = client.get(f"/api/clean/jobs/{job.id}/matched", params={"group": "interference_archive"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert payload["items"][0]["item_name"] == "干扰规则商品D"
+    assert payload["items"][0]["intervention_rule_name"] == "赠品规则"
+
+    response = client.get(f"/api/clean/jobs/{job.id}/matched", params={"group": "mapping", "keyword": "商品B"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert payload["items"][0]["item_name"] == "映射商品B"

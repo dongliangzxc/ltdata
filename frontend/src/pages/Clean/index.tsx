@@ -2,20 +2,24 @@ import { useMemo, useState } from 'react'
 import type { Key } from 'react'
 import {
   Card, Button, Table, Tag, Modal, Row, Col,
-  Space, Statistic, Select, message, Tabs, Popconfirm
+  Space, Statistic, Select, message, Tabs, Popconfirm, Input
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { EyeOutlined, AimOutlined, CheckCircleFilled, DeleteOutlined, LineChartOutlined } from '@ant-design/icons'
+import { EyeOutlined, AimOutlined, CheckCircleFilled, DeleteOutlined, LineChartOutlined, FileSearchOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import { useNavigate } from 'react-router-dom'
 import {
   deleteCleanJob,
   getCleanMonthlyPool,
   listCleanJobs,
+  listCleanJobMatched,
   previewCleanJob,
   upsertMonthlyCleanTask,
 } from '../../services/api'
-import type { CleanJobItem, CleanMonthlyPoolItem, CleanJobListView, UserProfile } from '../../services/api'
+import type {
+  CleanJobItem, CleanMonthlyPoolItem, CleanJobListView, UserProfile,
+  CleanMatchedGroup, CleanMatchedItem, CleanMatchedResponse,
+} from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 
 type CleanJobStatus = 'created' | 'cleaning' | 'matching' | 'processing' | 'reviewing' | 'published' | 'failed' | 'done' | 'error' | 'archived'
@@ -120,6 +124,7 @@ const jobColumns = (
   onAdjust: (id: number) => void,
   onDelete: (id: number) => void,
   view: CleanJobListView,
+  onMatched: (id: number) => void,
 ): ColumnsType<CleanJobItem> => [
   {
     title: '任务名称', dataIndex: 'task_name', width: 180,
@@ -172,7 +177,7 @@ const jobColumns = (
     render: (v?: string | null) => v || '-',
   },
   {
-    title: '操作', width: 300, fixed: 'right',
+    title: '操作', width: 360, fixed: 'right',
     render: (_: unknown, row) => (
       <Space size={4}>
         {view === 'active' && (
@@ -182,6 +187,7 @@ const jobColumns = (
           <Button type="link" icon={<LineChartOutlined />} size="small" onClick={() => onAdjust(row.id)}>数据调整</Button>
         )}
         <Button type="link" icon={<EyeOutlined />} size="small" onClick={() => onView(row.id)}>预览</Button>
+        <Button type="link" icon={<FileSearchOutlined />} size="small" onClick={() => onMatched(row.id)}>查看已匹配</Button>
         {view === 'active' && (
           <Popconfirm
             title="确认删除该清洗任务？"
@@ -290,6 +296,90 @@ const previewCols: ColumnsType<CleanPreviewRow> = [
   },
 ]
 
+const MATCH_SOURCE_LABEL: Record<string, string> = {
+  s0: 'URL映射命中',
+  s0.2: '历史库(旧)',
+  historical: '历史库命中',
+  s0.5: '规则命中',
+  s1: '品牌字段匹配',
+  s2: '标题品牌码匹配',
+  s3: '标题品牌名匹配',
+  s4: '型号码兜底',
+  manual: '人工确认',
+}
+
+const matchedSourceLabel = (source?: string | null) => (source ? MATCH_SOURCE_LABEL[source] ?? source : '-')
+
+const matchedMappingCols: ColumnsType<CleanMatchedItem> = [
+  {
+    title: '平台', dataIndex: 'platform', width: 80,
+    render: formatText,
+  },
+  {
+    title: '商品名称', dataIndex: 'item_name', ellipsis: true,
+    render: formatText,
+  },
+  {
+    title: '原始品牌', dataIndex: 'brand_raw', width: 110,
+    render: formatText,
+  },
+  {
+    title: '匹配型号', width: 150,
+    render: (_: unknown, row) => row.brand_code || row.model_code
+      ? `${row.brand_code || '-'} ${row.model_code || '-'}`
+      : '-',
+  },
+  {
+    title: '匹配来源', dataIndex: 'match_source', width: 130,
+    render: matchedSourceLabel,
+  },
+  {
+    title: '销量', dataIndex: 'sales_qty', width: 80,
+    render: formatNumber,
+  },
+  {
+    title: '销售额', dataIndex: 'sales_amount', width: 110,
+    render: (v: number | null | undefined) => v != null ? `¥${Number(v).toLocaleString()}` : '-',
+  },
+]
+
+const matchedFilteredCols: ColumnsType<CleanMatchedItem> = [
+  {
+    title: '平台', dataIndex: 'platform', width: 80,
+    render: formatText,
+  },
+  {
+    title: '商品名称', dataIndex: 'item_name', ellipsis: true,
+    render: formatText,
+  },
+  {
+    title: '原始品牌', dataIndex: 'brand_raw', width: 110,
+    render: formatText,
+  },
+  {
+    title: '命中来源', width: 150,
+    render: (_: unknown, row) => row.intervention_rule_name || row.matched_keyword || '-',
+  },
+  {
+    title: '命中原因', dataIndex: 'matched_reason', ellipsis: true,
+    render: formatText,
+  },
+  {
+    title: '销量', dataIndex: 'sales_qty', width: 80,
+    render: formatNumber,
+  },
+  {
+    title: '销售额', dataIndex: 'sales_amount', width: 110,
+    render: (v: number | null | undefined) => v != null ? `¥${Number(v).toLocaleString()}` : '-',
+  },
+]
+
+const matchedTabLabels: Record<CleanMatchedGroup, string> = {
+  mapping: '映射匹配',
+  interference_link: '干扰链接',
+  interference_archive: '干扰项存档',
+}
+
 export default function CleanPage() {
   const navigate = useNavigate()
   const currentUser = readStoredUser()
@@ -306,6 +396,11 @@ export default function CleanPage() {
   const [jobSortBy, setJobSortBy] = useState<'created_at' | 'updated_at'>('created_at')
   const [previewJobId, setPreviewJobId] = useState<number | null>(null)
   const [previewPage, setPreviewPage] = useState(1)
+  const [matchedJobId, setMatchedJobId] = useState<number | null>(null)
+  const [matchedGroup, setMatchedGroup] = useState<CleanMatchedGroup>('mapping')
+  const [matchedPage, setMatchedPage] = useState(1)
+  const [matchedKeyword, setMatchedKeyword] = useState('')
+  const [matchedKeywordInput, setMatchedKeywordInput] = useState('')
   const [upsertingRowKey, setUpsertingRowKey] = useState<string | null>(null)
   const [selectedMonthlyRowKeys, setSelectedMonthlyRowKeys] = useState<Key[]>([])
   const [batchUpserting, setBatchUpserting] = useState(false)
@@ -459,6 +554,22 @@ export default function CleanPage() {
   )
   const currentPreviewData: TaggedCleanPreviewResponse | undefined = previewData?.jobId === previewJobId ? previewData : undefined
 
+  const { data: matchedData, loading: matchedLoading } = useRequest(
+    async () => {
+      const jobId = matchedJobId!
+      const response = await listCleanJobMatched(jobId, {
+        group: matchedGroup,
+        page: matchedPage,
+        page_size: 20,
+        keyword: matchedKeyword || undefined,
+      })
+      return { ...response.data, jobId }
+    },
+    { ready: matchedJobId != null, refreshDeps: [matchedJobId, matchedGroup, matchedPage, matchedKeyword] }
+  )
+  const currentMatchedData: (CleanMatchedResponse & { jobId: number }) | undefined =
+    matchedData?.jobId === matchedJobId ? matchedData : undefined
+
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <Card title="待入清洗队列">
@@ -556,6 +667,7 @@ export default function CleanPage() {
             id => navigate(`/data-adjustment?clean_job_id=${id}`),
             handleDeleteJob,
             jobView,
+            id => { setMatchedJobId(id); setMatchedGroup('mapping'); setMatchedPage(1); setMatchedKeyword(''); setMatchedKeywordInput('') },
           )}
           rowKey="id"
           size="small"
@@ -584,6 +696,49 @@ export default function CleanPage() {
             pageSize: 20,
             total: currentPreviewData?.total ?? 0,
             onChange: setPreviewPage,
+            showSizeChanger: false,
+            showTotal: t => `共 ${t} 条`,
+          }}
+        />
+      </Modal>
+
+      <Modal
+        title={`已匹配数据查看（任务 #${matchedJobId}）`}
+        open={matchedJobId != null}
+        onCancel={() => setMatchedJobId(null)}
+        footer={null}
+        width={1200}
+      >
+        <Tabs
+          activeKey={matchedGroup}
+          onChange={key => { setMatchedGroup(key as CleanMatchedGroup); setMatchedPage(1) }}
+          items={(Object.keys(matchedTabLabels) as CleanMatchedGroup[]).map(key => ({
+            key,
+            label: `${matchedTabLabels[key]}（${currentMatchedData?.counts?.[key] ?? 0}）`,
+          }))}
+        />
+        <Space style={{ marginBottom: 12 }}>
+          <Input.Search
+            allowClear
+            placeholder="按商品名称搜索"
+            style={{ width: 260 }}
+            value={matchedKeywordInput}
+            onChange={e => setMatchedKeywordInput(e.target.value)}
+            onSearch={v => { setMatchedKeyword(v.trim()); setMatchedPage(1) }}
+          />
+        </Space>
+        <Table
+          dataSource={currentMatchedData?.items ?? []}
+          columns={matchedGroup === 'mapping' ? matchedMappingCols : matchedFilteredCols}
+          rowKey="id"
+          size="small"
+          loading={matchedLoading}
+          scroll={{ x: 1000 }}
+          pagination={{
+            current: matchedPage,
+            pageSize: 20,
+            total: currentMatchedData?.total ?? 0,
+            onChange: setMatchedPage,
             showSizeChanger: false,
             showTotal: t => `共 ${t} 条`,
           }}

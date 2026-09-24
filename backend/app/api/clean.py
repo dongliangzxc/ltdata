@@ -862,6 +862,141 @@ def preview_clean_job(
     }
 
 
+@router.get("/jobs/{job_id}/matched")
+def list_clean_job_matched(
+    job_id: int,
+    group: str = Query("mapping", pattern="^(mapping|interference_link|interference_archive)$"),
+    keyword: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """查看清洗任务已匹配到的数据，按来源分开：
+    - mapping：匹配到型号的结果（matched/url_matched/confirmed）
+    - interference_link：命中干扰链接库被剔除的数据
+    - interference_archive：命中干扰项规则被存档的数据
+    """
+    _get_visible_clean_job_or_404(db, current_user, job_id)
+
+    mapping_count = (
+        db.query(func.count(MatchResult.id))
+        .filter(
+            MatchResult.clean_job_id == job_id,
+            MatchResult.match_status.in_(["matched", "url_matched", "confirmed"]),
+        )
+        .scalar()
+        or 0
+    )
+    interference_link_count = (
+        db.query(func.count(FilteredItem.id))
+        .filter(
+            FilteredItem.clean_job_id == job_id,
+            FilteredItem.is_recovered == 0,
+            FilteredItem.intervention_rule_id.is_(None),
+        )
+        .scalar()
+        or 0
+    )
+    interference_archive_count = (
+        db.query(func.count(FilteredItem.id))
+        .filter(
+            FilteredItem.clean_job_id == job_id,
+            FilteredItem.is_recovered == 0,
+            FilteredItem.intervention_rule_id.isnot(None),
+        )
+        .scalar()
+        or 0
+    )
+    counts = {
+        "mapping": mapping_count,
+        "interference_link": interference_link_count,
+        "interference_archive": interference_archive_count,
+    }
+
+    kw = (keyword or "").strip()
+    if group == "mapping":
+        q = (
+            db.query(MatchResult, RawDataRecord, ModelRecord)
+            .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
+            .outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
+            .filter(
+                MatchResult.clean_job_id == job_id,
+                MatchResult.match_status.in_(["matched", "url_matched", "confirmed"]),
+            )
+        )
+        if kw:
+            q = q.filter(RawDataRecord.item_name.ilike(f"%{kw}%"))
+        total = q.count()
+        rows = q.order_by(MatchResult.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
+        items = [
+            {
+                "id": mr.id,
+                "raw_data_id": mr.raw_data_id,
+                "match_status": mr.match_status,
+                "match_source": mr.match_source,
+                "model_code": model.model_code if model else None,
+                "brand_code": model.brand_code if model else None,
+                "item_name": rd.item_name,
+                "item_url": rd.item_url,
+                "brand_raw": rd.brand_raw,
+                "shop_name": rd.shop_name,
+                "platform": rd.platform,
+                "item_id": rd.item_id,
+                "price": float(rd.price) if rd.price is not None else None,
+                "sales_qty": rd.sales_qty,
+                "sales_amount": float(rd.sales_amount) if rd.sales_amount is not None else None,
+            }
+            for mr, rd, model in rows
+        ]
+    else:
+        q = (
+            db.query(FilteredItem, RawDataRecord)
+            .join(RawDataRecord, FilteredItem.raw_data_id == RawDataRecord.id)
+            .filter(
+                FilteredItem.clean_job_id == job_id,
+                FilteredItem.is_recovered == 0,
+            )
+        )
+        if group == "interference_link":
+            q = q.filter(FilteredItem.intervention_rule_id.is_(None))
+        else:
+            q = q.filter(FilteredItem.intervention_rule_id.isnot(None))
+        if kw:
+            q = q.filter(RawDataRecord.item_name.ilike(f"%{kw}%"))
+        total = q.count()
+        rows = q.order_by(FilteredItem.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
+        items = [
+            {
+                "id": fi.id,
+                "raw_data_id": fi.raw_data_id,
+                "matched_keyword": fi.matched_keyword,
+                "intervention_rule_name": fi.intervention_rule_name,
+                "matched_reason": fi.matched_reason,
+                "item_name": rd.item_name,
+                "item_url": rd.item_url,
+                "brand_raw": rd.brand_raw,
+                "shop_name": rd.shop_name,
+                "platform": rd.platform,
+                "item_id": rd.item_id,
+                "price": float(rd.price) if rd.price is not None else None,
+                "sales_qty": rd.sales_qty,
+                "sales_amount": float(rd.sales_amount) if rd.sales_amount is not None else None,
+                "created_at": format_beijing_datetime(fi.created_at),
+            }
+            for fi, rd in rows
+        ]
+
+    return {
+        "group": group,
+        "counts": counts,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "items": items,
+    }
+
+
 class CleanTaskSearchItem(BaseModel):
     id: int
     task_name: str | None = None

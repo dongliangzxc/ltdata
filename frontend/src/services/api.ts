@@ -307,6 +307,38 @@ export const deleteCleanJob = (jobId: number) =>
 export const previewCleanJob = (jobId: number, params?: Record<string, unknown>) =>
   api.get(`/clean/jobs/${jobId}/preview`, { params })
 
+export type CleanMatchedGroup = 'mapping' | 'interference_link' | 'interference_archive'
+
+export type CleanMatchedItem = {
+  id: number
+  raw_data_id: number
+  match_status?: string | null
+  match_source?: string | null
+  model_code?: string | null
+  brand_code?: string | null
+  matched_keyword?: string | null
+  intervention_rule_name?: string | null
+  matched_reason?: string | null
+  item_name: string | null
+  item_url: string | null
+  brand_raw: string | null
+  shop_name: string | null
+  platform: string | null
+  item_id: string | null
+  price: number | null
+  sales_qty: number | null
+  sales_amount: number | null
+  created_at?: string | null
+}
+
+export type CleanMatchedResponse = PaginatedResponse<CleanMatchedItem> & {
+  group: CleanMatchedGroup
+  counts: Record<CleanMatchedGroup, number>
+}
+
+export const listCleanJobMatched = (jobId: number, params: Record<string, unknown>) =>
+  api.get<CleanMatchedResponse>(`/clean/jobs/${jobId}/matched`, { params })
+
 export const rerunCleanTaskWithCurrentRules = (cleanJobId: number) =>
   api.post<RerunCleanTaskResult>(`/clean/tasks/${cleanJobId}/rerun-with-current-rules`)
 

@@ -300,7 +300,7 @@ const MATCH_SOURCE_LABEL: Record<string, string> = {
   s0: 'URL映射命中',
   's0.2': '历史库(旧)',
   historical: '历史库命中',
-  s0.5: '规则命中',
+  's0.5': '规则命中',
   s1: '品牌字段匹配',
   s2: '标题品牌码匹配',
   s3: '标题品牌名匹配',

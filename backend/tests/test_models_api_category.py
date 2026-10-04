@@ -44,7 +44,15 @@ def client():
     ])
     s.commit()
     s.close()
+    c.session_factory = Session
     return c
+
+
+@pytest.fixture
+def db_session(client):
+    s = client.session_factory()
+    yield s
+    s.close()
 
 
 def test_create_model_with_category_code(client):
@@ -102,3 +110,15 @@ def test_create_model_canonicalizes_category_case(client):
     data = r.json()
     assert data["category_code"] == "soundbar"
     assert data["category_name"] == "回音壁"
+
+
+def test_list_models_filters_out_empty_shell_models(client, db_session):
+    from app.models.schemas import ModelRecord
+    db_session.add(ModelRecord(brand_code="JBL", model_code="", model_name=None, category_code="soundbar"))
+    db_session.commit()
+    client.post("/api/models", json={"brand_code": "JBL", "model_code": "BAR800", "category_code": "soundbar"})
+    r = client.get("/api/models")
+    assert r.status_code == 200
+    items = r.json()["items"]
+    assert len(items) == 1
+    assert items[0]["model_code"] == "BAR800"

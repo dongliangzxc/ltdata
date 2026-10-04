@@ -824,8 +824,16 @@ def list_models(
 ):
     visible_codes = set(_visible_model_category_codes(db, current_user))
 
+    # 过滤空壳型号（model_code 为空/仅占位符的"只有品牌、无型号"记录，避免确认时被误选）
+    model_code_filter = (
+        ModelRecord.model_code.isnot(None),
+        ModelRecord.model_code != "",
+        ~ModelRecord.model_code.in_(["-"]),
+    )
+
     # count query (no join needed)
     cq = db.query(ModelRecord).filter(ModelRecord.category_code.in_(visible_codes))
+    cq = cq.filter(*model_code_filter)
     if brand_code:
         cq = cq.filter(ModelRecord.brand_code.ilike(f"%{brand_code}%"))
     if keyword:
@@ -843,6 +851,7 @@ def list_models(
     q = db.query(ModelRecord, Category).outerjoin(
         Category, ModelRecord.category_code == Category.code
     ).filter(ModelRecord.category_code.in_(visible_codes))
+    q = q.filter(*model_code_filter)
     if brand_code:
         q = q.filter(ModelRecord.brand_code.ilike(f"%{brand_code}%"))
     if keyword:

@@ -231,8 +231,8 @@ export default function ReselectModal({ open, matchId, onClose, onSuccess }: Res
           <Descriptions size="small" bordered column={2}>
             <Descriptions.Item label="商品名称" span={2}>{detail.item_name || '-'}</Descriptions.Item>
             <Descriptions.Item label="当前型号">
-              {hasDisplayModel(detail.brand_code, detail.model_code)
-                ? <Text code>[{detail.brand_code}] {detail.model_code}</Text>
+              {(!isPlaceholderCode(detail.brand_code) || !isPlaceholderCode(detail.model_code))
+                ? <Text code>{!isPlaceholderCode(detail.brand_code) ? `[${detail.brand_code}] ` : ''}{detail.model_code || '待补'}</Text>
                 : '-'}
             </Descriptions.Item>
             <Descriptions.Item label="状态">{renderMatchStatus(detail.match_status)}</Descriptions.Item>

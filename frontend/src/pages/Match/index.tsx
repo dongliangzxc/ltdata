@@ -42,10 +42,6 @@ const isPlaceholderCode = (value?: string | null) => (
   !value || value === '未知' || value === '未识别品牌'
 )
 
-const hasDisplayModel = (brandCode?: string | null, modelCode?: string | null) => (
-  !isPlaceholderCode(brandCode) && !isPlaceholderCode(modelCode)
-)
-
 const matchSourceMeta = (source?: string | null) => {
   const map: Record<string, { label: string; color: string }> = {
     s0: { label: 'URL映射命中', color: 'blue' },
@@ -1784,8 +1780,8 @@ export default function MatchPage() {
                       <Descriptions.Item label="入库品牌">{reviewDetail.brand_code || reviewDetail.brand_std || reviewDetail.brand_raw || '-'}</Descriptions.Item>
                       <Descriptions.Item label="当前型号">
                         <Space wrap>
-                          {hasDisplayModel(reviewDetail.brand_code, reviewDetail.model_code)
-                            ? <Text code>[{reviewDetail.brand_code}] {reviewDetail.model_code}</Text>
+                          {(!isPlaceholderCode(reviewDetail.brand_code) || !isPlaceholderCode(reviewDetail.model_code))
+                            ? <Text code>{!isPlaceholderCode(reviewDetail.brand_code) ? `[${reviewDetail.brand_code}] ` : ''}{reviewDetail.model_code || '待补'}</Text>
                             : <Text type="secondary">-</Text>}
                           <Select
                             showSearch

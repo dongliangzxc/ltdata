@@ -343,6 +343,7 @@ export default function MatchPage() {
         page: 1,
         page_size: 50,
         category_code: reviewDetail?.category_code || undefined,
+        exclude_placeholder: false,
       }).then(r => r.data)
       setModelOptions((res.items ?? []).map(modelOptionFromModel))
     } finally {
@@ -361,6 +362,7 @@ export default function MatchPage() {
         page: 1,
         page_size: 50,
         category_code: selectedJob?.category_code || selectedJob?.dispatch_category_code || undefined,
+        exclude_placeholder: false,
       }).then(r => r.data)
       if (searchSeq !== batchModelSearchSeqRef.current) return
       setBatchModelOptions((res.items ?? []).map(modelOptionFromModel))
@@ -1795,7 +1797,7 @@ export default function MatchPage() {
                             loading={modelSearchLoading}
                             options={modelOptions.map(m => ({
                               value: m.id,
-                              label: `[${m.brand_code}] ${m.model_code || '-'}${m.model_name ? ' ' + m.model_name : ''}`,
+                              label: `[${m.brand_code}] ${m.model_code || '待补'}${m.model_name ? ' ' + m.model_name : ''}`,
                             }))}
                             value={selectedModels[reviewDetail.id]}
                             onChange={v => {
@@ -2064,7 +2066,7 @@ export default function MatchPage() {
               loading={batchModelSearchLoading}
               options={batchModelOptions.map(m => ({
                 value: m.id,
-                label: `[${m.brand_code || '-'}] ${m.model_code || '-'}${m.model_name ? ` - ${m.model_name}` : ''}`,
+                label: `[${m.brand_code || '-'}] ${m.model_code || '待补'}${m.model_name ? ` - ${m.model_name}` : ''}`,
               }))}
             />
             <Button icon={<PlusOutlined />} onClick={() => { setCreateModelContext('batch'); setCreateModelOpen(true) }}>

@@ -817,6 +817,7 @@ def list_models(
     keyword:       Optional[str] = Query(None),
     category_code: Optional[str] = Query(None),
     status:        Optional[str] = Query(None),
+    exclude_placeholder: bool = Query(True),
     page:          int = Query(1, ge=1),
     page_size:     int = Query(20, ge=1, le=2000),
     db: Session = Depends(get_db),
@@ -824,7 +825,8 @@ def list_models(
 ):
     visible_codes = set(_visible_model_category_codes(db, current_user))
 
-    # 过滤空壳型号（model_code 为空/仅占位符的"只有品牌、无型号"记录，避免确认时被误选）
+    # 过滤空壳型号（model_code 为空/仅占位符的"只有品牌、无型号"记录，避免确认时被误选）。
+    # 仅用于型号搜索/选择场景；产品属性管理需要能查到全部记录，调用时传 exclude_placeholder=false。
     model_code_filter = (
         ModelRecord.model_code.isnot(None),
         ModelRecord.model_code != "",
@@ -833,7 +835,8 @@ def list_models(
 
     # count query (no join needed)
     cq = db.query(ModelRecord).filter(ModelRecord.category_code.in_(visible_codes))
-    cq = cq.filter(*model_code_filter)
+    if exclude_placeholder:
+        cq = cq.filter(*model_code_filter)
     if brand_code:
         cq = cq.filter(ModelRecord.brand_code.ilike(f"%{brand_code}%"))
     if keyword:
@@ -851,7 +854,8 @@ def list_models(
     q = db.query(ModelRecord, Category).outerjoin(
         Category, ModelRecord.category_code == Category.code
     ).filter(ModelRecord.category_code.in_(visible_codes))
-    q = q.filter(*model_code_filter)
+    if exclude_placeholder:
+        q = q.filter(*model_code_filter)
     if brand_code:
         q = q.filter(ModelRecord.brand_code.ilike(f"%{brand_code}%"))
     if keyword:

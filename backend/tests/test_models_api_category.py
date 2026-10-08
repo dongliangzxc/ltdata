@@ -122,3 +122,16 @@ def test_list_models_filters_out_empty_shell_models(client, db_session):
     items = r.json()["items"]
     assert len(items) == 1
     assert items[0]["model_code"] == "BAR800"
+
+
+def test_list_models_can_include_placeholder_models(client):
+    """产品属性管理传 exclude_placeholder=false 时，'-' 等空壳型号也必须能查到。"""
+    r = client.post("/api/models", json={"brand_code": "JBL", "model_code": "-", "category_code": "soundbar"})
+    assert r.status_code == 200
+    assert r.json()["model_code"] == "-"
+
+    hidden = client.get("/api/models").json()["items"]
+    assert all(item["model_code"] != "-" for item in hidden)
+
+    shown = client.get("/api/models", params={"exclude_placeholder": "false"}).json()["items"]
+    assert any(item["model_code"] == "-" for item in shown)

@@ -124,7 +124,7 @@ export default function ModelsPage() {
     return code ? extraFieldsByCategory[code] ?? [] : []
   }, [watchedCategoryCode, editingItem, extraFieldsByCategory])
 
-  const queryParams = { ...search, page, page_size: pageSize }
+  const queryParams = { ...search, page, page_size: pageSize, exclude_placeholder: false }
   const { data, loading, refresh } = useRequest(
     () => listModels(queryParams).then(r => r.data),
     { refreshDeps: [JSON.stringify(queryParams)] }

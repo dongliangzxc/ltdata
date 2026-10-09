@@ -1833,16 +1833,6 @@ export default function MatchPage() {
                       >转移到其他任务</Button>
                       <Button size="small" onClick={() => refreshReviewWorkbench(reviewDetail.id)}>继续下一条</Button>
                       {reviewDetail.item_url ? <a href={reviewDetail.item_url} target="_blank" rel="noreferrer"><LinkOutlined /> 打开商品</a> : null}
-                      {reviewDetail.item_image ? (
-                        <Image
-                          src={reviewDetail.item_image}
-                          alt="商品图片"
-                          width={28}
-                          height={28}
-                          style={{ objectFit: 'cover', borderRadius: 4 }}
-                          preview={{ mask: false }}
-                        />
-                      ) : null}
                     </Space>
                   ) : null)}
               >

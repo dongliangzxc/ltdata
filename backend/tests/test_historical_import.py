@@ -1923,6 +1923,29 @@ def test_import_tablet_same_storage_different_series_creates_two_models(db):
     assert {m.model_code for m in models} == {"12+256G"}
 
 
+def test_import_tablet_missing_storage_imports_pending_without_error(db):
+    """系列品类：有产品系列但存储为「-」时，按待补导入，不再回退名称匹配报错。"""
+    _seed_tablet_series(db)
+    client = _client(db)
+    content = _history_excel([{
+        "年度": 2026, "月度": "202606", "平台": "京东",
+        "商品名称": "AOC电纸书小Q", "商品网址": "https://item.jd.com/3001.html",
+        "品牌": "AOC", "产品系列": "小Q", "机型": "-",
+    }])
+
+    resp = client.post(
+        "/api/historical/import",
+        files={"file": ("智能平板数据库.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["errors"] == []
+    assert data["success"] == 1
+    assert db.query(HistoricalMapping).one().model_id is None
+    assert db.query(ModelRecord).count() == 0
+
+
 def test_import_tablet_same_storage_different_series_matches_correct_model(db):
     """同品牌同存储不同系列，各自命中对应型号，不误配。"""
     _seed_tablet_series(db)

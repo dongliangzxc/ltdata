@@ -649,23 +649,26 @@ def _resolve_model(
     series_codes = series_codes or set()
     models_by_series = models_by_series or {}
 
-    # 系列品类（智能平板/学习平板）：按「品牌 + 产品系列 + 型号码(存储)」精确定位
-    if (
-        model_type_raw
-        and model_text
-        and category_code
-        and category_code in series_codes
-        and brand_code_raw
-        and not _is_unknown_brand(brand_code_raw)
-    ):
+    model_code_raw = _usable_identity_value(model_code_raw)
+    model_text = _usable_identity_value(model_text)
+
+    # 系列品类（智能平板/学习平板）：只按「品牌 + 产品系列 + 型号码(存储)」定位；
+    # 系列或存储缺失（如「-」/空）时按待补导入，不再回退名称匹配。
+    if category_code and category_code in series_codes:
+        if not (brand_code_raw and not _is_unknown_brand(brand_code_raw)):
+            return None, None
         series = _usable_identity_value(model_type_raw)
-        series_code = _usable_identity_value(model_code_raw) or _usable_identity_value(model_text)
+        series_code = model_code_raw or model_text
         if series and series_code:
             key = _series_model_key(brand_code_raw, category_code, series, series_code)
             model = models_by_series.get(key)
             if model:
                 return model, None
             return None, f"型号码「{series_code}」在型号库中不存在"
+        return None, None
+
+    if not model_code_raw and not model_text:
+        return None, None
 
     if model_code_raw:
         if not brand_code_raw and model_code_raw in ambiguous_model_codes:

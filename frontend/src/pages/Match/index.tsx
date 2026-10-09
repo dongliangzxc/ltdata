@@ -2,7 +2,7 @@ import { useMemo, useState, useEffect, useRef } from 'react'
 import {
   Card, Select, Button, Table, Tag, Space, Typography, Input,
   message, Row, Col, Statistic, Tooltip, Progress, Alert, Popconfirm, InputNumber, Tabs,
-  List, Descriptions, Empty, Modal, Image, Checkbox, Switch,
+  List, Descriptions, Empty, Modal, Image, Checkbox, Switch, Popover, Badge,
 } from 'antd'
 import { AimOutlined, StopOutlined, CloudUploadOutlined, LoadingOutlined, LinkOutlined, DownloadOutlined, PlusOutlined, UndoOutlined, SwapOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
@@ -217,6 +217,8 @@ export default function MatchPage() {
   const [sortBy, setSortBy] = useState<string>('default')
   const [priceMin, setPriceMin] = useState<number | null>(null)
   const [priceMax, setPriceMax] = useState<number | null>(null)
+  const [salesMin, setSalesMin] = useState<number | null>(null)
+  const [salesMax, setSalesMax] = useState<number | null>(null)
   const [topBrandsOnly, setTopBrandsOnly] = useState(false)
   const [page, setPage] = useState(1)
   const [confirmingIds, setConfirmingIds] = useState<Set<number>>(new Set())
@@ -439,11 +441,13 @@ export default function MatchPage() {
       sort_by: sortBy !== 'default' ? sortBy : undefined,
       price_min: priceMin ?? undefined,
       price_max: priceMax ?? undefined,
+      sales_min: salesMin ?? undefined,
+      sales_max: salesMax ?? undefined,
       top_brands: topBrandsOnly && isPowerBankJob ? TOP_BRANDS_LIMIT : undefined,
     }).then(r => r.data),
     {
       ready: selectedJobId != null && summary != null && summary.total > 0 && activeTab !== 'filtered',
-      refreshDeps: [selectedJobId, keyword, searchBy, page, activeTab, categoryName, sortBy, priceMin, priceMax, topBrandsOnly],
+      refreshDeps: [selectedJobId, keyword, searchBy, page, activeTab, categoryName, sortBy, priceMin, priceMax, salesMin, salesMax, topBrandsOnly],
     }
   )
 
@@ -1481,22 +1485,33 @@ export default function MatchPage() {
                 onChange={e => setInputValue(e.target.value)}
                 onSearch={v => { setInputValue(v); setKeyword(v); setPage(1); resetBatchSelection() }}
               />
-              <InputNumber
-                placeholder="价格下限"
-                min={0}
-                style={{ width: 120 }}
-                value={priceMin ?? undefined}
-                onChange={v => { setPriceMin(v ?? null); setPage(1); resetBatchSelection() }}
-                addonAfter="元"
-              />
-              <InputNumber
-                placeholder="价格上限"
-                min={0}
-                style={{ width: 120 }}
-                value={priceMax ?? undefined}
-                onChange={v => { setPriceMax(v ?? null); setPage(1); resetBatchSelection() }}
-                addonAfter="元"
-              />
+              <Popover
+                trigger="click"
+                placement="bottomRight"
+                content={
+                  <Space direction="vertical" size={10} style={{ width: 248 }}>
+                    <div>
+                      <div style={{ marginBottom: 4, color: '#8c8c8c', fontSize: 12 }}>价格区间（元）</div>
+                      <Space.Compact>
+                        <InputNumber placeholder="下限" min={0} style={{ width: 104 }} value={priceMin ?? undefined} onChange={v => { setPriceMin(v ?? null); setPage(1); resetBatchSelection() }} />
+                        <InputNumber placeholder="上限" min={0} style={{ width: 104 }} value={priceMax ?? undefined} onChange={v => { setPriceMax(v ?? null); setPage(1); resetBatchSelection() }} />
+                      </Space.Compact>
+                    </div>
+                    <div>
+                      <div style={{ marginBottom: 4, color: '#8c8c8c', fontSize: 12 }}>销量区间</div>
+                      <Space.Compact>
+                        <InputNumber placeholder="下限" min={0} style={{ width: 104 }} value={salesMin ?? undefined} onChange={v => { setSalesMin(v ?? null); setPage(1); resetBatchSelection() }} />
+                        <InputNumber placeholder="上限" min={0} style={{ width: 104 }} value={salesMax ?? undefined} onChange={v => { setSalesMax(v ?? null); setPage(1); resetBatchSelection() }} />
+                      </Space.Compact>
+                    </div>
+                    <Button size="small" onClick={() => { setPriceMin(null); setPriceMax(null); setSalesMin(null); setSalesMax(null); setPage(1); resetBatchSelection() }}>清空</Button>
+                  </Space>
+                }
+              >
+                <Badge dot={[priceMin, priceMax, salesMin, salesMax].some(v => v != null)}>
+                  <Button size="small">高级筛选</Button>
+                </Badge>
+              </Popover>
             </Space>
           }
         >
@@ -1512,6 +1527,8 @@ export default function MatchPage() {
               setSortBy('default')
               setPriceMin(null)
               setPriceMax(null)
+              setSalesMin(null)
+              setSalesMax(null)
               setSelectedReviewId(null)
               setSelectedFilteredId(null)
               setReviewDetail(null)

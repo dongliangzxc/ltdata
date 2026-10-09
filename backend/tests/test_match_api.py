@@ -1340,8 +1340,8 @@ def test_pending_filters_by_price_range(db, match_client):
     db.flush()
 
     ids: dict[str, int] = {}
-    for name, price in [("低价", 800), ("中价", 2000), ("高价", 3000)]:
-        rd = RawDataRecord(file_id=upload.id, platform="jd", item_id=f"sku-{name}", item_name=name, price=price)
+    for name, price, qty in [("低价", 800, 3), ("中价", 2000, 20), ("高价", 3000, 60)]:
+        rd = RawDataRecord(file_id=upload.id, platform="jd", item_id=f"sku-{name}", item_name=name, price=price, sales_qty=qty)
         db.add(rd)
         db.flush()
         mr = MatchResult(
@@ -1364,6 +1364,17 @@ def test_pending_filters_by_price_range(db, match_client):
     resp = match_client.get(
         f"/api/match/{clean_job.id}/pending",
         params={"status": "pending", "price_min": 1000, "price_max": 2500},
+    )
+    assert resp.status_code == 200
+    assert {i["id"] for i in resp.json()["items"]} == {ids["中价"]}
+
+    resp = match_client.get(f"/api/match/{clean_job.id}/pending", params={"status": "pending", "sales_max": 5})
+    assert resp.status_code == 200
+    assert {i["id"] for i in resp.json()["items"]} == {ids["低价"]}
+
+    resp = match_client.get(
+        f"/api/match/{clean_job.id}/pending",
+        params={"status": "pending", "sales_min": 10, "sales_max": 30},
     )
     assert resp.status_code == 200
     assert {i["id"] for i in resp.json()["items"]} == {ids["中价"]}

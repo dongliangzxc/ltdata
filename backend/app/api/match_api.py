@@ -700,6 +700,10 @@ def list_pending(
         q = q.order_by(func.isnull(RawDataRecord.price).asc(), RawDataRecord.price.desc())
     elif sort_by == "price_asc":
         q = q.order_by(func.isnull(RawDataRecord.price).asc(), RawDataRecord.price.asc())
+    elif sort_by == "item_name_asc":
+        q = q.order_by(RawDataRecord.item_name.asc())
+    elif sort_by == "item_name_desc":
+        q = q.order_by(RawDataRecord.item_name.desc())
 
     total = q.count()
     rows = q.offset((page - 1) * page_size).limit(page_size).all()

@@ -1476,6 +1476,8 @@ export default function MatchPage() {
                 onChange={v => { setSortBy(v); setPage(1); resetBatchSelection() }}
                 options={[
                   { value: 'default', label: '默认排序' },
+                  { value: 'item_name_asc', label: '商品名称 A→Z' },
+                  { value: 'item_name_desc', label: '商品名称 Z→A' },
                   { value: 'sales_qty_desc', label: '销量从高到低' },
                   { value: 'sales_qty_asc', label: '销量从低到高' },
                   { value: 'price_desc', label: '价格从高到低' },

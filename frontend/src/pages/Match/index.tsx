@@ -1851,6 +1851,15 @@ export default function MatchPage() {
                     <Empty description="请选择左侧干扰项记录" />
                   ) : (
                     <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                      {filteredDetail.item_image ? (
+                        <Image
+                          src={filteredDetail.item_image}
+                          alt="商品图片"
+                          width={180}
+                          height={180}
+                          style={{ objectFit: 'contain', borderRadius: 6, border: '1px solid #f0f0f0', background: '#fafafa' }}
+                        />
+                      ) : null}
                       <Descriptions size="small" column={2} bordered>
                         <Descriptions.Item label="商品名称" span={2}>{filteredDetail.item_name || '-'}</Descriptions.Item>
                         <Descriptions.Item label="原品牌">{filteredDetail.brand_raw || '-'}</Descriptions.Item>
@@ -1891,6 +1900,15 @@ export default function MatchPage() {
                   <Empty description="请选择左侧复核商品" />
                 ) : (
                   <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                    {reviewDetail.item_image ? (
+                      <Image
+                        src={reviewDetail.item_image}
+                        alt="商品图片"
+                        width={180}
+                        height={180}
+                        style={{ objectFit: 'contain', borderRadius: 6, border: '1px solid #f0f0f0', background: '#fafafa' }}
+                      />
+                    ) : null}
                     <Descriptions size="small" column={2} bordered>
                       <Descriptions.Item label="商品名称" span={2}>{reviewDetail.item_name || '-'}</Descriptions.Item>
                       <Descriptions.Item label="原品牌">{reviewDetail.brand_raw || '-'}</Descriptions.Item>

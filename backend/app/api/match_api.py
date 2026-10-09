@@ -498,6 +498,10 @@ def _build_review_queue_query(
         q = q.order_by(func.isnull(MatchResult.updated_at).asc(), MatchResult.updated_at.desc())
     elif sort_by == "updated_at_asc":
         q = q.order_by(func.isnull(MatchResult.updated_at).asc(), MatchResult.updated_at.asc())
+    elif sort_by == "price_desc":
+        q = q.order_by(func.isnull(RawDataRecord.price).asc(), RawDataRecord.price.desc())
+    elif sort_by == "price_asc":
+        q = q.order_by(func.isnull(RawDataRecord.price).asc(), RawDataRecord.price.asc())
     else:
         q = q.order_by(MatchResult.id.asc())
     return q
@@ -586,6 +590,10 @@ def list_pending(
         q = q.order_by(func.isnull(MatchResult.updated_at).asc(), MatchResult.updated_at.desc())
     elif sort_by == "updated_at_asc":
         q = q.order_by(func.isnull(MatchResult.updated_at).asc(), MatchResult.updated_at.asc())
+    elif sort_by == "price_desc":
+        q = q.order_by(func.isnull(RawDataRecord.price).asc(), RawDataRecord.price.desc())
+    elif sort_by == "price_asc":
+        q = q.order_by(func.isnull(RawDataRecord.price).asc(), RawDataRecord.price.asc())
 
     total = q.count()
     rows = q.offset((page - 1) * page_size).limit(page_size).all()
@@ -902,6 +910,10 @@ def list_missing_attrs(
         q = q.order_by(func.isnull(MatchResult.updated_at).asc(), MatchResult.updated_at.desc())
     elif sort_by == "updated_at_asc":
         q = q.order_by(func.isnull(MatchResult.updated_at).asc(), MatchResult.updated_at.asc())
+    elif sort_by == "price_desc":
+        q = q.order_by(func.isnull(RawDataRecord.price).asc(), RawDataRecord.price.desc())
+    elif sort_by == "price_asc":
+        q = q.order_by(func.isnull(RawDataRecord.price).asc(), RawDataRecord.price.asc())
 
     total = q.count()
     rows = q.offset((page - 1) * page_size).limit(page_size).all()

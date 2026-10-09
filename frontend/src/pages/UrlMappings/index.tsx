@@ -13,6 +13,7 @@ import {
 import type { UserProfile } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 import ImportMappingModal from '../../components/ImportMappingModal'
+import { formatModelLabel } from '../../utils/modelLabel'
 
 const { Text } = Typography
 
@@ -55,6 +56,7 @@ type ModelOption = {
   model_code: string | null
   brand_name: string | null
   model_name: string | null
+  series: string | null
   category_code: string | null
 }
 
@@ -115,6 +117,7 @@ export default function UrlMappingsPage() {
     model_code: m.model_code,
     brand_name: m.brand_name ?? null,
     model_name: m.model_name ?? null,
+    series: m.series ?? null,
     category_code: m.category_code ?? null,
   }))
   const visibleModelOptions = modelOptions.filter(m => !m.category_code || visibleCategoryCodes.has(m.category_code))
@@ -400,7 +403,7 @@ export default function UrlMappingsPage() {
               }
               options={filteredModelOptions.map(m => ({
                 value: m.id,
-                label: `[${m.brand_code}] ${m.model_code || '-'}${m.model_name ? ' ' + m.model_name : ''}`,
+                label: formatModelLabel(m),
               }))}
             />
           </Form.Item>

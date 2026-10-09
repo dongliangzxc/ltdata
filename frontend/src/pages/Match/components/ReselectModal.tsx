@@ -6,6 +6,7 @@ import {
 import { LoadingOutlined } from '@ant-design/icons'
 import type { MatchCandidateOut, MatchReviewDetail, ModelItem } from '../../../services/api'
 import { getMatchReviewDetail, listModels, confirmMatch } from '../../../services/api'
+import { formatModelLabel } from '../../../utils/modelLabel'
 
 const { Text } = Typography
 
@@ -66,6 +67,7 @@ interface ModelOption {
   model_code: string
   brand_name?: string | null
   model_name?: string | null
+  series?: string | null
 }
 const modelOptionFromCandidate = (c: MatchCandidateOut): ModelOption => ({
   id: c.model_id!,
@@ -73,6 +75,7 @@ const modelOptionFromCandidate = (c: MatchCandidateOut): ModelOption => ({
   model_code: c.model_code || '',
   brand_name: null,
   model_name: null,
+  series: null,
 })
 const modelOptionFromModel = (m: ModelItem): ModelOption => ({
   id: m.id,
@@ -80,11 +83,9 @@ const modelOptionFromModel = (m: ModelItem): ModelOption => ({
   model_code: m.model_code || '',
   brand_name: m.brand_name ?? null,
   model_name: m.model_name ?? null,
+  series: m.series ?? null,
 })
-const modelOptionLabel = (opt: ModelOption) => {
-  const base = `[${opt.brand_code || '-'}] ${opt.model_code || '-'}`
-  return opt.model_name ? `${base} · ${opt.model_name}` : base
-}
+const modelOptionLabel = (opt: ModelOption) => formatModelLabel(opt)
 const mergeModelOption = (list: ModelOption[], opt: ModelOption) =>
   list.some(x => x.id === opt.id) ? list : [opt, ...list]
 

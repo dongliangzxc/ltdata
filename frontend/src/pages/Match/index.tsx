@@ -27,6 +27,7 @@ import InterventionRuleModal from './components/InterventionRuleModal'
 import CreateModelModal from '../../components/CreateModelModal'
 import { buildTransferFilterState, getDefaultTransferFilters, shouldClearTransferTarget } from './utils/transferFilters'
 import type { TransferFilters, TransferSelectOption } from './utils/transferFilters'
+import { formatModelLabel } from '../../utils/modelLabel'
 
 const { Text } = Typography
 
@@ -121,6 +122,7 @@ type ModelOption = {
   model_code: string | null
   brand_name: string | null
   model_name: string | null
+  series: string | null
 }
 
 const modelOptionFromModel = (model: ModelItem): ModelOption => ({
@@ -129,6 +131,7 @@ const modelOptionFromModel = (model: ModelItem): ModelOption => ({
   model_code: model.model_code,
   brand_name: model.brand_name ?? null,
   model_name: model.model_name ?? null,
+  series: model.series ?? null,
 })
 
 type PublishJob = {
@@ -400,7 +403,7 @@ export default function MatchPage() {
     })
     setCreateModelOpen(false)
 
-    const modelLabel = `[${model.brand_code}] ${model.model_code || ''}${model.model_name ? ' ' + model.model_name : ''}`
+    const modelLabel = formatModelLabel(model)
     Modal.confirm({
       title: '选用新创建的型号并完成？',
       content: `新创建的型号 ${modelLabel} 已入库。是否将该记录选用为当前型号并直接处理完成？`,
@@ -1853,7 +1856,7 @@ export default function MatchPage() {
                             loading={modelSearchLoading}
                             options={modelOptions.map(m => ({
                               value: m.id,
-                              label: `[${m.brand_code}] ${m.model_code || '待补'}${m.model_name ? ' ' + m.model_name : ''}`,
+                              label: formatModelLabel(m),
                             }))}
                             value={selectedModels[reviewDetail.id]}
                             onChange={v => {
@@ -2122,7 +2125,7 @@ export default function MatchPage() {
               loading={batchModelSearchLoading}
               options={batchModelOptions.map(m => ({
                 value: m.id,
-                label: `[${m.brand_code || '-'}] ${m.model_code || '待补'}${m.model_name ? ` - ${m.model_name}` : ''}`,
+                label: formatModelLabel(m),
               }))}
             />
             <Button icon={<PlusOutlined />} onClick={() => { setCreateModelContext('batch'); setCreateModelOpen(true) }}>
@@ -2161,7 +2164,7 @@ export default function MatchPage() {
               loading={batchModelSearchLoading}
               options={batchModelOptions.map(m => ({
                 value: m.id,
-                label: `[${m.brand_code || '-'}] ${m.model_code || '待补'}${m.model_name ? ` - ${m.model_name}` : ''}`,
+                label: formatModelLabel(m),
               }))}
             />
             <Button icon={<PlusOutlined />} onClick={() => { setCreateModelContext('batch'); setCreateModelOpen(true) }}>

@@ -1780,13 +1780,15 @@ export default function MatchPage() {
                       <Descriptions.Item label="入库品牌">{reviewDetail.brand_code || reviewDetail.brand_std || reviewDetail.brand_raw || '-'}</Descriptions.Item>
                       <Descriptions.Item label="当前型号">
                         <Space wrap>
-                          {(!isPlaceholderCode(reviewDetail.brand_code) || !isPlaceholderCode(reviewDetail.model_code))
-                            ? <Text code>{`[${[
-                                !isPlaceholderCode(reviewDetail.brand_code) ? reviewDetail.brand_code : '',
-                                (reviewDetail.series ?? '').trim(),
-                                reviewDetail.model_code || '待补',
-                              ].filter(Boolean).join('-')}]`}</Text>
-                            : <Text type="secondary">-</Text>}
+                          {(() => {
+                            const brand = !isPlaceholderCode(reviewDetail.brand_code) ? `[${reviewDetail.brand_code}]` : ''
+                            const seriesVal = (reviewDetail.series ?? '').trim()
+                            const series = seriesVal ? `[${seriesVal}]` : ''
+                            const modelVal = (reviewDetail.model_code ?? '').trim()
+                            const model = modelVal && !isPlaceholderCode(modelVal) && !/^-+$/.test(modelVal) ? modelVal : ''
+                            const parts = [brand, series, model].filter(Boolean)
+                            return parts.length ? <Text code>{parts.join(' ')}</Text> : <Text type="secondary">-</Text>
+                          })()}
                           <Select
                             showSearch
                             placeholder="搜索/选择其他型号确认"

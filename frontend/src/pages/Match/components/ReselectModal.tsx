@@ -231,13 +231,15 @@ export default function ReselectModal({ open, matchId, onClose, onSuccess }: Res
           <Descriptions size="small" bordered column={2}>
             <Descriptions.Item label="商品名称" span={2}>{detail.item_name || '-'}</Descriptions.Item>
             <Descriptions.Item label="当前型号">
-              {(!isPlaceholderCode(detail.brand_code) || !isPlaceholderCode(detail.model_code))
-                ? <Text code>{`[${[
-                    !isPlaceholderCode(detail.brand_code) ? detail.brand_code : '',
-                    (detail.series ?? '').trim(),
-                    detail.model_code || '待补',
-                  ].filter(Boolean).join('-')}]`}</Text>
-                : '-'}
+              {(() => {
+                const brand = !isPlaceholderCode(detail.brand_code) ? `[${detail.brand_code}]` : ''
+                const seriesVal = (detail.series ?? '').trim()
+                const series = seriesVal ? `[${seriesVal}]` : ''
+                const modelVal = (detail.model_code ?? '').trim()
+                const model = modelVal && !isPlaceholderCode(modelVal) ? modelVal : ''
+                const parts = [brand, series, model].filter(Boolean)
+                return parts.length ? <Text code>{parts.join(' ')}</Text> : '-'
+              })()}
             </Descriptions.Item>
             <Descriptions.Item label="状态">{renderMatchStatus(detail.match_status)}</Descriptions.Item>
             <Descriptions.Item label="来源">{renderMatchSource(detail.match_source)}</Descriptions.Item>

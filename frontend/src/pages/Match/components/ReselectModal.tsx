@@ -232,11 +232,11 @@ export default function ReselectModal({ open, matchId, onClose, onSuccess }: Res
             <Descriptions.Item label="商品名称" span={2}>{detail.item_name || '-'}</Descriptions.Item>
             <Descriptions.Item label="当前型号">
               {(!isPlaceholderCode(detail.brand_code) || !isPlaceholderCode(detail.model_code))
-                ? <Text code>{[
+                ? <Text code>{`[${[
                     !isPlaceholderCode(detail.brand_code) ? detail.brand_code : '',
                     (detail.series ?? '').trim(),
                     detail.model_code || '待补',
-                  ].filter(Boolean).join('-')}</Text>
+                  ].filter(Boolean).join('-')}]`}</Text>
                 : '-'}
             </Descriptions.Item>
             <Descriptions.Item label="状态">{renderMatchStatus(detail.match_status)}</Descriptions.Item>

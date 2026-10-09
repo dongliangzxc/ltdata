@@ -1781,11 +1781,11 @@ export default function MatchPage() {
                       <Descriptions.Item label="当前型号">
                         <Space wrap>
                           {(!isPlaceholderCode(reviewDetail.brand_code) || !isPlaceholderCode(reviewDetail.model_code))
-                            ? <Text code>{[
+                            ? <Text code>{`[${[
                                 !isPlaceholderCode(reviewDetail.brand_code) ? reviewDetail.brand_code : '',
                                 (reviewDetail.series ?? '').trim(),
                                 reviewDetail.model_code || '待补',
-                              ].filter(Boolean).join('-')}</Text>
+                              ].filter(Boolean).join('-')}]`}</Text>
                             : <Text type="secondary">-</Text>}
                           <Select
                             showSearch

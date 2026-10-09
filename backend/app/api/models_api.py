@@ -874,7 +874,8 @@ def list_models(
         cq = cq.filter(
             ModelRecord.model_name.ilike(f"%{keyword}%") |
             ModelRecord.model_code.ilike(f"%{keyword}%") |
-            ModelRecord.brand_name.ilike(f"%{keyword}%")
+            ModelRecord.brand_name.ilike(f"%{keyword}%") |
+            ModelRecord.brand_code.ilike(f"%{keyword}%")
         )
     if category_code:
         cq = cq.filter(ModelRecord.category_code == category_code)
@@ -893,7 +894,8 @@ def list_models(
         q = q.filter(
             ModelRecord.model_name.ilike(f"%{keyword}%") |
             ModelRecord.model_code.ilike(f"%{keyword}%") |
-            ModelRecord.brand_name.ilike(f"%{keyword}%")
+            ModelRecord.brand_name.ilike(f"%{keyword}%") |
+            ModelRecord.brand_code.ilike(f"%{keyword}%")
         )
     if category_code:
         q = q.filter(ModelRecord.category_code == category_code)

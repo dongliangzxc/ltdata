@@ -135,3 +135,18 @@ def test_list_models_can_include_placeholder_models(client):
 
     shown = client.get("/api/models", params={"exclude_placeholder": "false"}).json()["items"]
     assert any(item["model_code"] == "-" for item in shown)
+
+
+def test_list_models_keyword_matches_brand_code(client, db_session):
+    """型号搜索 keyword 应能命中品牌码（品牌名不同、型号名/码为空时也搜得到）。"""
+    from app.models.schemas import ModelRecord
+    db_session.add(ModelRecord(
+        brand_code="好记星", brand_name="（Ozing）",
+        model_code=None, model_name=None, category_code="soundbar",
+    ))
+    db_session.commit()
+
+    r = client.get("/api/models", params={"keyword": "好记星", "exclude_placeholder": "false"})
+    assert r.status_code == 200
+    assert r.json()["total"] == 1
+    assert r.json()["items"][0]["brand_code"] == "好记星"

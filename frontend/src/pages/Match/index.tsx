@@ -255,6 +255,28 @@ export default function MatchPage() {
     const params = topBrandsOnly && isPowerBankJob ? { top_brands: TOP_BRANDS_LIMIT } : undefined
     return getMatchSummary(id, params).then(r => setSummary(r.data))
   }
+
+  // 复核队列的筛选条件（与列表一致），用于把统计条数也按搜索/筛选后展示
+  const hasSummaryFilter = !!(
+    keyword || categoryName ||
+    priceMin != null || priceMax != null || salesMin != null || salesMax != null ||
+    (topBrandsOnly && isPowerBankJob)
+  )
+  const summaryFilterParams = {
+    keyword: keyword || undefined,
+    search_by: searchBy,
+    category_name: categoryName || undefined,
+    price_min: priceMin ?? undefined,
+    price_max: priceMax ?? undefined,
+    sales_min: salesMin ?? undefined,
+    sales_max: salesMax ?? undefined,
+    top_brands: topBrandsOnly && isPowerBankJob ? TOP_BRANDS_LIMIT : undefined,
+  }
+  const { data: viewSummary } = useRequest(
+    () => getMatchSummary(selectedJobId!, summaryFilterParams).then(r => r.data),
+    { ready: selectedJobId != null && hasSummaryFilter, refreshDeps: [selectedJobId, JSON.stringify(summaryFilterParams), hasSummaryFilter] }
+  )
+  const summaryView = hasSummaryFilter ? (viewSummary ?? summary) : summary
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
   const [modelSearchLoading, setModelSearchLoading] = useState(false)
   const [createModelOpen, setCreateModelOpen] = useState(false)
@@ -341,8 +363,8 @@ export default function MatchPage() {
     doSearchCleanTasks(transferKeyword)
   }, [transferCategoryFilter, transferPlatformFilter, transferMonthFilter])
   const preciseMatchedCount = summary?.precise_matched ?? summary?.url_matched ?? 0
-  const otherAutoMatchedCount = summary ? Math.max(summary.matched - Math.max(preciseMatchedCount - (summary.url_matched ?? 0), 0), 0) : 0
-  const readyCount = summary ? (summary?.url_matched ?? 0) + summary.matched + summary.confirmed : 0
+  const otherAutoMatchedCount = summaryView ? Math.max(summaryView.matched - Math.max(preciseMatchedCount - (summaryView.url_matched ?? 0), 0), 0) : 0
+  const readyCount = summaryView ? (summaryView.url_matched ?? 0) + summaryView.matched + summaryView.confirmed : 0
 
   const handleModelSearch = async (keyword: string) => {
     if (!keyword.trim()) return
@@ -1169,24 +1191,24 @@ export default function MatchPage() {
   ]
 
   const queueTabs: Array<{ key: ReviewTabKey; label: string; count: number; color: string }> = [
-    { key: 'unidentified_brand', label: '未识别品牌', count: summary?.unidentified_brand ?? 0, color: '#722ed1' },
-    { key: 'text_only', label: 'URL映射待确认', count: summary?.text_only ?? 0, color: '#d48806' },
-    { key: 'pending', label: '待确认', count: summary?.pending ?? 0, color: '#d46b08' },
-    { key: 'disputed', label: '争议复核', count: summary?.disputed ?? 0, color: '#cf1322' },
-    { key: 'matched', label: '已匹配', count: (summary?.matched ?? 0) + (summary?.url_matched ?? 0), color: '#389e0d' },
-    { key: 'invalid_model', label: '型号失效', count: summary?.invalid_model ?? 0, color: '#fa541c' },
-    { key: 'confirmed', label: '已人工确认', count: summary?.confirmed ?? 0, color: '#1677ff' },
-    { key: 'excluded', label: '已排除', count: summary?.excluded ?? 0, color: '#8c8c8c' },
+    { key: 'unidentified_brand', label: '未识别品牌', count: summaryView?.unidentified_brand ?? 0, color: '#722ed1' },
+    { key: 'text_only', label: 'URL映射待确认', count: summaryView?.text_only ?? 0, color: '#d48806' },
+    { key: 'pending', label: '待确认', count: summaryView?.pending ?? 0, color: '#d46b08' },
+    { key: 'disputed', label: '争议复核', count: summaryView?.disputed ?? 0, color: '#cf1322' },
+    { key: 'matched', label: '已匹配', count: (summaryView?.matched ?? 0) + (summaryView?.url_matched ?? 0), color: '#389e0d' },
+    { key: 'invalid_model', label: '型号失效', count: summaryView?.invalid_model ?? 0, color: '#fa541c' },
+    { key: 'confirmed', label: '已人工确认', count: summaryView?.confirmed ?? 0, color: '#1677ff' },
+    { key: 'excluded', label: '已排除', count: summaryView?.excluded ?? 0, color: '#8c8c8c' },
     { key: 'filtered', label: '干扰项过滤', count: filteredData?.total ?? 0, color: '#fa8c16' },
   ]
 
   const currentQueueTitle = queueTabs.find(tab => tab.key === activeTab)?.label ?? '复核'
   const cleanJobs = jobsData ?? []
   const canRetryMatch = selectedJob?.status === 'failed' || selectedJob?.status === 'error'
-  const metadataPendingCount = summary
-    ? (summary.pending ?? 0) + (summary.text_only ?? 0) + (summary.disputed ?? 0)
+  const metadataPendingCount = summaryView
+    ? (summaryView.pending ?? 0) + (summaryView.text_only ?? 0) + (summaryView.disputed ?? 0)
     : selectedJob?.pending_count ?? 0
-  const metadataPublishableCount = summary ? readyCount : selectedJob?.publishable_count ?? 0
+  const metadataPublishableCount = summaryView ? readyCount : selectedJob?.publishable_count ?? 0
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -1375,26 +1397,26 @@ export default function MatchPage() {
       {summary && summary.total > 0 && (
         <Card>
           <Row gutter={16}>
-            <Col span={3}><Statistic title="总条数" value={summary.total} /></Col>
+            <Col span={3}><Statistic title="总条数" value={summaryView?.total ?? 0} /></Col>
             <Col span={3}><Statistic title="精准匹配" value={preciseMatchedCount} valueStyle={{ color: '#389e0d' }} /></Col>
             <Col span={3}><Statistic title="其他自动匹配" value={otherAutoMatchedCount} valueStyle={{ color: '#3f8600' }} /></Col>
-            <Col span={3}><Statistic title="URL映射待确认" value={summary.text_only ?? 0} valueStyle={{ color: '#d48806' }} /></Col>
-            <Col span={3}><Statistic title="待确认" value={summary.pending} valueStyle={{ color: '#d46b08' }} /></Col>
-            <Col span={3}><Statistic title="已人工确认" value={summary.confirmed} valueStyle={{ color: '#1677ff' }} /></Col>
-            <Col span={2}><Statistic title="已排除" value={summary.excluded} valueStyle={{ color: '#cf1322' }} /></Col>
-            <Col span={2}><Statistic title="已禁用" value={summary.disabled ?? 0} valueStyle={{ color: '#faad14' }} /></Col>
+            <Col span={3}><Statistic title="URL映射待确认" value={summaryView?.text_only ?? 0} valueStyle={{ color: '#d48806' }} /></Col>
+            <Col span={3}><Statistic title="待确认" value={summaryView?.pending ?? 0} valueStyle={{ color: '#d46b08' }} /></Col>
+            <Col span={3}><Statistic title="已人工确认" value={summaryView?.confirmed ?? 0} valueStyle={{ color: '#1677ff' }} /></Col>
+            <Col span={2}><Statistic title="已排除" value={summaryView?.excluded ?? 0} valueStyle={{ color: '#cf1322' }} /></Col>
+            <Col span={2}><Statistic title="已禁用" value={summaryView?.disabled ?? 0} valueStyle={{ color: '#faad14' }} /></Col>
             <Col span={3}>
               <Statistic
                 title="未识别品牌"
-                value={summary?.unidentified_brand ?? 0}
+                value={summaryView?.unidentified_brand ?? 0}
                 valueStyle={{ color: '#722ed1' }}
               />
             </Col>
             <Col span={3}>
               <Statistic
                 title="匹配率"
-                value={summary.total ? Math.round(
-                  ((summary.url_matched ?? 0) + summary.matched + summary.confirmed) / summary.total * 100
+                value={summaryView?.total ? Math.round(
+                  ((summaryView.url_matched ?? 0) + summaryView.matched + summaryView.confirmed) / summaryView.total * 100
                 ) : 0}
                 suffix="%"
                 valueStyle={{ color: '#3f8600' }}
@@ -1410,7 +1432,7 @@ export default function MatchPage() {
             <Space>
               <span>任务复核工作台</span>
               <span style={{ fontSize: 12, color: '#8c8c8c' }}>
-                待处理 {(summary.text_only ?? 0) + summary.pending + (summary.disputed ?? 0)} 条 · 已匹配/确认 {readyCount} 条 · 已排除 {summary.excluded ?? 0} 条 · 干扰过滤 {filteredData?.total ?? 0} 条
+                待处理 {(summaryView?.text_only ?? 0) + (summaryView?.pending ?? 0) + (summaryView?.disputed ?? 0)} 条 · 已匹配/确认 {readyCount} 条 · 已排除 {summaryView?.excluded ?? 0} 条 · 干扰过滤 {filteredData?.total ?? 0} 条
               </span>
             </Space>
           }

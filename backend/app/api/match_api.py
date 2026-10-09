@@ -328,16 +328,77 @@ def get_match_progress(clean_job_id: int):
 @router.get("/{clean_job_id}/summary", response_model=MatchSummary)
 def get_match_summary(
     clean_job_id: int,
+    keyword: Optional[str] = Query(None),
+    search_by: str = Query("item_name"),
+    category_name: Optional[str] = Query(None),
+    price_min: Optional[float] = Query(None, ge=0),
+    price_max: Optional[float] = Query(None, ge=0),
+    sales_min: Optional[int] = Query(None, ge=0),
+    sales_max: Optional[int] = Query(None, ge=0),
     top_brands: Optional[int] = Query(None, ge=1, le=500, description="统计仅限当前任务内销量前 N 品牌"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """查看某次清洗任务的匹配统计，无记录时返回全零（不报错）"""
-    _get_visible_match_clean_job_or_404(db, current_user, clean_job_id)
-    q = db.query(MatchResult).filter(MatchResult.clean_job_id == clean_job_id)
+    """查看某次清洗任务的匹配统计，无记录时返回全零（不报错）。
+
+    支持与复核队列一致的筛选（keyword/search_by/category_name/价格/销量/top_brands），
+    传入时统计即为筛选后的条数。
+    """
+    clean_job = _get_visible_match_clean_job_or_404(db, current_user, clean_job_id)
+    dispatch_batch_id = clean_job.dispatch_batch_id
+    if dispatch_batch_id is not None:
+        di_join_cond = (
+            (DispatchItem.raw_data_id == MatchResult.raw_data_id) &
+            (DispatchItem.batch_id == dispatch_batch_id)
+        )
+    else:
+        di_join_cond = (DispatchItem.raw_data_id == None)  # noqa: E711
+
+    q = (
+        db.query(MatchResult.id)
+        .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
+        .outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
+        .outerjoin(DispatchItem, di_join_cond)
+        .outerjoin(Category, DispatchItem.category_code == Category.code)
+        .filter(MatchResult.clean_job_id == clean_job_id)
+    )
+
+    allowed_search_fields = {"item_name", "brand_raw", "brand_code", "shop_name", "model_code"}
+    if search_by not in allowed_search_fields:
+        search_by = "item_name"
+    if keyword:
+        pattern = f"%{keyword}%"
+        if search_by == "brand_raw":
+            q = q.filter(RawDataRecord.brand_raw.ilike(pattern))
+        elif search_by == "brand_code":
+            q = (
+                q.outerjoin(BrandRecord, BrandRecord.brand_code == ModelRecord.brand_code)
+                 .filter(
+                     (ModelRecord.brand_code.ilike(pattern))
+                     | (BrandRecord.brand_name.ilike(pattern))
+                 )
+            )
+        elif search_by == "shop_name":
+            q = q.filter(RawDataRecord.shop_name.ilike(pattern))
+        elif search_by == "model_code":
+            q = q.filter(ModelRecord.model_code.ilike(pattern))
+        else:
+            q = q.filter(RawDataRecord.item_name.ilike(pattern))
+    if category_name:
+        q = q.filter(Category.code == category_name)
+    if price_min is not None:
+        q = q.filter(RawDataRecord.price >= price_min)
+    if price_max is not None:
+        q = q.filter(RawDataRecord.price <= price_max)
+    if sales_min is not None:
+        q = q.filter(RawDataRecord.sales_qty >= sales_min)
+    if sales_max is not None:
+        q = q.filter(RawDataRecord.sales_qty <= sales_max)
     if top_brands and top_brands > 0:
         q = _apply_top_brands_filter(db, q, clean_job_id, top_brands)
-    rows = q.all()
+
+    mr_ids = [mid for (mid,) in q.group_by(MatchResult.id).all()]
+    rows = db.query(MatchResult).filter(MatchResult.id.in_(mr_ids)).all() if mr_ids else []
     if not rows:
         return MatchSummary(
             clean_job_id=clean_job_id,

@@ -1380,6 +1380,41 @@ def test_pending_filters_by_price_range(db, match_client):
     assert {i["id"] for i in resp.json()["items"]} == {ids["中价"]}
 
 
+def test_summary_respects_filters(db, match_client):
+    from app.models.schemas import RawDataRecord, MatchResult, CleanJobRecord, UploadFileRecord
+
+    model = ModelRecord(brand_code="DJI", model_code="Osmo6", category_code="camera")
+    db.add(model)
+    upload = UploadFileRecord(filename="sum.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+    job = CleanJobRecord(file_ids=[upload.id], status="reviewing")
+    db.add(job)
+    db.flush()
+    for name, price in [("小米A", 800), ("小米B", 2000), ("大疆C", 3000)]:
+        rd = RawDataRecord(file_id=upload.id, platform="jd", item_id=f"sku-{name}", item_name=name, price=price)
+        db.add(rd)
+        db.flush()
+        db.add(MatchResult(
+            clean_job_id=job.id, raw_data_id=rd.id, model_id=model.id,
+            match_status="matched", matched_by="auto", match_source="s1",
+        ))
+    db.commit()
+
+    resp = match_client.get(f"/api/match/{job.id}/summary")
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 3
+    assert resp.json()["matched"] == 3
+
+    resp = match_client.get(f"/api/match/{job.id}/summary", params={"price_min": 1000})
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 2
+
+    resp = match_client.get(f"/api/match/{job.id}/summary", params={"keyword": "小米"})
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 2
+
+
 def test_pending_search_by_item_name_default_preserves_previous_behavior(db, match_client):
     from app.models.schemas import BrandRecord
     model_dji = ModelRecord(brand_code="DJI", model_code="Osmo6", category_code="camera")

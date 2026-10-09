@@ -980,6 +980,7 @@ class MatchSummary(BaseModel):
     disabled:    int = 0
     unidentified_brand: int = 0
     missing_attrs: int = 0
+    invalid_model: int = 0
 
 
 # ─────────────────────────── 发布任务 ───────────────────────────

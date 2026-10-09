@@ -34,6 +34,9 @@ from app.utils.time_utils import format_beijing_datetime
 router = APIRouter(prefix="/api/match", tags=["match"])
 logger = logging.getLogger(__name__)
 
+# 可发布/可复核的匹配状态（发布与复核队列共用口径）
+REVIEWABLE_MATCH_STATUSES = ("url_matched", "matched", "confirmed")
+
 
 def _visible_match_category_codes(db: Session, current_user: User) -> set[str] | None:
     if getattr(current_user, "is_admin", 0) == 1:
@@ -367,6 +370,24 @@ def get_match_summary(
     else:
         missing_attrs_count = 0
 
+    # 型号失效：已匹配/已确认但 model_id 为空或指向已删除的型号
+    reviewable_model_ids = {
+        r.model_id for r in rows
+        if r.match_status in REVIEWABLE_MATCH_STATUSES and r.model_id is not None
+    }
+    existing_model_ids: set[int] = set()
+    if reviewable_model_ids:
+        existing_model_ids = {
+            mid for (mid,) in db.query(ModelRecord.id)
+            .filter(ModelRecord.id.in_(reviewable_model_ids))
+            .all()
+        }
+    invalid_model_count = sum(
+        1 for r in rows
+        if r.match_status in REVIEWABLE_MATCH_STATUSES
+        and (r.model_id is None or r.model_id not in existing_model_ids)
+    )
+
     return MatchSummary(
         clean_job_id=clean_job_id,
         total=total,
@@ -381,6 +402,7 @@ def get_match_summary(
         disabled=disabled_count,
         unidentified_brand=unidentified_brand_count,
         missing_attrs=missing_attrs_count,
+        invalid_model=invalid_model_count,
     )
 
 
@@ -527,7 +549,7 @@ def list_pending(
     current_user: User = Depends(get_current_user),
 ):
     """分页查询复核队列条目。"""
-    allowed_statuses = {"pending", "text_only", "disputed", "matched", "url_matched", "confirmed", "excluded"}
+    allowed_statuses = {"pending", "text_only", "disputed", "matched", "url_matched", "confirmed", "excluded", "invalid_model"}
     if status not in allowed_statuses:
         status = "pending"
 
@@ -556,6 +578,9 @@ def list_pending(
     )
     if status == "matched":
         q = q.filter(MatchResult.match_status.in_(["matched", "url_matched"]))
+    elif status == "invalid_model":
+        q = q.filter(MatchResult.match_status.in_(REVIEWABLE_MATCH_STATUSES))
+        q = q.filter(or_(MatchResult.model_id.is_(None), ModelRecord.id.is_(None)))
     else:
         q = q.filter(MatchResult.match_status == status)
 
@@ -940,6 +965,80 @@ def list_missing_attrs(
             "category_name": cat.name if cat else None,
         })
     return PaginatedResponse(total=total, page=page, page_size=page_size, items=items)
+
+
+@router.post("/{clean_job_id}/invalid-model/reassign")
+def reassign_invalid_model(
+    clean_job_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    将本任务内「型号失效」记录批量重新指定到同一型号。
+
+    型号失效 = match_status IN (matched, url_matched, confirmed) 且 model_id 为空
+    或指向已删除的型号（删除型号产生的悬空引用）。
+    payload: { "model_id": 123 }
+    """
+    model_id = (payload or {}).get("model_id")
+    if not model_id:
+        raise HTTPException(status_code=400, detail="model_id 不能为空")
+    model = db.query(ModelRecord).filter(ModelRecord.id == int(model_id)).first()
+    if not model:
+        raise HTTPException(status_code=404, detail="型号不存在")
+
+    _get_visible_match_clean_job_or_404(db, current_user, clean_job_id)
+
+    model_exists = (
+        db.query(ModelRecord.id)
+        .filter(ModelRecord.id == MatchResult.model_id)
+        .correlate(MatchResult)
+        .exists()
+    )
+    targets = (
+        db.query(MatchResult)
+        .filter(
+            MatchResult.clean_job_id == clean_job_id,
+            MatchResult.match_status.in_(REVIEWABLE_MATCH_STATUSES),
+            or_(MatchResult.model_id.is_(None), ~model_exists),
+        )
+        .all()
+    )
+
+    success = 0
+    failures: list[dict] = []
+    ok_ids: list[int] = []
+    for mr in targets:
+        rd = db.query(RawDataRecord).filter(RawDataRecord.id == mr.raw_data_id).first()
+        item_name = rd.item_name if rd else None
+        try:
+            _snapshot_prev_state(mr)
+            confirm_single_review(db, mr, model)
+            db.commit()
+            success += 1
+            ok_ids.append(mr.id)
+        except Exception:
+            logger.exception("invalid-model reassign failed for mr_id=%s", mr.id)
+            db.rollback()
+            failures.append({"id": mr.id, "item_name": item_name, "reason": "系统错误"})
+
+    if ok_ids:
+        try:
+            from app.services.attribute_matcher import run_attribute_matching
+            run_attribute_matching(db, ok_ids)
+        except Exception:
+            logger.exception("post-reassign attribute matching failed for ids=%s", ok_ids)
+            db.rollback()
+        try:
+            audit_price(db, ok_ids)
+        except Exception:
+            logger.exception("post-reassign price audit failed for ids=%s", ok_ids)
+            db.rollback()
+
+    touch_clean_job(db, clean_job_id)
+    db.commit()
+    return {"success": success, "failed": len(failures), "failures": failures}
 
 
 @router.put("/confirm/{match_id}", response_model=MatchResultOut)

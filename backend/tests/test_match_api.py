@@ -684,6 +684,67 @@ def test_pending_endpoint_supports_reviewed_and_excluded_statuses(db, match_clie
     assert excluded_response.json()["items"][0]["id"] == excluded.id
 
 
+def _seed_invalid_model_job(db):
+    """建一个任务：一条型号有效、两条指向已删除型号。返回 (clean_job, valid_row, dangling_rows, target_model)。"""
+    model = ModelRecord(brand_code="Sony", model_code="WH-XM5", category_code="headphone")
+    target = ModelRecord(brand_code="Sony", model_code="WH-XM6", category_code="headphone")
+    db.add_all([model, target])
+    db.flush()
+    upload = UploadFileRecord(filename="invalid-model.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+    clean_job = CleanJobRecord(file_ids=[upload.id], status="done", category_code="headphone")
+    db.add(clean_job)
+    db.flush()
+
+    valid = _seed_review_row(db, clean_job_id=clean_job.id, upload_id=upload.id, model_id=model.id, status="matched", item_name="valid row")
+    dangling_matched = _seed_review_row(db, clean_job_id=clean_job.id, upload_id=upload.id, model_id=999999, status="matched", item_name="dangling matched")
+    dangling_confirmed = _seed_review_row(db, clean_job_id=clean_job.id, upload_id=upload.id, model_id=888888, status="confirmed", item_name="dangling confirmed")
+    _seed_review_row(db, clean_job_id=clean_job.id, upload_id=upload.id, status="pending", item_name="pending row")
+    db.commit()
+    return clean_job, valid, [dangling_matched, dangling_confirmed], target
+
+
+def test_match_summary_counts_invalid_model(db, match_client):
+    clean_job, _valid, _dangling, _target = _seed_invalid_model_job(db)
+
+    resp = match_client.get(f"/api/match/{clean_job.id}/summary")
+    assert resp.status_code == 200
+    assert resp.json()["invalid_model"] == 2
+
+
+def test_pending_endpoint_supports_invalid_model_status(db, match_client):
+    clean_job, valid, dangling, _target = _seed_invalid_model_job(db)
+
+    resp = match_client.get(f"/api/match/{clean_job.id}/pending", params={"status": "invalid_model"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 2
+    assert {item["id"] for item in body["items"]} == {row.id for row in dangling}
+    assert valid.id not in {item["id"] for item in body["items"]}
+
+
+def test_invalid_model_reassign_repoints_rows(db, match_client):
+    clean_job, _valid, dangling, target = _seed_invalid_model_job(db)
+
+    resp = match_client.post(
+        f"/api/match/{clean_job.id}/invalid-model/reassign",
+        json={"model_id": target.id},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["success"] == 2
+    assert resp.json()["failed"] == 0
+
+    db.expire_all()
+    for row in dangling:
+        refreshed = db.query(MatchResult).get(row.id)
+        assert refreshed.model_id == target.id
+        assert refreshed.match_status == "confirmed"
+
+    summary = match_client.get(f"/api/match/{clean_job.id}/summary").json()
+    assert summary["invalid_model"] == 0
+
+
 def test_pending_endpoint_sorts_by_updated_at(db, match_client):
     """处理时间从近到远/从远到近应真正生效，而不是被忽略。"""
     upload = UploadFileRecord(filename="sort-queue.xlsx", status="done")

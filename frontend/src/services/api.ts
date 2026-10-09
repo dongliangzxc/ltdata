@@ -816,6 +816,15 @@ export const batchConfirmMatch = (clean_job_id: number, payload: BatchConfirmPay
 export const previewBatchConfirmMatch = (clean_job_id: number, filter: BatchConfirmFilter) =>
   api.get<BatchConfirmPreview>(`/match/${clean_job_id}/batch-confirm/preview`, { params: filter })
 
+export type InvalidModelReassignResult = {
+  success: number
+  failed: number
+  failures: BatchConfirmFailure[]
+}
+
+export const reassignInvalidModel = (clean_job_id: number, model_id: number) =>
+  api.post<InvalidModelReassignResult>(`/match/${clean_job_id}/invalid-model/reassign`, { model_id })
+
 export interface TransferNoticeOut {
   clean_job_id: number
   new_count: number

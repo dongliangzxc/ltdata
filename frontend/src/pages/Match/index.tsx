@@ -15,7 +15,7 @@ import {
   triggerExport, getExportJob, getDownloadUrl,
   getCleanMonthlyPool, rerunCleanTaskWithCurrentRules,
   listFilteredItems, recoverFilteredItem,
-  batchConfirmMatch, previewBatchConfirmMatch,
+  batchConfirmMatch, previewBatchConfirmMatch, reassignInvalidModel,
   searchCleanTasks, transferMatchItem, getTransferNotice, fetchAllCategories,
 } from '../../services/api'
 import type { CleanJobItem, MatchCandidateOut, MatchReviewDetail, FilteredItemOut, ModelItem, BatchConfirmFilter, BatchConfirmResult, CleanTaskSearchItem, UserProfile } from '../../services/api'
@@ -84,6 +84,7 @@ type MatchSummary = {
   disputed: number
   disabled: number
   unidentified_brand?: number
+  invalid_model?: number
 }
 
 type PendingItem = {
@@ -148,7 +149,7 @@ type MatchProgress = {
   error?: string
 }
 
-type ReviewTabKey = 'text_only' | 'pending' | 'unidentified_brand' | 'disputed' | 'matched' | 'confirmed' | 'excluded' | 'filtered'
+type ReviewTabKey = 'text_only' | 'pending' | 'unidentified_brand' | 'disputed' | 'matched' | 'confirmed' | 'invalid_model' | 'excluded' | 'filtered'
 
 type SearchBy = 'item_name' | 'brand_raw' | 'brand_code' | 'shop_name' | 'model_code'
 
@@ -261,6 +262,8 @@ export default function MatchPage() {
   const [batchModelId, setBatchModelId] = useState<number | null>(null)
   const [batchModelSearchLoading, setBatchModelSearchLoading] = useState(false)
   const batchModelSearchSeqRef = useRef(0)
+  const [invalidModelModalOpen, setInvalidModelModalOpen] = useState(false)
+  const [invalidModelReassigning, setInvalidModelReassigning] = useState(false)
   const [transferModalOpen, setTransferModalOpen] = useState(false)
   const [transferTargetId, setTransferTargetId] = useState<number | undefined>(undefined)
   const [transferOptions, setTransferOptions] = useState<CleanTaskSearchItem[]>([])
@@ -516,6 +519,7 @@ export default function MatchPage() {
       disputed: summary.disputed ?? 0,
       matched: (summary.matched ?? 0) + (summary.url_matched ?? 0),
       confirmed: summary.confirmed ?? 0,
+      invalid_model: summary.invalid_model ?? 0,
       excluded: summary.excluded ?? 0,
       filtered: filteredData?.total ?? 0,
     }
@@ -949,6 +953,36 @@ export default function MatchPage() {
     })
   }
 
+  const openInvalidModelModal = () => {
+    setBatchModelId(null)
+    setBatchModelOptions([])
+    setInvalidModelModalOpen(true)
+  }
+
+  const submitInvalidModelReassign = async () => {
+    if (!selectedJobId) return
+    if (!batchModelId) {
+      message.warning('请选择要指定的型号')
+      return
+    }
+    setInvalidModelReassigning(true)
+    try {
+      const { data } = await reassignInvalidModel(selectedJobId, batchModelId)
+      if (data.failed === 0) {
+        message.success(`已重新指定 ${data.success} 条`)
+      } else {
+        message.warning(`成功 ${data.success} 条，失败 ${data.failed} 条`)
+      }
+      setInvalidModelModalOpen(false)
+      refreshPending()
+      fetchSummary()
+    } catch (err: any) {
+      message.error(err?.response?.data?.detail || '批量重新指定失败')
+    } finally {
+      setInvalidModelReassigning(false)
+    }
+  }
+
   const handleExclude = async (matchId: number) => {
     const reason = reviewReason.trim()
     setConfirmingIds(prev => new Set(prev).add(matchId))
@@ -1129,6 +1163,7 @@ export default function MatchPage() {
     { key: 'pending', label: '待确认', count: summary?.pending ?? 0, color: '#d46b08' },
     { key: 'disputed', label: '争议复核', count: summary?.disputed ?? 0, color: '#cf1322' },
     { key: 'matched', label: '已匹配', count: (summary?.matched ?? 0) + (summary?.url_matched ?? 0), color: '#389e0d' },
+    { key: 'invalid_model', label: '型号失效', count: summary?.invalid_model ?? 0, color: '#fa541c' },
     { key: 'confirmed', label: '已人工确认', count: summary?.confirmed ?? 0, color: '#1677ff' },
     { key: 'excluded', label: '已排除', count: summary?.excluded ?? 0, color: '#8c8c8c' },
     { key: 'filtered', label: '干扰项过滤', count: filteredData?.total ?? 0, color: '#fa8c16' },
@@ -1545,6 +1580,19 @@ export default function MatchPage() {
                   以下商品的品牌在系统中未能识别，建议先前往「规则管理 → 品牌写法库」补充写法后重新匹配，效率高于逐条人工确认。
                   <Button type="link" size="small" onClick={() => window.open('/rules', '_blank')}>前往规则管理 →</Button>
                 </span>
+              }
+            />
+          )}
+          {activeTab === 'invalid_model' && (
+            <Alert
+              type="error"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message={
+                <Space wrap>
+                  <span>以下商品原先指定的型号已被删除（型号失效），发布时会漏掉这些记录，请重新指定正确型号。</span>
+                  <Button size="small" danger onClick={openInvalidModelModal}>批量重新指定型号</Button>
+                </Space>
               }
             />
           )}
@@ -2067,6 +2115,45 @@ export default function MatchPage() {
               allowClear
               value={batchModelId ?? undefined}
               placeholder="搜索并选择确认型号"
+              style={{ flex: 1 }}
+              filterOption={false}
+              onSearch={handleBatchModelSearch}
+              onChange={(value) => setBatchModelId(value ?? null)}
+              loading={batchModelSearchLoading}
+              options={batchModelOptions.map(m => ({
+                value: m.id,
+                label: `[${m.brand_code || '-'}] ${m.model_code || '待补'}${m.model_name ? ` - ${m.model_name}` : ''}`,
+              }))}
+            />
+            <Button icon={<PlusOutlined />} onClick={() => { setCreateModelContext('batch'); setCreateModelOpen(true) }}>
+              新建型号
+            </Button>
+          </Space.Compact>
+        </Space>
+      </Modal>
+
+      <Modal
+        open={invalidModelModalOpen}
+        title={`将 ${summary?.invalid_model ?? 0} 条型号失效记录重新指定到所选型号`}
+        width={560}
+        okText="确认"
+        cancelText="取消"
+        confirmLoading={invalidModelReassigning}
+        onOk={submitInvalidModelReassign}
+        onCancel={() => setInvalidModelModalOpen(false)}
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Alert
+            type="error"
+            showIcon
+            message="这些记录原先指定的型号已被删除。此处会统一重新指定到下方选择的型号，并重新确认。"
+          />
+          <Space.Compact style={{ width: '100%' }}>
+            <Select
+              showSearch
+              allowClear
+              value={batchModelId ?? undefined}
+              placeholder="搜索并选择要指定的型号"
               style={{ flex: 1 }}
               filterOption={false}
               onSearch={handleBatchModelSearch}

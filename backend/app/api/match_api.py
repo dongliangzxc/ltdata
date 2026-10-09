@@ -810,6 +810,7 @@ def get_match_review_detail(match_id: int, db: Session = Depends(get_db)):
         "model_id": mr.model_id,
         "model_code": model.model_code if model else None,
         "brand_code": model.brand_code if model else None,
+        "series": model.series if model else None,
         "category_code": category_code,
         "category_name": cat.name if cat else None,
         "metadata_specs": metadata_specs,

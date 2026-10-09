@@ -1327,6 +1327,48 @@ def test_pending_search_by_brand_raw_filters_on_raw_brand(db, match_client):
     assert body["items"][0]["id"] == dji_mr.id
 
 
+def test_pending_filters_by_price_range(db, match_client):
+    from app.models.schemas import RawDataRecord, MatchResult, CleanJobRecord, UploadFileRecord
+
+    model = ModelRecord(brand_code="DJI", model_code="Osmo6", category_code="camera")
+    db.add(model)
+    upload = UploadFileRecord(filename="price.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+    clean_job = CleanJobRecord(file_ids=[upload.id], status="reviewing")
+    db.add(clean_job)
+    db.flush()
+
+    ids: dict[str, int] = {}
+    for name, price in [("低价", 800), ("中价", 2000), ("高价", 3000)]:
+        rd = RawDataRecord(file_id=upload.id, platform="jd", item_id=f"sku-{name}", item_name=name, price=price)
+        db.add(rd)
+        db.flush()
+        mr = MatchResult(
+            clean_job_id=clean_job.id, raw_data_id=rd.id, model_id=model.id,
+            match_status="pending", matched_by="auto", match_source="s1",
+        )
+        db.add(mr)
+        db.flush()
+        ids[name] = mr.id
+    db.commit()
+
+    resp = match_client.get(f"/api/match/{clean_job.id}/pending", params={"status": "pending", "price_min": 1000})
+    assert resp.status_code == 200
+    assert {i["id"] for i in resp.json()["items"]} == {ids["中价"], ids["高价"]}
+
+    resp = match_client.get(f"/api/match/{clean_job.id}/pending", params={"status": "pending", "price_max": 1000})
+    assert resp.status_code == 200
+    assert {i["id"] for i in resp.json()["items"]} == {ids["低价"]}
+
+    resp = match_client.get(
+        f"/api/match/{clean_job.id}/pending",
+        params={"status": "pending", "price_min": 1000, "price_max": 2500},
+    )
+    assert resp.status_code == 200
+    assert {i["id"] for i in resp.json()["items"]} == {ids["中价"]}
+
+
 def test_pending_search_by_item_name_default_preserves_previous_behavior(db, match_client):
     from app.models.schemas import BrandRecord
     model_dji = ModelRecord(brand_code="DJI", model_code="Osmo6", category_code="camera")

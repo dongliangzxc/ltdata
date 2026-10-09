@@ -215,6 +215,8 @@ export default function MatchPage() {
   const [searchBy, setSearchBy] = useState<SearchBy>('item_name')
   const [categoryName, setCategoryName] = useState<string | undefined>()
   const [sortBy, setSortBy] = useState<string>('default')
+  const [priceMin, setPriceMin] = useState<number | null>(null)
+  const [priceMax, setPriceMax] = useState<number | null>(null)
   const [topBrandsOnly, setTopBrandsOnly] = useState(false)
   const [page, setPage] = useState(1)
   const [confirmingIds, setConfirmingIds] = useState<Set<number>>(new Set())
@@ -435,11 +437,13 @@ export default function MatchPage() {
       ...(activeTab === 'unidentified_brand' ? { brand_identified: 0 } : {}),
       category_name: categoryName || undefined,
       sort_by: sortBy !== 'default' ? sortBy : undefined,
+      price_min: priceMin ?? undefined,
+      price_max: priceMax ?? undefined,
       top_brands: topBrandsOnly && isPowerBankJob ? TOP_BRANDS_LIMIT : undefined,
     }).then(r => r.data),
     {
       ready: selectedJobId != null && summary != null && summary.total > 0 && activeTab !== 'filtered',
-      refreshDeps: [selectedJobId, keyword, searchBy, page, activeTab, categoryName, sortBy, topBrandsOnly],
+      refreshDeps: [selectedJobId, keyword, searchBy, page, activeTab, categoryName, sortBy, priceMin, priceMax, topBrandsOnly],
     }
   )
 
@@ -1477,6 +1481,22 @@ export default function MatchPage() {
                 onChange={e => setInputValue(e.target.value)}
                 onSearch={v => { setInputValue(v); setKeyword(v); setPage(1); resetBatchSelection() }}
               />
+              <InputNumber
+                placeholder="价格下限"
+                min={0}
+                style={{ width: 120 }}
+                value={priceMin ?? undefined}
+                onChange={v => { setPriceMin(v ?? null); setPage(1); resetBatchSelection() }}
+                addonAfter="元"
+              />
+              <InputNumber
+                placeholder="价格上限"
+                min={0}
+                style={{ width: 120 }}
+                value={priceMax ?? undefined}
+                onChange={v => { setPriceMax(v ?? null); setPage(1); resetBatchSelection() }}
+                addonAfter="元"
+              />
             </Space>
           }
         >
@@ -1490,6 +1510,8 @@ export default function MatchPage() {
               setInputValue('')
               setCategoryName(undefined)
               setSortBy('default')
+              setPriceMin(null)
+              setPriceMax(null)
               setSelectedReviewId(null)
               setSelectedFilteredId(null)
               setReviewDetail(null)

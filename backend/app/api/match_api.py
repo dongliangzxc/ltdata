@@ -543,6 +543,8 @@ def list_pending(
     category_name: Optional[str] = Query(None),
     sort_by: str = Query("default"),
     top_brands: Optional[int] = Query(None, ge=1, le=500, description="仅展示当前任务内销量前 N 品牌"),
+    price_min: Optional[float] = Query(None, ge=0, description="价格下限（元）"),
+    price_max: Optional[float] = Query(None, ge=0, description="价格上限（元）"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -611,6 +613,10 @@ def list_pending(
         q = q.filter(MatchResult.brand_identified == brand_identified)
     if category_name:
         q = q.filter(Category.code == category_name)
+    if price_min is not None:
+        q = q.filter(RawDataRecord.price >= price_min)
+    if price_max is not None:
+        q = q.filter(RawDataRecord.price <= price_max)
     if top_brands and top_brands > 0:
         q = _apply_top_brands_filter(db, q, clean_job_id, top_brands)
 

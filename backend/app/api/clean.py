@@ -937,6 +937,7 @@ def list_clean_job_matched(
                 "match_source": mr.match_source,
                 "model_code": model.model_code if model else None,
                 "brand_code": model.brand_code if model else None,
+                "series": model.series if model else None,
                 "item_name": rd.item_name,
                 "item_url": rd.item_url,
                 "brand_raw": rd.brand_raw,

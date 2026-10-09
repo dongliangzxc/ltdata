@@ -170,7 +170,9 @@ CREATE TABLE IF NOT EXISTS category_extra_fields (
 
 INSERT IGNORE INTO category_extra_fields (category_code, field_key, field_label, field_type, required, sort_order) VALUES
     ('tablet',    'series', '产品系列', 'text', 1, 1),
-    ('edu_tablet', 'series', '产品系列', 'text', 1, 1);
+    ('edu_tablet', 'series', '产品系列', 'text', 1, 1),
+    ('camera',    'series', '产品系列', 'text', 0, 1),
+    ('vrar',      'series', '产品系列', 'text', 0, 1);
 
 -- 从型号主信息回填品牌主数据
 INSERT IGNORE INTO brands (brand_code, brand_name, status)

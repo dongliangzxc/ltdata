@@ -325,9 +325,11 @@ const matchedMappingCols: ColumnsType<CleanMatchedItem> = [
   },
   {
     title: '匹配型号', width: 150,
-    render: (_: unknown, row) => row.brand_code || row.model_code
-      ? `${row.brand_code || '-'} ${row.model_code || '-'}`
-      : '-',
+    render: (_: unknown, row) => {
+      const series = (row.series || '').trim()
+      if (!row.brand_code && !row.model_code && !series) return '-'
+      return [row.brand_code || '-', series || null, row.model_code || '-'].filter(Boolean).join(' ')
+    },
   },
   {
     title: '匹配来源', dataIndex: 'match_source', width: 130,

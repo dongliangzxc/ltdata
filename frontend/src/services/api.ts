@@ -316,6 +316,7 @@ export type CleanMatchedItem = {
   match_source?: string | null
   model_code?: string | null
   brand_code?: string | null
+  series?: string | null
   matched_keyword?: string | null
   intervention_rule_name?: string | null
   matched_reason?: string | null

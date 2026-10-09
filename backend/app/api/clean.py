@@ -867,6 +867,8 @@ def list_clean_job_matched(
     job_id: int,
     group: str = Query("mapping", pattern="^(mapping|interference_link|interference_archive)$"),
     keyword: Optional[str] = Query(None),
+    price_min: Optional[float] = Query(None, ge=0),
+    price_max: Optional[float] = Query(None, ge=0),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -876,6 +878,8 @@ def list_clean_job_matched(
     - mapping：匹配到型号的结果（matched/url_matched/confirmed）
     - interference_link：命中干扰链接库被剔除的数据
     - interference_archive：命中干扰项规则被存档的数据
+
+    支持按价格区间筛选（price_min / price_max，单位为元）。
     """
     _get_visible_clean_job_or_404(db, current_user, job_id)
 
@@ -915,6 +919,14 @@ def list_clean_job_matched(
     }
 
     kw = (keyword or "").strip()
+
+    def _apply_price_filter(query):
+        if price_min is not None:
+            query = query.filter(RawDataRecord.price >= price_min)
+        if price_max is not None:
+            query = query.filter(RawDataRecord.price <= price_max)
+        return query
+
     if group == "mapping":
         q = (
             db.query(MatchResult, RawDataRecord, ModelRecord)
@@ -927,6 +939,7 @@ def list_clean_job_matched(
         )
         if kw:
             q = q.filter(RawDataRecord.item_name.ilike(f"%{kw}%"))
+        q = _apply_price_filter(q)
         total = q.count()
         rows = q.order_by(MatchResult.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
         items = [
@@ -965,6 +978,7 @@ def list_clean_job_matched(
             q = q.filter(FilteredItem.intervention_rule_id.isnot(None))
         if kw:
             q = q.filter(RawDataRecord.item_name.ilike(f"%{kw}%"))
+        q = _apply_price_filter(q)
         total = q.count()
         rows = q.order_by(FilteredItem.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
         items = [

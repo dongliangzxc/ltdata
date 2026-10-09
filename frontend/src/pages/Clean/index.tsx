@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import type { Key } from 'react'
 import {
   Card, Button, Table, Tag, Modal, Row, Col,
-  Space, Statistic, Select, message, Tabs, Popconfirm, Input
+  Space, Statistic, Select, message, Tabs, Popconfirm, Input, InputNumber
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { EyeOutlined, AimOutlined, CheckCircleFilled, DeleteOutlined, LineChartOutlined, FileSearchOutlined } from '@ant-design/icons'
@@ -403,6 +403,8 @@ export default function CleanPage() {
   const [matchedPage, setMatchedPage] = useState(1)
   const [matchedKeyword, setMatchedKeyword] = useState('')
   const [matchedKeywordInput, setMatchedKeywordInput] = useState('')
+  const [matchedPriceMin, setMatchedPriceMin] = useState<number | null>(null)
+  const [matchedPriceMax, setMatchedPriceMax] = useState<number | null>(null)
   const [upsertingRowKey, setUpsertingRowKey] = useState<string | null>(null)
   const [selectedMonthlyRowKeys, setSelectedMonthlyRowKeys] = useState<Key[]>([])
   const [batchUpserting, setBatchUpserting] = useState(false)
@@ -564,10 +566,12 @@ export default function CleanPage() {
         page: matchedPage,
         page_size: 20,
         keyword: matchedKeyword || undefined,
+        price_min: matchedPriceMin ?? undefined,
+        price_max: matchedPriceMax ?? undefined,
       })
       return { ...response.data, jobId }
     },
-    { ready: matchedJobId != null, refreshDeps: [matchedJobId, matchedGroup, matchedPage, matchedKeyword] }
+    { ready: matchedJobId != null, refreshDeps: [matchedJobId, matchedGroup, matchedPage, matchedKeyword, matchedPriceMin, matchedPriceMax] }
   )
   const currentMatchedData: (CleanMatchedResponse & { jobId: number }) | undefined =
     matchedData?.jobId === matchedJobId ? matchedData : undefined
@@ -719,7 +723,7 @@ export default function CleanPage() {
             label: `${matchedTabLabels[key]}（${currentMatchedData?.counts?.[key] ?? 0}）`,
           }))}
         />
-        <Space style={{ marginBottom: 12 }}>
+        <Space style={{ marginBottom: 12 }} wrap>
           <Input.Search
             allowClear
             placeholder="按商品名称搜索"
@@ -727,6 +731,22 @@ export default function CleanPage() {
             value={matchedKeywordInput}
             onChange={e => setMatchedKeywordInput(e.target.value)}
             onSearch={v => { setMatchedKeyword(v.trim()); setMatchedPage(1) }}
+          />
+          <InputNumber
+            placeholder="价格下限"
+            min={0}
+            style={{ width: 130 }}
+            value={matchedPriceMin ?? undefined}
+            onChange={value => { setMatchedPriceMin(value ?? null); setMatchedPage(1) }}
+            addonAfter="元"
+          />
+          <InputNumber
+            placeholder="价格上限"
+            min={0}
+            style={{ width: 130 }}
+            value={matchedPriceMax ?? undefined}
+            onChange={value => { setMatchedPriceMax(value ?? null); setMatchedPage(1) }}
+            addonAfter="元"
           />
         </Space>
         <Table

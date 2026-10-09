@@ -2660,3 +2660,41 @@ def test_list_clean_job_matched_returns_separated_groups(db):
     payload = response.json()
     assert payload["total"] == 1
     assert payload["items"][0]["item_name"] == "映射商品B"
+
+
+def test_list_clean_job_matched_filters_by_price(db):
+    client = _make_client(db)
+    db.add(Category(code="soundbar", name="回音壁"))
+    db.flush()
+    upload = UploadFileRecord(filename="price.xlsx", platform="jd", row_count=3, status="done")
+    db.add(upload)
+    db.flush()
+    raw_cheap = RawDataRecord(file_id=upload.id, platform="jd", item_id="p1", item_name="便宜商品", price=800)
+    raw_mid = RawDataRecord(file_id=upload.id, platform="jd", item_id="p2", item_name="中价商品", price=2000)
+    raw_high = RawDataRecord(file_id=upload.id, platform="jd", item_id="p3", item_name="高价商品", price=3000)
+    db.add_all([raw_cheap, raw_mid, raw_high])
+    db.flush()
+    job = CleanJobRecord(file_ids=[upload.id], rules={"dedup": True}, status="reviewing", row_in=3, row_out=3)
+    db.add(job)
+    db.flush()
+    model = ModelRecord(brand_code="SONY", model_code="HT-A7000", category_code="soundbar")
+    db.add(model)
+    db.flush()
+    db.add_all([
+        MatchResult(clean_job_id=job.id, raw_data_id=raw_cheap.id, model_id=model.id, match_status="matched", match_source="s1"),
+        MatchResult(clean_job_id=job.id, raw_data_id=raw_mid.id, model_id=model.id, match_status="matched", match_source="s1"),
+        MatchResult(clean_job_id=job.id, raw_data_id=raw_high.id, model_id=model.id, match_status="matched", match_source="s1"),
+    ])
+    db.commit()
+
+    resp = client.get(f"/api/clean/jobs/{job.id}/matched", params={"group": "mapping", "price_min": 1000})
+    assert resp.status_code == 200
+    assert {i["item_name"] for i in resp.json()["items"]} == {"中价商品", "高价商品"}
+
+    resp = client.get(f"/api/clean/jobs/{job.id}/matched", params={"group": "mapping", "price_max": 1000})
+    assert resp.status_code == 200
+    assert {i["item_name"] for i in resp.json()["items"]} == {"便宜商品"}
+
+    resp = client.get(f"/api/clean/jobs/{job.id}/matched", params={"group": "mapping", "price_min": 1000, "price_max": 2500})
+    assert resp.status_code == 200
+    assert {i["item_name"] for i in resp.json()["items"]} == {"中价商品"}

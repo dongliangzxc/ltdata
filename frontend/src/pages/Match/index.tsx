@@ -150,18 +150,22 @@ type MatchProgress = {
 
 type ReviewTabKey = 'text_only' | 'pending' | 'unidentified_brand' | 'disputed' | 'matched' | 'confirmed' | 'excluded' | 'filtered'
 
-type SearchBy = 'item_name' | 'brand_raw' | 'brand_code'
+type SearchBy = 'item_name' | 'brand_raw' | 'brand_code' | 'shop_name' | 'model_code'
 
 const searchByLabelMap: Record<SearchBy, string> = {
   item_name: '商品名称',
   brand_raw: '原品牌',
   brand_code: '入库品牌',
+  shop_name: '店铺',
+  model_code: '型号',
 }
 
 const searchByPlaceholderMap: Record<SearchBy, string> = {
   item_name: '搜索宝贝名称',
   brand_raw: '搜索原品牌',
   brand_code: '搜索入库品牌',
+  shop_name: '搜索店铺',
+  model_code: '搜索型号',
 }
 
 function readStoredUser(): UserProfile | null {
@@ -1424,7 +1428,7 @@ export default function MatchPage() {
                 style={{ width: 130 }}
                 options={(activeTab === 'filtered'
                   ? (['item_name', 'brand_raw'] as SearchBy[])
-                  : (['item_name', 'brand_raw', 'brand_code'] as SearchBy[])
+                  : (['item_name', 'brand_raw', 'brand_code', 'shop_name', 'model_code'] as SearchBy[])
                 ).map(value => ({ value, label: searchByLabelMap[value] }))}
               />
               <Input.Search
@@ -1454,7 +1458,7 @@ export default function MatchPage() {
               setFilteredDetail(null)
               setReviewReason('')
               resetBatchSelection()
-              if (nextTab === 'filtered' && searchBy === 'brand_code') {
+              if (nextTab === 'filtered' && ['brand_code', 'shop_name', 'model_code'].includes(searchBy)) {
                 setSearchBy('item_name')
               }
             }}

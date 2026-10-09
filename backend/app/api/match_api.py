@@ -463,7 +463,7 @@ def _build_review_queue_query(
         .filter(MatchResult.clean_job_id == clean_job_id, MatchResult.match_status == tab)
     )
 
-    allowed_search_fields = {"item_name", "brand_raw", "brand_code"}
+    allowed_search_fields = {"item_name", "brand_raw", "brand_code", "shop_name", "model_code"}
     if search_by not in allowed_search_fields:
         search_by = "item_name"
     if keyword:
@@ -478,6 +478,10 @@ def _build_review_queue_query(
                      | (BrandRecord.brand_name.ilike(pattern))
                  )
             )
+        elif search_by == "shop_name":
+            q = q.filter(RawDataRecord.shop_name.ilike(pattern))
+        elif search_by == "model_code":
+            q = q.filter(ModelRecord.model_code.ilike(pattern))
         else:
             q = q.filter(RawDataRecord.item_name.ilike(pattern))
     if category_name:
@@ -555,7 +559,7 @@ def list_pending(
     else:
         q = q.filter(MatchResult.match_status == status)
 
-    allowed_search_fields = {"item_name", "brand_raw", "brand_code"}
+    allowed_search_fields = {"item_name", "brand_raw", "brand_code", "shop_name", "model_code"}
     if search_by not in allowed_search_fields:
         search_by = "item_name"
 
@@ -572,6 +576,10 @@ def list_pending(
                  )
                  .group_by(BrandRecord.id)
             )
+        elif search_by == "shop_name":
+            q = q.filter(RawDataRecord.shop_name.ilike(pattern))
+        elif search_by == "model_code":
+            q = q.filter(ModelRecord.model_code.ilike(pattern))
         else:  # item_name（默认）
             q = q.filter(RawDataRecord.item_name.ilike(pattern))
     if brand_identified is not None:

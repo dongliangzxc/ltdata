@@ -779,7 +779,7 @@ export const confirmMatch = (
 export type BatchConfirmFilter = {
   tab: 'text_only' | 'pending'
   keyword?: string | null
-  search_by?: 'item_name' | 'brand_raw' | 'brand_code'
+  search_by?: 'item_name' | 'brand_raw' | 'brand_code' | 'shop_name' | 'model_code'
   category_name?: string | null
   sort_by?: 'default' | 'sales_qty_desc' | 'sales_qty_asc' | 'price_desc' | 'price_asc' | 'updated_at_desc' | 'updated_at_asc'
   top_brands?: number | null

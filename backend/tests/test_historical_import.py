@@ -285,11 +285,11 @@ def test_headers_detects_detail_sheet_and_maps_door_lock_aliases(db, tmp_path, m
     assert data["issues"] == []
 
 
-def test_headers_defaults_model_text_to_product_series_when_model_is_storage(db):
-    """平板格式：同时有「产品系列」和「机型」列时，「机型」实为存储配置。
+def test_headers_defaults_model_to_storage_and_type_to_product_series(db):
+    """平板格式：同时有「产品系列」和「机型」列时，「机型」为存储，「产品系列」为系列。
 
-    默认映射应把「产品系列」提升为型号、把「机型」落到机型/系列，
-    避免用存储配置（如 16+512G）当型号去匹配导致「匹配到多个型号」。
+    默认映射为 型号←机型、机型/系列←产品系列；系列品类的匹配按
+    「品牌 + 产品系列 + 型号码(存储)」进行（见 series 匹配逻辑）。
     """
     db.add(Category(code="tablet", name="智能平板"))
     db.commit()
@@ -313,8 +313,9 @@ def test_headers_defaults_model_text_to_product_series_when_model_is_storage(db)
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["mapping"]["model_text"] == "产品系列"
-    assert data["mapping"]["model_type"] == "机型"
+    assert data["mapping"]["model_text"] == "机型"
+    assert data["mapping"]["model_type"] == "产品系列"
+    assert data["mapping"]["platform"] == "五大电商"
 
 
 def test_headers_keeps_model_text_when_product_series_not_present(db):
@@ -1821,3 +1822,126 @@ def test_confirm_rejects_invalid_mapping_source_column(db, tmp_path, monkeypatch
 
     assert resp.status_code == 422
     assert "字段映射不存在：标题 -> 不存在列" in resp.json()["detail"]
+
+
+def _seed_tablet_series(db):
+    from app.models.schemas import CategoryExtraField
+
+    db.add(Category(code="tablet", name="智能平板"))
+    db.add(CategoryExtraField(
+        category_code="tablet", field_key="series", field_label="产品系列",
+        field_type="text", required=1, sort_order=1,
+    ))
+    db.commit()
+
+
+def test_import_tablet_matches_by_brand_series_storage(db):
+    """系列品类：按「品牌 + 产品系列 + 型号码(存储)」精确匹配已有型号。"""
+    _seed_tablet_series(db)
+    model = ModelRecord(
+        brand_code="红米",
+        model_code="6+128G",
+        model_name="6+128G",
+        series="REDMI Pad 2 SE",
+        category_code="tablet",
+    )
+    db.add(model)
+    db.commit()
+    client = _client(db)
+    content = _history_excel([{
+        "年度": 2026, "月度": "202606", "平台": "京东",
+        "商品名称": "红米平板", "商品网址": "https://item.jd.com/1001.html",
+        "品牌": "红米", "产品系列": "REDMI Pad 2 SE", "机型": "6+128G",
+    }])
+
+    resp = client.post(
+        "/api/historical/import",
+        files={"file": ("智能平板数据库.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] == 1
+    assert data["errors"] == []
+    assert db.query(HistoricalMapping).one().model_id == model.id
+
+
+def test_import_tablet_auto_creates_model_with_series(db):
+    """系列品类：匹配不到时创建型号，写入 series 与型号码(存储)。"""
+    _seed_tablet_series(db)
+    client = _client(db)
+    content = _history_excel([{
+        "年度": 2026, "月度": "202606", "平台": "京东",
+        "商品名称": "红米平板", "商品网址": "https://item.jd.com/1001.html",
+        "品牌": "红米", "产品系列": "REDMI Pad 2 SE", "机型": "6+128G",
+    }])
+
+    resp = client.post(
+        "/api/historical/import",
+        files={"file": ("智能平板数据库.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] == 1
+    assert data["errors"] == []
+    model = db.query(ModelRecord).filter(ModelRecord.category_code == "tablet").one()
+    assert model.brand_code == "红米"
+    assert model.model_code == "6+128G"
+    assert model.series == "REDMI Pad 2 SE"
+
+
+def test_import_tablet_same_storage_different_series_creates_two_models(db):
+    """同品牌、同存储、不同产品系列 → 两条独立型号，不串号。"""
+    _seed_tablet_series(db)
+    client = _client(db)
+    content = _history_excel([
+        {
+            "年度": 2026, "月度": "202606", "平台": "京东",
+            "商品名称": "联想平板A", "商品网址": "https://item.jd.com/2001.html",
+            "品牌": "联想", "产品系列": "小新Pad Pro 12.7", "机型": "12+256G",
+        },
+        {
+            "年度": 2026, "月度": "202606", "平台": "京东",
+            "商品名称": "联想平板B", "商品网址": "https://item.jd.com/2002.html",
+            "品牌": "联想", "产品系列": "拯救者Y700五代", "机型": "12+256G",
+        },
+    ])
+
+    resp = client.post(
+        "/api/historical/import",
+        files={"file": ("智能平板数据库.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] == 2
+    assert data["errors"] == []
+    models = db.query(ModelRecord).filter(ModelRecord.category_code == "tablet").all()
+    assert len(models) == 2
+    assert {m.series for m in models} == {"小新Pad Pro 12.7", "拯救者Y700五代"}
+    assert {m.model_code for m in models} == {"12+256G"}
+
+
+def test_import_tablet_same_storage_different_series_matches_correct_model(db):
+    """同品牌同存储不同系列，各自命中对应型号，不误配。"""
+    _seed_tablet_series(db)
+    m1 = ModelRecord(brand_code="联想", model_code="12+256G", model_name="12+256G", series="小新Pad Pro 12.7", category_code="tablet")
+    m2 = ModelRecord(brand_code="联想", model_code="12+256G", model_name="12+256G", series="拯救者Y700五代", category_code="tablet")
+    db.add_all([m1, m2])
+    db.commit()
+    client = _client(db)
+    content = _history_excel([{
+        "年度": 2026, "月度": "202606", "平台": "京东",
+        "商品名称": "联想平板B", "商品网址": "https://item.jd.com/2002.html",
+        "品牌": "联想", "产品系列": "拯救者Y700五代", "机型": "12+256G",
+    }])
+
+    resp = client.post(
+        "/api/historical/import",
+        files={"file": ("智能平板数据库.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["success"] == 1
+    assert db.query(HistoricalMapping).one().model_id == m2.id

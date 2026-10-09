@@ -26,7 +26,7 @@ from app.core.auth_deps import get_current_user
 from app.core.config import settings
 from app.core.permissions import visible_category_codes
 from app.models.database import get_db
-from app.models.schemas import Category, HistoricalMapping, ModelRecord, User
+from app.models.schemas import Category, CategoryExtraField, HistoricalMapping, ModelRecord, User
 from app.services.export_guards import MAX_SYNC_EXPORT_ROWS, ensure_export_row_limit
 from app.services.import_helper import save_tmp_file
 from app.utils.time_utils import format_beijing_datetime
@@ -104,7 +104,7 @@ HISTORICAL_FIELD_ALIASES = {
     "week": {"周", "周度"},
     "report_type": {"报告类型"},
     "channel": {"渠道", "渠道类型"},
-    "platform": {"商场", "平台"},
+    "platform": {"商场", "平台", "五大电商"},
     "category_name_raw": {"品类", "类目", "产品品类"},
     "brand_raw": {"品牌"},
     "model_text": {"型号", "品牌+系列", "品牌产品系列", "机型"},
@@ -256,24 +256,7 @@ def _build_mapping(columns: list[str]) -> dict[str, str]:
             used.add(field)
         elif field == "item_url" and col == "网址":
             mapping[field] = col
-    _apply_model_text_preference(columns, mapping)
     return mapping
-
-
-def _apply_model_text_preference(columns: list[str], mapping: dict[str, str]) -> None:
-    """后置补充规则（优先级靠后，不覆盖已有型号/机型映射）。
-
-    当「型号」默认取自「机型」列、且表中另有「产品系列」列时，说明该表的
-    「机型」列实际装的是存储配置等规格值，真正的机型在「产品系列」列。
-    此时把「产品系列」提升为「型号」，「机型」改映射到「机型/系列」。
-
-    触发条件限定了「型号」当前恰好取自「机型」列，因此不影响路由器
-    （品牌产品系列→型号、产品系列→机型）、笔记本（品牌+系列→型号）等
-    已有文件的默认映射，也不影响只有「机型」列的门锁文件。
-    """
-    if mapping.get("model_text") == "机型" and "产品系列" in columns:
-        mapping["model_text"] = "产品系列"
-        mapping["model_type"] = "机型"
 
 
 def _read_sheet_preview(
@@ -505,12 +488,16 @@ def _preview_stats_for_rows(db: Session, rows: Iterable[dict]) -> dict:
     model_text_values = {_clean_value(_get(row, "型号")) for row in materialized_rows}
     models_by_code, models_by_code_unbranded, models_by_name = _load_preview_models(db, model_code_values, model_text_values)
     ambiguous_model_codes = _ambiguous_model_codes_from_rows(materialized_rows, models_by_code_unbranded)
+    series_codes = _series_category_codes(db)
+    models_by_series = _load_series_models(db, series_codes)
     return _calculate_preview_stats_for_rows(
         materialized_rows,
         models_by_code=models_by_code,
         models_by_code_unbranded=models_by_code_unbranded,
         models_by_name=models_by_name,
         ambiguous_model_codes=ambiguous_model_codes,
+        series_codes=series_codes,
+        models_by_series=models_by_series,
     )
 
 
@@ -534,6 +521,42 @@ def _load_preview_models(db: Session, model_code_values: set[str | None], model_
     return models_by_code, models_by_code_unbranded, models_by_name
 
 
+def _series_category_codes(db: Session) -> set[str]:
+    """配置了「产品系列」扩展字段的品类码（如智能平板/学习平板）。"""
+    rows = (
+        db.query(CategoryExtraField.category_code)
+        .filter(CategoryExtraField.field_key == "series")
+        .all()
+    )
+    return {code for (code,) in rows if code}
+
+
+def _series_model_key(
+    brand_code: Optional[str],
+    category_code: Optional[str],
+    series: Optional[str],
+    model_code: Optional[str],
+) -> tuple[str, str, str, str]:
+    return (
+        (brand_code or "").strip(),
+        (category_code or "").strip(),
+        (series or "").strip(),
+        (model_code or "").strip(),
+    )
+
+
+def _load_series_models(
+    db: Session, series_codes: set[str]
+) -> dict[tuple[str, str, str, str], ModelRecord]:
+    """预加载系列品类型号，键为 (品牌码, 品类码, 产品系列, 型号码)。"""
+    if not series_codes:
+        return {}
+    result: dict[tuple[str, str, str, str], ModelRecord] = {}
+    for model in db.query(ModelRecord).filter(ModelRecord.category_code.in_(series_codes)).all():
+        result[_series_model_key(model.brand_code, model.category_code, model.series, model.model_code)] = model
+    return result
+
+
 def _calculate_preview_stats_for_rows(
     rows: Iterable[dict],
     *,
@@ -541,11 +564,15 @@ def _calculate_preview_stats_for_rows(
     models_by_code_unbranded: dict[str, list[ModelRecord]],
     models_by_name: dict[str, list[ModelRecord]],
     ambiguous_model_codes: set[str],
+    series_codes: Optional[set[str]] = None,
+    models_by_series: Optional[dict[tuple[str, str, str, str], ModelRecord]] = None,
 ) -> dict:
+    series_codes = series_codes or set()
+    models_by_series = models_by_series or {}
     total_rows = 0
     missing_required_rows = 0
     missing_model_rows = 0
-    auto_create_keys: set[tuple[str, str]] = set()
+    auto_create_keys: set[tuple] = set()
 
     for row in rows:
         total_rows += 1
@@ -554,6 +581,8 @@ def _calculate_preview_stats_for_rows(
             continue
         model_code_raw = _clean_value(_get(row, "型号码"))
         model_text = _clean_value(_get(row, "型号"))
+        model_type_raw = _clean_value(_get(row, "机型"))
+        category_code = _clean_value(_get(row, "品类码"))
         brand_raw = _clean_value(_get(row, "品牌"))
         brand_code_raw = _clean_value(_get(row, "品牌码"))
         effective_brand_code = _effective_brand_code(brand_code_raw, brand_raw)
@@ -567,6 +596,10 @@ def _calculate_preview_stats_for_rows(
             models_by_code_unbranded=models_by_code_unbranded,
             models_by_name=models_by_name,
             ambiguous_model_codes=ambiguous_model_codes,
+            model_type_raw=model_type_raw,
+            category_code=category_code,
+            series_codes=series_codes,
+            models_by_series=models_by_series,
         )
         if model is None:
             missing_model_rows += 1
@@ -577,10 +610,17 @@ def _calculate_preview_stats_for_rows(
                 brand_raw=brand_raw,
                 model_code_raw=model_code_raw,
                 model_text=model_text,
-                category_code=_clean_value(_get(row, "品类码")),
+                category_code=category_code,
             )
             if values is not None:
-                auto_create_keys.add((values["brand_code"], values["model_code"]))
+                auto_create_keys.add(
+                    (
+                        values["brand_code"],
+                        category_code,
+                        _usable_identity_value(model_type_raw) if category_code in series_codes else None,
+                        values["model_code"],
+                    )
+                )
 
     return {
         "total_rows": total_rows,
@@ -600,8 +640,33 @@ def _resolve_model(
     models_by_code_unbranded: dict[str, list[ModelRecord]],
     models_by_name: dict[str, list[ModelRecord]],
     ambiguous_model_codes: Optional[set[str]] = None,
+    model_type_raw: Optional[str] = None,
+    category_code: Optional[str] = None,
+    series_codes: Optional[set[str]] = None,
+    models_by_series: Optional[dict[tuple[str, str, str, str], ModelRecord]] = None,
 ):
     ambiguous_model_codes = ambiguous_model_codes or set()
+    series_codes = series_codes or set()
+    models_by_series = models_by_series or {}
+
+    # 系列品类（智能平板/学习平板）：按「品牌 + 产品系列 + 型号码(存储)」精确定位
+    if (
+        model_type_raw
+        and model_text
+        and category_code
+        and category_code in series_codes
+        and brand_code_raw
+        and not _is_unknown_brand(brand_code_raw)
+    ):
+        series = _usable_identity_value(model_type_raw)
+        series_code = _usable_identity_value(model_code_raw) or _usable_identity_value(model_text)
+        if series and series_code:
+            key = _series_model_key(brand_code_raw, category_code, series, series_code)
+            model = models_by_series.get(key)
+            if model:
+                return model, None
+            return None, f"型号码「{series_code}」在型号库中不存在"
+
     if model_code_raw:
         if not brand_code_raw and model_code_raw in ambiguous_model_codes:
             return None, f"型号码「{model_code_raw}」匹配到多个品牌，请填写品牌码"
@@ -836,7 +901,12 @@ def _get_or_create_model(
     models_by_code_unbranded: dict[str, list[ModelRecord]],
     models_by_name: dict[str, list[ModelRecord]],
     ambiguous_model_codes: Optional[set[str]] = None,
+    model_type_raw: Optional[str] = None,
+    series_codes: Optional[set[str]] = None,
+    models_by_series: Optional[dict[tuple[str, str, str, str], ModelRecord]] = None,
 ) -> tuple[Optional[ModelRecord], Optional[str]]:
+    series_codes = series_codes or set()
+    models_by_series = models_by_series or {}
     model, reason = _resolve_model(
         model_code_raw=model_code_raw,
         model_text=model_text,
@@ -845,6 +915,10 @@ def _get_or_create_model(
         models_by_code_unbranded=models_by_code_unbranded,
         models_by_name=models_by_name,
         ambiguous_model_codes=ambiguous_model_codes,
+        model_type_raw=model_type_raw,
+        category_code=category_code,
+        series_codes=series_codes,
+        models_by_series=models_by_series,
     )
     if model:
         return model, None
@@ -863,16 +937,26 @@ def _get_or_create_model(
     if values is None:
         return None, None
 
-    existing = db.query(ModelRecord).filter(
+    is_series_category = bool(category_code and category_code in series_codes)
+    series_value = _usable_identity_value(model_type_raw) if is_series_category else None
+    if is_series_category:
+        values["series"] = series_value
+
+    existing_query = db.query(ModelRecord).filter(
         ModelRecord.brand_code == values["brand_code"],
         ModelRecord.model_code == values["model_code"],
-    ).first()
+    )
+    if is_series_category:
+        existing_query = existing_query.filter(ModelRecord.series == series_value)
+    existing = existing_query.first()
     if existing:
         models_by_code[(existing.brand_code, existing.model_code)] = existing
         if existing not in models_by_code_unbranded.setdefault(existing.model_code, []):
             models_by_code_unbranded[existing.model_code].append(existing)
-        if existing not in models_by_name.setdefault(existing.model_name, []):
+        if existing.model_name and existing not in models_by_name.setdefault(existing.model_name, []):
             models_by_name[existing.model_name].append(existing)
+        if is_series_category:
+            models_by_series[_series_model_key(existing.brand_code, existing.category_code, existing.series, existing.model_code)] = existing
         return existing, None
 
     new_model = ModelRecord(**values)
@@ -881,6 +965,8 @@ def _get_or_create_model(
     models_by_code[(new_model.brand_code, new_model.model_code)] = new_model
     models_by_code_unbranded.setdefault(new_model.model_code, []).append(new_model)
     models_by_name.setdefault(new_model.model_name, []).append(new_model)
+    if is_series_category:
+        models_by_series[_series_model_key(new_model.brand_code, new_model.category_code, new_model.series, new_model.model_code)] = new_model
     return new_model, None
 
 
@@ -951,6 +1037,8 @@ def _historical_preview_response(
             ),
             models_by_code_unbranded,
         )
+        series_codes = _series_category_codes(db)
+        models_by_series = _load_series_models(db, series_codes)
         stats = _calculate_preview_stats_for_rows(
             (
                 _standardize_historical_row(raw_row, normalized_mapping, category_code)
@@ -960,6 +1048,8 @@ def _historical_preview_response(
             models_by_code_unbranded=models_by_code_unbranded,
             models_by_name=models_by_name,
             ambiguous_model_codes=ambiguous_model_codes,
+            series_codes=series_codes,
+            models_by_series=models_by_series,
         )
         total_rows = stats["total_rows"]
     return {
@@ -1027,6 +1117,8 @@ def _import_historical_dataframe(db: Session, df: pd.DataFrame, import_batch: st
     rows = (raw_row.to_dict() for _, raw_row in df.iterrows())
     models_by_code, models_by_code_unbranded, models_by_name = _preload_models(db, df)
     ambiguous_model_codes = _ambiguous_model_codes_from_batch(df, models_by_code_unbranded)
+    series_codes = _series_category_codes(db)
+    models_by_series = _load_series_models(db, series_codes)
     return _import_historical_rows(
         db,
         rows,
@@ -1035,6 +1127,8 @@ def _import_historical_dataframe(db: Session, df: pd.DataFrame, import_batch: st
         models_by_code_unbranded=models_by_code_unbranded,
         models_by_name=models_by_name,
         ambiguous_model_codes=ambiguous_model_codes,
+        series_codes=series_codes,
+        models_by_series=models_by_series,
     )
 
 
@@ -1133,7 +1227,11 @@ def _import_historical_rows(
     models_by_code_unbranded: dict[str, list[ModelRecord]],
     models_by_name: dict[str, list[ModelRecord]],
     ambiguous_model_codes: set[str],
+    series_codes: Optional[set[str]] = None,
+    models_by_series: Optional[dict[tuple[str, str, str, str], ModelRecord]] = None,
 ) -> dict:
+    series_codes = series_codes or set()
+    models_by_series = models_by_series or {}
     success = 0
     created = 0
     updated = 0
@@ -1195,6 +1293,7 @@ def _import_historical_rows(
         brand_code_raw = _clean_value(_get(row, "品牌码"))
         effective_brand_code = _effective_brand_code(brand_code_raw, brand_raw)
         model_code_raw = _clean_value(_get(row, "型号码"))
+        model_type_raw = _clean_value(_get(row, "机型"))
         category_name_raw = _clean_value(_get(row, "品类"))
         category_code_raw = _clean_value(_get(row, "品类码"))
         resolved_category_code = _resolve_category_code(
@@ -1214,6 +1313,9 @@ def _import_historical_rows(
             models_by_code_unbranded=models_by_code_unbranded,
             models_by_name=models_by_name,
             ambiguous_model_codes=ambiguous_model_codes,
+            model_type_raw=model_type_raw,
+            series_codes=series_codes,
+            models_by_series=models_by_series,
         )
         if reason:
             errors.append({"row": row_num, "reason": reason})
@@ -1293,6 +1395,8 @@ def _import_historical_stream(
         (_standardize_historical_row(row, mapping, category_code) for row in raw_rows_factory()),
         models_by_code_unbranded,
     )
+    series_codes = _series_category_codes(db)
+    models_by_series = _load_series_models(db, series_codes)
     return _import_historical_rows(
         db,
         (_standardize_historical_row(row, mapping, category_code) for row in raw_rows_factory()),
@@ -1301,6 +1405,8 @@ def _import_historical_stream(
         models_by_code_unbranded=models_by_code_unbranded,
         models_by_name=models_by_name,
         ambiguous_model_codes=ambiguous_model_codes,
+        series_codes=series_codes,
+        models_by_series=models_by_series,
     )
 
 

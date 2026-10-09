@@ -251,7 +251,7 @@ def models_confirm(
         if "series" in required_extra_keys and not series:
             errors.append(f"Row {i}: 品类「{category_code}」必填字段「产品系列」为空，已跳过")
             continue
-        model_key = _model_unique_key(brand_code, model_code, category_code)
+        model_key = _model_unique_key(brand_code, model_code, category_code, series)
         existing = pending_models.get(model_key)
         if existing is None:
             existing = (
@@ -260,6 +260,7 @@ def models_confirm(
                     ModelRecord.brand_code == brand_code,
                     ModelRecord.model_code == model_code,
                     ModelRecord.category_code == category_code,
+                    ModelRecord.series == series,
                 )
                 .first()
             )
@@ -383,16 +384,23 @@ def _normalize_code(value: str | None) -> str:
     return (value or "").strip()
 
 
-def _model_unique_key(brand_code: str | None, model_code: str | None, category_code: str | None) -> tuple:
+def _model_unique_key(
+    brand_code: str | None,
+    model_code: str | None,
+    category_code: str | None,
+    series: str | None = None,
+) -> tuple:
     """与 MySQL utf8mb4_general_ci 唯一索引（models.uq_model）对齐的去重键。
 
     数据库唯一索引大小写不敏感，同一批次内 `z8h` 与 `Z8H` 属同一型号；
     这里统一小写，避免 autoflush 关闭时未 flush 的记录查不到而重复插入。
+    系列品类（智能平板/学习平板）的唯一键额外包含 series。
     """
     return (
         (brand_code or "").strip().lower(),
         (model_code or "").strip().lower(),
         (category_code or "").strip().lower(),
+        (series or "").strip().lower(),
     )
 
 
@@ -736,6 +744,7 @@ async def import_models(
                 ModelRecord.brand_code == vals["brand_code"],
                 ModelRecord.model_code == vals["model_code"],
                 ModelRecord.category_code == vals["category_code"],
+                ModelRecord.series == vals["series"],
             ).first()
             if existing:
                 for k, v in vals.items():
@@ -973,11 +982,18 @@ def create_model(
     if _is_placeholder_code(brand_code) or not brand:
         raise HTTPException(status_code=400, detail="请先创建品牌或选择已有品牌")
 
+    series_value = (
+        _normalize_optional_text(payload.series)
+        if "series" in _configured_extra_field_keys(db, category_code)
+        else None
+    )
+
     if model_code:
         existing = db.query(ModelRecord).filter(
             ModelRecord.brand_code == brand_code,
             ModelRecord.model_code == model_code,
             ModelRecord.category_code == category_code,
+            ModelRecord.series == series_value,
         ).first()
         if existing:
             raise HTTPException(status_code=409, detail="该品牌+型号+品类已存在")
@@ -993,7 +1009,7 @@ def create_model(
         launch_week=payload.launch_week,
         launch_price=payload.launch_price,
         url=payload.url,
-        series=_normalize_optional_text(payload.series) if "series" in _configured_extra_field_keys(db, category_code) else None,
+        series=series_value,
         status=payload.status,
         operator=payload.operator,
     )
@@ -1033,11 +1049,17 @@ def update_model(
 
     brand_code = _normalize_code(payload.brand_code)
     model_code = _normalize_optional_model_code(payload.model_code)
+    series_value = (
+        _normalize_optional_text(payload.series)
+        if "series" in _configured_extra_field_keys(db, category_code)
+        else None
+    )
     if model_code:
         existing = db.query(ModelRecord).filter(
             ModelRecord.brand_code == brand_code,
             ModelRecord.model_code == model_code,
             ModelRecord.category_code == category_code,
+            ModelRecord.series == series_value,
             ModelRecord.id != model_id,
         ).first()
         if existing:
@@ -1053,7 +1075,7 @@ def update_model(
     obj.launch_week   = payload.launch_week
     obj.launch_price  = payload.launch_price
     obj.url           = payload.url
-    obj.series        = _normalize_optional_text(payload.series) if "series" in _configured_extra_field_keys(db, category_code) else None
+    obj.series        = series_value
     obj.status        = payload.status
     obj.operator      = payload.operator
 

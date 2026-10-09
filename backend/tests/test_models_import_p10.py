@@ -38,7 +38,8 @@ def client(tmp_upload):
         poolclass=StaticPool,
     )
     Base.metadata.create_all(engine)
-    Session = sessionmaker(bind=engine)
+    # 与生产 SessionLocal 保持一致（autoflush=False），以覆盖同批次未 flush 的去重逻辑
+    Session = sessionmaker(bind=engine, autoflush=False)
 
     # Pre-seed a category
     s = Session()
@@ -422,6 +423,49 @@ def test_models_confirm_multiple_rows(client):
     assert resp.status_code == 200
     data = resp.json()
     assert data["models_inserted"] == 3
+    assert data["errors"] == []
+
+
+def test_models_confirm_dedupes_repeated_new_brand(client):
+    """同一批次内新品牌出现多次时，品牌只创建一次，不触发唯一键冲突（生产 autoflush=False）。"""
+    resp = _headers_then_confirm(
+        client,
+        headers=["brand_code", "model_code"],
+        data_rows=[
+            ["溪物", "MODEL_1"],
+            ["溪物", "MODEL_2"],
+        ],
+        mapping={"brand_code": "brand_code", "model_code": "model_code"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["models_inserted"] == 2
+    assert data["errors"] == []
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        from app.models.schemas import BrandRecord
+        brands = db.query(BrandRecord).filter(BrandRecord.brand_code == "溪物").all()
+        assert len(brands) == 1
+    finally:
+        db.close()
+
+
+def test_models_confirm_dedupes_repeated_model_row(client):
+    """同一批次内完全重复的（品牌+型号+品类）行不应触发唯一键冲突。"""
+    resp = _headers_then_confirm(
+        client,
+        headers=["brand_code", "model_code"],
+        data_rows=[
+            ["BRAND_DUP", "MODEL_DUP"],
+            ["BRAND_DUP", "MODEL_DUP"],
+        ],
+        mapping={"brand_code": "brand_code", "model_code": "model_code"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["models_inserted"] == 1
+    assert data["models_updated"] == 1
     assert data["errors"] == []
 
 

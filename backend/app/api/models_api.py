@@ -210,6 +210,8 @@ def models_confirm(
     models_inserted = 0
     models_updated = 0
     errors = []
+    # 同一批次内已新增但未 flush 的型号（autoflush 关闭时查询看不到），按唯一键去重
+    pending_models: dict[tuple, ModelRecord] = {}
     # 本次导入所选品类已配置的扩展字段（如 {'series'}），用于决定是否写入扩展字段值
     configured_extra_keys = _configured_extra_field_keys(db, _canonical_category_code(db, payload.category_code))
     required_extra_keys = _required_extra_field_keys(db, _canonical_category_code(db, payload.category_code))
@@ -249,15 +251,18 @@ def models_confirm(
         if "series" in required_extra_keys and not series:
             errors.append(f"Row {i}: 品类「{category_code}」必填字段「产品系列」为空，已跳过")
             continue
-        existing = (
-            db.query(ModelRecord)
-            .filter(
-                ModelRecord.brand_code == brand_code,
-                ModelRecord.model_code == model_code,
-                ModelRecord.category_code == category_code,
+        model_key = (brand_code, model_code, category_code)
+        existing = pending_models.get(model_key)
+        if existing is None:
+            existing = (
+                db.query(ModelRecord)
+                .filter(
+                    ModelRecord.brand_code == brand_code,
+                    ModelRecord.model_code == model_code,
+                    ModelRecord.category_code == category_code,
+                )
+                .first()
             )
-            .first()
-        )
         _ensure_import_brand(db, brand_code, optional_fields.get("brand_name"))
         int_fields = {}
         for k in ["launch_year", "launch_month", "launch_week"]:
@@ -278,7 +283,7 @@ def models_confirm(
                     setattr(existing, attr, val)
             models_updated += 1
         else:
-            db.add(ModelRecord(
+            new_model = ModelRecord(
                 brand_code=brand_code,
                 model_code=model_code,
                 category_code=category_code,
@@ -286,7 +291,9 @@ def models_confirm(
                 **int_fields,
                 launch_price=launch_price,
                 series=series,
-            ))
+            )
+            db.add(new_model)
+            pending_models[model_key] = new_model
             models_inserted += 1
 
     specs_inserted = 0
@@ -413,12 +420,21 @@ def _required_extra_field_keys(db: Session, category_code: str | None) -> set[st
 
 
 def _ensure_import_brand(db: Session, brand_code: str, brand_name: str | None = None) -> None:
-    """Keep batch import compatible by creating missing brand master rows."""
+    """Keep batch import compatible by creating missing brand master rows.
+
+    注意：生产 SessionLocal 关闭了 autoflush，同一批次内重复出现的品牌在本函数
+    的查询里看不到尚未 flush 的待插入对象，会导致同品牌被 add 多次、flush 时
+    触发唯一键冲突。用 session.info 记录本批次已处理的品牌码来去重。
+    """
     normalized_code = _normalize_code(brand_code)
     if _is_placeholder_code(normalized_code):
         return
     normalized_name = _normalize_optional_text(brand_name)
+    handled: set[str] = db.info.setdefault("_import_brand_codes", set())
+    if normalized_code in handled:
+        return
     existing = db.query(BrandRecord).filter(BrandRecord.brand_code == normalized_code).first()
+    handled.add(normalized_code)
     if existing:
         if not existing.brand_name and normalized_name:
             existing.brand_name = normalized_name

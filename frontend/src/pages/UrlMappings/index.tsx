@@ -163,6 +163,7 @@ export default function UrlMappingsPage() {
             model_code: m.model_code,
             brand_name: m.brand_name ?? null,
             model_name: m.model_name ?? null,
+            series: m.series ?? null,
             category_code: m.category_code ?? null,
           })
         })

@@ -469,6 +469,31 @@ def test_models_confirm_dedupes_repeated_model_row(client):
     assert data["errors"] == []
 
 
+def test_models_confirm_dedupes_case_variant_model_rows(client):
+    """型号仅大小写不同（z8h / Z8H）在 MySQL 大小写不敏感唯一索引下属同一型号，不应冲突。"""
+    resp = _headers_then_confirm(
+        client,
+        headers=["brand_code", "model_code"],
+        data_rows=[
+            ["中兴", "z8h"],
+            ["中兴", "Z8H"],
+        ],
+        mapping={"brand_code": "brand_code", "model_code": "model_code"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["models_inserted"] == 1
+    assert data["models_updated"] == 1
+    assert data["errors"] == []
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        rows = db.query(ModelRecord).filter(ModelRecord.brand_code == "中兴").all()
+        assert len(rows) == 1
+    finally:
+        db.close()
+
+
 def test_models_confirm_column_remapping(client):
     """Confirm supports remapping non-standard column names."""
     resp = _headers_then_confirm(

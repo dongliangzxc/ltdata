@@ -251,7 +251,7 @@ def models_confirm(
         if "series" in required_extra_keys and not series:
             errors.append(f"Row {i}: 品类「{category_code}」必填字段「产品系列」为空，已跳过")
             continue
-        model_key = (brand_code, model_code, category_code)
+        model_key = _model_unique_key(brand_code, model_code, category_code)
         existing = pending_models.get(model_key)
         if existing is None:
             existing = (
@@ -383,6 +383,19 @@ def _normalize_code(value: str | None) -> str:
     return (value or "").strip()
 
 
+def _model_unique_key(brand_code: str | None, model_code: str | None, category_code: str | None) -> tuple:
+    """与 MySQL utf8mb4_general_ci 唯一索引（models.uq_model）对齐的去重键。
+
+    数据库唯一索引大小写不敏感，同一批次内 `z8h` 与 `Z8H` 属同一型号；
+    这里统一小写，避免 autoflush 关闭时未 flush 的记录查不到而重复插入。
+    """
+    return (
+        (brand_code or "").strip().lower(),
+        (model_code or "").strip().lower(),
+        (category_code or "").strip().lower(),
+    )
+
+
 def _normalize_optional_text(value: str | None) -> str | None:
     cleaned = (value or "").strip()
     return cleaned or None
@@ -431,10 +444,12 @@ def _ensure_import_brand(db: Session, brand_code: str, brand_name: str | None = 
         return
     normalized_name = _normalize_optional_text(brand_name)
     handled: set[str] = db.info.setdefault("_import_brand_codes", set())
-    if normalized_code in handled:
+    # brands.brand_code 唯一索引大小写不敏感，这里也用小写键去重
+    handled_key = normalized_code.lower()
+    if handled_key in handled:
         return
     existing = db.query(BrandRecord).filter(BrandRecord.brand_code == normalized_code).first()
-    handled.add(normalized_code)
+    handled.add(handled_key)
     if existing:
         if not existing.brand_name and normalized_name:
             existing.brand_name = normalized_name

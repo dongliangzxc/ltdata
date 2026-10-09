@@ -1843,17 +1843,10 @@ export default function MatchPage() {
                     <Empty description="请选择左侧干扰项记录" />
                   ) : (
                     <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                      {filteredDetail.item_image ? (
-                        <Image
-                          src={filteredDetail.item_image}
-                          alt="商品图片"
-                          width={180}
-                          height={180}
-                          style={{ objectFit: 'contain', borderRadius: 6, border: '1px solid #f0f0f0', background: '#fafafa' }}
-                        />
-                      ) : null}
-                      <Descriptions size="small" column={2} bordered>
-                        <Descriptions.Item label="商品名称" span={2}>{filteredDetail.item_name || '-'}</Descriptions.Item>
+                      <Row gutter={16} wrap={false}>
+                        <Col flex="auto">
+                          <Descriptions size="small" column={2} bordered>
+                            <Descriptions.Item label="商品名称" span={2}>{filteredDetail.item_name || '-'}</Descriptions.Item>
                         <Descriptions.Item label="原品牌">{filteredDetail.brand_raw || '-'}</Descriptions.Item>
                         <Descriptions.Item label="店铺">{filteredDetail.shop_name || '-'}</Descriptions.Item>
                         <Descriptions.Item label="平台">{filteredDetail.platform || '-'}</Descriptions.Item>
@@ -1865,7 +1858,22 @@ export default function MatchPage() {
                         <Descriptions.Item label="命中规则">{filteredDetail.intervention_rule_name || '-'}</Descriptions.Item>
                         <Descriptions.Item label="命中关键词">{filteredDetail.matched_keyword || '-'}</Descriptions.Item>
                         <Descriptions.Item label="过滤原因" span={2}>{filteredDetail.matched_reason || '-'}</Descriptions.Item>
-                      </Descriptions>
+                          </Descriptions>
+                        </Col>
+                        {filteredDetail.item_image ? (
+                          <Col flex="200px">
+                            <div style={{ border: '1px solid #f0f0f0', borderRadius: 8, background: '#fafafa', padding: 8, textAlign: 'center' }}>
+                              <Image
+                                src={filteredDetail.item_image}
+                                alt="商品图片"
+                                width={180}
+                                height={180}
+                                style={{ objectFit: 'contain', borderRadius: 6 }}
+                              />
+                            </div>
+                          </Col>
+                        ) : null}
+                      </Row>
 
                       <Alert
                         type="warning"
@@ -1892,17 +1900,10 @@ export default function MatchPage() {
                   <Empty description="请选择左侧复核商品" />
                 ) : (
                   <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                    {reviewDetail.item_image ? (
-                      <Image
-                        src={reviewDetail.item_image}
-                        alt="商品图片"
-                        width={180}
-                        height={180}
-                        style={{ objectFit: 'contain', borderRadius: 6, border: '1px solid #f0f0f0', background: '#fafafa' }}
-                      />
-                    ) : null}
-                    <Descriptions size="small" column={2} bordered>
-                      <Descriptions.Item label="商品名称" span={2}>{reviewDetail.item_name || '-'}</Descriptions.Item>
+                    <Row gutter={16} wrap={false}>
+                      <Col flex="auto">
+                        <Descriptions size="small" column={2} bordered>
+                          <Descriptions.Item label="商品名称" span={2}>{reviewDetail.item_name || '-'}</Descriptions.Item>
                       <Descriptions.Item label="原品牌">{reviewDetail.brand_raw || '-'}</Descriptions.Item>
                       <Descriptions.Item label="店铺">{reviewDetail.shop_name || '-'}</Descriptions.Item>
                       <Descriptions.Item label="入库品牌">{reviewDetail.brand_code || reviewDetail.brand_std || reviewDetail.brand_raw || '-'}</Descriptions.Item>
@@ -1949,7 +1950,22 @@ export default function MatchPage() {
                       </Descriptions.Item>
                       <Descriptions.Item label="价格">{reviewDetail.price != null ? `¥${reviewDetail.price}` : '-'}</Descriptions.Item>
                       <Descriptions.Item label="销量">{formatNumber(reviewDetail.sales_qty)}</Descriptions.Item>
-                    </Descriptions>
+                        </Descriptions>
+                      </Col>
+                      {reviewDetail.item_image ? (
+                        <Col flex="200px">
+                          <div style={{ border: '1px solid #f0f0f0', borderRadius: 8, background: '#fafafa', padding: 8, textAlign: 'center' }}>
+                            <Image
+                              src={reviewDetail.item_image}
+                              alt="商品图片"
+                              width={180}
+                              height={180}
+                              style={{ objectFit: 'contain', borderRadius: 6 }}
+                            />
+                          </div>
+                        </Col>
+                      ) : null}
+                    </Row>
 
                     <Card size="small" title="候选型号" bodyStyle={{ padding: 8 }}>
                       {(reviewDetail.candidates ?? []).length === 0 ? <Text type="secondary">暂无候选型号</Text> : (

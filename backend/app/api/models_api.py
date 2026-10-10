@@ -111,12 +111,12 @@ def _build_model_template_bytes() -> bytes:
     workbook = Workbook()
     model_sheet = workbook.active
     model_sheet.title = "型号"
+    # 只填表头，不预置示例数据行：示例行的「品类」是固定值，无法与导入第一步
+    # 所选的品类保持一致，会被当成无法识别的品类跳过并在结果里报错。
     model_sheet.append(_MODEL_TEMPLATE_HEADERS)
-    model_sheet.append(["DJI", "OSMO-ACTION-4", "action_camera", "大疆", "Osmo Action 4", 2024, 9, None, 2999, "https://example.com/product", None])
 
     spec_sheet = workbook.create_sheet("型号规格")
     spec_sheet.append(_MODEL_SPEC_TEMPLATE_HEADERS)
-    spec_sheet.append(["DJI", "OSMO-ACTION-4", "产品形态", "OA传统"])
 
     output = io.BytesIO()
     workbook.save(output)

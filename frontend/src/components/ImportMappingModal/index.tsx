@@ -107,11 +107,18 @@ export default function ImportMappingModal({
         setMapping(data.suggested_template.mapping)
         setIgnoreColumns(new Set(data.suggested_template.ignore_columns))
       } else {
-        // Auto-map columns whose name exactly matches a standard field
+        // Auto-map columns whose name matches a standard field value or label（如中文「产品系列」→ series）
         const autoMap: Record<string, string> = {}
         const fieldValues = new Set(standardFields.map(f => f.value))
+        const fieldLabels = new Map(standardFields.map(f => [f.label, f.value]))
         data.columns.forEach(col => {
-          if (fieldValues.has(col)) autoMap[col] = col
+          const trimmed = col.trim()
+          if (fieldValues.has(trimmed)) {
+            autoMap[col] = trimmed
+          } else {
+            const byLabel = fieldLabels.get(trimmed)
+            if (byLabel) autoMap[col] = byLabel
+          }
         })
         setMapping(autoMap)
         setIgnoreColumns(new Set())

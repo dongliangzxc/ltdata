@@ -34,7 +34,7 @@ UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "./uploads")
 _MODEL_TEMPLATE_FILENAME = "产品属性导入模板.xlsx"
 _MODEL_TEMPLATE_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _MODEL_TEMPLATE_HEADERS = ["品牌码", "型号码", "品类", "品牌名称", "型号名称", "上市年", "上市月", "上市周", "上市价格", "网址", "产品系列"]
-_MODEL_SPEC_TEMPLATE_HEADERS = ["品牌码", "型号码", "规格名称", "规格值"]
+_MODEL_SPEC_TEMPLATE_HEADERS = ["品牌码", "型号码", "产品系列", "规格名称", "规格值"]
 
 
 def _visible_model_category_codes(db: Session, current_user: User) -> list[str]:
@@ -289,17 +289,24 @@ def models_confirm(
     if models_inserted > 0 or models_updated > 0:
         db.flush()
 
-        model_key_to_id = {
-            (record.brand_code, record.model_code, record.category_code): record.id
-            for record in db.query(ModelRecord).all()
-        }
+        # 型号定位：系列品类同一「品牌+型号」下会有多条记录（仅产品系列不同），
+        # 所以规格表必须带上产品系列，按「品牌码+型号码+品类+产品系列」精确匹配。
+        models_by_full_key: dict[tuple, int] = {}
+        models_by_key: dict[tuple, list[int]] = {}
+        for record in db.query(ModelRecord).all():
+            models_by_full_key[
+                (record.brand_code, record.model_code, record.category_code, record.series or "")
+            ] = record.id
+            models_by_key.setdefault(
+                (record.brand_code, record.model_code, record.category_code), []
+            ).append(record.id)
 
         if not df_spec.empty:
             df_spec.columns = [str(c).strip() for c in df_spec.columns]
             df_spec = df_spec.dropna(axis=1, how="all")
             priority = {"品牌码": "brand_code", "型号码": "model_code"}
             fallback = {"品牌": "brand_code", "型号": "model_code"}
-            other = {"规格名称": "spec_name", "规格值": "spec_value"}
+            other = {"规格名称": "spec_name", "规格值": "spec_value", "产品系列": "series"}
             spec_rename = {}
             for src, dst in priority.items():
                 if src in df_spec.columns:
@@ -316,16 +323,44 @@ def models_confirm(
                 for col in ["brand_code", "model_code"]:
                     df_spec[col] = df_spec[col].replace("不需要填写", None).ffill()
 
+                series_required = "series" in required_extra_keys
                 affected_model_ids = set()
                 spec_rows = []
-                for _, spec_row in df_spec.iterrows():
+                for offset, (_, spec_row) in enumerate(df_spec.iterrows()):
+                    row_no = offset + 2
                     brand_code = _clean_val(spec_row.get("brand_code"))
                     model_code = _clean_val(spec_row.get("model_code"))
                     spec_name = _clean_val(spec_row.get("spec_name"))
                     if not brand_code or not model_code or not spec_name:
                         continue
-                    model_id = model_key_to_id.get((str(brand_code), str(model_code), payload.category_code))
+                    brand_key = str(brand_code)
+                    model_key_code = str(model_code)
+                    series_val = _clean_val(spec_row.get("series"))
+                    series = str(series_val).strip() if series_val is not None else None
+                    if series_required and not series:
+                        errors.append(
+                            f"型号规格 行 {row_no}: 品类「{payload.category_code}」必填字段「产品系列」为空，规格未导入"
+                        )
+                        continue
+                    model_id = models_by_full_key.get(
+                        (brand_key, model_key_code, payload.category_code, series or "")
+                    )
+                    if model_id is None and not series_required:
+                        candidates = models_by_key.get(
+                            (brand_key, model_key_code, payload.category_code), []
+                        )
+                        if len(candidates) == 1:
+                            model_id = candidates[0]
+                        elif len(candidates) > 1:
+                            errors.append(
+                                f"型号规格 行 {row_no}: 「{brand_key} {model_key_code}」在品类「{payload.category_code}」下有多条产品系列，请在规格表填「产品系列」"
+                            )
+                            continue
                     if model_id is None:
+                        suffix = f"（产品系列：{series}）" if series else ""
+                        errors.append(
+                            f"型号规格 行 {row_no}: 找不到对应型号「{brand_key} {model_key_code}」{suffix}"
+                        )
                         continue
                     affected_model_ids.add(model_id)
                     spec_rows.append({

@@ -851,6 +851,69 @@ def test_models_confirm_skips_row_when_required_series_empty(client):
     assert "产品系列" in data["errors"][0] and "为空" in data["errors"][0]
 
 
+def test_models_confirm_specs_match_by_series_for_required_category(client):
+    """系列品类：同一品牌+型号下有多条记录时，规格表按「产品系列」挂到正确型号。"""
+    from app.models.schemas import CategoryExtraField, ModelSpec
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        db.add(Category(code="tablet", name="智能平板"))
+        db.add(CategoryExtraField(category_code="tablet", field_key="series", field_label="产品系列", field_type="text", required=1, sort_order=1))
+        db.commit()
+    finally:
+        db.close()
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "型号"
+    ws.append(["品牌码", "型号码", "品类", "品牌名称", "型号名称", "产品系列"])
+    ws.append(["华为", "8+128G", "tablet", "华为", "MatePad", "MatePad 11"])
+    ws.append(["华为", "8+128G", "tablet", "华为", "MatePad", "MatePad Air"])
+    spec_ws = wb.create_sheet("型号规格")
+    spec_ws.append(["品牌码", "型号码", "产品系列", "规格名称", "规格值"])
+    spec_ws.append(["华为", "8+128G", "MatePad Air", "屏幕类型", "LCD"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    xlsx_bytes = buf.getvalue()
+
+    headers_resp = client.post(
+        "/api/models/headers",
+        files={"file": ("models.xlsx", xlsx_bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert headers_resp.status_code == 200
+
+    confirm_resp = client.post(
+        "/api/models/confirm",
+        json={
+            "temp_file_id": headers_resp.json()["temp_file_id"],
+            "mapping": {
+                "品牌码": "brand_code",
+                "型号码": "model_code",
+                "品类": "category_code",
+                "品牌名称": "brand_name",
+                "型号名称": "model_name",
+                "产品系列": "series",
+            },
+            "ignore_columns": [],
+            "category_code": "tablet",
+        },
+    )
+    assert confirm_resp.status_code == 200
+    data = confirm_resp.json()
+    assert data["models_inserted"] == 2
+    assert data["specs_inserted"] == 1
+    assert data["errors"] == []
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        target = db.query(ModelRecord).filter_by(brand_code="华为", model_code="8+128G", series="MatePad Air").one()
+        other = db.query(ModelRecord).filter_by(brand_code="华为", model_code="8+128G", series="MatePad 11").one()
+        specs = db.query(ModelSpec).filter(ModelSpec.model_id == target.id).all()
+        assert [(s.spec_name, s.spec_value) for s in specs] == [("屏幕类型", "LCD")]
+        assert db.query(ModelSpec).filter(ModelSpec.model_id == other.id).count() == 0
+    finally:
+        db.close()
+
+
 def test_create_model_rejects_empty_series_for_required_category(client):
     """产品系列为必填品类时，新建型号 series 为空应返回 422。"""
     from app.models.schemas import BrandRecord, Category, CategoryExtraField

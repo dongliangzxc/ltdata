@@ -95,6 +95,7 @@ def test_models_template_download_returns_two_sheet_workbook(monkeypatch):
     assert [cell.value for cell in workbook["型号规格"][1]] == [
         "品牌码",
         "型号码",
+        "产品系列",
         "规格名称",
         "规格值",
     ]

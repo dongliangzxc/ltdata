@@ -866,7 +866,10 @@ def list_models(
     if exclude_placeholder:
         cq = cq.filter(*model_code_filter)
     if brand_code:
-        cq = cq.filter(ModelRecord.brand_code.ilike(f"%{brand_code}%"))
+        cq = cq.filter(
+            ModelRecord.brand_code.ilike(f"%{brand_code}%") |
+            ModelRecord.brand_name.ilike(f"%{brand_code}%")
+        )
     if keyword:
         cq = cq.filter(
             ModelRecord.model_name.ilike(f"%{keyword}%") |
@@ -886,7 +889,10 @@ def list_models(
     if exclude_placeholder:
         q = q.filter(*model_code_filter)
     if brand_code:
-        q = q.filter(ModelRecord.brand_code.ilike(f"%{brand_code}%"))
+        q = q.filter(
+            ModelRecord.brand_code.ilike(f"%{brand_code}%") |
+            ModelRecord.brand_name.ilike(f"%{brand_code}%")
+        )
     if keyword:
         q = q.filter(
             ModelRecord.model_name.ilike(f"%{keyword}%") |

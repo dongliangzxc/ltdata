@@ -150,3 +150,20 @@ def test_list_models_keyword_matches_brand_code(client, db_session):
     assert r.status_code == 200
     assert r.json()["total"] == 1
     assert r.json()["items"][0]["brand_code"] == "好记星"
+
+
+def test_list_models_brand_filter_matches_brand_name(client, db_session):
+    """列表「搜索品牌」按品牌码或品牌名都能命中（品牌列展示的是品牌名）。"""
+    from app.models.schemas import ModelRecord
+    db_session.add(ModelRecord(
+        brand_code="DJI1", brand_name="大疆1",
+        model_code="M1", model_name=None, category_code="soundbar",
+    ))
+    db_session.commit()
+
+    by_code = client.get("/api/models", params={"brand_code": "DJI1"}).json()
+    assert by_code["total"] == 1
+
+    by_name = client.get("/api/models", params={"brand_code": "大疆1"}).json()
+    assert by_name["total"] == 1
+    assert by_name["items"][0]["brand_code"] == "DJI1"

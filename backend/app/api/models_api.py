@@ -225,20 +225,8 @@ def models_confirm(
             errors.append(f"Row {i}: missing brand_code or model_code")
             continue
 
-        # category_code: 以第一步「选择品类」的所选品类为准做校验
-        # Excel 品类列的值（品类码或品类名称）必须与所选品类一致，否则跳过该行
-        cat_val = str(_clean_val(row_dict.get("category_code")) or "").strip()
-        if cat_val:
-            resolved = _resolve_category_code(db, cat_val)
-            if resolved is None:
-                errors.append(f"Row {i}: 无法识别品类「{cat_val}」，已跳过")
-                continue
-            if resolved != payload.category_code:
-                errors.append(f"Row {i}: 品类「{cat_val}」与所选品类不一致，已跳过")
-                continue
-            category_code = resolved
-        else:
-            category_code = payload.category_code
+        # 品类一律以第一步「选择品类」的所选品类为准，Excel 品类列的值不参与判定
+        category_code = payload.category_code
         _ensure_model_category_visible(db, current_user, category_code)
 
         optional_fields = {

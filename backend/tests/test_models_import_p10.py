@@ -550,8 +550,8 @@ def test_models_confirm_accepts_excel_category_name_matching_selected_category(c
         db.close()
 
 
-def test_models_confirm_skips_row_when_excel_category_mismatches_selected(client):
-    """Excel 品类列与第一步所选品类不一致时，该行跳过并写入 errors，不影响其他行。"""
+def test_models_confirm_uses_selected_category_when_excel_category_mismatches(client):
+    """Excel 品类列与第一步所选品类不一致时，仍以第一步所选品类为准入库。"""
     xlsx_bytes = _make_models_template_xlsx(
         model_rows=[
             ["DJI", "OSMO-ACTION-4", "测试品类", "大疆", "Osmo Action 4"],
@@ -582,13 +582,12 @@ def test_models_confirm_skips_row_when_excel_category_mismatches_selected(client
     )
     assert confirm_resp.status_code == 200
     data = confirm_resp.json()
-    assert data["models_inserted"] == 0
-    assert len(data["errors"]) == 2
-    assert all("与所选品类不一致" in e for e in data["errors"])
+    assert data["models_inserted"] == 2
+    assert data["errors"] == []
 
 
-def test_models_confirm_skips_row_when_excel_category_unrecognized(client):
-    """Excel 品类列既不是品类码也不是品类名称时，该行跳过并写入 errors。"""
+def test_models_confirm_uses_selected_category_when_excel_category_unrecognized(client):
+    """Excel 品类列既不是品类码也不是品类名称时，忽略该列，按第一步所选品类入库。"""
     xlsx_bytes = _make_models_template_xlsx(
         model_rows=[["DJI", "OSMO-ACTION-4", "不存在的品类", "大疆", "Osmo Action 4"]],
         spec_rows=[["DJI", "OSMO-ACTION-4", "产品形态", "OA传统"]],
@@ -616,9 +615,8 @@ def test_models_confirm_skips_row_when_excel_category_unrecognized(client):
     )
     assert confirm_resp.status_code == 200
     data = confirm_resp.json()
-    assert data["models_inserted"] == 0
-    assert len(data["errors"]) == 1
-    assert "无法识别品类" in data["errors"][0]
+    assert data["models_inserted"] == 1
+    assert data["errors"] == []
 
 
 def test_models_confirm_handles_empty_price_and_url_cells(client):

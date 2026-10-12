@@ -76,7 +76,7 @@ const modelOptionFromCandidate = (c: MatchCandidateOut): ModelOption => ({
   model_code: c.model_code || '',
   brand_name: null,
   model_name: null,
-  series: null,
+  series: c.series ?? null,
 })
 const modelOptionFromModel = (m: ModelItem): ModelOption => ({
   id: m.id,
@@ -269,7 +269,15 @@ export default function ReselectModal({ open, matchId, onClose, onSuccess }: Res
                               onClick={() => handlePickCandidate(c)}>选用</Button>,
                     ]}
                   >
-                    <Text code>[{c.brand_code || '-'}] {c.model_code || '-'}</Text>
+                    <Text code>{(() => {
+                      const brandVal = (c.brand_code || '').trim()
+                      const brand = !isPlaceholderCode(brandVal) ? `[${brandVal}]` : ''
+                      const seriesVal = (c.series ?? '').trim()
+                      const series = seriesVal ? `[${seriesVal}]` : ''
+                      const modelVal = (c.model_code || '').trim()
+                      const model = modelVal && !isPlaceholderCode(modelVal) ? modelVal : ''
+                      return [brand, series, model].filter(Boolean).join(' ') || '-'
+                    })()}</Text>
                   </List.Item>
                 )}
               />

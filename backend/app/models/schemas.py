@@ -944,6 +944,7 @@ class MatchCandidateOut(BaseModel):
     model_id:     int
     model_code:   Optional[str] = None
     brand_code:   Optional[str] = None
+    series:       Optional[str] = None
     match_source: Optional[str] = None
     score:        int
     rank:         int

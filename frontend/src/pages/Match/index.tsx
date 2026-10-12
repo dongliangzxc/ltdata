@@ -907,7 +907,7 @@ export default function MatchPage() {
         processCount = 500
       }
       distributionLines = preview.candidate_distribution.map(d =>
-        `  · [${d.brand_code}] ${d.model_code} × ${d.count}`,
+        `  · [${d.brand_code}]${d.series ? ` [${d.series}]` : ''} ${d.model_code} × ${d.count}`,
       )
     } else {
       if (selectedBatchIds.size === 0) return
@@ -918,7 +918,7 @@ export default function MatchPage() {
       items.filter((i: PendingItem) => selectedBatchIds.has(i.id)).forEach((i: PendingItem) => {
         const top = getTopCandidate(i)
         if (!top) return
-        const k = `[${top.brand_code}] ${top.model_code}`
+        const k = `[${top.brand_code}]${top.series ? ` [${top.series}]` : ''} ${top.model_code}`
         dist.set(k, (dist.get(k) ?? 0) + 1)
       })
       distributionLines = Array.from(dist.entries()).map(([k, v]) => `  · ${k} × ${v}`)
@@ -1974,7 +1974,15 @@ export default function MatchPage() {
                             >
                               <Space>
                                 <Tag color={candidate.rank === 1 ? 'blue' : 'default'}>#{candidate.rank}</Tag>
-                                <Text code>[{candidate.brand_code ?? '-'}] {candidate.model_code ?? '-'}</Text>
+                                <Text code>{(() => {
+                                  const brandVal = (candidate.brand_code ?? '').trim()
+                                  const brand = !isPlaceholderCode(brandVal) ? `[${brandVal}]` : ''
+                                  const seriesVal = (candidate.series ?? '').trim()
+                                  const series = seriesVal ? `[${seriesVal}]` : ''
+                                  const modelVal = (candidate.model_code ?? '').trim()
+                                  const model = modelVal && !isPlaceholderCode(modelVal) && !/^-+$/.test(modelVal) ? modelVal : ''
+                                  return [brand, series, model].filter(Boolean).join(' ') || '-'
+                                })()}</Text>
                                 {renderMatchSource(candidate.match_source)}
                                 <Text type="secondary">分数 {candidate.score}</Text>
                               </Space>

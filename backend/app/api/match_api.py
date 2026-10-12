@@ -733,6 +733,7 @@ def list_pending(
                     model_id=cand.model_id,
                     model_code=model.model_code if model else None,
                     brand_code=model.brand_code if model else None,
+                    series=model.series if model else None,
                     match_source=cand.match_source,
                     score=cand.score,
                     rank=cand.rank,
@@ -978,6 +979,7 @@ def get_match_review_detail(match_id: int, db: Session = Depends(get_db)):
                 "model_id": cand.model_id,
                 "model_code": candidate_model.model_code if candidate_model else None,
                 "brand_code": candidate_model.brand_code if candidate_model else None,
+                "series": candidate_model.series if candidate_model else None,
                 "match_source": cand.match_source,
                 "score": cand.score,
                 "rank": cand.rank,
@@ -1491,14 +1493,14 @@ def batch_confirm_preview(
             continue
         total_valid += 1
         if cand_model and _candidate_is_valid(mr, cand_model):
-            dist[(cand_model.brand_code, cand_model.model_code)] += 1
+            dist[(cand_model.brand_code, cand_model.model_code, cand_model.series)] += 1
     top = dist.most_common(20)
     return {
         "total_valid": total_valid,
         "total_invalid": total_invalid,
         "candidate_distribution": [
-            {"brand_code": bc, "model_code": mc, "count": c}
-            for (bc, mc), c in top
+            {"brand_code": bc, "model_code": mc, "series": s, "count": c}
+            for (bc, mc, s), c in top
         ],
     }
 

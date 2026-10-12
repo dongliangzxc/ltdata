@@ -808,7 +808,7 @@ export type BatchConfirmResult = {
 export type BatchConfirmPreview = {
   total_valid: number
   total_invalid: number
-  candidate_distribution: { brand_code: string; model_code: string; count: number }[]
+  candidate_distribution: { brand_code: string; model_code: string; series: string | null; count: number }[]
 }
 
 export const batchConfirmMatch = (clean_job_id: number, payload: BatchConfirmPayload) =>
@@ -1254,6 +1254,7 @@ export interface MatchCandidateOut {
   model_id: number
   model_code: string | null
   brand_code: string | null
+  series: string | null
   match_source: string | null
   score: number
   rank: number

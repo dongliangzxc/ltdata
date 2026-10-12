@@ -52,6 +52,35 @@ def _seed_clean_row(db, *, brand_raw, item_name):
     return job.id
 
 
+def _seed_clean_row_with_url(db, *, brand_raw, item_name, item_id, item_url,
+                             platform="jd", month=202609, category_code="video_doorbell"):
+    """插入带 URL/品类 的清洗数据，用于 URL 映射（S0）相关测试。返回 clean_job_id。"""
+    upload = UploadFileRecord(filename="url.xlsx", platform=platform, month_range="202609", row_count=1)
+    db.add(upload)
+    db.flush()
+    raw = RawDataRecord(
+        file_id=upload.id, platform=platform, month=month,
+        item_name=item_name, brand_raw=brand_raw,
+        item_id=item_id, item_url=item_url,
+    )
+    db.add(raw)
+    db.flush()
+
+    job = CleanJobRecord(file_ids=[upload.id], rules={}, status="done", row_in=1, row_out=1,
+                         category_code=category_code, platform=platform)
+    db.add(job)
+    db.flush()
+    row = CleanedDataRecord(
+        raw_data_id=raw.id, clean_job_id=job.id,
+        platform=platform, month=month,
+        item_name=item_name, brand_raw=brand_raw,
+        item_id=item_id, item_url=item_url,
+    )
+    db.add(row)
+    db.flush()
+    return job.id
+
+
 def _setup_base(db):
     """创建最小可用的 model + cleaned_data"""
     model = ModelRecord(brand_code="SONY", model_code="HT-A7000", brand_name="Sony")
@@ -545,4 +574,107 @@ def test_run_match_for_result_ignores_out_of_category_models(db):
 
     result = run_match_for_result(db, mr.id)
     assert result.match_status == "pending"
+    assert result.model_id is None
+
+
+# ── S0 复用"型号码为空"的品牌占位型号（跨任务确认结果复用） ───────
+
+
+def test_s0_reuses_url_mapping_to_brand_only_model(db):
+    """
+    URL 映射指向型号码为空、但品牌正常且 active 的占位型号（本品类）：
+    即使文本匹配（S1-S4）认不出型号，也应通过 S0 直接复用为 url_matched，
+    等价于上一任务的人工确认结果。
+    """
+    from app.models.schemas import ItemUrlMapping
+
+    model = ModelRecord(
+        brand_code="小米", model_code=None, brand_name="小米",
+        category_code="video_doorbell",
+    )
+    db.add(model)
+    db.flush()
+
+    db.add(ItemUrlMapping(
+        platform="jd", item_id="100193155629",
+        item_url="https://item.jd.com/100193155629.html",
+        model_id=model.id, brand_code="小米",
+    ))
+
+    item_name = "小米智能门铃4 可视门铃300万+100万双摄家用监控摄像头"
+    clean_job_id = _seed_clean_row_with_url(
+        db, brand_raw="小米", item_name=item_name,
+        item_id="100193155629", item_url="https://item.jd.com/100193155629.html",
+    )
+    db.commit()
+
+    run_match(db, clean_job_id)
+
+    result = db.query(MatchResult).filter(MatchResult.clean_job_id == clean_job_id).first()
+    assert result is not None
+    assert result.match_status == "url_matched", f"期望 url_matched，实际 {result.match_status}"
+    assert result.model_id == model.id
+    assert result.match_source == "s0"
+
+
+def test_s0_skips_url_mapping_to_generic_brand_model(db):
+    """通用占位品牌（其他）的空型号不应被自动复用，避免误挂在兜底品牌上。"""
+    from app.models.schemas import ItemUrlMapping
+
+    model = ModelRecord(
+        brand_code="其他", model_code=None, brand_name="其他",
+        category_code="video_doorbell",
+    )
+    db.add(model)
+    db.flush()
+
+    db.add(ItemUrlMapping(
+        platform="jd", item_id="100193155630",
+        item_url="https://item.jd.com/100193155630.html",
+        model_id=model.id, brand_code="其他",
+    ))
+
+    clean_job_id = _seed_clean_row_with_url(
+        db, brand_raw="其他", item_name="无品牌可视门铃",
+        item_id="100193155630", item_url="https://item.jd.com/100193155630.html",
+    )
+    db.commit()
+
+    run_match(db, clean_job_id)
+
+    result = db.query(MatchResult).filter(MatchResult.clean_job_id == clean_job_id).first()
+    assert result is not None
+    assert result.match_status == "pending", f"期望 pending，实际 {result.match_status}"
+    assert result.model_id is None
+
+
+def test_s0_skips_url_mapping_to_out_of_category_brand_only_model(db):
+    """占位型号属于其他品类时不应复用（品类限定，避免跨品类误匹配）。"""
+    from app.models.schemas import ItemUrlMapping
+
+    model = ModelRecord(
+        brand_code="小米", model_code=None, brand_name="小米",
+        category_code="headphone",
+    )
+    db.add(model)
+    db.flush()
+
+    db.add(ItemUrlMapping(
+        platform="jd", item_id="100193155631",
+        item_url="https://item.jd.com/100193155631.html",
+        model_id=model.id, brand_code="小米",
+    ))
+
+    # 任务是 video_doorbell，而占位型号属于 headphone
+    clean_job_id = _seed_clean_row_with_url(
+        db, brand_raw="小米", item_name="小米智能门铃4 可视门铃",
+        item_id="100193155631", item_url="https://item.jd.com/100193155631.html",
+    )
+    db.commit()
+
+    run_match(db, clean_job_id)
+
+    result = db.query(MatchResult).filter(MatchResult.clean_job_id == clean_job_id).first()
+    assert result is not None
+    assert result.match_status == "pending", f"期望 pending，实际 {result.match_status}"
     assert result.model_id is None

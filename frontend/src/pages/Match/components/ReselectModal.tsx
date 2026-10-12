@@ -32,6 +32,7 @@ const matchSourceMeta = (source?: string | null) => {
     s3: { label: '标题品牌名匹配', color: 'green' },
     s4: { label: '型号码兜底匹配', color: 'orange' },
     manual: { label: '人工确认', color: 'blue' },
+    exclude_reuse: { label: '沿用历史排除', color: 'default' },
   }
   return source ? map[source] : undefined
 }

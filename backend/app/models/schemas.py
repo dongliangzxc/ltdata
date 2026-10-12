@@ -636,6 +636,32 @@ class ItemUrlMapping(Base):
     model = relationship("ModelRecord")
 
 
+class ItemExclusion(Base):
+    """人工排除沉淀库：记录被人工排除的商品，供后续清洗任务按同品类自动沿用排除。
+
+    复用匹配键：优先 (platform, item_id)，无链接时回退规范化标题 item_name_norm；
+    category_code 限定复用范围（同品类内生效）。
+    """
+    __tablename__ = "item_exclusions"
+    __table_args__ = (
+        Index("idx_item_excl_cat_item", "category_code", "platform", "item_id"),
+        Index("idx_item_excl_cat_name", "category_code", "item_name_norm"),
+    )
+
+    id             = Column(Integer, primary_key=True, autoincrement=True)
+    category_code  = Column(String(50), nullable=True, index=True, comment='限定复用的品类码')
+    platform       = Column(String(20), nullable=True)
+    item_id        = Column(String(100), nullable=True)
+    item_url       = Column(String(500), nullable=True)
+    item_name      = Column(Text, nullable=True)
+    item_name_norm = Column(String(500), nullable=True, comment='规范化标题，标题兜底匹配键')
+    reason         = Column(String(500), nullable=True)
+    source         = Column(String(30), nullable=True, comment='manual/same_title')
+    created_at     = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at     = Column(DateTime, nullable=False, default=datetime.utcnow,
+                            onupdate=datetime.utcnow)
+
+
 class HistoricalMapping(Base):
     __tablename__ = "historical_mappings"
     __table_args__ = (

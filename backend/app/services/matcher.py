@@ -7,6 +7,11 @@
            从宝贝链接提取 (platform, item_id)，查 item_url_mappings 表。
            人工维护的 URL→型号映射，置信度最高。命中 → url_matched。
 
+  S0.1   ── 人工排除沉淀库沿用
+           同品类内，命中 item_exclusions（优先 platform+item_id，回退规范化标题）
+           的自动标记为 excluded（match_source=exclude_reuse），不再走后续阶段。
+           URL 映射命中（S0）优先于此阶段。
+
   S0.2   ── 历史库匹配
            同样用 (platform, item_id)，查 historical_mappings 表（批量导入的历史对照）。
            命中 → matched。
@@ -52,6 +57,7 @@ from dataclasses import dataclass, field
 from sqlalchemy.orm import Session
 from app.models.schemas import CleanedDataRecord, ModelRecord, ModelAlias, MatchResult, MatchResultAttr, MatchResultCandidate, ItemUrlMapping, MatchRule, HistoricalMapping, CleanJobRecord, RawDataRecord
 from app.utils.url_utils import extract_item_id
+from app.utils.text_utils import title_key
 from app.services.attribute_matcher import run_attribute_matching
 from app.services.price_auditor import audit_price
 
@@ -72,6 +78,9 @@ class MatchContext:
     long_code_models: list = field(default_factory=list)
     alias_map: dict = field(default_factory=dict)
     brand_raw_cache: dict = field(default_factory=dict)
+    exclusion_url_keys: set = field(default_factory=set)
+    exclusion_name_keys: set = field(default_factory=set)
+    url_reusable_model_ids: set = field(default_factory=set)
 
 
 def _load_match_context(db: Session, category_code: str | None) -> MatchContext:
@@ -84,9 +93,17 @@ def _load_match_context(db: Session, category_code: str | None) -> MatchContext:
         model_query = model_query.filter(ModelRecord.category_code == category_code)
     model_rows = model_query.all()
     ctx.valid_model_ids = {m.id for m in model_rows if _is_valid_model(m)}
+    # URL 映射可复用型号：本品类 active 且品牌非占位的型号即可被 URL 直接复用
+    # （type 允许为空——video_doorbell 等按品牌级归类的品类，人工确认往往落在
+    # 型号码为空的占位型号上，若不放开则同链接已确认商品无法自动复用）。
+    ctx.url_reusable_model_ids = {
+        m.id
+        for m in model_rows
+        if m.status == "active" and not _is_generic_brand_code(m.brand_code)
+    }
 
     for um in db.query(ItemUrlMapping).all():
-        if um.model_id and um.model_id in ctx.valid_model_ids:
+        if um.model_id and um.model_id in ctx.url_reusable_model_ids:
             ctx.url_map[(um.platform, um.item_id)] = um.model_id
         elif um.brand_code:
             ctx.url_brand_map[(um.platform, um.item_id)] = um.brand_code
@@ -113,7 +130,21 @@ def _load_match_context(db: Session, category_code: str | None) -> MatchContext:
     for a in db.query(ModelAlias).all():
         ctx.alias_map.setdefault(a.model_id, []).append(_norm(a.alias_code))
 
+    # 人工排除沉淀库：同品类内命中即自动沿用排除（S0.1）
+    from app.services.exclusion_store import load_exclusion_index
+    ctx.exclusion_url_keys, ctx.exclusion_name_keys = load_exclusion_index(db, category_code)
+
     return ctx
+
+
+def _is_excluded(ctx: MatchContext, platform: str | None, item_id: str | None, item_name: str | None) -> bool:
+    """S0.1：命中人工排除沉淀库（链接优先，标题兜底）。"""
+    if not ctx.exclusion_url_keys and not ctx.exclusion_name_keys:
+        return False
+    if platform and item_id and (platform.lower(), item_id) in ctx.exclusion_url_keys:
+        return True
+    key = title_key(item_name)
+    return bool(key) and key in ctx.exclusion_name_keys
 
 
 def _norm(s: str | None) -> str:
@@ -123,6 +154,16 @@ def _norm(s: str | None) -> str:
 def _is_placeholder_code(s: str | None) -> bool:
     value = _norm(s)
     return value == "" or set(value) == {"-"}
+
+
+_GENERIC_BRAND_CODES = {
+    "其他", "其他品牌", "无品牌", "未知品牌", "未知", "未识别品牌", "UNKNOWN", "OTHER",
+}
+
+
+def _is_generic_brand_code(s: str | None) -> bool:
+    """品牌占位/通用品牌（不可作为自动复用型号）。"""
+    return _is_placeholder_code(s) or _norm(s) in _GENERIC_BRAND_CODES
 
 
 def _is_valid_model(m: ModelRecord) -> bool:
@@ -418,6 +459,27 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
             # model_id=NULL 但 brand_code 有值：作为 S1 品牌线索
             url_brand_hint = url_brand_map.get((platform, item_id))
 
+        # ── S0.1: 人工排除沉淀库沿用 ───────────────────────────────
+        if _is_excluded(ctx, *(url_info or (None, None)), row.item_name):
+            results.append(MatchResult(
+                clean_job_id=clean_job_id,
+                raw_data_id=row.raw_data_id,
+                model_id=None,
+                match_status="excluded",
+                matched_by="auto",
+                match_source="exclude_reuse",
+            ))
+            if len(results) >= BATCH:
+                db.bulk_save_objects(results)
+                if commit:
+                    db.commit()
+                else:
+                    db.flush()
+                if progress_cb:
+                    progress_cb(i + 1, total, matched_count)
+                results = []
+            continue
+
         # ── S0.2: 历史库精确匹配 ─────────────────────────────────
         hist_hit = _history_lookup(db, row)
         if hist_hit:
@@ -640,6 +702,17 @@ def run_match_for_result(
                 db.commit()
             return mr
         url_brand_hint = ctx.url_brand_map.get((platform, item_id))
+
+    # ── S0.1: 人工排除沉淀库沿用 ───────────────────────────────
+    if _is_excluded(ctx, *(url_info or (None, None)), raw.item_name):
+        mr.model_id = None
+        mr.match_status = "excluded"
+        mr.matched_by = "auto"
+        mr.match_source = "exclude_reuse"
+        mr.brand_identified = 0
+        if commit:
+            db.commit()
+        return mr
 
     # ── S0.2: 历史库精确匹配 ─────────────────────────────────
     hist_hit = _history_lookup(db, raw)

@@ -2,9 +2,7 @@
 型号匹配 API
 """
 import logging
-import re
 import time
-import unicodedata
 from collections import Counter
 from datetime import datetime
 from threading import Thread
@@ -27,8 +25,13 @@ from app.models.schemas import (
 )
 from app.services.clean_task_snapshot import ACTIVE_TASK_STATUSES, touch_clean_job
 from app.services.data_cleaner import _load_brand_alias_map
+from app.services.exclusion_store import (
+    remove_exclusion_for_raw,
+    upsert_exclusion_for_raw,
+)
 from app.services.matcher import run_match, run_match_for_result
 from app.services.price_auditor import audit_price
+from app.utils.text_utils import title_key
 from app.utils.time_utils import format_beijing_datetime
 
 router = APIRouter(prefix="/api/match", tags=["match"])
@@ -96,14 +99,10 @@ def _get_visible_match_result_or_404(db: Session, current_user: User, match_id: 
 _progress: dict[int, dict] = {}
 
 SAME_TITLE_ACTIONABLE_STATUSES = {"pending", "text_only", "disputed"}
-_TITLE_PUNCT_RE = re.compile(
-    r"[\s\-‐‑‒–—―_/\\|,，、.。·・•!！?？:：;；'‘’\"“”()（）\[\]【】{}<>《》&+@#＃$￥%％^*＊=~～`｀…]+"
-)
 
 
 def _same_title_key(value: str | None) -> str:
-    normalized = unicodedata.normalize("NFKC", value or "").casefold().strip()
-    return _TITLE_PUNCT_RE.sub("", normalized)
+    return title_key(value)
 
 
 def _same_title_rows(db: Session, match_id: int):
@@ -184,6 +183,15 @@ def _upsert_url_mapping_for_raw(db: Session, rd: RawDataRecord, model: ModelReco
         source=source,
     ))
     return True
+
+
+def _clean_job_category_code(db: Session, clean_job_id: int | None) -> str | None:
+    if not clean_job_id:
+        return None
+    job = db.query(CleanJobRecord).filter(CleanJobRecord.id == clean_job_id).first()
+    if not job:
+        return None
+    return job.category_code or job.dispatch_category_code
 
 
 def confirm_single_review(db: Session, mr: MatchResult, model: ModelRecord) -> None:
@@ -822,10 +830,11 @@ def exclude_same_title_matches(match_id: int, payload: dict, db: Session = Depen
     include_statuses = _allowed_same_title_statuses(payload)
     reason = (payload.get("reason") or "").strip() or None
     _current_mr, rows = _same_title_rows(db, match_id)
+    category_code = _clean_job_category_code(db, _current_mr.clean_job_id)
     now = datetime.utcnow()
     affected_ids: list[int] = []
 
-    for mr, _rd, _model in rows:
+    for mr, rd, _model in rows:
         if mr.match_status not in include_statuses:
             continue
         mr.match_status = "excluded"
@@ -835,6 +844,7 @@ def exclude_same_title_matches(match_id: int, payload: dict, db: Session = Depen
         mr.dispute_reason = None
         mr.review_note = reason
         mr.reviewed_at = now
+        upsert_exclusion_for_raw(db, rd, category_code, reason=reason, source="same_title")
         affected_ids.append(mr.id)
 
     touch_clean_job(db, _current_mr.clean_job_id)
@@ -1131,6 +1141,8 @@ def confirm_match(
     payload: { "excluded": true } → 标记排除，status=excluded
     """
     mr = _get_visible_match_result_or_404(db, current_user, match_id)
+    raw = db.query(RawDataRecord).filter(RawDataRecord.id == mr.raw_data_id).first()
+    category_code = _clean_job_category_code(db, mr.clean_job_id)
 
     reason = (payload.get("reason") or "").strip() or None
 
@@ -1142,6 +1154,7 @@ def confirm_match(
         mr.dispute_reason = None
         mr.review_note = reason
         mr.reviewed_at = datetime.utcnow()
+        upsert_exclusion_for_raw(db, raw, category_code, reason=reason, source="manual")
     elif payload.get("disputed"):
         if not reason:
             raise HTTPException(status_code=400, detail="暂存争议需填写原因")
@@ -1158,6 +1171,7 @@ def confirm_match(
             raise HTTPException(status_code=404, detail="型号不存在")
         _snapshot_prev_state(mr)
         confirm_single_review(db, mr, m)
+        remove_exclusion_for_raw(db, raw, category_code)
     else:
         raise HTTPException(status_code=400, detail="需提供 model_id、excluded=true 或 disputed=true")
 
@@ -1178,7 +1192,7 @@ def confirm_match(
     touch_clean_job(db, mr.clean_job_id)
     db.commit()
 
-    rd = db.query(RawDataRecord).filter(RawDataRecord.id == mr.raw_data_id).first()
+    rd = raw
     model_info = db.query(ModelRecord).filter(ModelRecord.id == mr.model_id).first() if mr.model_id else None
 
     return MatchResultOut(
@@ -1503,6 +1517,11 @@ def revert_match(match_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="匹配记录不存在")
     if mr.match_status not in MANUAL_TERMINAL_STATUSES:
         raise HTTPException(status_code=400, detail="当前记录没有可撤销的历史操作")
+
+    # 撤销一条「已排除」记录时，同步从排除沉淀库删除，避免后续任务继续自动沿用。
+    if mr.match_status == "excluded":
+        raw = db.query(RawDataRecord).filter(RawDataRecord.id == mr.raw_data_id).first()
+        remove_exclusion_for_raw(db, raw, _clean_job_category_code(db, mr.clean_job_id))
 
     # 已确认的记录如果之前把 URL 映射写成新型号，撤销时不动 URL 映射库——
     # 避免误伤后来同链接的匹配；如需一并回滚需要单独在页面上处理。

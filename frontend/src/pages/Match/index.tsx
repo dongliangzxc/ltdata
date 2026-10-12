@@ -1697,9 +1697,7 @@ export default function MatchPage() {
                       >
                         <List.Item.Meta
                           title={
-                            <Tooltip title={item.item_name}>
-                              <Text strong ellipsis style={{ maxWidth: 280 }}>{item.item_name || '-'}</Text>
-                            </Tooltip>
+                            <Text strong style={{ display: 'block', wordBreak: 'break-all', lineHeight: '20px' }}>{item.item_name || '-'}</Text>
                           }
                           description={
                             <Space direction="vertical" size={4} style={{ width: '100%' }}>
@@ -1761,9 +1759,7 @@ export default function MatchPage() {
                           )}
                           <List.Item.Meta
                             title={
-                              <Tooltip title={item.item_name}>
-                                <Text strong ellipsis style={{ maxWidth: 280 }}>{item.item_name || '-'}</Text>
-                              </Tooltip>
+                              <Text strong style={{ display: 'block', wordBreak: 'break-all', lineHeight: '20px' }}>{item.item_name || '-'}</Text>
                             }
                             description={
                               <Space direction="vertical" size={4} style={{ width: '100%' }}>

@@ -1546,8 +1546,6 @@ export default function MatchPage() {
               const nextTab = key as ReviewTabKey
               setActiveTab(nextTab)
               setPage(1)
-              setKeyword('')
-              setInputValue('')
               setCategoryName(undefined)
               setSortBy('default')
               setPriceMin(null)

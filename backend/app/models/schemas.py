@@ -48,6 +48,12 @@ class UploadDownloadJob(Base):
 
 class RawDataRecord(Base):
     __tablename__ = "raw_data"
+    # Upload deduplication probes (item_id, month, platform) for every batch.
+    # Keep this index explicit in ORM metadata so fresh databases and tests
+    # receive the same lookup plan as migrated production databases.
+    __table_args__ = (
+        Index("idx_raw_dedup_lookup", "item_id", "month", "platform"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     file_id = Column(Integer, ForeignKey("upload_files.id"), nullable=False)

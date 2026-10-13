@@ -20,7 +20,7 @@ from app.core.permissions import visible_category_codes
 from app.models.database import get_db
 from app.models.schemas import (
     BrandRecord, BrandCategory, ModelRecord, ModelSpec, ModelAlias,
-    HistoricalMapping, ItemUrlMapping, MatchRule,
+    HistoricalMapping, ItemUrlMapping, MatchRule, MatchResult,
     ModelIn, ModelOut, ModelSpecOut, ModelAliasOut,
     CategoryExtraField, CategoryExtraFieldOut,
     PaginatedResponse, Category, User,
@@ -950,6 +950,71 @@ def list_models(
         result.append(out)
 
     return PaginatedResponse(total=total, page=page, page_size=page_size, items=result)
+
+
+class _BulkDeleteModelsIn(BaseModel):
+    category_code: str
+
+
+def _bulk_delete_scope(db: Session, current_user: User, category_code: str | None) -> str:
+    code = _canonical_category_code(db, category_code)
+    if not code:
+        raise HTTPException(status_code=422, detail="品类不能为空")
+    _ensure_model_category_visible(db, current_user, code)
+    return code
+
+
+@router.get("/category-count", response_model=dict)
+def model_category_count(
+    category_code: str = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    code = _bulk_delete_scope(db, current_user, category_code)
+    count = db.query(ModelRecord).filter(ModelRecord.category_code == code).count()
+    return {"category_code": code, "count": count}
+
+
+@router.post("/bulk-delete", response_model=dict)
+def bulk_delete_models_by_category(
+    payload: _BulkDeleteModelsIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """按品类删除全部型号，并解除相关引用（历史映射 / URL 映射 / 匹配结果）。
+
+    型号被匹配规则引用时阻止删除（与单条删除一致）。
+    """
+    code = _bulk_delete_scope(db, current_user, payload.category_code)
+    model_ids = [row[0] for row in db.query(ModelRecord.id).filter(ModelRecord.category_code == code).all()]
+    if not model_ids:
+        return {"category_code": code, "deleted": 0}
+
+    blocked = db.query(MatchRule).filter(MatchRule.model_id.in_(model_ids)).count()
+    if blocked:
+        raise HTTPException(
+            status_code=409,
+            detail=f"该品类仍有 {blocked} 个型号被匹配规则引用，请先删除或调整规则",
+        )
+
+    chunk_size = 1000
+    for start in range(0, len(model_ids), chunk_size):
+        chunk = model_ids[start:start + chunk_size]
+        db.query(HistoricalMapping).filter(HistoricalMapping.model_id.in_(chunk)).update(
+            {HistoricalMapping.model_id: None}, synchronize_session=False,
+        )
+        db.query(ItemUrlMapping).filter(ItemUrlMapping.model_id.in_(chunk)).update(
+            {ItemUrlMapping.model_id: None}, synchronize_session=False,
+        )
+        db.query(MatchResult).filter(MatchResult.model_id.in_(chunk)).update(
+            {MatchResult.model_id: None}, synchronize_session=False,
+        )
+        db.query(ModelSpec).filter(ModelSpec.model_id.in_(chunk)).delete(synchronize_session=False)
+        db.query(ModelAlias).filter(ModelAlias.model_id.in_(chunk)).delete(synchronize_session=False)
+
+    deleted = db.query(ModelRecord).filter(ModelRecord.id.in_(model_ids)).delete(synchronize_session=False)
+    db.commit()
+    return {"category_code": code, "deleted": deleted}
 
 
 @router.get("/{model_id}", response_model=ModelOut)

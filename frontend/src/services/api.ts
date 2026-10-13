@@ -722,6 +722,10 @@ export const updateModel = (id: number, data: CreateModelPayload) => api.put<Mod
 export const batchUpdateModelsCategory = (data: { model_ids: number[]; category_code: string }) =>
   api.post<{ updated: number; errors: { model_id: number; reason: string }[] }>('/models/batch-category', data)
 export const deleteModel = (id: number) => api.delete(`/models/${id}`)
+export const getModelCategoryCount = (category_code: string) =>
+  api.get<{ category_code: string; count: number }>('/models/category-count', { params: { category_code } })
+export const bulkDeleteModels = (category_code: string) =>
+  api.post<{ category_code: string; deleted: number }>('/models/bulk-delete', { category_code })
 export const downloadModelTemplate = () =>
   api.get('/models/template', { responseType: 'blob' })
 

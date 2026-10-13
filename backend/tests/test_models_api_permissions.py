@@ -214,3 +214,104 @@ def test_batch_update_model_category_rejects_invisible_target(client):
     })
 
     assert resp.status_code == 403
+
+
+def _as_admin(client):
+    client.current_user.is_admin = 1
+    client.current_user.category_permissions = []
+
+
+def test_model_category_count(client):
+    _as_admin(client)
+    with client.Session() as session:
+        session.add_all([
+            Category(code="tv", name="电视", sort_order=1),
+            Category(code="ac", name="空调", sort_order=2),
+        ])
+        session.add_all([
+            ModelRecord(brand_code="B1", model_code="TV-1", category_code="tv", brand_name="品牌一"),
+            ModelRecord(brand_code="B1", model_code="TV-2", category_code="tv", brand_name="品牌一"),
+            ModelRecord(brand_code="B2", model_code="AC-1", category_code="ac", brand_name="品牌二"),
+        ])
+        session.commit()
+
+    res = client.get("/api/models/category-count", params={"category_code": "tv"})
+
+    assert res.status_code == 200
+    assert res.json() == {"category_code": "tv", "count": 2}
+
+
+def test_bulk_delete_models_removes_category_and_clears_refs(client):
+    from app.models.schemas import (
+        HistoricalMapping, ItemUrlMapping, MatchResult, ModelSpec, ModelAlias,
+    )
+    _as_admin(client)
+    with client.Session() as session:
+        session.add_all([
+            Category(code="tv", name="电视", sort_order=1),
+            Category(code="ac", name="空调", sort_order=2),
+        ])
+        tv = ModelRecord(brand_code="B1", model_code="TV-1", category_code="tv", brand_name="品牌一")
+        tv2 = ModelRecord(brand_code="B1", model_code="TV-2", category_code="tv", brand_name="品牌一")
+        ac = ModelRecord(brand_code="B2", model_code="AC-1", category_code="ac", brand_name="品牌二")
+        session.add_all([tv, tv2, ac])
+        session.flush()
+        session.add_all([
+            ModelSpec(model_id=tv.id, spec_name="屏幕"),
+            ModelAlias(model_id=tv.id, alias_code="TV-ALIAS-1"),
+            ItemUrlMapping(platform="jd", item_id="tv-item", item_url="https://item.jd.com/tv-item.html",
+                           brand_code="B1", model_id=tv.id),
+            HistoricalMapping(platform="jd", item_id="h1", item_name="电视一", item_name_norm="电视一",
+                              year=2026, month_num=1, month="2026-01", match_key_type="url",
+                              raw_payload={}, model_id=tv2.id),
+            MatchResult(clean_job_id=1, raw_data_id=1, model_id=tv.id, match_status="matched"),
+        ])
+        session.commit()
+
+    res = client.post("/api/models/bulk-delete", json={"category_code": "tv"})
+
+    assert res.status_code == 200
+    assert res.json() == {"category_code": "tv", "deleted": 2}
+    with client.Session() as session:
+        remaining = session.query(ModelRecord).all()
+        assert [m.category_code for m in remaining] == ["ac"]
+        assert session.query(ModelSpec).count() == 0
+        assert session.query(ModelAlias).count() == 0
+        assert all(r.model_id is None for r in session.query(ItemUrlMapping).all())
+        assert all(r.model_id is None for r in session.query(HistoricalMapping).all())
+        assert all(r.model_id is None for r in session.query(MatchResult).all())
+
+
+def test_bulk_delete_models_blocks_when_match_rule_references(client):
+    from app.models.schemas import MatchRule
+    _as_admin(client)
+    with client.Session() as session:
+        session.add(Category(code="tv", name="电视", sort_order=1))
+        model = ModelRecord(brand_code="B1", model_code="TV-1", category_code="tv", brand_name="品牌一")
+        session.add(model)
+        session.flush()
+        session.add(MatchRule(keyword="电视一", match_type="contains", model_id=model.id))
+        session.commit()
+
+    res = client.post("/api/models/bulk-delete", json={"category_code": "tv"})
+
+    assert res.status_code == 409
+    with client.Session() as session:
+        assert session.query(ModelRecord).count() == 1
+
+
+def test_bulk_delete_models_rejects_invisible_category(client):
+    client.current_user.is_admin = 0
+    client.current_user.category_permissions = ["tv"]
+    with client.Session() as session:
+        session.add_all([
+            Category(code="tv", name="电视", sort_order=1),
+            Category(code="ac", name="空调", sort_order=2),
+        ])
+        session.add(ModelRecord(brand_code="B2", model_code="AC-1", category_code="ac", brand_name="品牌二"))
+        session.commit()
+
+    res = client.post("/api/models/bulk-delete", json={"category_code": "ac"})
+
+    assert res.status_code == 403
+    assert res.json()["detail"] == "无权限访问该品类"

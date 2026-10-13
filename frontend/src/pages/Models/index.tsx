@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import {
   Card, Table, Button, Input, Space, Popconfirm, Modal, Form,
-  InputNumber, message, Row, Col, Divider, Typography, Select, Tag
+  InputNumber, message, Row, Col, Divider, Typography, Select, Tag, Alert
 } from 'antd'
 import {
   PlusOutlined, UploadOutlined, DownloadOutlined, EditOutlined, DeleteOutlined,
@@ -12,7 +12,7 @@ import {
   listModels, getModelDetail, createModel, updateModel, deleteModel,
   listModelAliases, addModelAlias, deleteModelAlias,
   listCategories, downloadModelTemplate, listModelExtraFields,
-  batchUpdateModelsCategory,
+  batchUpdateModelsCategory, getModelCategoryCount, bulkDeleteModels,
 } from '../../services/api'
 import type { ModelItem as ApiModelItem, UserProfile } from '../../services/api'
 import ImportMappingModal from '../../components/ImportMappingModal'
@@ -55,6 +55,10 @@ export default function ModelsPage() {
   const [batchCategoryOpen, setBatchCategoryOpen] = useState(false)
   const [batchCategory, setBatchCategory] = useState<string | undefined>()
   const [batchSubmitting, setBatchSubmitting] = useState(false)
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
+  const [bulkDeleteCount, setBulkDeleteCount] = useState<number | null>(null)
+  const [bulkCountLoading, setBulkCountLoading] = useState(false)
+  const [bulkDeleting, setBulkDeleting] = useState(false)
   const [expandedSpecs, setExpandedSpecs] = useState<Record<number, ModelSpec[]>>({})
   const [form] = Form.useForm()
   const watchedCategoryCode = Form.useWatch('category_code', form)
@@ -243,6 +247,45 @@ export default function ModelsPage() {
     }
   }
 
+  const selectedCategoryLabel = useMemo(
+    () => visibleCategoryOptions.find(o => o.value === search.category_code)?.label,
+    [visibleCategoryOptions, search.category_code]
+  )
+
+  const openBulkDelete = async () => {
+    const code = search.category_code
+    if (!code) return
+    setBulkDeleteOpen(true)
+    setBulkDeleteCount(null)
+    setBulkCountLoading(true)
+    try {
+      const res = await getModelCategoryCount(code)
+      setBulkDeleteCount(res.data.count)
+    } catch {
+      // handled by interceptor
+    } finally {
+      setBulkCountLoading(false)
+    }
+  }
+
+  const handleBulkDelete = async () => {
+    const code = search.category_code
+    if (!code) return
+    setBulkDeleting(true)
+    try {
+      const res = await bulkDeleteModels(code)
+      message.success(`已删除 ${res.data.deleted} 个型号`)
+      setBulkDeleteOpen(false)
+      setSelectedRowKeys([])
+      setPage(1)
+      refresh()
+    } catch {
+      // handled by interceptor
+    } finally {
+      setBulkDeleting(false)
+    }
+  }
+
   const columns = [
     { title: '品类', dataIndex: 'category_name', width: 110, render: (v: string | null) => v || '-' },
     { title: '品牌', dataIndex: 'brand_name', width: 120, render: (v: string | null) => v || '-' },
@@ -340,6 +383,15 @@ export default function ModelsPage() {
               onClick={() => { setBatchCategoryOpen(true); setBatchCategory(undefined) }}
             >
               批量改品类{selectedRowKeys.length > 0 ? `（${selectedRowKeys.length}）` : ''}
+            </Button>
+            <Button
+              danger
+              icon={<DeleteOutlined />}
+              disabled={!search.category_code}
+              title={search.category_code ? undefined : '请先在「品类筛选」中选择品类'}
+              onClick={openBulkDelete}
+            >
+              一键删除
             </Button>
             <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增型号</Button>
           </Space>
@@ -441,6 +493,35 @@ export default function ModelsPage() {
             />
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title="按品类一键删除"
+        open={bulkDeleteOpen}
+        onCancel={() => setBulkDeleteOpen(false)}
+        onOk={handleBulkDelete}
+        okText="确认删除"
+        okButtonProps={{ danger: true, disabled: bulkCountLoading || bulkDeleteCount === 0 }}
+        confirmLoading={bulkDeleting}
+        destroyOnClose
+        width={480}
+      >
+        <Alert
+          type="warning"
+          showIcon
+          message="该操作不可恢复，请谨慎执行"
+          style={{ marginBottom: 12 }}
+        />
+        <p style={{ marginBottom: 8 }}>
+          品类：<Text strong>{selectedCategoryLabel || search.category_code}</Text>
+        </p>
+        <p style={{ marginBottom: 8 }}>
+          将删除该品类下全部型号
+          {bulkCountLoading ? '（统计中…）' : bulkDeleteCount != null ? `，共 ${bulkDeleteCount} 条` : ''}。
+        </p>
+        <p style={{ color: '#999', marginBottom: 0 }}>
+          同时解除型号关联：历史映射 / URL 映射 / 匹配结果的型号置空；被匹配规则引用的型号会阻止删除。
+        </p>
       </Modal>
 
       <Modal

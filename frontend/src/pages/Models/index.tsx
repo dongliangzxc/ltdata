@@ -89,9 +89,10 @@ export default function ModelsPage() {
 
   const currentUser = readStoredUser()
   const { data: categoriesData } = useRequest(() => listCategories().then(r => r.data))
-  const categoryOptions = (categoriesData ?? []).map((c: { code: string; name: string }) => ({
-    value: c.code, label: `${c.name}（${c.code}）`
-  }))
+  const categoryOptions: { value: string; label: string }[] =
+    (categoriesData ?? []).map((c: { code: string; name: string }) => ({
+      value: c.code, label: `${c.name}（${c.code}）`
+    }))
   const visibleCategoryOptions = useMemo(() => {
     if (!currentUser) return categoryOptions
     if (currentUser.is_admin === 1) return categoryOptions

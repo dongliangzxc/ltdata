@@ -444,6 +444,10 @@ def delete_upload_file(file_id: int, db: Session = Depends(get_db)):
 # ─── P9: Two-phase upload ────────────────────────────────────
 
 REQUIRED_FIELDS = {"item_id", "month", "platform", "item_name", "sales_qty", "sales_amount", "price"}
+# A progress update opens a separate DB session so the long import transaction
+# remains atomic.  Reporting every ten 5,000-row batches is enough for a smooth
+# UI while avoiding hundreds of extra SELECT/UPDATE/COMMIT round trips.
+PROGRESS_BATCH_INTERVAL = 10
 
 
 def _run_upload_confirm_thread(
@@ -554,17 +558,36 @@ def _run_upload_confirm_thread(
             progress=45,
             processed_rows=0,
         )
+        # Deduplicate inside the uploaded file before querying MySQL.  Apart
+        # from shrinking the IN lists, this prevents two identical rows in one
+        # upload from colliding with the raw_data unique key.
+        candidate_records = []
+        seen_upload_keys = set()
+        for record in records:
+            item_id = record.get("item_id")
+            if item_id is None:
+                candidate_records.append(record)
+                continue
+            key = (str(item_id), record.get("month"), record.get("platform"))
+            if key in seen_upload_keys:
+                continue
+            seen_upload_keys.add(key)
+            candidate_records.append(record)
+
         keys = [
             (str(r.get("item_id")), r.get("month"), r.get("platform"))
-            for r in records
+            for r in candidate_records
             if r.get("item_id") is not None
         ]
         existing_set: set = set()
         if keys:
             DEDUP_BATCH = 5000
             for i in range(0, len(keys), DEDUP_BATCH):
-                if _is_upload_job_cancelled(job_id):
-                    return
+                batch_no = i // DEDUP_BATCH
+                is_last_batch = i + DEDUP_BATCH >= len(keys)
+                if batch_no % PROGRESS_BATCH_INTERVAL == 0 or is_last_batch:
+                    if _is_upload_job_cancelled(job_id):
+                        return
                 chunk = keys[i: i + DEDUP_BATCH]
                 rows = db.query(
                     RawDataRecord.item_id, RawDataRecord.month, RawDataRecord.platform
@@ -573,16 +596,17 @@ def _run_upload_confirm_thread(
                 ).all()
                 existing_set.update((e.item_id, e.month, e.platform) for e in rows)
                 processed = min(i + DEDUP_BATCH, len(keys))
-                _update_upload_job_progress(
-                    db,
-                    job,
-                    stage="deduping",
-                    stage_label="正在去重检查",
-                    progress=45 + int(15 * processed / max(len(keys), 1)),
-                    processed_rows=processed,
-                )
+                if batch_no % PROGRESS_BATCH_INTERVAL == 0 or is_last_batch:
+                    _update_upload_job_progress(
+                        db,
+                        job,
+                        stage="deduping",
+                        stage_label="正在去重检查",
+                        progress=45 + int(15 * processed / max(len(keys), 1)),
+                        processed_rows=processed,
+                    )
         to_insert = [
-            r for r in records
+            r for r in candidate_records
             if (str(r.get("item_id")), r.get("month"), r.get("platform")) not in existing_set
         ]
         skipped = len(records) - len(to_insert)
@@ -628,9 +652,12 @@ def _run_upload_confirm_thread(
         if to_insert:
             batch_size = 5000
             for i in range(0, len(to_insert), batch_size):
-                if _is_upload_job_cancelled(job_id):
-                    db.rollback()
-                    return
+                batch_no = i // batch_size
+                is_last_batch = i + batch_size >= len(to_insert)
+                if batch_no % PROGRESS_BATCH_INTERVAL == 0 or is_last_batch:
+                    if _is_upload_job_cancelled(job_id):
+                        db.rollback()
+                        return
                 chunk = to_insert[i: i + batch_size]
                 db.execute(
                     RawDataRecord.__table__.insert(),
@@ -663,16 +690,17 @@ def _run_upload_confirm_thread(
                     ],
                 )
                 inserted = min(i + batch_size, len(to_insert))
-                _update_upload_job_progress(
-                    db,
-                    job,
-                    stage="inserting",
-                    stage_label="正在写入数据",
-                    progress=65 + int(25 * inserted / max(len(to_insert), 1)),
-                    processed_rows=inserted,
-                    inserted_rows=inserted,
-                    skipped_rows=skipped,
-                )
+                if batch_no % PROGRESS_BATCH_INTERVAL == 0 or is_last_batch:
+                    _update_upload_job_progress(
+                        db,
+                        job,
+                        stage="inserting",
+                        stage_label="正在写入数据",
+                        progress=65 + int(25 * inserted / max(len(to_insert), 1)),
+                        processed_rows=inserted,
+                        inserted_rows=inserted,
+                        skipped_rows=skipped,
+                    )
         db.commit()
         db.refresh(file_record)
         _update_upload_job_progress(

@@ -276,6 +276,10 @@ def parse_with_mapping(
 
     # Build extra_data
     df_ext = df[ext_cols] if ext_cols else pd.DataFrame(index=df.index)
+    # The original full-width frame is no longer needed once the standard and
+    # extension frames have been split out.  Release it before building the
+    # Python record list to lower peak memory on wide 382k-row workbooks.
+    del df
 
     def _clean(v):
         if v is None:
@@ -298,14 +302,26 @@ def parse_with_mapping(
             pass
         return v
 
+    # Iterate over native row tuples.  Calling ``iloc`` for every row
+    # constructs a pandas Series per row and is disproportionately expensive
+    # for large uploads (hundreds of thousands of rows).  ``itertuples`` also
+    # avoids a second full list-of-dicts copy before ``records`` is built.
+    std_columns = list(df_std.columns)
+    std_rows = df_std.itertuples(index=False, name=None)
+    ext_rows = df_ext.itertuples(index=False, name=None) if ext_cols else None
     records = []
-    for i in range(len(df_std)):
-        row = {k: _clean(v) for k, v in df_std.iloc[i].items()}
-        extra = {}
+    empty_ext = ()
+    for values, ext_values in zip(std_rows, ext_rows or (empty_ext for _ in range(len(df_std)))):
+        row = {k: _clean(v) for k, v in zip(std_columns, values)}
         if ext_cols:
-            extra = {col: _clean(df_ext.iloc[i][col]) for col in ext_cols}
-            extra = {k: v for k, v in extra.items() if v is not None}
-        row["extra_data"] = extra if extra else None
+            extra = {
+                col: value
+                for col, value in ((col, _clean(value)) for col, value in zip(ext_cols, ext_values))
+                if value is not None
+            }
+            row["extra_data"] = extra or None
+        else:
+            row["extra_data"] = None
         records.append(row)
 
     return records, platform_label, month_range

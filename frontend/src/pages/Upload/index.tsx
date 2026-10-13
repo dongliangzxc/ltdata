@@ -294,7 +294,6 @@ function MappingCard({
           const { status, progress, error_msg } = job
           pollFailCount = 0  // reset on success
           setUploadProgress(progress)
-          onJobUpdate?.()
           if (status === 'done') {
             stopPoll()
             setUploadProgress(100)

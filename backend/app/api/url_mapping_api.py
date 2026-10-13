@@ -169,6 +169,10 @@ class UrlMappingConfirmPayload(BaseModel):
     data_month: Optional[int] = None
 
 
+class UrlMappingBulkDeletePayload(BaseModel):
+    category_code: str
+
+
 @router.get("/template")
 def download_url_mapping_template():
     from openpyxl import Workbook
@@ -642,3 +646,48 @@ def delete_url_mapping(
     db.delete(m)
     db.commit()
     return {"deleted": True}
+
+
+def _url_mapping_category_match_query(db: Session, category_code: str):
+    """与列表页品类筛选口径一致：记录品类或型号归属品类命中即算该品类。"""
+    return (
+        db.query(ItemUrlMapping.id)
+        .outerjoin(ModelRecord, ItemUrlMapping.model_id == ModelRecord.id)
+        .filter(or_(
+            ModelRecord.category_code == category_code,
+            ItemUrlMapping.category_code == category_code,
+        ))
+    )
+
+
+@router.get("/category-count")
+def url_mapping_category_count(
+    category_code: str = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_url_mapping_category_visible(db, current_user, category_code)
+    count = _url_mapping_category_match_query(db, category_code).count()
+    return {"category_code": category_code, "count": count}
+
+
+@router.post("/bulk-delete")
+def bulk_delete_url_mappings(
+    payload: UrlMappingBulkDeletePayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """按品类批量删除 URL 映射，删除范围与列表页品类筛选一致。"""
+    _ensure_url_mapping_category_visible(db, current_user, payload.category_code)
+    ids = [row[0] for row in _url_mapping_category_match_query(db, payload.category_code).all()]
+    deleted = 0
+    chunk_size = 1000
+    for start in range(0, len(ids), chunk_size):
+        chunk = ids[start:start + chunk_size]
+        deleted += (
+            db.query(ItemUrlMapping)
+            .filter(ItemUrlMapping.id.in_(chunk))
+            .delete(synchronize_session=False)
+        )
+    db.commit()
+    return {"category_code": payload.category_code, "deleted": deleted}

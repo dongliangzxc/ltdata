@@ -1001,6 +1001,12 @@ export const updateUrlMapping = (id: number, data: { platform: string; item_id: 
 export const deleteUrlMapping = (id: number) =>
   api.delete(`/url-mappings/${id}`)
 
+export const getUrlMappingCategoryCount = (category_code: string) =>
+  api.get('/url-mappings/category-count', { params: { category_code } })
+
+export const bulkDeleteUrlMappings = (category_code: string) =>
+  api.post('/url-mappings/bulk-delete', { category_code })
+
 export const downloadUrlMappingTemplate = () =>
   api.get('/url-mappings/template', { responseType: 'blob' })
 

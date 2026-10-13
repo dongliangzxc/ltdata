@@ -1,14 +1,14 @@
 import { useMemo, useState } from 'react'
 import {
   Card, Table, Button, Input, Select, Space, Typography,
-  Modal, Form, InputNumber, message, Popconfirm, Tag,
+  Modal, Form, InputNumber, message, Popconfirm, Tag, Alert,
 } from 'antd'
 import { PlusOutlined, UploadOutlined, EditOutlined, DeleteOutlined, DownloadOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import {
   listUrlMappings, createUrlMapping, updateUrlMapping,
   deleteUrlMapping, listModels, getModelDetail, downloadUrlMappingTemplate,
-  listModelExtraFields,
+  listModelExtraFields, getUrlMappingCategoryCount, bulkDeleteUrlMappings,
 } from '../../services/api'
 import type { UserProfile } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
@@ -82,6 +82,11 @@ export default function UrlMappingsPage() {
 
   const [filterYear, setFilterYear] = useState<number | undefined>()
   const [filterMonth, setFilterMonth] = useState<number | undefined>()
+
+  const [bulkOpen, setBulkOpen] = useState(false)
+  const [bulkCount, setBulkCount] = useState<number | null>(null)
+  const [bulkLoading, setBulkLoading] = useState(false)
+  const [bulkDeleting, setBulkDeleting] = useState(false)
 
   const currentUser = readStoredUser()
   const { options: categoryOptions } = useCategoryOptions()
@@ -194,6 +199,40 @@ export default function UrlMappingsPage() {
     await deleteUrlMapping(id)
     message.success('已删除')
     refresh()
+  }
+
+  const selectedCategoryLabel = useMemo(
+    () => visibleCategoryOptions.find(o => o.value === categoryCode)?.label,
+    [visibleCategoryOptions, categoryCode]
+  )
+
+  const openBulkDelete = async () => {
+    if (!categoryCode) return
+    setBulkOpen(true)
+    setBulkCount(null)
+    setBulkLoading(true)
+    try {
+      const res = await getUrlMappingCategoryCount(categoryCode)
+      setBulkCount(res.data.count)
+    } catch {
+      message.error('获取待删除数量失败，请重试')
+    } finally {
+      setBulkLoading(false)
+    }
+  }
+
+  const handleBulkDelete = async () => {
+    if (!categoryCode) return
+    setBulkDeleting(true)
+    try {
+      const res = await bulkDeleteUrlMappings(categoryCode)
+      message.success(`已删除 ${res.data.deleted} 条映射`)
+      setBulkOpen(false)
+      setPage(1)
+      refresh()
+    } finally {
+      setBulkDeleting(false)
+    }
   }
 
   const handleDownloadTemplate = async () => {
@@ -328,6 +367,15 @@ export default function UrlMappingsPage() {
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增</Button>
           <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>导入 Excel</Button>
           <Button icon={<DownloadOutlined />} onClick={handleDownloadTemplate}>下载导入模板</Button>
+          <Button
+            danger
+            icon={<DeleteOutlined />}
+            disabled={!categoryCode}
+            title={categoryCode ? undefined : '请先选择品类'}
+            onClick={openBulkDelete}
+          >
+            批量删除
+          </Button>
         </Space>
       </Card>
 
@@ -364,6 +412,35 @@ export default function UrlMappingsPage() {
         onSuccess={() => { refresh() }}
         onClose={() => setImportOpen(false)}
       />
+
+      <Modal
+        title="按品类批量删除"
+        open={bulkOpen}
+        onCancel={() => setBulkOpen(false)}
+        onOk={handleBulkDelete}
+        okText="确认删除"
+        okButtonProps={{ danger: true, disabled: bulkLoading || bulkCount === 0 }}
+        confirmLoading={bulkDeleting}
+        destroyOnClose
+        width={480}
+      >
+        <Alert
+          type="warning"
+          showIcon
+          message="该操作不可恢复，请谨慎执行"
+          style={{ marginBottom: 12 }}
+        />
+        <p style={{ marginBottom: 8 }}>
+          品类：<Text strong>{selectedCategoryLabel || categoryCode}</Text>
+        </p>
+        <p style={{ marginBottom: 8 }}>
+          将删除该品类下全部 URL 映射记录
+          {bulkLoading ? '（统计中…）' : bulkCount != null ? `，共 ${bulkCount} 条` : ''}。
+        </p>
+        <p style={{ color: '#999', marginBottom: 0 }}>
+          删除范围与列表页「品类筛选」一致，不受关键词 / 平台 / 年份 / 月份筛选影响。
+        </p>
+      </Modal>
 
       <Modal
         title={editingId ? '编辑映射' : '新增映射'}

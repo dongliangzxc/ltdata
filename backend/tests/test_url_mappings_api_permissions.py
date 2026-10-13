@@ -307,3 +307,63 @@ def test_confirm_duplicate_item_id_in_same_file_no_conflict(client):
     with client.Session() as session:
         rows = session.query(ItemUrlMapping).filter_by(item_id="915690762696").all()
         assert len(rows) == 1
+
+
+def test_category_count_matches_list_filter(client):
+    """category-count 统计口径与列表页品类筛选一致（含占位记录）。"""
+    with client.Session() as session:
+        tv, _ = seed_data(session)
+        session.add(ItemUrlMapping(
+            platform="jd", item_id="tv-placeholder", item_url="https://item.jd.com/tv-placeholder.html",
+            brand_code="SONY", model_id=None, category_code="TV",
+        ))
+        session.commit()
+
+    res = client.get("/api/url-mappings/category-count", params={"category_code": "TV"})
+
+    assert res.status_code == 200
+    assert res.json() == {"category_code": "TV", "count": 2}
+
+
+def test_category_count_blocks_invisible_category(client):
+    with client.Session() as session:
+        seed_data(session)
+        session.commit()
+
+    res = client.get("/api/url-mappings/category-count", params={"category_code": "AC"})
+
+    assert res.status_code == 403
+    assert res.json()["detail"] == "无权限访问该品类"
+
+
+def test_bulk_delete_removes_only_selected_category(client):
+    """批量删除按品类口径删除（含占位记录），其他品类不受影响。"""
+    with client.Session() as session:
+        tv, ac = seed_data(session)
+        session.add(ItemUrlMapping(
+            platform="jd", item_id="tv-placeholder", item_url="https://item.jd.com/tv-placeholder.html",
+            brand_code="SONY", model_id=None, category_code="TV",
+        ))
+        session.commit()
+        ac_id = ac.id
+
+    res = client.post("/api/url-mappings/bulk-delete", json={"category_code": "TV"})
+
+    assert res.status_code == 200
+    assert res.json() == {"category_code": "TV", "deleted": 2}
+
+    with client.Session() as session:
+        remaining = session.query(ItemUrlMapping).all()
+        assert [r.item_id for r in remaining] == ["ac-item"]
+        assert session.query(ModelRecord).filter_by(id=ac_id).first() is not None
+
+
+def test_bulk_delete_blocks_invisible_category(client):
+    with client.Session() as session:
+        seed_data(session)
+        session.commit()
+
+    res = client.post("/api/url-mappings/bulk-delete", json={"category_code": "AC"})
+
+    assert res.status_code == 403
+    assert res.json()["detail"] == "无权限访问该品类"

@@ -1,11 +1,11 @@
 import { useMemo, useState } from 'react'
 import {
   Card, Table, Button, Input, Space, Popconfirm, Modal, Form,
-  InputNumber, message, Row, Col, Divider, Typography, Select, Tag, Alert
+  InputNumber, message, Row, Col, Divider, Typography, Select, Tag, Alert, Flex
 } from 'antd'
 import {
   PlusOutlined, UploadOutlined, DownloadOutlined, EditOutlined, DeleteOutlined,
-  MinusCircleOutlined, SwapOutlined,
+  MinusCircleOutlined, SwapOutlined, ExclamationCircleFilled,
 } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import {
@@ -335,69 +335,60 @@ export default function ModelsPage() {
 
   return (
     <Card>
-      <Row gutter={12} style={{ marginBottom: 16 }} align="middle">
-        <Col>
+      <Flex vertical gap={12} style={{ marginBottom: 16 }}>
+        <Space wrap size={8}>
           <Select
             placeholder="品类筛选"
             allowClear
-            style={{ width: 140 }}
+            style={{ width: 150 }}
             options={visibleCategoryOptions}
             onChange={v => { setSearch(p => ({ ...p, category_code: v || undefined })); setPage(1) }}
           />
-        </Col>
-        <Col>
           <Input
             placeholder="搜索品牌"
             allowClear
-            style={{ width: 140 }}
+            style={{ width: 150 }}
             onChange={e => { setSearch(p => ({ ...p, brand_code: e.target.value || undefined })); setPage(1) }}
           />
-        </Col>
-        <Col>
           <Input
             placeholder="搜索型号/名称"
             allowClear
-            style={{ width: 160 }}
+            style={{ width: 180 }}
             onChange={e => { setSearch(p => ({ ...p, keyword: e.target.value || undefined })); setPage(1) }}
           />
-        </Col>
-        <Col>
           <Select
             placeholder="状态筛选"
             allowClear
-            style={{ width: 110 }}
+            style={{ width: 120 }}
             options={[
               { value: 'active', label: '启用' },
               { value: 'inactive', label: '停用' },
             ]}
             onChange={v => { setSearch(p => ({ ...p, status: v || undefined })); setPage(1) }}
           />
-        </Col>
-        <Col flex="auto" />
-        <Col>
-          <Space>
-            <Button icon={<DownloadOutlined />} onClick={handleDownloadTemplate}>下载模板</Button>
-            <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>Excel 导入</Button>
-            <Button
-              icon={<SwapOutlined />}
-              disabled={selectedRowKeys.length === 0}
-              onClick={() => { setBatchCategoryOpen(true); setBatchCategory(undefined) }}
-            >
-              批量改品类{selectedRowKeys.length > 0 ? `（${selectedRowKeys.length}）` : ''}
-            </Button>
-            <Button
-              danger
-              icon={<DeleteOutlined />}
-              disabled={!search.category_code}
-              title={search.category_code ? undefined : '请先在「品类筛选」中选择品类'}
-              onClick={openBulkDelete}
-            >
-              一键删除
-            </Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增型号</Button>
-          </Space>
-        </Col>
-      </Row>
+        </Space>
+        <Flex wrap gap={8} justify="flex-end">
+          <Button icon={<DownloadOutlined />} onClick={handleDownloadTemplate}>下载模板</Button>
+          <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>Excel 导入</Button>
+          <Button
+            icon={<SwapOutlined />}
+            disabled={selectedRowKeys.length === 0}
+            onClick={() => { setBatchCategoryOpen(true); setBatchCategory(undefined) }}
+          >
+            批量改品类{selectedRowKeys.length > 0 ? `（${selectedRowKeys.length}）` : ''}
+          </Button>
+          <Button
+            danger
+            icon={<DeleteOutlined />}
+            disabled={!search.category_code}
+            title={search.category_code ? undefined : '请先在「品类筛选」中选择品类'}
+            onClick={openBulkDelete}
+          >
+            一键删除
+          </Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增型号</Button>
+        </Flex>
+      </Flex>
 
       <Table
         dataSource={data?.items ?? []}
@@ -497,7 +488,12 @@ export default function ModelsPage() {
       </Modal>
 
       <Modal
-        title="按品类一键删除"
+        title={
+          <Space size={8}>
+            <ExclamationCircleFilled style={{ color: '#faad14' }} />
+            按品类一键删除
+          </Space>
+        }
         open={bulkDeleteOpen}
         onCancel={() => setBulkDeleteOpen(false)}
         onOk={handleBulkDelete}
@@ -505,24 +501,23 @@ export default function ModelsPage() {
         okButtonProps={{ danger: true, disabled: bulkCountLoading || bulkDeleteCount === 0 }}
         confirmLoading={bulkDeleting}
         destroyOnClose
-        width={480}
+        width={460}
       >
         <Alert
-          type="warning"
+          type="error"
           showIcon
-          message="该操作不可恢复，请谨慎执行"
-          style={{ marginBottom: 12 }}
+          message={
+            <span>
+              将删除 <Text strong>{selectedCategoryLabel || search.category_code}</Text> 品类下全部型号
+              {bulkCountLoading
+                ? '（统计中…）'
+                : bulkDeleteCount != null
+                  ? <>，共 <Text strong style={{ color: '#cf1322' }}>{bulkDeleteCount}</Text> 条</>
+                  : null}
+            </span>
+          }
+          description="删除后不可恢复，并会解除历史映射、URL 映射、匹配结果的型号关联；被匹配规则引用的型号将阻止本次删除。"
         />
-        <p style={{ marginBottom: 8 }}>
-          品类：<Text strong>{selectedCategoryLabel || search.category_code}</Text>
-        </p>
-        <p style={{ marginBottom: 8 }}>
-          将删除该品类下全部型号
-          {bulkCountLoading ? '（统计中…）' : bulkDeleteCount != null ? `，共 ${bulkDeleteCount} 条` : ''}。
-        </p>
-        <p style={{ color: '#999', marginBottom: 0 }}>
-          同时解除型号关联：历史映射 / URL 映射 / 匹配结果的型号置空；被匹配规则引用的型号会阻止删除。
-        </p>
       </Modal>
 
       <Modal

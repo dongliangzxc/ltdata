@@ -367,7 +367,7 @@ export default function ModelsPage() {
             onChange={v => { setSearch(p => ({ ...p, status: v || undefined })); setPage(1) }}
           />
         </Space>
-        <Flex wrap gap={8} justify="flex-end">
+        <Space wrap size={8}>
           <Button icon={<DownloadOutlined />} onClick={handleDownloadTemplate}>下载模板</Button>
           <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>Excel 导入</Button>
           <Button
@@ -387,7 +387,7 @@ export default function ModelsPage() {
             一键删除
           </Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增型号</Button>
-        </Flex>
+        </Space>
       </Flex>
 
       <Table

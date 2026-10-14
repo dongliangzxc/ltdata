@@ -12,18 +12,23 @@ import {
 import { useRequest } from 'ahooks'
 import {
   listInterventionRules, createInterventionRule, updateInterventionRule, deleteInterventionRule,
+  getInterventionRuleCategoryCount, bulkDeleteInterventionRules,
   listBrandAliases, createBrandAlias, importBrandAliases, deleteBrandAlias,
   listMatchRules, createMatchRule, updateMatchRule, deleteMatchRule,
   listFilteredItems, recoverFilteredItem, recoverFilteredItemsBatch,
   listCleanJobs, listModels,
   listAttrRuleCategories, listAttrRules, createAttrRule,
   updateAttrRule, deleteAttrRule,
+  getAttrRuleCategoryCount, bulkDeleteAttrRules,
   listCorrectionRules, createCorrectionRule, updateCorrectionRule, deleteCorrectionRule,
+  getCorrectionRuleCategoryCount, bulkDeleteCorrectionRules,
   listInterferenceLinks, importInterferenceLinks, deleteInterferenceLink, downloadInterferenceLinkTemplate,
+  getInterferenceLinkCategoryCount, bulkDeleteInterferenceLinks,
   type UserProfile,
 } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 import ImportMappingModal from '../../components/ImportMappingModal'
+import BulkDeleteByCategory from '../../components/BulkDeleteByCategory'
 import { formatModelLabel } from '../../utils/modelLabel'
 
 const { Text } = Typography
@@ -197,6 +202,15 @@ function InterventionRuleTab() {
             options={visibleCategoryOptions}
             value={filterCategory}
             onChange={v => setFilterCategory(v)}
+          />
+          <BulkDeleteByCategory
+            categoryCode={filterCategory}
+            categoryLabel={visibleCategoryOptions.find(o => o.value === filterCategory)?.label}
+            itemLabel="清洗干预规则"
+            description="删除该品类下的全部清洗干预规则，操作不可恢复。"
+            getCount={getInterventionRuleCategoryCount}
+            bulkDelete={bulkDeleteInterventionRules}
+            onSuccess={refresh}
           />
         </Space>
         <Table dataSource={data ?? []} columns={columns} rowKey="id" size="small" loading={loading}
@@ -604,6 +618,15 @@ function AttrRuleTab() {
         />
         <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>添加规则</Button>
         <Button icon={<UploadOutlined />} onClick={() => setAttrImportOpen(true)}>批量导入</Button>
+        <BulkDeleteByCategory
+          categoryCode={filterCategory && filterCategory !== '__global__' ? filterCategory : undefined}
+          categoryLabel={categoryOptions.find(o => o.value === filterCategory)?.label}
+          itemLabel="属性规则"
+          description="删除该品类下的全部属性规则（全局规则不受影响），操作不可恢复。"
+          getCount={getAttrRuleCategoryCount}
+          bulkDelete={bulkDeleteAttrRules}
+          onSuccess={refresh}
+        />
       </Space>
       <Table dataSource={data ?? []} columns={columns} rowKey="id" size="small" loading={loading}
         pagination={{ pageSize: 20, showTotal: (t: number) => `共 ${t} 条` }} />
@@ -794,6 +817,15 @@ function CorrectionRulesTab() {
             onChange={v => setFilterCategory(v || undefined)}
           />
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增规则</Button>
+          <BulkDeleteByCategory
+            categoryCode={filterCategory}
+            categoryLabel={visibleCategoryOptions.find(o => o.value === filterCategory)?.label}
+            itemLabel="修正规则"
+            description="删除该品类下的全部修正规则，操作不可恢复。"
+            getCount={getCorrectionRuleCategoryCount}
+            bulkDelete={bulkDeleteCorrectionRules}
+            onSuccess={refresh}
+          />
         </Space>
         <Table
           dataSource={data ?? []}
@@ -961,6 +993,15 @@ function InterferenceLinkTab() {
         />
         <Input placeholder="搜索链接" allowClear value={keyword} onChange={e => { setKeyword(e.target.value); setPage(1) }}
           style={{ width: 220 }} />
+        <BulkDeleteByCategory
+          categoryCode={filterCategory}
+          categoryLabel={visibleCategoryOptions.find(o => o.value === filterCategory)?.label}
+          itemLabel="干扰链接"
+          description="删除该品类下的全部干扰链接，操作不可恢复。"
+          getCount={getInterferenceLinkCategoryCount}
+          bulkDelete={bulkDeleteInterferenceLinks}
+          onSuccess={() => { setPage(1); refresh() }}
+        />
       </Space>
       <Table
         dataSource={data?.items ?? []}

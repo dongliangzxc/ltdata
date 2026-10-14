@@ -388,6 +388,12 @@ export const updateInterventionRule = (id: number, payload: UpdateInterventionRu
 export const deleteInterventionRule = (id: number) =>
   api.delete(`/rules/intervention-rules/${id}`)
 
+export const getInterventionRuleCategoryCount = (category_code: string) =>
+  api.get<{ category_code: string; count: number }>('/rules/intervention-rules/category-count', { params: { category_code } })
+
+export const bulkDeleteInterventionRules = (category_code: string) =>
+  api.post<{ category_code: string; deleted: number }>('/rules/intervention-rules/bulk-delete', { category_code })
+
 // ─── Rules - Interference Links ─────────────────────────────
 export interface InterferenceLinkItem {
   id: number
@@ -412,6 +418,12 @@ export const importInterferenceLinks = (formData: FormData) =>
 
 export const deleteInterferenceLink = (id: number) =>
   api.delete(`/rules/interference-links/${id}`)
+
+export const getInterferenceLinkCategoryCount = (category_code: string) =>
+  api.get<{ category_code: string; count: number }>('/rules/interference-links/category-count', { params: { category_code } })
+
+export const bulkDeleteInterferenceLinks = (category_code: string) =>
+  api.post<{ category_code: string; deleted: number }>('/rules/interference-links/bulk-delete', { category_code })
 
 export const downloadInterferenceLinkTemplate = () =>
   api.get('/rules/interference-links/template', { responseType: 'blob' })
@@ -1109,6 +1121,12 @@ export const updateAttrRule = (id: number, payload: Record<string, unknown>) =>
 export const deleteAttrRule = (id: number) =>
   api.delete(`/rules/attr-rules/${id}`)
 
+export const getAttrRuleCategoryCount = (category_code: string) =>
+  api.get<{ category_code: string; count: number }>('/rules/attr-rules/category-count', { params: { category_code } })
+
+export const bulkDeleteAttrRules = (category_code: string) =>
+  api.post<{ category_code: string; deleted: number }>('/rules/attr-rules/bulk-delete', { category_code })
+
 export const applyAttrRules = (match_job_id: number) =>
   api.post('/rules/attr-rules/apply', { match_job_id })
 
@@ -1246,6 +1264,12 @@ export const updateCorrectionRule = (id: number, payload: Record<string, unknown
 
 export const deleteCorrectionRule = (id: number) =>
   api.delete(`/correction-rules/${id}`)
+
+export const getCorrectionRuleCategoryCount = (category_code: string) =>
+  api.get<{ category_code: string; count: number }>('/correction-rules/category-count', { params: { category_code } })
+
+export const bulkDeleteCorrectionRules = (category_code: string) =>
+  api.post<{ category_code: string; deleted: number }>('/correction-rules/bulk-delete', { category_code })
 
 export const applyCorrectionRules = (cleanJobId: number) =>
   api.post(`/correction-rules/apply/${cleanJobId}`)
@@ -1431,6 +1455,12 @@ export const updateBrand = (brandCode: string, payload: UpdateBrandPayload) =>
 
 export const setBrandCategories = (brandCode: string, categoryCodes: string[]) =>
   api.put<BrandItem>(`/brands/${encodeURIComponent(brandCode)}/categories`, { category_codes: categoryCodes })
+
+export const getBrandCategoryCount = (category_code: string) =>
+  api.get<{ category_code: string; count: number }>('/brands/category-count', { params: { category_code } })
+
+export const bulkDeleteBrands = (category_code: string) =>
+  api.post<{ category_code: string; deleted: number; aliases_deleted: number }>('/brands/bulk-delete', { category_code })
 
 export const listBrandAliasesByCode = (brandCode: string) =>
   api.get<BrandAliasItem[]>(`/brands/${brandCode}/aliases`)

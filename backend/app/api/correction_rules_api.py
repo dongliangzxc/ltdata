@@ -1,6 +1,7 @@
 """修正规则 CRUD API"""
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.core.auth_deps import get_current_user
 from app.core.permissions import visible_category_codes
@@ -44,6 +45,35 @@ def list_rules(
     if category_code:
         q = q.filter(CorrectionRule.category_code == category_code)
     return q.all()
+
+
+class CorrectionBulkDeleteIn(BaseModel):
+    category_code: str
+
+
+@router.get("/category-count")
+def correction_rule_category_count(
+    category_code: str = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_correction_category_visible(db, current_user, category_code)
+    count = db.query(CorrectionRule).filter(CorrectionRule.category_code == category_code).count()
+    return {"category_code": category_code, "count": count}
+
+
+@router.post("/bulk-delete")
+def bulk_delete_correction_rules(
+    payload: CorrectionBulkDeleteIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_correction_category_visible(db, current_user, payload.category_code)
+    deleted = db.query(CorrectionRule).filter(
+        CorrectionRule.category_code == payload.category_code
+    ).delete(synchronize_session=False)
+    db.commit()
+    return {"category_code": payload.category_code, "deleted": deleted}
 
 
 @router.post("", response_model=CorrectionRuleOut, status_code=201)

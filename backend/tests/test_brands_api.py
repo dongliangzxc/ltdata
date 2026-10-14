@@ -786,3 +786,49 @@ def test_update_brand_name_accepts_missing_field_and_clears(client_and_db):
     assert resp.status_code == 200
     assert resp.json()["brand_name"] is None
     assert db.query(BrandRecord).filter_by(brand_code="JBL").one().brand_name is None
+
+
+def test_brand_category_count(client_and_db):
+    from app.models.schemas import Category
+    client, db = client_and_db
+    db.add_all([Category(code="TV", name="电视", sort_order=1)])
+    db.add_all([BrandRecord(brand_code="SONY"), BrandRecord(brand_code="LG")])
+    db.add(ModelRecord(brand_code="SONY", model_code="TV-1", category_code="TV"))
+    db.commit()
+
+    resp = client.get("/api/brands/category-count", params={"category_code": "TV"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {"category_code": "TV", "count": 1}
+
+
+def test_bulk_delete_brands_by_category(client_and_db):
+    from app.models.schemas import BrandCategory, Category
+    client, db = client_and_db
+    db.add_all([
+        Category(code="TV", name="电视", sort_order=1),
+        Category(code="AC", name="空调", sort_order=2),
+    ])
+    db.add_all([
+        BrandRecord(brand_code="SONY", brand_name="索尼"),
+        BrandRecord(brand_code="GREE", brand_name="格力"),
+        BrandAlias(alias_name="索尼别名", brand_code="SONY"),
+    ])
+    db.add_all([
+        ModelRecord(brand_code="SONY", model_code="TV-1", category_code="TV"),
+        ModelRecord(brand_code="GREE", model_code="AC-1", category_code="AC"),
+        BrandCategory(brand_code="GREE", category_code="TV"),
+    ])
+    db.commit()
+
+    resp = client.post("/api/brands/bulk-delete", json={"category_code": "TV"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    # TV 下品牌 = SONY（型号归属）∪ GREE（直接指派 TV）
+    assert body["deleted"] == 2
+    assert body["aliases_deleted"] == 1
+    assert db.query(BrandRecord).count() == 0
+    assert db.query(BrandAlias).count() == 0
+    assert db.query(BrandCategory).count() == 0
+    assert db.query(ModelRecord).count() == 2

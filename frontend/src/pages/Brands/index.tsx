@@ -8,9 +8,11 @@ import { useRequest } from 'ahooks'
 import {
   listBrands, listBrandAliasesByCode, createBrandAliasForCode, deleteBrandAliasById,
   updateBrand, updateBrandAliasForCode, setBrandCategories, fetchAllCategories,
+  getBrandCategoryCount, bulkDeleteBrands,
   type BrandItem, type BrandAliasItem,
 } from '../../services/api'
 import CreateBrandModal from '../../components/CreateBrandModal'
+import BulkDeleteByCategory from '../../components/BulkDeleteByCategory'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 
 function AliasPanel({
@@ -321,6 +323,15 @@ export default function BrandsPage() {
           showSearch
           optionFilterProp="label"
           style={{ width: 180 }}
+        />
+        <BulkDeleteByCategory
+          categoryCode={selectedCategoryCode}
+          categoryLabel={selectedCategoryCode ? categoryLabelMap.get(selectedCategoryCode) : undefined}
+          itemLabel="品牌"
+          description="仅删除该品类下的品牌主数据及其写法别名；型号记录保留，型号的品牌码不变。"
+          getCount={getBrandCategoryCount}
+          bulkDelete={bulkDeleteBrands}
+          onSuccess={() => { setCurrentPage(1); refresh() }}
         />
       </Space>
       <Table

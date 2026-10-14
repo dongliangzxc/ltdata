@@ -65,6 +65,10 @@ def _filter_rule_category(query, model, db: Session, current_user: User):
     return query.filter(model.category_code.in_(visible_codes))
 
 
+class _BulkDeleteIn(BaseModel):
+    category_code: str
+
+
 ALLOWED_PRICE_OPS = {"gt", "gte", "lt", "lte", "between"}
 ALLOWED_CONDITION_KEYS = {
     "brand_in",
@@ -202,6 +206,31 @@ def list_intervention_rules(
     return [_intervention_rule_to_dict(rule) for rule in q.all()]
 
 
+@router.get("/intervention-rules/category-count")
+def intervention_rule_category_count(
+    category_code: str = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_rule_category_visible(db, current_user, category_code)
+    count = db.query(InterventionRule).filter(InterventionRule.category_code == category_code).count()
+    return {"category_code": category_code, "count": count}
+
+
+@router.post("/intervention-rules/bulk-delete")
+def bulk_delete_intervention_rules(
+    payload: _BulkDeleteIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_rule_category_visible(db, current_user, payload.category_code)
+    deleted = db.query(InterventionRule).filter(
+        InterventionRule.category_code == payload.category_code
+    ).delete(synchronize_session=False)
+    db.commit()
+    return {"category_code": payload.category_code, "deleted": deleted}
+
+
 @router.post("/intervention-rules", status_code=201)
 def create_intervention_rule(
     body: InterventionRuleIn,
@@ -315,6 +344,31 @@ def list_interference_links(
         "page_size": page_size,
         "items": [_interference_link_to_dict(db, row) for row in rows],
     }
+
+
+@router.get("/interference-links/category-count")
+def interference_link_category_count(
+    category_code: str = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_rule_category_visible(db, current_user, category_code)
+    count = db.query(InterferenceLink).filter(InterferenceLink.category_code == category_code).count()
+    return {"category_code": category_code, "count": count}
+
+
+@router.post("/interference-links/bulk-delete")
+def bulk_delete_interference_links(
+    payload: _BulkDeleteIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_rule_category_visible(db, current_user, payload.category_code)
+    deleted = db.query(InterferenceLink).filter(
+        InterferenceLink.category_code == payload.category_code
+    ).delete(synchronize_session=False)
+    db.commit()
+    return {"category_code": payload.category_code, "deleted": deleted}
 
 
 @router.post("/interference-links/import")
@@ -896,6 +950,31 @@ def list_attr_rules(
         }
         for r in rows
     ]
+
+
+@router.get("/attr-rules/category-count")
+def attr_rule_category_count(
+    category_code: str = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_rule_category_visible(db, current_user, category_code)
+    count = db.query(AttrRule).filter(AttrRule.category_code == category_code).count()
+    return {"category_code": category_code, "count": count}
+
+
+@router.post("/attr-rules/bulk-delete")
+def bulk_delete_attr_rules(
+    payload: _BulkDeleteIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_rule_category_visible(db, current_user, payload.category_code)
+    deleted = db.query(AttrRule).filter(
+        AttrRule.category_code == payload.category_code
+    ).delete(synchronize_session=False)
+    db.commit()
+    return {"category_code": payload.category_code, "deleted": deleted}
 
 
 @router.post("/attr-rules", status_code=201)

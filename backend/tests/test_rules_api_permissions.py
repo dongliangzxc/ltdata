@@ -272,3 +272,63 @@ def test_intervention_rule_delete_rejects_invisible_category():
 
     assert response.status_code == 403
     assert response.json()["detail"] == "无权限访问该品类"
+
+
+def test_bulk_delete_intervention_rules_by_category():
+    client = _client()
+    db = client.db
+    _seed_categories(db)
+    db.add_all([
+        InterventionRule(name="tv rule", category_code="TV", action="filter", conditions={}, priority=1),
+        InterventionRule(name="proj rule", category_code="projector", action="filter", conditions={}, priority=2),
+    ])
+    db.commit()
+
+    resp = client.post("/api/rules/intervention-rules/bulk-delete", json={"category_code": "TV"})
+
+    assert resp.status_code == 200
+    assert resp.json()["deleted"] == 1
+    assert db.query(InterventionRule).count() == 1
+
+
+def test_bulk_delete_intervention_rules_blocks_invisible_category():
+    client = _client()
+    _seed_categories(client.db)
+
+    resp = client.post("/api/rules/intervention-rules/bulk-delete", json={"category_code": "projector"})
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "无权限访问该品类"
+
+
+def test_bulk_delete_attr_rules_by_category_keeps_global():
+    client = _client()
+    db = client.db
+    _seed_categories(db)
+    db.add_all([
+        AttrRule(keyword="k1", match_type="contains", attr_name="a", attr_value="v", category_code="TV", priority=1),
+        AttrRule(keyword="k2", match_type="contains", attr_name="a", attr_value="v", category_code=None, priority=1),
+    ])
+    db.commit()
+
+    resp = client.post("/api/rules/attr-rules/bulk-delete", json={"category_code": "TV"})
+
+    assert resp.status_code == 200
+    assert resp.json()["deleted"] == 1
+    remaining = db.query(AttrRule).all()
+    assert len(remaining) == 1
+    assert remaining[0].category_code is None
+
+
+def test_bulk_delete_correction_rules_by_category():
+    client = _client()
+    db = client.db
+    _seed_categories(db)
+    db.add_all([_correction_rule("TV"), _correction_rule("projector")])
+    db.commit()
+
+    resp = client.post("/api/correction-rules/bulk-delete", json={"category_code": "TV"})
+
+    assert resp.status_code == 200
+    assert resp.json()["deleted"] == 1
+    assert db.query(CorrectionRule).count() == 1

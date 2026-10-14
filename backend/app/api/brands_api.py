@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.auth_deps import get_current_user
+from app.core.permissions import visible_category_codes
 from app.models.database import get_db
 from app.models.schemas import BrandRecord, ModelRecord, BrandAlias, BrandCategory, BrandIn, BrandOut, PaginatedResponse, Category, User
 
@@ -226,6 +227,72 @@ def list_brands(
         page_size=page_size,
         items=_build_brand_outs(db, brands),
     )
+
+
+class BrandBulkDeleteIn(BaseModel):
+    category_code: str
+
+
+def _ensure_brand_category_visible(db: Session, current_user: User, category_code: str) -> None:
+    all_codes = [code for code, in db.query(Category.code).order_by(Category.sort_order, Category.name).all()]
+    visible = set(visible_category_codes(current_user, all_codes))
+    if visible and category_code not in visible:
+        raise HTTPException(status_code=403, detail="无权限访问该品类")
+
+
+def _brand_codes_in_category(db: Session, category_code: str) -> set[str]:
+    """与列表页品类筛选口径一致：型号归属该品类，或品牌直接指派了该品类。"""
+    normalized = func.trim(ModelRecord.brand_code)
+    codes = {
+        code for (code,) in db.query(normalized)
+        .filter(ModelRecord.brand_code.isnot(None), ModelRecord.category_code == category_code)
+        .distinct().all() if code
+    }
+    codes |= {
+        code for (code,) in db.query(BrandCategory.brand_code)
+        .filter(BrandCategory.category_code == category_code)
+        .distinct().all() if code
+    }
+    return codes
+
+
+@router.get("/category-count")
+def brand_category_count(
+    category_code: str = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_brand_category_visible(db, current_user, category_code)
+    codes = _brand_codes_in_category(db, category_code)
+    if not codes:
+        return {"category_code": category_code, "count": 0}
+    count = db.query(BrandRecord).filter(BrandRecord.brand_code.in_(codes)).count()
+    return {"category_code": category_code, "count": count}
+
+
+@router.post("/bulk-delete")
+def bulk_delete_brands(
+    payload: BrandBulkDeleteIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """按品类删除该品类下的品牌主数据及写法别名（保留型号记录，型号品牌码不变）。"""
+    _ensure_brand_category_visible(db, current_user, payload.category_code)
+    codes = _brand_codes_in_category(db, payload.category_code)
+    if not codes:
+        return {"category_code": payload.category_code, "deleted": 0, "aliases_deleted": 0}
+    code_list = list(codes)
+    aliases_deleted = db.query(BrandAlias).filter(BrandAlias.brand_code.in_(code_list)).delete(
+        synchronize_session=False,
+    )
+    db.query(BrandCategory).filter(BrandCategory.brand_code.in_(code_list)).delete(
+        synchronize_session=False,
+    )
+    deleted = db.query(BrandRecord).filter(BrandRecord.brand_code.in_(code_list)).delete(
+        synchronize_session=False,
+    )
+    db.commit()
+    return {"category_code": payload.category_code, "deleted": deleted, "aliases_deleted": aliases_deleted}
 
 
 @router.post("", response_model=BrandOut, status_code=201)

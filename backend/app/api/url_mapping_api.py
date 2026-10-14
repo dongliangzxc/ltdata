@@ -130,6 +130,83 @@ def _get_or_create_url_import_model(
     return model
 
 
+_SERIES_MODEL_CODE_PLACEHOLDERS = ("", "—", "--", "未知")
+
+
+def _series_model_code(model_code: str) -> str:
+    """系列品类里型号码允许为占位（如 vrar 的 '-'），空/其它占位统一存 '-'。"""
+    return model_code if model_code not in _SERIES_MODEL_CODE_PLACEHOLDERS else "-"
+
+
+def _resolve_series_model(
+    db: Session,
+    *,
+    brand_code: str,
+    model_code: str,
+    category_code: str | None,
+    series: str,
+) -> ModelRecord | None:
+    """系列品类定位型号：品牌 + 产品系列（型号码可为占位 '-'）。
+
+    按精确度依次尝试：品类+型号码+系列 → 品类+系列 → 型号码+系列 → 系列。
+    """
+    code = _series_model_code(model_code)
+    attempts = [
+        [ModelRecord.brand_code == brand_code, ModelRecord.series == series,
+         ModelRecord.model_code == code, ModelRecord.category_code == category_code] if category_code else None,
+        [ModelRecord.brand_code == brand_code, ModelRecord.series == series,
+         ModelRecord.category_code == category_code] if category_code else None,
+        [ModelRecord.brand_code == brand_code, ModelRecord.series == series, ModelRecord.model_code == code],
+        [ModelRecord.brand_code == brand_code, ModelRecord.series == series],
+    ]
+    for filters in attempts:
+        if not filters:
+            continue
+        model = db.query(ModelRecord).filter(*filters).first()
+        if model:
+            return model
+    return None
+
+
+def _get_or_create_series_url_import_model(
+    db: Session,
+    *,
+    brand_code: str,
+    model_code: str,
+    category_code: str | None,
+    series: str,
+) -> ModelRecord | None:
+    """系列品类型号匹配不到时自动创建（保留占位型号码 + 产品系列）。"""
+    if _is_unusable_brand_code(brand_code) or not category_code or not series:
+        return None
+    code = _series_model_code(model_code)
+    brand = db.query(BrandRecord).filter(BrandRecord.brand_code == brand_code).first()
+    if not brand:
+        db.add(BrandRecord(brand_code=brand_code, brand_name=brand_code))
+        db.flush()
+    if not db.query(BrandCategory).filter_by(brand_code=brand_code, category_code=category_code).first():
+        db.add(BrandCategory(brand_code=brand_code, category_code=category_code))
+    existing = db.query(ModelRecord).filter(
+        ModelRecord.brand_code == brand_code,
+        ModelRecord.model_code == code,
+        ModelRecord.category_code == category_code,
+        ModelRecord.series == series,
+    ).first()
+    if existing:
+        return existing
+    model = ModelRecord(
+        brand_code=brand_code,
+        model_code=code,
+        category_code=category_code,
+        series=series,
+        brand_name=brand.brand_name if brand else brand_code,
+        status="active",
+    )
+    db.add(model)
+    db.flush()
+    return model
+
+
 def _is_unusable_brand_code(value: str | None) -> bool:
     text = (value or "").strip()
     if not text:
@@ -301,35 +378,53 @@ def url_mapping_confirm(
             continue
         url_platform, item_id = url_info
 
-        # Lookup model — 系列品类按「品牌+型号码+产品系列」定位；其余品类不含系列
+        # Lookup model — 系列品类按「品牌+产品系列」定位（型号码允许占位，如 vrar 的 '-'）；其余品类按品牌+型号码
         is_series_category = _category_has_series(db, payload.category_code)
-        applied_series = series_value if is_series_category else None
 
         model = None
-        if model_code not in ("", "-", "—", "--", "未知"):
-            base_filters = [
-                ModelORM.brand_code == brand_code,
-                ModelORM.model_code == model_code,
-            ]
-            if is_series_category:
-                base_filters.append(ModelORM.series == series_value)
+        if is_series_category and series_value:
+            model = _resolve_series_model(
+                db, brand_code=brand_code, model_code=model_code,
+                category_code=payload.category_code, series=series_value,
+            )
+            if not model:
+                model = _get_or_create_series_url_import_model(
+                    db, brand_code=brand_code, model_code=model_code,
+                    category_code=payload.category_code, series=series_value,
+                )
+                if model is None:
+                    errors.append(f"Row {i}: model ({brand_code}, {series_value}) not found")
+                    continue
+            if model.category_code and payload.category_code and model.category_code != payload.category_code:
+                errors.append(
+                    f"Row {i}: warning — model category ({model.category_code}) "
+                    f"differs from selected ({payload.category_code})"
+                )
+        elif model_code not in ("", "-", "—", "--", "未知"):
             if payload.category_code:
                 model = (
                     db.query(ModelORM)
-                    .filter(*base_filters, ModelORM.category_code == payload.category_code)
+                    .filter(
+                        ModelORM.brand_code == brand_code,
+                        ModelORM.model_code == model_code,
+                        ModelORM.category_code == payload.category_code,
+                    )
                     .first()
                 )
             if not model:
-                model = db.query(ModelORM).filter(*base_filters).first()
+                model = (
+                    db.query(ModelORM)
+                    .filter(ModelORM.brand_code == brand_code, ModelORM.model_code == model_code)
+                    .first()
+                )
             if not model:
                 model = _get_or_create_url_import_model(
                     db, brand_code=brand_code, model_code=model_code,
-                    category_code=payload.category_code, series=applied_series,
+                    category_code=payload.category_code,
                 )
                 if model is None:
                     errors.append(f"Row {i}: model ({brand_code}, {model_code}) not found")
                     continue
-
             # Category mismatch warning (non-blocking)
             if model.category_code and payload.category_code and model.category_code != payload.category_code:
                 errors.append(

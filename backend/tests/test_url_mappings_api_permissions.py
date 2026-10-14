@@ -435,3 +435,55 @@ def test_url_mapping_import_uses_series_to_locate_model(client):
         assert m is not None
         assert m.model is not None
         assert m.model.series == "小屏"
+
+
+def test_url_mapping_import_series_links_placeholder_model(client):
+    """系列品类：型号码为 '-'，按 品牌+产品系列 关联到占位型号（如 vrar）。"""
+    from app.models.schemas import CategoryExtraField
+
+    with client.Session() as session:
+        seed_data(session)
+        session.add(CategoryExtraField(
+            category_code="TV", field_key="series", field_label="产品系列",
+            field_type="text", required=0, sort_order=1,
+        ))
+        session.add(ModelRecord(brand_code="SONY", model_code="-", category_code="TV", series="A80V", brand_name="索尼"))
+        session.commit()
+
+    res = _upload_series_and_confirm(client, category_code="TV", rows=[
+        ["jd", "https://item.jd.com/ph-item.html", "SONY", "-", "A80V"],
+    ])
+
+    assert res.status_code == 200, res.text
+    with client.Session() as session:
+        m = session.query(ItemUrlMapping).filter_by(item_id="ph-item").first()
+        assert m is not None
+        assert m.model is not None
+        assert m.model.model_code == "-"
+        assert m.model.series == "A80V"
+
+
+def test_url_mapping_import_series_creates_placeholder_model_when_missing(client):
+    """系列品类：系列型号不存在时自动建号（保留占位型号码 '-' + 系列）。"""
+    from app.models.schemas import CategoryExtraField, ModelRecord as ModelORM
+
+    with client.Session() as session:
+        seed_data(session)
+        session.add(CategoryExtraField(
+            category_code="TV", field_key="series", field_label="产品系列",
+            field_type="text", required=0, sort_order=1,
+        ))
+        session.commit()
+
+    res = _upload_series_and_confirm(client, category_code="TV", rows=[
+        ["jd", "https://item.jd.com/new-series-item.html", "SONY", "-", "NewSeries"],
+    ])
+
+    assert res.status_code == 200, res.text
+    with client.Session() as session:
+        m = session.query(ItemUrlMapping).filter_by(item_id="new-series-item").first()
+        assert m is not None and m.model_id is not None
+        created = session.query(ModelORM).filter_by(id=m.model_id).one()
+        assert created.brand_code == "SONY"
+        assert created.model_code == "-"
+        assert created.series == "NewSeries"

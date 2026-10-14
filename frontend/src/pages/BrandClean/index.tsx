@@ -27,7 +27,7 @@ export default function BrandCleanPage() {
   const [pageSize, setPageSize] = useState(20)
   const [keyword, setKeyword] = useState('')
   const [keywordInput, setKeywordInput] = useState('')
-  const [editableOnly, setEditableOnly] = useState(true)
+  const [actionableOnly, setActionableOnly] = useState(true)
   const [draft, setDraft] = useState<Record<number, string | null | undefined>>({})
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [batchBrand, setBatchBrand] = useState<string | undefined>(undefined)
@@ -52,9 +52,9 @@ export default function BrandCleanPage() {
       page,
       page_size: pageSize,
       keyword: keyword || undefined,
-      editable_only: editableOnly,
+      actionable_only: actionableOnly,
     }).then(r => r.data),
-    { ready: Number.isFinite(jobId) && jobId > 0, refreshDeps: [jobId, page, pageSize, keyword, editableOnly] },
+    { ready: Number.isFinite(jobId) && jobId > 0, refreshDeps: [jobId, page, pageSize, keyword, actionableOnly] },
   )
 
   const rows = useMemo(() => data?.items ?? [], [data])
@@ -63,7 +63,7 @@ export default function BrandCleanPage() {
     setDraft({})
     setSelectedIds([])
     setBatchBrand(undefined)
-  }, [page, pageSize, keyword, editableOnly, jobId])
+  }, [page, pageSize, keyword, actionableOnly, jobId])
 
   const rowValue = (row: BrandCleanRow): string | undefined => {
     if (draft[row.cleaned_data_id] !== undefined) return draft[row.cleaned_data_id] ?? undefined
@@ -224,16 +224,16 @@ export default function BrandCleanPage() {
           type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message="在此仅补充「入库品牌」，保存后只更新该行的入库品牌字段（品牌码）；不会写入型号匹配结果，任务也不会因此标记为「清洗完成」。默认只显示未匹配型号、可补充品牌的行；已匹配型号的行以型号品牌为准，可在「全部数据行」中查看但不可修改。"
+          message="在此仅补充「入库品牌」，保存后只更新该行的入库品牌字段（品牌码）；不会写入型号匹配结果，任务也不会因此标记为「清洗完成」。默认显示待处理（待确认 / URL映射待确认 / 争议）的行；已匹配型号的行以型号品牌为准不可修改，已匹配/已人工确认/已排除的行不显示，可在「全部数据行」中查看。"
         />
         <Space wrap style={{ marginBottom: 12 }}>
           <Radio.Group
-            value={editableOnly}
-            onChange={e => { setEditableOnly(e.target.value); setPage(1) }}
+            value={actionableOnly}
+            onChange={e => { setActionableOnly(e.target.value); setPage(1) }}
             optionType="button"
             buttonStyle="solid"
             options={[
-              { label: '仅可补充品牌（无型号）', value: true },
+              { label: '待处理（待确认 / URL映射待确认 / 争议）', value: true },
               { label: '全部数据行', value: false },
             ]}
           />

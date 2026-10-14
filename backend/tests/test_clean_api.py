@@ -2708,55 +2708,66 @@ def test_brand_rows_list_and_update(db):
         BrandRecord(brand_code="SONY", brand_name="索尼"),
         BrandRecord(brand_code="JBL", brand_name="JBL"),
     ])
-    upload = UploadFileRecord(filename="brand.xlsx", platform="jd", row_count=2, status="done")
+    upload = UploadFileRecord(filename="brand.xlsx", platform="jd", row_count=3, status="done")
     db.add(upload)
     db.flush()
     raw_no_model = RawDataRecord(file_id=upload.id, platform="jd", item_id="b1", item_name="无型号商品", brand_raw="某品牌")
     raw_model = RawDataRecord(file_id=upload.id, platform="jd", item_id="b2", item_name="有型号商品", brand_raw="SONY")
-    db.add_all([raw_no_model, raw_model])
+    raw_excluded = RawDataRecord(file_id=upload.id, platform="jd", item_id="b3", item_name="已排除商品", brand_raw="Sad")
+    db.add_all([raw_no_model, raw_model, raw_excluded])
     db.flush()
     job = CleanJobRecord(
         file_ids=[upload.id], rules={"dedup": True}, status="reviewing",
-        row_in=2, row_out=2, category_code="soundbar",
+        row_in=3, row_out=3, category_code="soundbar",
     )
     db.add(job)
     db.flush()
     cd_no = CleanedDataRecord(raw_data_id=raw_no_model.id, clean_job_id=job.id, item_name="无型号商品", brand_std="某品牌")
     cd_yes = CleanedDataRecord(raw_data_id=raw_model.id, clean_job_id=job.id, item_name="有型号商品", brand_std="SONY")
-    db.add_all([cd_no, cd_yes])
+    cd_excl = CleanedDataRecord(raw_data_id=raw_excluded.id, clean_job_id=job.id, item_name="已排除商品", brand_std="Sad")
+    db.add_all([cd_no, cd_yes, cd_excl])
     db.flush()
     model = ModelRecord(brand_code="SONY", brand_name="索尼", model_code="HT-A7000", category_code="soundbar")
     db.add(model)
     db.flush()
-    db.add(MatchResult(clean_job_id=job.id, raw_data_id=raw_model.id, model_id=model.id, match_status="matched", match_source="s1"))
+    db.add_all([
+        MatchResult(clean_job_id=job.id, raw_data_id=raw_model.id, model_id=model.id, match_status="matched", match_source="s1"),
+        MatchResult(clean_job_id=job.id, raw_data_id=raw_excluded.id, model_id=None, match_status="excluded", matched_by="manual"),
+    ])
     db.commit()
 
+    # 默认（actionable_only）：排除已匹配/已人工确认/已排除，仅剩待确认行
     resp = client.get(f"/api/clean/jobs/{job.id}/brand-rows")
     assert resp.status_code == 200
-    payload = resp.json()
-    assert payload["total"] == 2
-    items = {item["cleaned_data_id"]: item for item in payload["items"]}
-    assert items[cd_no.id]["has_model"] is False
+    actionable_payload = resp.json()
+    assert actionable_payload["total"] == 1
+    assert [item["cleaned_data_id"] for item in actionable_payload["items"]] == [cd_no.id]
+    assert actionable_payload["items"][0]["has_model"] is False
+
+    # 全部数据行
+    resp = client.get(f"/api/clean/jobs/{job.id}/brand-rows", params={"actionable_only": False})
+    assert resp.status_code == 200
+    all_payload = resp.json()
+    assert all_payload["total"] == 3
+    items = {item["cleaned_data_id"]: item for item in all_payload["items"]}
     assert items[cd_no.id]["brand_raw"] == "某品牌"
     assert items[cd_yes.id]["has_model"] is True
     assert items[cd_yes.id]["model_brand_code"] == "SONY"
 
-    resp = client.get(f"/api/clean/jobs/{job.id}/brand-rows", params={"editable_only": True})
-    assert resp.status_code == 200
-    editable_payload = resp.json()
-    assert editable_payload["total"] == 1
-    assert [item["cleaned_data_id"] for item in editable_payload["items"]] == [cd_no.id]
-
+    # 保存：仅未匹配型号且未排除的行可更新
     resp = client.patch(f"/api/clean/jobs/{job.id}/brand-rows", json={"items": [
         {"cleaned_data_id": cd_no.id, "brand_std": "JBL"},
         {"cleaned_data_id": cd_yes.id, "brand_std": "JBL"},
+        {"cleaned_data_id": cd_excl.id, "brand_std": "JBL"},
     ]})
     assert resp.status_code == 200
     assert resp.json()["updated"] == 1
     db.refresh(cd_no)
     db.refresh(cd_yes)
+    db.refresh(cd_excl)
     assert cd_no.brand_std == "JBL"
     assert cd_yes.brand_std == "SONY"
+    assert cd_excl.brand_std == "Sad"
 
     resp = client.patch(f"/api/clean/jobs/{job.id}/brand-rows", json={"items": [
         {"cleaned_data_id": cd_no.id, "brand_std": "NOT_EXIST"},

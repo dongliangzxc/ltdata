@@ -52,6 +52,9 @@ from app.utils.time_utils import format_beijing_datetime
 
 router = APIRouter(prefix="/api/clean", tags=["clean"])
 
+# 「只清洗品牌」默认范围排除的匹配状态：已匹配/已人工确认/已排除
+BRAND_CLEAN_RESOLVED_STATUSES = ("matched", "url_matched", "confirmed", "excluded")
+
 
 def _visible_clean_category_codes(db: Session, current_user: User) -> set[str] | None:
     if getattr(current_user, "is_admin", 0) == 1:
@@ -1045,14 +1048,15 @@ class BrandCleanUpdateIn(BaseModel):
 def list_clean_job_brand_rows(
     job_id: int,
     keyword: Optional[str] = Query(None),
-    editable_only: bool = Query(False, description="仅返回未匹配型号（可人工补充品牌）的行"),
+    actionable_only: bool = Query(True, description="仅返回待处理（待确认/URL映射待确认/争议）且未禁用的行"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """「只清洗品牌」列表：返回该清洗任务的数据行（cleaned_data），
-    附带原品牌、当前入库品牌、已匹配型号的品牌。editable_only=true 时只返回未匹配型号的行。"""
+    附带原品牌、当前入库品牌、已匹配型号的品牌。
+    actionable_only=true（默认）时排除已匹配/已人工确认/已排除/已禁用的行。"""
     _get_visible_clean_job_or_404(db, current_user, job_id)
 
     q = (
@@ -1060,18 +1064,21 @@ def list_clean_job_brand_rows(
         .join(RawDataRecord, CleanedDataRecord.raw_data_id == RawDataRecord.id)
         .filter(CleanedDataRecord.clean_job_id == job_id)
     )
-    if editable_only:
-        model_exists = (
+    if actionable_only:
+        resolved_exists = (
             db.query(MatchResult.id)
             .filter(
                 MatchResult.clean_job_id == job_id,
                 MatchResult.raw_data_id == CleanedDataRecord.raw_data_id,
-                MatchResult.model_id.isnot(None),
+                or_(
+                    MatchResult.match_status.in_(BRAND_CLEAN_RESOLVED_STATUSES),
+                    MatchResult.is_disabled == 1,
+                ),
             )
             .correlate(CleanedDataRecord)
             .exists()
         )
-        q = q.filter(~model_exists)
+        q = q.filter(~resolved_exists)
     kw = (keyword or "").strip()
     if kw:
         q = q.filter(RawDataRecord.item_name.ilike(f"%{kw}%"))
@@ -1123,7 +1130,8 @@ def update_clean_job_brand_rows(
     current_user: User = Depends(get_current_user),
 ):
     """「只清洗品牌」保存：仅更新 cleaned_data.brand_std（品牌码），
-    不写 match_results、不改任务状态与待处理计数。已匹配型号的行以型号品牌为准，跳过不更新。"""
+    不写 match_results、不改任务状态与待处理计数。
+    已匹配型号或已匹配/已人工确认/已排除/已禁用的行跳过不更新。"""
     _get_visible_clean_job_or_404(db, current_user, job_id)
     if not payload.items:
         return {"updated": 0}
@@ -1140,15 +1148,19 @@ def update_clean_job_brand_rows(
     found = {cd.id: cd for cd in rows}
 
     raw_ids = [cd.raw_data_id for cd in rows]
-    matched_raw_ids: set[int] = set()
+    blocked_raw_ids: set[int] = set()
     if raw_ids:
-        matched_raw_ids = {
+        blocked_raw_ids = {
             raw_id
             for (raw_id,) in db.query(MatchResult.raw_data_id)
             .filter(
                 MatchResult.clean_job_id == job_id,
                 MatchResult.raw_data_id.in_(raw_ids),
-                MatchResult.model_id.isnot(None),
+                or_(
+                    MatchResult.model_id.isnot(None),
+                    MatchResult.match_status.in_(BRAND_CLEAN_RESOLVED_STATUSES),
+                    MatchResult.is_disabled == 1,
+                ),
             )
             .all()
         }
@@ -1156,7 +1168,7 @@ def update_clean_job_brand_rows(
     to_update: list[tuple[CleanedDataRecord, str | None]] = []
     for item in payload.items:
         cd = found.get(item.cleaned_data_id)
-        if cd is None or cd.raw_data_id in matched_raw_ids:
+        if cd is None or cd.raw_data_id in blocked_raw_ids:
             continue
         value = (item.brand_std or "").strip() or None
         to_update.append((cd, value))

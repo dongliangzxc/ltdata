@@ -356,7 +356,7 @@ export type BrandCleanListResponse = PaginatedResponse<BrandCleanRow>
 
 export const listCleanJobBrandRows = (
   jobId: number,
-  params?: { keyword?: string; editable_only?: boolean; page?: number; page_size?: number },
+  params?: { keyword?: string; actionable_only?: boolean; page?: number; page_size?: number },
 ) => api.get<BrandCleanListResponse>(`/clean/jobs/${jobId}/brand-rows`, { params })
 
 export const updateCleanJobBrandRows = (

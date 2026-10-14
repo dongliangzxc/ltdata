@@ -946,6 +946,7 @@ def get_match_review_detail(match_id: int, db: Session = Depends(get_db)):
         "model_id": mr.model_id,
         "model_code": model.model_code if model else None,
         "brand_code": model.brand_code if model else None,
+        "manual_brand_code": manual_brand,
         "series": model.series if model else None,
         "category_code": category_code,
         "category_name": cat.name if cat else None,
@@ -1056,8 +1057,7 @@ def list_missing_attrs(
             "item_name": rd.item_name,
             "brand_raw": rd.brand_raw,
             "model_code": model.model_code if model else None,
-        "brand_code": model.brand_code if model else None,
-        "manual_brand_code": manual_brand,
+            "brand_code": model.brand_code if model else None,
             "sales_qty": rd.sales_qty,
             "category_name": cat.name if cat else None,
         })

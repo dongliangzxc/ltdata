@@ -352,13 +352,16 @@ export type BrandCleanRow = {
   has_model: boolean
   brand_identified: number
   brand_std_manual: boolean
+  editable: boolean
 }
 
 export type BrandCleanListResponse = PaginatedResponse<BrandCleanRow>
 
+export type BrandCleanGroup = 'actionable' | 'unidentified_brand' | 'pending' | 'text_only' | 'disputed' | 'all'
+
 export const listCleanJobBrandRows = (
   jobId: number,
-  params?: { keyword?: string; actionable_only?: boolean; page?: number; page_size?: number },
+  params?: { keyword?: string; group?: BrandCleanGroup; page?: number; page_size?: number },
 ) => api.get<BrandCleanListResponse>(`/clean/jobs/${jobId}/brand-rows`, { params })
 
 export const updateCleanJobBrandRows = (

@@ -54,6 +54,8 @@ router = APIRouter(prefix="/api/clean", tags=["clean"])
 
 # 「只清洗品牌」默认范围排除的匹配状态：已匹配/已人工确认/已排除
 BRAND_CLEAN_RESOLVED_STATUSES = ("matched", "url_matched", "confirmed", "excluded")
+# 可人工补充/覆盖品牌的匹配状态
+BRAND_CLEAN_ACTIONABLE_STATUSES = ("pending", "text_only", "disputed")
 
 
 def _visible_clean_category_codes(db: Session, current_user: User) -> set[str] | None:
@@ -1028,6 +1030,7 @@ class BrandCleanRow(BaseModel):
     has_model: bool = False
     brand_identified: int = 1
     brand_std_manual: bool = False
+    editable: bool = False
 
 
 class BrandCleanListOut(BaseModel):
@@ -1050,15 +1053,18 @@ class BrandCleanUpdateIn(BaseModel):
 def list_clean_job_brand_rows(
     job_id: int,
     keyword: Optional[str] = Query(None),
-    actionable_only: bool = Query(True, description="仅返回待处理（待确认/URL映射待确认/争议）且未禁用的行"),
+    group: str = Query(
+        "actionable",
+        description="筛选分类：actionable=待处理 / unidentified_brand=未识别品牌 / "
+                    "pending=待确认 / text_only=URL映射待确认 / disputed=争议复核 / all=全部",
+    ),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """「只清洗品牌」列表：返回该清洗任务的数据行（cleaned_data），
-    附带原品牌、当前入库品牌、已匹配型号的品牌。
-    actionable_only=true（默认）时排除已匹配/已人工确认/已排除/已禁用的行。"""
+    附带原品牌、当前入库品牌、已匹配型号的品牌，并标记该行是否可人工补充/覆盖品牌。"""
     _get_visible_clean_job_or_404(db, current_user, job_id)
 
     q = (
@@ -1066,21 +1072,40 @@ def list_clean_job_brand_rows(
         .join(RawDataRecord, CleanedDataRecord.raw_data_id == RawDataRecord.id)
         .filter(CleanedDataRecord.clean_job_id == job_id)
     )
-    if actionable_only:
-        resolved_exists = (
+
+    if group == "unidentified_brand":
+        group_cond = and_(
+            MatchResult.match_status == "pending",
+            MatchResult.brand_identified == 0,
+            MatchResult.is_disabled == 0,
+        )
+    elif group == "pending":
+        group_cond = and_(MatchResult.match_status == "pending", MatchResult.is_disabled == 0)
+    elif group == "text_only":
+        group_cond = and_(MatchResult.match_status == "text_only", MatchResult.is_disabled == 0)
+    elif group == "disputed":
+        group_cond = and_(MatchResult.match_status == "disputed", MatchResult.is_disabled == 0)
+    elif group == "all":
+        group_cond = None
+    else:  # actionable
+        group = "actionable"
+        group_cond = and_(
+            MatchResult.match_status.in_(BRAND_CLEAN_ACTIONABLE_STATUSES),
+            MatchResult.is_disabled == 0,
+        )
+    if group_cond is not None:
+        group_exists = (
             db.query(MatchResult.id)
             .filter(
                 MatchResult.clean_job_id == job_id,
                 MatchResult.raw_data_id == CleanedDataRecord.raw_data_id,
-                or_(
-                    MatchResult.match_status.in_(BRAND_CLEAN_RESOLVED_STATUSES),
-                    MatchResult.is_disabled == 1,
-                ),
+                group_cond,
             )
             .correlate(CleanedDataRecord)
             .exists()
         )
-        q = q.filter(~resolved_exists)
+        q = q.filter(group_exists)
+
     kw = (keyword or "").strip()
     if kw:
         q = q.filter(RawDataRecord.item_name.ilike(f"%{kw}%"))
@@ -1095,11 +1120,14 @@ def list_clean_job_brand_rows(
     raw_ids = [rd.id for _, rd in rows]
     model_map: dict[int, tuple[str, str | None]] = {}
     identified_map: dict[int, int] = {}
+    editable_raw_ids: set[int] = set()
     if raw_ids:
         model_rows = (
             db.query(
                 MatchResult.raw_data_id,
                 MatchResult.brand_identified,
+                MatchResult.match_status,
+                MatchResult.is_disabled,
                 ModelRecord.brand_code,
                 ModelRecord.brand_name,
             )
@@ -1110,8 +1138,10 @@ def list_clean_job_brand_rows(
             )
             .all()
         )
-        for raw_id, brand_identified, brand_code, brand_name in model_rows:
+        for raw_id, brand_identified, status, is_disabled, brand_code, brand_name in model_rows:
             identified_map.setdefault(raw_id, 1 if brand_identified is None else brand_identified)
+            if status in BRAND_CLEAN_ACTIONABLE_STATUSES and not is_disabled:
+                editable_raw_ids.add(raw_id)
             if brand_code is not None or brand_name is not None:
                 model_map.setdefault(raw_id, (brand_code, brand_name))
 
@@ -1131,6 +1161,7 @@ def list_clean_job_brand_rows(
             has_model=matched is not None,
             brand_identified=identified_map.get(rd.id, 1),
             brand_std_manual=manual_brand_std(cd, rd, brand_alias_map) is not None,
+            editable=rd.id in editable_raw_ids,
         ))
     return BrandCleanListOut(total=total, page=page, page_size=page_size, items=items)
 

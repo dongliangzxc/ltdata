@@ -2737,7 +2737,7 @@ def test_brand_rows_list_and_update(db):
     ])
     db.commit()
 
-    # 默认（actionable_only）：排除已匹配/已人工确认/已排除，仅剩待确认行
+    # 默认（actionable）：排除已匹配/已人工确认/已排除，仅剩待确认行
     resp = client.get(f"/api/clean/jobs/{job.id}/brand-rows")
     assert resp.status_code == 200
     actionable_payload = resp.json()
@@ -2745,9 +2745,10 @@ def test_brand_rows_list_and_update(db):
     assert [item["cleaned_data_id"] for item in actionable_payload["items"]] == [cd_no.id]
     assert actionable_payload["items"][0]["has_model"] is False
     assert actionable_payload["items"][0]["brand_identified"] == 0
+    assert actionable_payload["items"][0]["editable"] is True
 
     # 全部数据行
-    resp = client.get(f"/api/clean/jobs/{job.id}/brand-rows", params={"actionable_only": False})
+    resp = client.get(f"/api/clean/jobs/{job.id}/brand-rows", params={"group": "all"})
     assert resp.status_code == 200
     all_payload = resp.json()
     assert all_payload["total"] == 3
@@ -2755,6 +2756,13 @@ def test_brand_rows_list_and_update(db):
     assert items[cd_no.id]["brand_raw"] == "某品牌"
     assert items[cd_yes.id]["has_model"] is True
     assert items[cd_yes.id]["model_brand_code"] == "SONY"
+    assert items[cd_yes.id]["editable"] is False
+    assert items[cd_excl.id]["editable"] is False
+
+    # 未识别品牌分组
+    resp = client.get(f"/api/clean/jobs/{job.id}/brand-rows", params={"group": "unidentified_brand"})
+    assert resp.status_code == 200
+    assert [item["cleaned_data_id"] for item in resp.json()["items"]] == [cd_no.id]
 
     # 保存：仅未匹配型号且未排除的行可更新
     resp = client.patch(f"/api/clean/jobs/{job.id}/brand-rows", json={"items": [
@@ -2814,6 +2822,7 @@ def test_brand_rows_allows_manual_override_for_text_only(db):
     item = resp.json()["items"][0]
     assert item["has_model"] is True
     assert item["brand_std_manual"] is False
+    assert item["editable"] is True
 
     resp = client.patch(f"/api/clean/jobs/{job.id}/brand-rows", json={"items": [
         {"cleaned_data_id": cd.id, "brand_std": "JBL"},

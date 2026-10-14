@@ -1,22 +1,32 @@
-import { useEffect, useMemo, useState, type ReactElement } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Alert, Button, Card, Divider, Input, Radio, Select, Space, Table, Tag, Typography, message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { ArrowLeftOutlined, PlusOutlined, SaveOutlined } from '@ant-design/icons'
+import { ArrowLeftOutlined, DownloadOutlined, PlusOutlined, SaveOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import CreateBrandModal from '../../components/CreateBrandModal'
+import ProgressModal from '../../components/ProgressModal'
 import {
-  listBrands, listCleanJobBrandRows, updateCleanJobBrandRows,
+  getDownloadUrl, getExportJob, listBrands, listCleanJobBrandRows, triggerExport, updateCleanJobBrandRows,
 } from '../../services/api'
-import type { BrandCleanRow, BrandItem } from '../../services/api'
+import type { BrandCleanGroup, BrandCleanRow, BrandItem } from '../../services/api'
 
 const { Text, Title } = Typography
 
 type BrandOption = { value: string; label: string }
 
 const formatText = (value?: string | number | null) => (value === null || value === undefined || value === '' ? '-' : String(value))
+
+const GROUP_OPTIONS: { label: string; value: BrandCleanGroup }[] = [
+  { label: '待处理', value: 'actionable' },
+  { label: '未识别品牌', value: 'unidentified_brand' },
+  { label: '待确认', value: 'pending' },
+  { label: 'URL映射待确认', value: 'text_only' },
+  { label: '争议复核', value: 'disputed' },
+  { label: '全部数据行', value: 'all' },
+]
 
 export default function BrandCleanPage() {
   const navigate = useNavigate()
@@ -27,7 +37,7 @@ export default function BrandCleanPage() {
   const [pageSize, setPageSize] = useState(20)
   const [keyword, setKeyword] = useState('')
   const [keywordInput, setKeywordInput] = useState('')
-  const [actionableOnly, setActionableOnly] = useState(true)
+  const [group, setGroup] = useState<BrandCleanGroup>('actionable')
   const [draft, setDraft] = useState<Record<number, string | null | undefined>>({})
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [batchBrand, setBatchBrand] = useState<string | undefined>(undefined)
@@ -35,6 +45,17 @@ export default function BrandCleanPage() {
   const [brandOptions, setBrandOptions] = useState<BrandOption[]>([])
   const [brandModalOpen, setBrandModalOpen] = useState(false)
   const [brandTargetRowId, setBrandTargetRowId] = useState<number | null>(null)
+  const [exporting, setExporting] = useState(false)
+  const [exportProgress, setExportProgress] = useState(0)
+  const [exportError, setExportError] = useState('')
+  const [exportProgressVisible, setExportProgressVisible] = useState(false)
+  const exportPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (exportPollRef.current) clearInterval(exportPollRef.current)
+    }
+  }, [])
 
   useEffect(() => {
     listBrands({ page: 1, page_size: 2000 })
@@ -52,9 +73,9 @@ export default function BrandCleanPage() {
       page,
       page_size: pageSize,
       keyword: keyword || undefined,
-      actionable_only: actionableOnly,
+      group,
     }).then(r => r.data),
-    { ready: Number.isFinite(jobId) && jobId > 0, refreshDeps: [jobId, page, pageSize, keyword, actionableOnly] },
+    { ready: Number.isFinite(jobId) && jobId > 0, refreshDeps: [jobId, page, pageSize, keyword, group] },
   )
 
   const rows = useMemo(() => data?.items ?? [], [data])
@@ -63,7 +84,7 @@ export default function BrandCleanPage() {
     setDraft({})
     setSelectedIds([])
     setBatchBrand(undefined)
-  }, [page, pageSize, keyword, actionableOnly, jobId])
+  }, [page, pageSize, keyword, group, jobId])
 
   const originalValue = (row: BrandCleanRow): string | null => {
     if (row.brand_std_manual) return row.brand_std ?? null
@@ -170,6 +191,52 @@ export default function BrandCleanPage() {
     }
   }
 
+  const handleExport = async () => {
+    if (exportPollRef.current) return
+    setExporting(true)
+    setExportProgress(0)
+    setExportError('')
+    setExportProgressVisible(true)
+    try {
+      const res = await triggerExport({ clean_job_id: jobId, filename_prefix: '品牌清洗' })
+      const { job_id } = res.data as { job_id: number }
+      let pollFailCount = 0
+      exportPollRef.current = setInterval(async () => {
+        try {
+          const jobRes = await getExportJob(job_id)
+          const job = jobRes.data as { status: string; token?: string | null; error_msg?: string | null }
+          pollFailCount = 0
+          if (job.status === 'running') setExportProgress(50)
+          if (job.status === 'done' && job.token) {
+            if (exportPollRef.current) { clearInterval(exportPollRef.current); exportPollRef.current = null }
+            setExportProgress(100)
+            setTimeout(() => {
+              setExportProgressVisible(false)
+              setExporting(false)
+              const a = document.createElement('a')
+              a.href = getDownloadUrl(job.token!)
+              a.click()
+            }, 800)
+          } else if (job.status === 'error') {
+            if (exportPollRef.current) { clearInterval(exportPollRef.current); exportPollRef.current = null }
+            setExportError(job.error_msg || '导出失败，请重试')
+            setExporting(false)
+          }
+        } catch {
+          pollFailCount++
+          if (pollFailCount >= 10) {
+            if (exportPollRef.current) { clearInterval(exportPollRef.current); exportPollRef.current = null }
+            setExportError('网络异常，请刷新后重试')
+            setExporting(false)
+          }
+        }
+      }, 1000)
+    } catch {
+      setExportProgressVisible(false)
+      setExporting(false)
+    }
+  }
+
   if (!Number.isFinite(jobId) || jobId <= 0) {
     return (
       <Card>
@@ -201,6 +268,7 @@ export default function BrandCleanPage() {
           placeholder="选择品牌"
           options={brandOptions}
           value={rowValue(row)}
+          disabled={!row.editable}
           popupRender={renderBrandDropdown(row.cleaned_data_id)}
           filterOption={(input, option) => (option?.label as string ?? '').toLowerCase().includes(input.toLowerCase())}
           onChange={(value: string | undefined) => handleSet(row, value)}
@@ -212,9 +280,11 @@ export default function BrandCleanPage() {
       render: (_: unknown, row) => (
         <Space size={4} wrap>
           {row.brand_identified === 0 && !row.has_model && <Tag color="purple">未识别品牌</Tag>}
-          {row.has_model
-            ? <Text type="secondary">已匹配型号，可人工覆盖品牌</Text>
-            : <Text type="secondary">未匹配型号，可人工补充品牌</Text>}
+          {!row.editable
+            ? <Text type="secondary">已匹配/已确认/已排除，不可修改</Text>
+            : row.has_model
+              ? <Text type="secondary">已匹配型号，可人工覆盖品牌</Text>
+              : <Text type="secondary">未匹配型号，可人工补充品牌</Text>}
         </Space>
       ),
     },
@@ -235,14 +305,11 @@ export default function BrandCleanPage() {
         />
         <Space wrap style={{ marginBottom: 12 }}>
           <Radio.Group
-            value={actionableOnly}
-            onChange={e => { setActionableOnly(e.target.value); setPage(1) }}
+            value={group}
+            onChange={e => { setGroup(e.target.value); setPage(1) }}
             optionType="button"
             buttonStyle="solid"
-            options={[
-              { label: '待处理（待确认 / URL映射待确认 / 争议）', value: true },
-              { label: '全部数据行', value: false },
-            ]}
+            options={GROUP_OPTIONS}
           />
           <Input.Search
             allowClear
@@ -274,6 +341,7 @@ export default function BrandCleanPage() {
           >
             保存修改（{changedItems.length}）
           </Button>
+          <Button icon={<DownloadOutlined />} loading={exporting} onClick={handleExport}>导出全部数据</Button>
         </Space>
         <Table
           dataSource={rows}
@@ -285,6 +353,7 @@ export default function BrandCleanPage() {
           rowSelection={{
             selectedRowKeys: selectedIds,
             onChange: keys => setSelectedIds(keys as number[]),
+            getCheckboxProps: (row: BrandCleanRow) => ({ disabled: !row.editable }),
           }}
           pagination={{
             current: page,
@@ -301,6 +370,12 @@ export default function BrandCleanPage() {
         open={brandModalOpen}
         onCancel={() => { setBrandModalOpen(false); setBrandTargetRowId(null) }}
         onCreated={handleCreatedBrand}
+      />
+      <ProgressModal
+        visible={exportProgressVisible}
+        title="正在导出全部数据..."
+        progress={exportProgress}
+        errorMsg={exportError}
       />
     </Space>
   )

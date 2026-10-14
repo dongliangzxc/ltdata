@@ -8,6 +8,7 @@ import pytest
 from app.services.exporter import BASE_CN_NAMES, BASE_FIELD_NAMES, _base_row, export_match_filters, export_match_job
 from app.models.schemas import (
     Category, CleanJobRecord, MetadataSpec, ModelRecord, RawDataRecord, MatchResult, FilteredItem,
+    CleanedDataRecord, BrandRecord,
 )
 from app.core.config import settings
 
@@ -261,3 +262,24 @@ def test_export_match_filters_include_reviewing_clean_jobs(db):
 
     assert result
     assert result[0]["rows"] == 1
+
+
+def test_pending_sheet_falls_back_to_cleaned_brand_name(db):
+    """无型号（待确认）行导出时，入库品牌回退用 cleaned_data.brand_std 对应的品牌名。"""
+    clean_job_id = _seed(db)
+    mr = db.query(MatchResult).filter_by(clean_job_id=clean_job_id).first()
+    mr.model_id = None
+    mr.match_status = "pending"
+    rd = db.query(RawDataRecord).filter_by(id=mr.raw_data_id).first()
+    db.add(BrandRecord(brand_code="philips", brand_name="飞利浦"))
+    db.add(CleanedDataRecord(
+        raw_data_id=rd.id, clean_job_id=clean_job_id,
+        item_name=rd.item_name, brand_std="philips",
+    ))
+    db.commit()
+
+    result = export_match_job(db, clean_job_id)
+    assert result, "导出结果不应为空"
+    pending = pd.read_excel(result[0]["path"], sheet_name="待确认")
+    assert pending["宝贝ID"].astype(str).tolist() == ["100001"]
+    assert pending["入库品牌"].iloc[0] == "飞利浦"

@@ -340,6 +340,30 @@ export type CleanMatchedResponse = PaginatedResponse<CleanMatchedItem> & {
 export const listCleanJobMatched = (jobId: number, params: Record<string, unknown>) =>
   api.get<CleanMatchedResponse>(`/clean/jobs/${jobId}/matched`, { params })
 
+export type BrandCleanRow = {
+  cleaned_data_id: number
+  raw_data_id: number
+  platform: string | null
+  item_name: string | null
+  brand_raw: string | null
+  brand_std: string | null
+  model_brand_code: string | null
+  model_brand_name: string | null
+  has_model: boolean
+}
+
+export type BrandCleanListResponse = PaginatedResponse<BrandCleanRow>
+
+export const listCleanJobBrandRows = (
+  jobId: number,
+  params?: { keyword?: string; page?: number; page_size?: number },
+) => api.get<BrandCleanListResponse>(`/clean/jobs/${jobId}/brand-rows`, { params })
+
+export const updateCleanJobBrandRows = (
+  jobId: number,
+  items: { cleaned_data_id: number; brand_std: string | null }[],
+) => api.patch<{ updated: number }>(`/clean/jobs/${jobId}/brand-rows`, { items })
+
 export const rerunCleanTaskWithCurrentRules = (cleanJobId: number) =>
   api.post<RerunCleanTaskResult>(`/clean/tasks/${cleanJobId}/rerun-with-current-rules`)
 

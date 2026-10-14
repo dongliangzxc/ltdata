@@ -33,6 +33,7 @@ from app.models.schemas import (
     UploadFileRecord,
     Category,
     CleanJobItemRecord,
+    BrandRecord,
     User,
 )
 from app.services.clean_task_snapshot import (
@@ -1010,6 +1011,159 @@ def list_clean_job_matched(
         "page_size": page_size,
         "items": items,
     }
+
+
+class BrandCleanRow(BaseModel):
+    cleaned_data_id: int
+    raw_data_id: int
+    platform: str | None = None
+    item_name: str | None = None
+    brand_raw: str | None = None
+    brand_std: str | None = None
+    model_brand_code: str | None = None
+    model_brand_name: str | None = None
+    has_model: bool = False
+
+
+class BrandCleanListOut(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: list[BrandCleanRow]
+
+
+class BrandCleanUpdateItem(BaseModel):
+    cleaned_data_id: int
+    brand_std: str | None = None
+
+
+class BrandCleanUpdateIn(BaseModel):
+    items: list[BrandCleanUpdateItem]
+
+
+@router.get("/jobs/{job_id}/brand-rows", response_model=BrandCleanListOut)
+def list_clean_job_brand_rows(
+    job_id: int,
+    keyword: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """「只清洗品牌」列表：返回该清洗任务全部数据行（cleaned_data），
+    附带原品牌、当前入库品牌、已匹配型号的品牌。"""
+    _get_visible_clean_job_or_404(db, current_user, job_id)
+
+    q = (
+        db.query(CleanedDataRecord, RawDataRecord)
+        .join(RawDataRecord, CleanedDataRecord.raw_data_id == RawDataRecord.id)
+        .filter(CleanedDataRecord.clean_job_id == job_id)
+    )
+    kw = (keyword or "").strip()
+    if kw:
+        q = q.filter(RawDataRecord.item_name.ilike(f"%{kw}%"))
+    total = q.count()
+    rows = (
+        q.order_by(CleanedDataRecord.id)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+
+    raw_ids = [rd.id for _, rd in rows]
+    model_map: dict[int, tuple[str, str | None]] = {}
+    if raw_ids:
+        model_rows = (
+            db.query(MatchResult.raw_data_id, ModelRecord.brand_code, ModelRecord.brand_name)
+            .join(ModelRecord, MatchResult.model_id == ModelRecord.id)
+            .filter(
+                MatchResult.clean_job_id == job_id,
+                MatchResult.raw_data_id.in_(raw_ids),
+            )
+            .all()
+        )
+        for raw_id, brand_code, brand_name in model_rows:
+            model_map.setdefault(raw_id, (brand_code, brand_name))
+
+    items = []
+    for cd, rd in rows:
+        matched = model_map.get(rd.id)
+        items.append(BrandCleanRow(
+            cleaned_data_id=cd.id,
+            raw_data_id=rd.id,
+            platform=rd.platform,
+            item_name=rd.item_name,
+            brand_raw=rd.brand_raw,
+            brand_std=cd.brand_std,
+            model_brand_code=matched[0] if matched else None,
+            model_brand_name=matched[1] if matched else None,
+            has_model=matched is not None,
+        ))
+    return BrandCleanListOut(total=total, page=page, page_size=page_size, items=items)
+
+
+@router.patch("/jobs/{job_id}/brand-rows")
+def update_clean_job_brand_rows(
+    job_id: int,
+    payload: BrandCleanUpdateIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """「只清洗品牌」保存：仅更新 cleaned_data.brand_std（品牌码），
+    不写 match_results、不改任务状态与待处理计数。已匹配型号的行以型号品牌为准，跳过不更新。"""
+    _get_visible_clean_job_or_404(db, current_user, job_id)
+    if not payload.items:
+        return {"updated": 0}
+
+    cleaned_ids = [item.cleaned_data_id for item in payload.items]
+    rows = (
+        db.query(CleanedDataRecord)
+        .filter(
+            CleanedDataRecord.clean_job_id == job_id,
+            CleanedDataRecord.id.in_(cleaned_ids),
+        )
+        .all()
+    )
+    found = {cd.id: cd for cd in rows}
+
+    raw_ids = [cd.raw_data_id for cd in rows]
+    matched_raw_ids: set[int] = set()
+    if raw_ids:
+        matched_raw_ids = {
+            raw_id
+            for (raw_id,) in db.query(MatchResult.raw_data_id)
+            .filter(
+                MatchResult.clean_job_id == job_id,
+                MatchResult.raw_data_id.in_(raw_ids),
+                MatchResult.model_id.isnot(None),
+            )
+            .all()
+        }
+
+    to_update: list[tuple[CleanedDataRecord, str | None]] = []
+    for item in payload.items:
+        cd = found.get(item.cleaned_data_id)
+        if cd is None or cd.raw_data_id in matched_raw_ids:
+            continue
+        value = (item.brand_std or "").strip() or None
+        to_update.append((cd, value))
+
+    codes = {value for _, value in to_update if value}
+    if codes:
+        valid_codes = {
+            code
+            for (code,) in db.query(BrandRecord.brand_code)
+            .filter(BrandRecord.brand_code.in_(codes))
+            .all()
+        }
+        invalid = codes - valid_codes
+        if invalid:
+            raise HTTPException(status_code=400, detail=f"品牌不存在: {', '.join(sorted(invalid))}")
+
+    for cd, value in to_update:
+        cd.brand_std = value
+    db.commit()
+    return {"updated": len(to_update)}
 
 
 class CleanTaskSearchItem(BaseModel):

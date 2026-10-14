@@ -15,6 +15,7 @@ from app.models.schemas import (
     CleanJobItemRecord,
     CleanJobRecord,
     CleanedDataRecord,
+    BrandRecord,
     DispatchBatch,
     DispatchItem,
     FilteredItem,
@@ -2698,3 +2699,60 @@ def test_list_clean_job_matched_filters_by_price(db):
     resp = client.get(f"/api/clean/jobs/{job.id}/matched", params={"group": "mapping", "price_min": 1000, "price_max": 2500})
     assert resp.status_code == 200
     assert {i["item_name"] for i in resp.json()["items"]} == {"中价商品"}
+
+
+def test_brand_rows_list_and_update(db):
+    client = _make_client(db)
+    db.add(Category(code="soundbar", name="回音壁"))
+    db.add_all([
+        BrandRecord(brand_code="SONY", brand_name="索尼"),
+        BrandRecord(brand_code="JBL", brand_name="JBL"),
+    ])
+    upload = UploadFileRecord(filename="brand.xlsx", platform="jd", row_count=2, status="done")
+    db.add(upload)
+    db.flush()
+    raw_no_model = RawDataRecord(file_id=upload.id, platform="jd", item_id="b1", item_name="无型号商品", brand_raw="某品牌")
+    raw_model = RawDataRecord(file_id=upload.id, platform="jd", item_id="b2", item_name="有型号商品", brand_raw="SONY")
+    db.add_all([raw_no_model, raw_model])
+    db.flush()
+    job = CleanJobRecord(
+        file_ids=[upload.id], rules={"dedup": True}, status="reviewing",
+        row_in=2, row_out=2, category_code="soundbar",
+    )
+    db.add(job)
+    db.flush()
+    cd_no = CleanedDataRecord(raw_data_id=raw_no_model.id, clean_job_id=job.id, item_name="无型号商品", brand_std="某品牌")
+    cd_yes = CleanedDataRecord(raw_data_id=raw_model.id, clean_job_id=job.id, item_name="有型号商品", brand_std="SONY")
+    db.add_all([cd_no, cd_yes])
+    db.flush()
+    model = ModelRecord(brand_code="SONY", brand_name="索尼", model_code="HT-A7000", category_code="soundbar")
+    db.add(model)
+    db.flush()
+    db.add(MatchResult(clean_job_id=job.id, raw_data_id=raw_model.id, model_id=model.id, match_status="matched", match_source="s1"))
+    db.commit()
+
+    resp = client.get(f"/api/clean/jobs/{job.id}/brand-rows")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["total"] == 2
+    items = {item["cleaned_data_id"]: item for item in payload["items"]}
+    assert items[cd_no.id]["has_model"] is False
+    assert items[cd_no.id]["brand_raw"] == "某品牌"
+    assert items[cd_yes.id]["has_model"] is True
+    assert items[cd_yes.id]["model_brand_code"] == "SONY"
+
+    resp = client.patch(f"/api/clean/jobs/{job.id}/brand-rows", json={"items": [
+        {"cleaned_data_id": cd_no.id, "brand_std": "JBL"},
+        {"cleaned_data_id": cd_yes.id, "brand_std": "JBL"},
+    ]})
+    assert resp.status_code == 200
+    assert resp.json()["updated"] == 1
+    db.refresh(cd_no)
+    db.refresh(cd_yes)
+    assert cd_no.brand_std == "JBL"
+    assert cd_yes.brand_std == "SONY"
+
+    resp = client.patch(f"/api/clean/jobs/{job.id}/brand-rows", json={"items": [
+        {"cleaned_data_id": cd_no.id, "brand_std": "NOT_EXIST"},
+    ]})
+    assert resp.status_code == 400

@@ -19,6 +19,7 @@ from app.models.schemas import (
     MatchResult, RawDataRecord, ModelRecord,
     ModelSpec, MetadataSpec,
     Category, CleanJobRecord, FilteredItem,
+    CleanedDataRecord, BrandRecord,
 )
 from app.core.config import settings
 
@@ -92,7 +93,7 @@ def _sheet_name(name: str, used_names: set[str]) -> str:
     return candidate
 
 
-def _base_row(rd: RawDataRecord, model: ModelRecord | None = None) -> dict:
+def _base_row(rd: RawDataRecord, model: ModelRecord | None = None, brand_name_fallback: str | None = None) -> dict:
     row = {}
     for field in BASE_FIELD_NAMES + MATCHED_EXTRA_FIELD_NAMES:
         if field == "brand_std":
@@ -100,7 +101,7 @@ def _base_row(rd: RawDataRecord, model: ModelRecord | None = None) -> dict:
         elif field == "model_code":
             row[field] = model.model_code if model else ""
         elif field == "brand_name":
-            row[field] = model.brand_name if model else ""
+            row[field] = model.brand_name if model else (brand_name_fallback or "")
         elif field == "model_name":
             row[field] = model.model_name if model else ""
         elif field == "series":
@@ -108,6 +109,36 @@ def _base_row(rd: RawDataRecord, model: ModelRecord | None = None) -> dict:
         else:
             row[field] = getattr(rd, field, None)
     return row
+
+
+def _cleaned_brand_name_map(db: Session, clean_job_ids: list[int]) -> dict[tuple[int, int], str]:
+    """无型号行导出「入库品牌」的回退来源：cleaned_data.brand_std（品牌码）→ brand_name。"""
+    rows = (
+        db.query(
+            CleanedDataRecord.clean_job_id,
+            CleanedDataRecord.raw_data_id,
+            CleanedDataRecord.brand_std,
+        )
+        .filter(
+            CleanedDataRecord.clean_job_id.in_(clean_job_ids),
+            CleanedDataRecord.brand_std.isnot(None),
+        )
+        .all()
+    )
+    if not rows:
+        return {}
+    codes = {brand_std for _, _, brand_std in rows if brand_std}
+    names = {
+        code: name
+        for code, name in db.query(BrandRecord.brand_code, BrandRecord.brand_name)
+        .filter(BrandRecord.brand_code.in_(codes))
+        .all()
+    }
+    result: dict[tuple[int, int], str] = {}
+    for job_id, raw_id, brand_std in rows:
+        if brand_std:
+            result[(job_id, raw_id)] = names.get(brand_std) or brand_std
+    return result
 
 
 def _spec_map_for_models(db: Session, model_ids: list[int]) -> dict[int, dict[str, str]]:
@@ -333,19 +364,20 @@ def _export_match_jobs(
             )
 
     pending_sheet = None
+    cleaned_brand_names = _cleaned_brand_name_map(db, clean_job_ids)
     for offset in range(0, pending_total, PAGE_SIZE):
         if pending_sheet is None:
             pending_sheet = workbook.create_sheet(title=_sheet_name("待确认", used_sheet_names))
             pending_sheet.append(BASE_CN_NAMES)
         pending_rows = pending_query.offset(offset).limit(PAGE_SIZE).all()
-        for _, rd in pending_rows:
-            row = _base_row(rd)
+        for mr, rd in pending_rows:
+            row = _base_row(rd, brand_name_fallback=cleaned_brand_names.get((mr.clean_job_id, rd.id)))
             pending_sheet.append([row.get(field) for field in BASE_FIELD_NAMES])
 
     for offset in range(0, text_only_total, PAGE_SIZE):
         text_only_rows = text_only_query.offset(offset).limit(PAGE_SIZE).all()
-        for _, rd, model in text_only_rows:
-            row = _base_row(rd, model)
+        for mr, rd, model in text_only_rows:
+            row = _base_row(rd, model, cleaned_brand_names.get((mr.clean_job_id, rd.id)))
             cat_code = model.category_code or ""
             cat = cat_map.get(cat_code, cat_code) or "未知品类"
             worksheet = get_text_only_sheet(cat)
@@ -359,8 +391,8 @@ def _export_match_jobs(
         sheet.append(BASE_CN_NAMES)
         for offset in range(0, total, PAGE_SIZE):
             rows = query.offset(offset).limit(PAGE_SIZE).all()
-            for _, rd, model in rows:
-                row = _base_row(rd, model)
+            for mr, rd, model in rows:
+                row = _base_row(rd, model, cleaned_brand_names.get((mr.clean_job_id, rd.id)))
                 sheet.append([row.get(field) for field in BASE_FIELD_NAMES])
 
     _write_simple_match_sheet("争议复核", disputed_total, disputed_query)

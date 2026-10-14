@@ -5,7 +5,7 @@ import {
   Space, Statistic, Select, message, Tabs, Popconfirm, Input, InputNumber
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { EyeOutlined, AimOutlined, CheckCircleFilled, DeleteOutlined, LineChartOutlined, FileSearchOutlined } from '@ant-design/icons'
+import { EyeOutlined, AimOutlined, CheckCircleFilled, DeleteOutlined, LineChartOutlined, FileSearchOutlined, TagsOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -122,6 +122,7 @@ const jobColumns = (
   onView: (id: number) => void,
   onEnter: (id: number) => void,
   onAdjust: (id: number) => void,
+  onBrandClean: (id: number) => void,
   onDelete: (id: number) => void,
   view: CleanJobListView,
   onMatched: (id: number) => void,
@@ -177,7 +178,7 @@ const jobColumns = (
     render: (v?: string | null) => v || '-',
   },
   {
-    title: '操作', width: 360, fixed: 'right',
+    title: '操作', width: 440, fixed: 'right',
     render: (_: unknown, row) => (
       <Space size={4}>
         {view === 'active' && (
@@ -185,6 +186,9 @@ const jobColumns = (
         )}
         {view === 'active' && (
           <Button type="link" icon={<LineChartOutlined />} size="small" onClick={() => onAdjust(row.id)}>数据调整</Button>
+        )}
+        {view === 'active' && (
+          <Button type="link" icon={<TagsOutlined />} size="small" onClick={() => onBrandClean(row.id)}>只清洗品牌</Button>
         )}
         <Button type="link" icon={<EyeOutlined />} size="small" onClick={() => onView(row.id)}>预览</Button>
         <Button type="link" icon={<FileSearchOutlined />} size="small" onClick={() => onMatched(row.id)}>查看已匹配</Button>
@@ -671,6 +675,7 @@ export default function CleanPage() {
             id => { setPreviewJobId(id); setPreviewPage(1) },
             id => navigate(`/match?job_id=${id}`),
             id => navigate(`/data-adjustment?clean_job_id=${id}`),
+            id => navigate(`/brand-clean?clean_job_id=${id}`),
             handleDeleteJob,
             jobView,
             id => { setMatchedJobId(id); setMatchedGroup('mapping'); setMatchedPage(1); setMatchedKeyword(''); setMatchedKeywordInput('') },

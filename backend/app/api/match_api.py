@@ -962,7 +962,7 @@ def get_match_review_detail(match_id: int, db: Session = Depends(get_db)):
         "platform": rd.platform,
         "item_id": rd.item_id,
         "brand_raw": rd.brand_raw,
-        "brand_std": live_brand_std or (cleaned.brand_std if cleaned else None) or rd.brand_std,
+        "brand_std": (cleaned.brand_std if cleaned else None) or live_brand_std or rd.brand_std,
         "shop_name": rd.shop_name,
         "ref_price": float(rd.ref_price) if rd.ref_price is not None else None,
         "price": float(rd.price) if rd.price is not None else None,

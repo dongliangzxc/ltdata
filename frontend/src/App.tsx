@@ -8,6 +8,7 @@ import LoginPage from './pages/Login'
 import UploadPage from './pages/Upload'
 import DataListPage from './pages/DataList'
 import CleanPage from './pages/Clean'
+import BrandCleanPage from './pages/BrandClean'
 import MatchPage from './pages/Match'
 import MatchResultsPage from './pages/MatchResults'
 import DataAdjustmentPage from './pages/DataAdjustment'
@@ -49,6 +50,7 @@ export default function App() {
             <Route path="/upload" element={<ProtectedPage><UploadPage /></ProtectedPage>} />
             <Route path="/rawdata" element={<ProtectedPage><DataListPage /></ProtectedPage>} />
             <Route path="/clean" element={<ProtectedPage><CleanPage /></ProtectedPage>} />
+            <Route path="/brand-clean" element={<ProtectedPage><BrandCleanPage /></ProtectedPage>} />
             <Route path="/data-adjustment" element={<ProtectedPage><DataAdjustmentPage /></ProtectedPage>} />
             <Route path="/rules" element={<ProtectedPage><RulesPage /></ProtectedPage>} />
             <Route path="/match" element={<ProtectedPage><MatchPage /></ProtectedPage>} />

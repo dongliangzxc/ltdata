@@ -112,6 +112,7 @@ menuItems.forEach(item => {
 })
 pageTitles.set('/match', '清洗任务详情')
 pageTitles.set('/data-adjustment', '数据调整')
+pageTitles.set('/brand-clean', '只清洗品牌')
 pageTitles.set('/match-results', '匹配结果')
 
 interface Props {

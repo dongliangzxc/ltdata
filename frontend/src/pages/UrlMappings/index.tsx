@@ -78,6 +78,7 @@ export default function UrlMappingsPage() {
   const [saving, setSaving] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [modalCategoryCode, setModalCategoryCode] = useState<string | undefined>()
+  const [modalSeries, setModalSeries] = useState<string | undefined>()
   const [editModelOption, setEditModelOption] = useState<ModelOption | null>(null)
 
   const [filterYear, setFilterYear] = useState<number | undefined>()
@@ -144,6 +145,7 @@ export default function UrlMappingsPage() {
     setEditingId(null)
     form.resetFields()
     setModalCategoryCode(undefined)
+    setModalSeries(undefined)
     setModalOpen(true)
   }
 
@@ -156,7 +158,8 @@ export default function UrlMappingsPage() {
       model_id: record.model_id,
       price: record.price,
     })
-    setModalCategoryCode(undefined)
+    setModalCategoryCode(record.category_code ?? undefined)
+    setModalSeries(record.series ?? undefined)
     setEditModelOption(null)
     if (record.model_id != null) {
       getModelDetail(record.model_id)
@@ -251,15 +254,31 @@ export default function UrlMappingsPage() {
     }
   }
 
+  const modalCategoryIsSeries = !!modalCategoryCode
+    && (extraFieldKeysByCategory[modalCategoryCode] ?? []).includes('series')
+
+  const modalSeriesOptions = useMemo(() => {
+    if (!modalCategoryIsSeries || !modalCategoryCode) return []
+    const values = new Set<string>()
+    for (const m of visibleModelOptions) {
+      if (m.category_code === modalCategoryCode && m.series) values.add(m.series)
+    }
+    if (editModelOption?.series && editModelOption.category_code === modalCategoryCode) {
+      values.add(editModelOption.series)
+    }
+    return Array.from(values).sort()
+  }, [modalCategoryIsSeries, modalCategoryCode, visibleModelOptions, editModelOption])
+
   const filteredModelOptions = useMemo(() => {
-    const base = modalCategoryCode
+    let base = modalCategoryCode
       ? visibleModelOptions.filter(m => m.category_code === modalCategoryCode)
       : visibleModelOptions
+    if (modalSeries) base = base.filter(m => (m.series || '') === modalSeries)
     const seen = new Set(base.map(m => m.id))
     const extra: ModelOption[] = []
     if (editModelOption && !seen.has(editModelOption.id)) extra.push(editModelOption)
     return [...base, ...extra]
-  }, [modalCategoryCode, visibleModelOptions, editModelOption])
+  }, [modalCategoryCode, modalSeries, visibleModelOptions, editModelOption])
 
   const columns = [
     {
@@ -461,9 +480,22 @@ export default function UrlMappingsPage() {
               style={{ width: '100%' }}
               options={visibleCategoryOptions}
               value={modalCategoryCode}
-              onChange={v => setModalCategoryCode(v)}
+              onChange={v => { setModalCategoryCode(v); setModalSeries(undefined) }}
             />
           </div>
+          {modalCategoryIsSeries && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ marginBottom: 4, fontSize: 14 }}>产品系列（筛选型号用）</div>
+              <Select
+                allowClear
+                placeholder="选择产品系列可缩小型号列表"
+                style={{ width: '100%' }}
+                options={modalSeriesOptions.map(s => ({ value: s, label: s }))}
+                value={modalSeries}
+                onChange={v => setModalSeries(v)}
+              />
+            </div>
+          )}
           <Form.Item name="platform" label="平台" rules={[{ required: true }]}>
             <Select options={PLATFORM_OPTIONS} />
           </Form.Item>

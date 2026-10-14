@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
-  Alert, Button, Card, Input, Select, Space, Table, Tag, Typography, message,
+  Alert, Button, Card, Input, Radio, Select, Space, Table, Tag, Typography, message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { ArrowLeftOutlined, SaveOutlined } from '@ant-design/icons'
@@ -26,6 +26,7 @@ export default function BrandCleanPage() {
   const [pageSize, setPageSize] = useState(20)
   const [keyword, setKeyword] = useState('')
   const [keywordInput, setKeywordInput] = useState('')
+  const [editableOnly, setEditableOnly] = useState(true)
   const [draft, setDraft] = useState<Record<number, string | null | undefined>>({})
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [batchBrand, setBatchBrand] = useState<string | undefined>(undefined)
@@ -48,8 +49,9 @@ export default function BrandCleanPage() {
       page,
       page_size: pageSize,
       keyword: keyword || undefined,
+      editable_only: editableOnly,
     }).then(r => r.data),
-    { ready: Number.isFinite(jobId) && jobId > 0, refreshDeps: [jobId, page, pageSize, keyword] },
+    { ready: Number.isFinite(jobId) && jobId > 0, refreshDeps: [jobId, page, pageSize, keyword, editableOnly] },
   )
 
   const rows = useMemo(() => data?.items ?? [], [data])
@@ -58,7 +60,7 @@ export default function BrandCleanPage() {
     setDraft({})
     setSelectedIds([])
     setBatchBrand(undefined)
-  }, [page, pageSize, keyword, jobId])
+  }, [page, pageSize, keyword, editableOnly, jobId])
 
   const rowValue = (row: BrandCleanRow): string | undefined => {
     if (draft[row.cleaned_data_id] !== undefined) return draft[row.cleaned_data_id] ?? undefined
@@ -172,9 +174,19 @@ export default function BrandCleanPage() {
           type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message="在此仅补充「入库品牌」，保存后只更新该行的入库品牌字段（品牌码）；不会写入型号匹配结果，任务也不会因此标记为「清洗完成」。已匹配型号的行以型号品牌为准，不可修改。"
+          message="在此仅补充「入库品牌」，保存后只更新该行的入库品牌字段（品牌码）；不会写入型号匹配结果，任务也不会因此标记为「清洗完成」。默认只显示未匹配型号、可补充品牌的行；已匹配型号的行以型号品牌为准，可在「全部数据行」中查看但不可修改。"
         />
         <Space wrap style={{ marginBottom: 12 }}>
+          <Radio.Group
+            value={editableOnly}
+            onChange={e => { setEditableOnly(e.target.value); setPage(1) }}
+            optionType="button"
+            buttonStyle="solid"
+            options={[
+              { label: '仅可补充品牌（无型号）', value: true },
+              { label: '全部数据行', value: false },
+            ]}
+          />
           <Input.Search
             allowClear
             placeholder="按商品名称搜索"

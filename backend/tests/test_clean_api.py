@@ -2741,6 +2741,12 @@ def test_brand_rows_list_and_update(db):
     assert items[cd_yes.id]["has_model"] is True
     assert items[cd_yes.id]["model_brand_code"] == "SONY"
 
+    resp = client.get(f"/api/clean/jobs/{job.id}/brand-rows", params={"editable_only": True})
+    assert resp.status_code == 200
+    editable_payload = resp.json()
+    assert editable_payload["total"] == 1
+    assert [item["cleaned_data_id"] for item in editable_payload["items"]] == [cd_no.id]
+
     resp = client.patch(f"/api/clean/jobs/{job.id}/brand-rows", json={"items": [
         {"cleaned_data_id": cd_no.id, "brand_std": "JBL"},
         {"cleaned_data_id": cd_yes.id, "brand_std": "JBL"},

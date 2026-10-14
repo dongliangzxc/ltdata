@@ -1045,13 +1045,14 @@ class BrandCleanUpdateIn(BaseModel):
 def list_clean_job_brand_rows(
     job_id: int,
     keyword: Optional[str] = Query(None),
+    editable_only: bool = Query(False, description="仅返回未匹配型号（可人工补充品牌）的行"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """「只清洗品牌」列表：返回该清洗任务全部数据行（cleaned_data），
-    附带原品牌、当前入库品牌、已匹配型号的品牌。"""
+    """「只清洗品牌」列表：返回该清洗任务的数据行（cleaned_data），
+    附带原品牌、当前入库品牌、已匹配型号的品牌。editable_only=true 时只返回未匹配型号的行。"""
     _get_visible_clean_job_or_404(db, current_user, job_id)
 
     q = (
@@ -1059,6 +1060,18 @@ def list_clean_job_brand_rows(
         .join(RawDataRecord, CleanedDataRecord.raw_data_id == RawDataRecord.id)
         .filter(CleanedDataRecord.clean_job_id == job_id)
     )
+    if editable_only:
+        model_exists = (
+            db.query(MatchResult.id)
+            .filter(
+                MatchResult.clean_job_id == job_id,
+                MatchResult.raw_data_id == CleanedDataRecord.raw_data_id,
+                MatchResult.model_id.isnot(None),
+            )
+            .correlate(CleanedDataRecord)
+            .exists()
+        )
+        q = q.filter(~model_exists)
     kw = (keyword or "").strip()
     if kw:
         q = q.filter(RawDataRecord.item_name.ilike(f"%{kw}%"))

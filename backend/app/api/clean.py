@@ -1026,6 +1026,7 @@ class BrandCleanRow(BaseModel):
     model_brand_code: str | None = None
     model_brand_name: str | None = None
     has_model: bool = False
+    brand_identified: int = 1
 
 
 class BrandCleanListOut(BaseModel):
@@ -1092,18 +1093,26 @@ def list_clean_job_brand_rows(
 
     raw_ids = [rd.id for _, rd in rows]
     model_map: dict[int, tuple[str, str | None]] = {}
+    identified_map: dict[int, int] = {}
     if raw_ids:
         model_rows = (
-            db.query(MatchResult.raw_data_id, ModelRecord.brand_code, ModelRecord.brand_name)
-            .join(ModelRecord, MatchResult.model_id == ModelRecord.id)
+            db.query(
+                MatchResult.raw_data_id,
+                MatchResult.brand_identified,
+                ModelRecord.brand_code,
+                ModelRecord.brand_name,
+            )
+            .outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
             .filter(
                 MatchResult.clean_job_id == job_id,
                 MatchResult.raw_data_id.in_(raw_ids),
             )
             .all()
         )
-        for raw_id, brand_code, brand_name in model_rows:
-            model_map.setdefault(raw_id, (brand_code, brand_name))
+        for raw_id, brand_identified, brand_code, brand_name in model_rows:
+            identified_map.setdefault(raw_id, 1 if brand_identified is None else brand_identified)
+            if brand_code is not None or brand_name is not None:
+                model_map.setdefault(raw_id, (brand_code, brand_name))
 
     items = []
     for cd, rd in rows:
@@ -1118,6 +1127,7 @@ def list_clean_job_brand_rows(
             model_brand_code=matched[0] if matched else None,
             model_brand_name=matched[1] if matched else None,
             has_model=matched is not None,
+            brand_identified=identified_map.get(rd.id, 1),
         ))
     return BrandCleanListOut(total=total, page=page, page_size=page_size, items=items)
 

@@ -350,6 +350,7 @@ export type BrandCleanRow = {
   model_brand_code: string | null
   model_brand_name: string | null
   has_model: boolean
+  brand_identified: number
 }
 
 export type BrandCleanListResponse = PaginatedResponse<BrandCleanRow>

@@ -204,11 +204,14 @@ export default function BrandCleanPage() {
       ),
     },
     {
-      title: '说明', width: 180,
+      title: '说明', width: 220,
       render: (_: unknown, row) => (
-        row.has_model
-          ? <Text type="secondary">已匹配型号，品牌以型号为准</Text>
-          : <Text type="secondary">未匹配型号，可人工补充品牌</Text>
+        <Space size={4} wrap>
+          {row.brand_identified === 0 && <Tag color="purple">未识别品牌</Tag>}
+          {row.has_model
+            ? <Text type="secondary">已匹配型号，品牌以型号为准</Text>
+            : <Text type="secondary">未匹配型号，可人工补充品牌</Text>}
+        </Space>
       ),
     },
   ]

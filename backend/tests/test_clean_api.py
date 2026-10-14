@@ -2732,6 +2732,7 @@ def test_brand_rows_list_and_update(db):
     db.flush()
     db.add_all([
         MatchResult(clean_job_id=job.id, raw_data_id=raw_model.id, model_id=model.id, match_status="matched", match_source="s1"),
+        MatchResult(clean_job_id=job.id, raw_data_id=raw_no_model.id, model_id=None, match_status="pending", brand_identified=0),
         MatchResult(clean_job_id=job.id, raw_data_id=raw_excluded.id, model_id=None, match_status="excluded", matched_by="manual"),
     ])
     db.commit()
@@ -2743,6 +2744,7 @@ def test_brand_rows_list_and_update(db):
     assert actionable_payload["total"] == 1
     assert [item["cleaned_data_id"] for item in actionable_payload["items"]] == [cd_no.id]
     assert actionable_payload["items"][0]["has_model"] is False
+    assert actionable_payload["items"][0]["brand_identified"] == 0
 
     # 全部数据行
     resp = client.get(f"/api/clean/jobs/{job.id}/brand-rows", params={"actionable_only": False})

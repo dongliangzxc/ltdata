@@ -45,7 +45,7 @@ from app.services.clean_task_snapshot import (
     get_monthly_clean_pool,
     upsert_monthly_task_snapshot,
 )
-from app.services.data_cleaner import run_clean
+from app.services.data_cleaner import run_clean, _load_brand_alias_map, manual_brand_std
 from app.services.matcher import run_match
 from app.services.publisher import delete_published_data
 from app.utils.time_utils import format_beijing_datetime
@@ -1027,6 +1027,7 @@ class BrandCleanRow(BaseModel):
     model_brand_name: str | None = None
     has_model: bool = False
     brand_identified: int = 1
+    brand_std_manual: bool = False
 
 
 class BrandCleanListOut(BaseModel):
@@ -1115,6 +1116,7 @@ def list_clean_job_brand_rows(
                 model_map.setdefault(raw_id, (brand_code, brand_name))
 
     items = []
+    brand_alias_map = _load_brand_alias_map(db)
     for cd, rd in rows:
         matched = model_map.get(rd.id)
         items.append(BrandCleanRow(
@@ -1128,6 +1130,7 @@ def list_clean_job_brand_rows(
             model_brand_name=matched[1] if matched else None,
             has_model=matched is not None,
             brand_identified=identified_map.get(rd.id, 1),
+            brand_std_manual=manual_brand_std(cd, rd, brand_alias_map) is not None,
         ))
     return BrandCleanListOut(total=total, page=page, page_size=page_size, items=items)
 
@@ -1141,7 +1144,7 @@ def update_clean_job_brand_rows(
 ):
     """「只清洗品牌」保存：仅更新 cleaned_data.brand_std（品牌码），
     不写 match_results、不改任务状态与待处理计数。
-    已匹配型号或已匹配/已人工确认/已排除/已禁用的行跳过不更新。"""
+    已匹配/已人工确认/已排除/已禁用的行跳过不更新；有型号的（如 URL映射待确认）行允许人工覆盖品牌。"""
     _get_visible_clean_job_or_404(db, current_user, job_id)
     if not payload.items:
         return {"updated": 0}
@@ -1167,7 +1170,6 @@ def update_clean_job_brand_rows(
                 MatchResult.clean_job_id == job_id,
                 MatchResult.raw_data_id.in_(raw_ids),
                 or_(
-                    MatchResult.model_id.isnot(None),
                     MatchResult.match_status.in_(BRAND_CLEAN_RESOLVED_STATUSES),
                     MatchResult.is_disabled == 1,
                 ),

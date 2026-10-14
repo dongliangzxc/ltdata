@@ -2775,3 +2775,53 @@ def test_brand_rows_list_and_update(db):
         {"cleaned_data_id": cd_no.id, "brand_std": "NOT_EXIST"},
     ]})
     assert resp.status_code == 400
+
+
+def test_brand_rows_allows_manual_override_for_text_only(db):
+    client = _make_client(db)
+    db.add(Category(code="soundbar", name="回音壁"))
+    db.add_all([
+        BrandRecord(brand_code="SONY", brand_name="索尼"),
+        BrandRecord(brand_code="JBL", brand_name="JBL"),
+    ])
+    upload = UploadFileRecord(filename="t.xlsx", platform="jd", row_count=1, status="done")
+    db.add(upload)
+    db.flush()
+    raw = RawDataRecord(file_id=upload.id, platform="jd", item_id="t1", item_name="URL待确认商品", brand_raw="某文本")
+    db.add(raw)
+    db.flush()
+    job = CleanJobRecord(
+        file_ids=[upload.id], rules={"dedup": True}, status="reviewing",
+        row_in=1, row_out=1, category_code="soundbar",
+    )
+    db.add(job)
+    db.flush()
+    cd = CleanedDataRecord(raw_data_id=raw.id, clean_job_id=job.id, item_name="URL待确认商品", brand_std="某文本")
+    db.add(cd)
+    db.flush()
+    model = ModelRecord(brand_code="SONY", brand_name="索尼", model_code="M1", category_code="soundbar")
+    db.add(model)
+    db.flush()
+    db.add(MatchResult(
+        clean_job_id=job.id, raw_data_id=raw.id, model_id=model.id,
+        match_status="text_only", match_source="s1",
+    ))
+    db.commit()
+
+    resp = client.get(f"/api/clean/jobs/{job.id}/brand-rows")
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 1
+    item = resp.json()["items"][0]
+    assert item["has_model"] is True
+    assert item["brand_std_manual"] is False
+
+    resp = client.patch(f"/api/clean/jobs/{job.id}/brand-rows", json={"items": [
+        {"cleaned_data_id": cd.id, "brand_std": "JBL"},
+    ]})
+    assert resp.status_code == 200
+    assert resp.json()["updated"] == 1
+    db.refresh(cd)
+    assert cd.brand_std == "JBL"
+
+    resp = client.get(f"/api/clean/jobs/{job.id}/brand-rows")
+    assert resp.json()["items"][0]["brand_std_manual"] is True

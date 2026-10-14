@@ -65,16 +65,21 @@ export default function BrandCleanPage() {
     setBatchBrand(undefined)
   }, [page, pageSize, keyword, actionableOnly, jobId])
 
+  const originalValue = (row: BrandCleanRow): string | null => {
+    if (row.brand_std_manual) return row.brand_std ?? null
+    if (row.has_model) return row.model_brand_code ?? null
+    return row.brand_std ?? null
+  }
+
   const rowValue = (row: BrandCleanRow): string | undefined => {
     if (draft[row.cleaned_data_id] !== undefined) return draft[row.cleaned_data_id] ?? undefined
-    return (row.has_model ? row.model_brand_code : row.brand_std) ?? undefined
+    return originalValue(row) ?? undefined
   }
 
   const changedItems = useMemo(
     () => rows
-      .filter(row => !row.has_model)
       .filter(row => draft[row.cleaned_data_id] !== undefined)
-      .filter(row => (draft[row.cleaned_data_id] ?? null) !== (row.brand_std ?? null))
+      .filter(row => (draft[row.cleaned_data_id] ?? null) !== originalValue(row))
       .map(row => ({ cleaned_data_id: row.cleaned_data_id, brand_std: draft[row.cleaned_data_id] ?? null })),
     [rows, draft],
   )
@@ -180,7 +185,7 @@ export default function BrandCleanPage() {
     {
       title: '当前入库品牌', dataIndex: 'brand_std', width: 160,
       render: (_: unknown, row) => {
-        if (row.has_model) {
+        if (row.has_model && !row.brand_std_manual) {
           return <Tag color="blue">{formatText(row.model_brand_code)}{row.model_brand_name ? ` ${row.model_brand_name}` : ''}</Tag>
         }
         return formatText(row.brand_std)
@@ -196,7 +201,6 @@ export default function BrandCleanPage() {
           placeholder="选择品牌"
           options={brandOptions}
           value={rowValue(row)}
-          disabled={row.has_model}
           popupRender={renderBrandDropdown(row.cleaned_data_id)}
           filterOption={(input, option) => (option?.label as string ?? '').toLowerCase().includes(input.toLowerCase())}
           onChange={(value: string | undefined) => handleSet(row, value)}
@@ -209,7 +213,7 @@ export default function BrandCleanPage() {
         <Space size={4} wrap>
           {row.brand_identified === 0 && !row.has_model && <Tag color="purple">未识别品牌</Tag>}
           {row.has_model
-            ? <Text type="secondary">已匹配型号，品牌以型号为准</Text>
+            ? <Text type="secondary">已匹配型号，可人工覆盖品牌</Text>
             : <Text type="secondary">未匹配型号，可人工补充品牌</Text>}
         </Space>
       ),
@@ -227,7 +231,7 @@ export default function BrandCleanPage() {
           type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message="在此仅补充「入库品牌」，保存后只更新该行的入库品牌字段（品牌码）；不会写入型号匹配结果，任务也不会因此标记为「清洗完成」。默认显示待处理（待确认 / URL映射待确认 / 争议）的行；已匹配型号的行以型号品牌为准不可修改，已匹配/已人工确认/已排除的行不显示，可在「全部数据行」中查看。"
+          message="在此补充「入库品牌」，保存后只更新该行的入库品牌字段（品牌码）；人工设置的品牌在详情/导出中优先于型号品牌。不会写入型号匹配结果，任务也不会因此标记为「清洗完成」。默认显示待处理（待确认 / URL映射待确认 / 争议）行，可在「全部数据行」中查看其它行。"
         />
         <Space wrap style={{ marginBottom: 12 }}>
           <Radio.Group
@@ -281,7 +285,6 @@ export default function BrandCleanPage() {
           rowSelection={{
             selectedRowKeys: selectedIds,
             onChange: keys => setSelectedIds(keys as number[]),
-            getCheckboxProps: (row: BrandCleanRow) => ({ disabled: row.has_model }),
           }}
           pagination={{
             current: page,

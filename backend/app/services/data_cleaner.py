@@ -76,6 +76,35 @@ def _load_brand_alias_map(db: Session) -> dict[str, str]:
     return result
 
 
+def auto_brand_std(raw: RawDataRecord, brand_alias_map: dict[str, str]) -> str | None:
+    """清洗时 brand_std 的自动取值：原始 brand_std → 品牌写法库别名 → 原始 brand_raw。"""
+    brand_std = raw.brand_std
+    if raw.brand_raw:
+        hit = brand_alias_map.get(raw.brand_raw.upper())
+        if hit:
+            brand_std = hit
+    if not brand_std:
+        brand_std = raw.brand_raw
+    return brand_std
+
+
+def manual_brand_std(
+    cleaned: "CleanedDataRecord | None",
+    raw: RawDataRecord,
+    brand_alias_map: dict[str, str],
+) -> str | None:
+    """「只清洗品牌」人工设置的品牌：cleaned.brand_std 与自动算出的值不同即为人工值。
+
+    不加标记列时的判定方式；未人工设置（或人工值恰好等于自动值）返回 None。
+    """
+    if cleaned is None or not cleaned.brand_std:
+        return None
+    if cleaned.brand_std != auto_brand_std(raw, brand_alias_map):
+        return cleaned.brand_std
+    return None
+
+
+
 def _format_number(value: object) -> str:
     try:
         return f"{float(value):g}"

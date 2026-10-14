@@ -24,7 +24,7 @@ from app.models.schemas import (
     User,
 )
 from app.services.clean_task_snapshot import ACTIVE_TASK_STATUSES, touch_clean_job
-from app.services.data_cleaner import _load_brand_alias_map
+from app.services.data_cleaner import _load_brand_alias_map, manual_brand_std
 from app.services.exclusion_store import (
     remove_exclusion_for_raw,
     upsert_exclusion_for_raw,
@@ -891,6 +891,13 @@ def get_match_review_detail(match_id: int, db: Session = Depends(get_db)):
     brand_alias_map = _load_brand_alias_map(db)
     live_brand_std = brand_alias_map.get(rd.brand_raw.upper()) if rd.brand_raw else None
 
+    # 「只清洗品牌」人工设置的品牌：仅对待处理行生效，覆盖型号品牌
+    manual_brand = (
+        manual_brand_std(cleaned, rd, brand_alias_map)
+        if mr.match_status in ("pending", "text_only", "disputed")
+        else None
+    )
+
     category_code = model.category_code if model and model.category_code else None
     if not category_code:
         clean_job = db.query(CleanJobRecord).filter(CleanJobRecord.id == mr.clean_job_id).first()
@@ -1049,7 +1056,8 @@ def list_missing_attrs(
             "item_name": rd.item_name,
             "brand_raw": rd.brand_raw,
             "model_code": model.model_code if model else None,
-            "brand_code": model.brand_code if model else None,
+        "brand_code": model.brand_code if model else None,
+        "manual_brand_code": manual_brand,
             "sales_qty": rd.sales_qty,
             "category_name": cat.name if cat else None,
         })

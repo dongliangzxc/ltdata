@@ -283,3 +283,26 @@ def test_pending_sheet_falls_back_to_cleaned_brand_name(db):
     pending = pd.read_excel(result[0]["path"], sheet_name="待确认")
     assert pending["宝贝ID"].astype(str).tolist() == ["100001"]
     assert pending["入库品牌"].iloc[0] == "飞利浦"
+
+
+def test_text_only_sheet_uses_manual_brand_override(db):
+    """URL映射待确认行人工覆盖品牌后，导出「入库品牌」应显示人工值而非型号品牌。"""
+    clean_job_id = _seed(db)
+    model = db.query(ModelRecord).first()
+    rd = _make_extra_raw(db, "400001", "URL待确认商品")
+    db.add(MatchResult(
+        clean_job_id=clean_job_id, raw_data_id=rd.id, model_id=model.id,
+        match_status="text_only", matched_by="auto", match_source="s1", is_disabled=0,
+    ))
+    db.add(BrandRecord(brand_code="JBL", brand_name="JBL"))
+    db.add(CleanedDataRecord(
+        raw_data_id=rd.id, clean_job_id=clean_job_id,
+        item_name=rd.item_name, brand_std="JBL",
+    ))
+    db.commit()
+
+    result = export_match_job(db, clean_job_id)
+    xl = pd.read_excel(result[0]["path"], sheet_name="耳机-URL映射待确认")
+    row = xl[xl["宝贝ID"].astype(str) == "400001"]
+    # 型号品牌是「索尼」，人工设为 JBL 应覆盖
+    assert row["入库品牌"].iloc[0] == "JBL"

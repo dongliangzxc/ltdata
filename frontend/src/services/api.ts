@@ -351,6 +351,7 @@ export type BrandCleanRow = {
   model_brand_name: string | null
   has_model: boolean
   brand_identified: number
+  brand_std_manual: boolean
 }
 
 export type BrandCleanListResponse = PaginatedResponse<BrandCleanRow>
@@ -1395,6 +1396,7 @@ export interface MatchResultOut {
   brand_std?: string | null
   model_code?: string | null
   brand_code?: string | null
+  manual_brand_code?: string | null
   series?: string | null
   attr_count?: number
   candidates?: MatchCandidateOut[]

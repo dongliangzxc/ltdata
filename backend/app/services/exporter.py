@@ -93,7 +93,12 @@ def _sheet_name(name: str, used_names: set[str]) -> str:
     return candidate
 
 
-def _base_row(rd: RawDataRecord, model: ModelRecord | None = None, brand_name_fallback: str | None = None) -> dict:
+def _base_row(
+    rd: RawDataRecord,
+    model: ModelRecord | None = None,
+    brand_name_fallback: str | None = None,
+    brand_name_override: str | None = None,
+) -> dict:
     row = {}
     for field in BASE_FIELD_NAMES + MATCHED_EXTRA_FIELD_NAMES:
         if field == "brand_std":
@@ -101,7 +106,10 @@ def _base_row(rd: RawDataRecord, model: ModelRecord | None = None, brand_name_fa
         elif field == "model_code":
             row[field] = model.model_code if model else ""
         elif field == "brand_name":
-            row[field] = model.brand_name if model else (brand_name_fallback or "")
+            if brand_name_override is not None:
+                row[field] = brand_name_override
+            else:
+                row[field] = model.brand_name if model else (brand_name_fallback or "")
         elif field == "model_name":
             row[field] = model.model_name if model else ""
         elif field == "series":
@@ -111,34 +119,65 @@ def _base_row(rd: RawDataRecord, model: ModelRecord | None = None, brand_name_fa
     return row
 
 
-def _cleaned_brand_name_map(db: Session, clean_job_ids: list[int]) -> dict[tuple[int, int], str]:
-    """无型号行导出「入库品牌」的回退来源：cleaned_data.brand_std（品牌码）→ brand_name。"""
+def _cleaned_brand_info(
+    db: Session, clean_job_ids: list[int]
+) -> tuple[dict[tuple[int, int], str], dict[tuple[int, int], str], dict[str, str | None]]:
+    """返回：
+    - fallback（无型号行「入库品牌」）= cleaned_data.brand_std → brand_name
+    - manual（「只清洗品牌」人工设的品牌，与自动值不同时）= brand_code
+    - brand_names：brand_code → brand_name（用于把人工品牌码映射成品牌名）
+    """
+    from app.services.data_cleaner import _load_brand_alias_map
+
     rows = (
         db.query(
             CleanedDataRecord.clean_job_id,
             CleanedDataRecord.raw_data_id,
             CleanedDataRecord.brand_std,
+            RawDataRecord.brand_raw,
+            RawDataRecord.brand_std,
         )
-        .filter(
-            CleanedDataRecord.clean_job_id.in_(clean_job_ids),
-            CleanedDataRecord.brand_std.isnot(None),
-        )
+        .join(RawDataRecord, CleanedDataRecord.raw_data_id == RawDataRecord.id)
+        .filter(CleanedDataRecord.clean_job_id.in_(clean_job_ids))
         .all()
     )
     if not rows:
-        return {}
-    codes = {brand_std for _, _, brand_std in rows if brand_std}
-    names = {
+        return {}, {}, {}
+    codes = {cd_std for _, _, cd_std, _, _ in rows if cd_std}
+    brand_names = {
         code: name
         for code, name in db.query(BrandRecord.brand_code, BrandRecord.brand_name)
         .filter(BrandRecord.brand_code.in_(codes))
         .all()
     }
-    result: dict[tuple[int, int], str] = {}
-    for job_id, raw_id, brand_std in rows:
-        if brand_std:
-            result[(job_id, raw_id)] = names.get(brand_std) or brand_std
-    return result
+    alias_map = _load_brand_alias_map(db)
+    actionable_rows = (
+        db.query(MatchResult.clean_job_id, MatchResult.raw_data_id)
+        .filter(
+            MatchResult.clean_job_id.in_(clean_job_ids),
+            MatchResult.match_status.in_(("pending", "text_only", "disputed")),
+            MatchResult.is_disabled == 0,
+        )
+        .all()
+    )
+    actionable_keys = {(job_id, raw_id) for job_id, raw_id in actionable_rows}
+    fallback: dict[tuple[int, int], str] = {}
+    manual: dict[tuple[int, int], str] = {}
+    for job_id, raw_id, cd_std, rd_raw, rd_std in rows:
+        if not cd_std:
+            continue
+        key = (job_id, raw_id)
+        fallback[key] = brand_names.get(cd_std) or cd_std
+        auto = rd_std
+        if rd_raw:
+            hit = alias_map.get(rd_raw.upper())
+            if hit:
+                auto = hit
+        if not auto:
+            auto = rd_raw
+        if cd_std != auto and key in actionable_keys:
+            manual[key] = cd_std
+    return fallback, manual, brand_names
 
 
 def _spec_map_for_models(db: Session, model_ids: list[int]) -> dict[int, dict[str, str]]:
@@ -349,11 +388,19 @@ def _export_match_jobs(
             text_only_sheets[cat] = (worksheet,)
         return text_only_sheets[cat][0]
 
+    cleaned_brand_names, manual_brands, brand_names = _cleaned_brand_info(db, clean_job_ids)
+
+    def _brand_override(job_id: int, raw_id: int) -> str | None:
+        code = manual_brands.get((job_id, raw_id))
+        if not code:
+            return None
+        return brand_names.get(code) or code
+
     for offset in range(0, matched_total, PAGE_SIZE):
         matched_rows = matched_query.offset(offset).limit(PAGE_SIZE).all()
         spec_map = _spec_map_for_models(db, list({mr.model_id for mr, _, _ in matched_rows}))
         for mr, rd, model in matched_rows:
-            row = _base_row(rd, model)
+            row = _base_row(rd, model, brand_name_override=_brand_override(mr.clean_job_id, rd.id))
             cat_code = model.category_code or ""
             cat = cat_map.get(cat_code, cat_code) or "未知品类"
             worksheet, spec_names = get_category_sheet(cat, cat_code)
@@ -364,20 +411,27 @@ def _export_match_jobs(
             )
 
     pending_sheet = None
-    cleaned_brand_names = _cleaned_brand_name_map(db, clean_job_ids)
     for offset in range(0, pending_total, PAGE_SIZE):
         if pending_sheet is None:
             pending_sheet = workbook.create_sheet(title=_sheet_name("待确认", used_sheet_names))
             pending_sheet.append(BASE_CN_NAMES)
         pending_rows = pending_query.offset(offset).limit(PAGE_SIZE).all()
         for mr, rd in pending_rows:
-            row = _base_row(rd, brand_name_fallback=cleaned_brand_names.get((mr.clean_job_id, rd.id)))
+            row = _base_row(
+                rd,
+                brand_name_fallback=cleaned_brand_names.get((mr.clean_job_id, rd.id)),
+                brand_name_override=_brand_override(mr.clean_job_id, rd.id),
+            )
             pending_sheet.append([row.get(field) for field in BASE_FIELD_NAMES])
 
     for offset in range(0, text_only_total, PAGE_SIZE):
         text_only_rows = text_only_query.offset(offset).limit(PAGE_SIZE).all()
         for mr, rd, model in text_only_rows:
-            row = _base_row(rd, model, cleaned_brand_names.get((mr.clean_job_id, rd.id)))
+            row = _base_row(
+                rd, model,
+                cleaned_brand_names.get((mr.clean_job_id, rd.id)),
+                _brand_override(mr.clean_job_id, rd.id),
+            )
             cat_code = model.category_code or ""
             cat = cat_map.get(cat_code, cat_code) or "未知品类"
             worksheet = get_text_only_sheet(cat)
@@ -392,7 +446,11 @@ def _export_match_jobs(
         for offset in range(0, total, PAGE_SIZE):
             rows = query.offset(offset).limit(PAGE_SIZE).all()
             for mr, rd, model in rows:
-                row = _base_row(rd, model, cleaned_brand_names.get((mr.clean_job_id, rd.id)))
+                row = _base_row(
+                    rd, model,
+                    cleaned_brand_names.get((mr.clean_job_id, rd.id)),
+                    _brand_override(mr.clean_job_id, rd.id),
+                )
                 sheet.append([row.get(field) for field in BASE_FIELD_NAMES])
 
     _write_simple_match_sheet("争议复核", disputed_total, disputed_query)

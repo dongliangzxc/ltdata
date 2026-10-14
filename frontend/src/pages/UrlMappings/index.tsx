@@ -405,6 +405,7 @@ export default function UrlMappingsPage() {
           { value: 'item_url', label: '商品链接', required: true },
           { value: 'brand_code', label: '品牌码', required: true },
           { value: 'model_code', label: '型号码', required: true },
+          { value: 'series', label: '产品系列' },
           { value: 'price', label: '价格' },
         ]}
         headersUrl="/url-mappings/headers"

@@ -367,3 +367,71 @@ def test_bulk_delete_blocks_invisible_category(client):
 
     assert res.status_code == 403
     assert res.json()["detail"] == "无权限访问该品类"
+
+
+def _upload_series_and_confirm(client, *, category_code, rows):
+    """rows: list of [platform, item_url, brand_code, model_code, series]"""
+    import io as _io
+    import tempfile
+    from openpyxl import Workbook
+    from pathlib import Path
+
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["platform", "item_url", "brand_code", "model_code", "series"])
+    for r in rows:
+        ws.append(r)
+    buf = _io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp.write(buf.getvalue())
+        tmp_path = tmp.name
+
+    try:
+        headers = client.post(
+            "/api/url-mappings/headers",
+            files={"file": ("test.xlsx", open(tmp_path, "rb"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+        assert headers.status_code == 200, headers.text
+        temp_file_id = headers.json()["temp_file_id"]
+        return client.post("/api/url-mappings/confirm", json={
+            "temp_file_id": temp_file_id,
+            "mapping": {
+                "platform": "platform", "item_url": "item_url",
+                "brand_code": "brand_code", "model_code": "model_code", "series": "series",
+            },
+            "ignore_columns": [],
+            "category_code": category_code,
+        })
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
+def test_url_mapping_import_uses_series_to_locate_model(client):
+    """系列品类导入映射时，按 品牌+型号码+产品系列 定位到正确型号。"""
+    from app.models.schemas import CategoryExtraField
+
+    with client.Session() as session:
+        seed_data(session)
+        session.add(CategoryExtraField(
+            category_code="TV", field_key="series", field_label="产品系列",
+            field_type="text", required=0, sort_order=1,
+        ))
+        session.add_all([
+            ModelRecord(brand_code="SONY", model_code="TV-1", category_code="TV", series="大屏", brand_name="索尼"),
+            ModelRecord(brand_code="SONY", model_code="TV-1", category_code="TV", series="小屏", brand_name="索尼"),
+        ])
+        session.commit()
+
+    res = _upload_series_and_confirm(client, category_code="TV", rows=[
+        ["jd", "https://item.jd.com/series-item.html", "SONY", "TV-1", "小屏"],
+    ])
+
+    assert res.status_code == 200, res.text
+    with client.Session() as session:
+        m = session.query(ItemUrlMapping).filter_by(item_id="series-item").first()
+        assert m is not None
+        assert m.model is not None
+        assert m.model.series == "小屏"

@@ -20,7 +20,8 @@ from app.core.permissions import visible_category_codes
 from app.models.database import get_db
 from app.models.schemas import (
     ItemUrlMapping, ItemUrlMappingIn, ItemUrlMappingOut,
-    ModelRecord, BrandRecord, BrandCategory, PaginatedResponse, Category, User,
+    ModelRecord, BrandRecord, BrandCategory, CategoryExtraField,
+    PaginatedResponse, Category, User,
 )
 from app.utils.url_utils import extract_item_id
 from app.services.import_helper import save_tmp_file, read_columns, find_best_template, col_fingerprint
@@ -69,12 +70,23 @@ def _ensure_url_mapping_model_visible(db: Session, current_user: User, model: Mo
         raise HTTPException(status_code=403, detail="无权限访问该品类")
 
 
+def _category_has_series(db: Session, category_code: str | None) -> bool:
+    """该品类是否配置了「产品系列」扩展字段（系列品类：品牌+系列+型号码 定位型号）。"""
+    if not category_code:
+        return False
+    return db.query(CategoryExtraField).filter(
+        CategoryExtraField.category_code == category_code,
+        CategoryExtraField.field_key == "series",
+    ).first() is not None
+
+
 def _get_or_create_url_import_model(
     db: Session,
     *,
     brand_code: str,
     model_code: str,
     category_code: str | None,
+    series: str | None = None,
 ) -> ModelRecord | None:
     """型号匹配不到时自动创建型号记录（复用品牌主数据，品牌自动挂到所选品类）。
 
@@ -94,11 +106,14 @@ def _get_or_create_url_import_model(
     if not db.query(BrandCategory).filter_by(brand_code=brand_code, category_code=category_code).first():
         db.add(BrandCategory(brand_code=brand_code, category_code=category_code))
 
-    existing = db.query(ModelRecord).filter(
+    existing_query = db.query(ModelRecord).filter(
         ModelRecord.brand_code == brand_code,
         ModelRecord.model_code == model_code,
         ModelRecord.category_code == category_code,
-    ).first()
+    )
+    if series is not None:
+        existing_query = existing_query.filter(ModelRecord.series == series)
+    existing = existing_query.first()
     if existing:
         return existing
 
@@ -106,6 +121,7 @@ def _get_or_create_url_import_model(
         brand_code=brand_code,
         model_code=model_code,
         category_code=category_code,
+        series=series,
         brand_name=brand.brand_name if brand else brand_code,
         status="active",
     )
@@ -180,8 +196,8 @@ def download_url_mapping_template():
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "URL映射"
-    sheet.append(["platform", "item_url", "brand_code", "model_code", "price"])
-    sheet.append(["jd", "https://item.jd.com/100123456.html", "SONY", "X95L", 1299.9])
+    sheet.append(["platform", "item_url", "brand_code", "model_code", "series", "price"])
+    sheet.append(["jd", "https://item.jd.com/100123456.html", "SONY", "X95L", "", 1299.9])
     output = io.BytesIO()
     workbook.save(output)
     quoted_filename = quote("URL映射导入模板.xlsx")
@@ -269,6 +285,7 @@ def url_mapping_confirm(
         item_url = str(row_dict.get("item_url") or "").strip()
         brand_code = str(row_dict.get("brand_code") or "").strip()
         model_code = str(row_dict.get("model_code") or "").strip()
+        series_value = str(row_dict.get("series") or "").strip() or None
 
         if not platform_raw or not item_url or not brand_code:
             errors.append(f"Row {i}: missing required field")
@@ -284,29 +301,30 @@ def url_mapping_confirm(
             continue
         url_platform, item_id = url_info
 
-        # Lookup model — 优先匹配所选品类下的型号，匹配不到再回退其他品类
+        # Lookup model — 系列品类按「品牌+型号码+产品系列」定位；其余品类不含系列
+        is_series_category = _category_has_series(db, payload.category_code)
+        applied_series = series_value if is_series_category else None
+
         model = None
         if model_code not in ("", "-", "—", "--", "未知"):
+            base_filters = [
+                ModelORM.brand_code == brand_code,
+                ModelORM.model_code == model_code,
+            ]
+            if is_series_category:
+                base_filters.append(ModelORM.series == series_value)
             if payload.category_code:
                 model = (
                     db.query(ModelORM)
-                    .filter(
-                        ModelORM.brand_code == brand_code,
-                        ModelORM.model_code == model_code,
-                        ModelORM.category_code == payload.category_code,
-                    )
+                    .filter(*base_filters, ModelORM.category_code == payload.category_code)
                     .first()
                 )
             if not model:
-                model = (
-                    db.query(ModelORM)
-                    .filter(ModelORM.brand_code == brand_code, ModelORM.model_code == model_code)
-                    .first()
-                )
+                model = db.query(ModelORM).filter(*base_filters).first()
             if not model:
                 model = _get_or_create_url_import_model(
                     db, brand_code=brand_code, model_code=model_code,
-                    category_code=payload.category_code,
+                    category_code=payload.category_code, series=applied_series,
                 )
                 if model is None:
                     errors.append(f"Row {i}: model ({brand_code}, {model_code}) not found")

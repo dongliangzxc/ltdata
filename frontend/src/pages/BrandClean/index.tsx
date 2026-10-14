@@ -250,13 +250,15 @@ export default function BrandCleanPage() {
     { title: '商品名称', dataIndex: 'item_name', ellipsis: true, render: formatText },
     { title: '原品牌', dataIndex: 'brand_raw', width: 140, ellipsis: true, render: formatText },
     {
-      title: '当前入库品牌', dataIndex: 'brand_std', width: 160,
-      render: (_: unknown, row) => {
-        if (row.has_model && !row.brand_std_manual) {
-          return <Tag color="blue">{formatText(row.model_brand_code)}{row.model_brand_name ? ` ${row.model_brand_name}` : ''}</Tag>
-        }
-        return formatText(row.brand_std)
-      },
+      title: '当前入库品牌', dataIndex: 'brand_std', width: 200,
+      render: (_: unknown, row) => (
+        <Space size={4} wrap>
+          {row.has_model && !row.brand_std_manual
+            ? <Tag color="blue">{formatText(row.model_brand_code)}{row.model_brand_name ? ` ${row.model_brand_name}` : ''}</Tag>
+            : formatText(row.brand_std)}
+          {row.brand_std_manual && <Tag color="green">品牌已确认</Tag>}
+        </Space>
+      ),
     },
     {
       title: '品牌设置', width: 240,

@@ -1,15 +1,16 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactElement } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
-  Alert, Button, Card, Input, Radio, Select, Space, Table, Tag, Typography, message,
+  Alert, Button, Card, Divider, Input, Radio, Select, Space, Table, Tag, Typography, message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { ArrowLeftOutlined, SaveOutlined } from '@ant-design/icons'
+import { ArrowLeftOutlined, PlusOutlined, SaveOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
+import CreateBrandModal from '../../components/CreateBrandModal'
 import {
   listBrands, listCleanJobBrandRows, updateCleanJobBrandRows,
 } from '../../services/api'
-import type { BrandCleanRow } from '../../services/api'
+import type { BrandCleanRow, BrandItem } from '../../services/api'
 
 const { Text, Title } = Typography
 
@@ -32,6 +33,8 @@ export default function BrandCleanPage() {
   const [batchBrand, setBatchBrand] = useState<string | undefined>(undefined)
   const [saving, setSaving] = useState(false)
   const [brandOptions, setBrandOptions] = useState<BrandOption[]>([])
+  const [brandModalOpen, setBrandModalOpen] = useState(false)
+  const [brandTargetRowId, setBrandTargetRowId] = useState<number | null>(null)
 
   useEffect(() => {
     listBrands({ page: 1, page_size: 2000 })
@@ -80,6 +83,26 @@ export default function BrandCleanPage() {
     setDraft(prev => ({ ...prev, [row.cleaned_data_id]: value ?? null }))
   }
 
+  const openCreateBrand = (rowId?: number) => {
+    setBrandTargetRowId(rowId ?? null)
+    setBrandModalOpen(true)
+  }
+
+  const renderBrandDropdown = (rowId?: number) => (menu: ReactElement) => (
+    <>
+      {menu}
+      <Divider style={{ margin: '4px 0' }} />
+      <Button
+        type="link"
+        icon={<PlusOutlined />}
+        style={{ width: '100%', textAlign: 'left' }}
+        onClick={() => openCreateBrand(rowId)}
+      >
+        新建品牌
+      </Button>
+    </>
+  )
+
   const handleBatchApply = () => {
     const chosenBrand = batchBrand
     if (chosenBrand === undefined) {
@@ -96,6 +119,32 @@ export default function BrandCleanPage() {
       return next
     })
     message.success(`已为 ${selectedIds.length} 行设置品牌，记得点击保存`)
+  }
+
+  const handleCreatedBrand = (brand: BrandItem) => {
+    setBrandOptions(prev => {
+      if (prev.some(o => o.value === brand.brand_code)) return prev
+      return [...prev, {
+        value: brand.brand_code,
+        label: brand.brand_name ? `${brand.brand_name}（${brand.brand_code}）` : brand.brand_code,
+      }].sort((a, b) => a.value.localeCompare(b.value))
+    })
+    if (brandTargetRowId != null) {
+      setDraft(prev => ({ ...prev, [brandTargetRowId]: brand.brand_code }))
+      message.success('品牌已创建并设为该行品牌，记得点击保存')
+    } else if (selectedIds.length > 0) {
+      setDraft(prev => {
+        const next = { ...prev }
+        selectedIds.forEach(id => { next[id] = brand.brand_code })
+        return next
+      })
+      message.success(`品牌已创建，已为选中的 ${selectedIds.length} 行设置，记得点击保存`)
+    } else {
+      setBatchBrand(brand.brand_code)
+      message.success('品牌已创建，可在「批量设置品牌」中选择并应用')
+    }
+    setBrandModalOpen(false)
+    setBrandTargetRowId(null)
   }
 
   const handleSave = async () => {
@@ -148,6 +197,7 @@ export default function BrandCleanPage() {
           options={brandOptions}
           value={rowValue(row)}
           disabled={row.has_model}
+          popupRender={renderBrandDropdown(row.cleaned_data_id)}
           filterOption={(input, option) => (option?.label as string ?? '').toLowerCase().includes(input.toLowerCase())}
           onChange={(value: string | undefined) => handleSet(row, value)}
         />
@@ -202,9 +252,11 @@ export default function BrandCleanPage() {
             style={{ width: 260 }}
             options={brandOptions}
             value={batchBrand}
+            popupRender={renderBrandDropdown()}
             filterOption={(input, option) => (option?.label as string ?? '').toLowerCase().includes(input.toLowerCase())}
             onChange={(value: string | undefined) => setBatchBrand(value)}
           />
+          <Button icon={<PlusOutlined />} onClick={() => openCreateBrand()}>新建品牌</Button>
           <Button onClick={handleBatchApply} disabled={selectedIds.length === 0}>批量设置选中（{selectedIds.length}）</Button>
           <Button
             type="primary"
@@ -239,6 +291,11 @@ export default function BrandCleanPage() {
           }}
         />
       </Card>
+      <CreateBrandModal
+        open={brandModalOpen}
+        onCancel={() => { setBrandModalOpen(false); setBrandTargetRowId(null) }}
+        onCreated={handleCreatedBrand}
+      />
     </Space>
   )
 }

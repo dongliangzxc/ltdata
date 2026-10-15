@@ -1,0 +1,16 @@
+const fs = require('node:fs')
+const path = require('node:path')
+const assert = require('node:assert/strict')
+
+const source = fs.readFileSync(path.join(__dirname, 'index.tsx'), 'utf8')
+const apiSource = fs.readFileSync(path.join(__dirname, '../../services/api.ts'), 'utf8')
+
+assert.match(source, /type ReviewTabKey = [^\n]*'ignored'/, 'match workbench should expose an ignored review tab')
+assert.match(source, /status: activeTab === 'unidentified_brand' \? 'pending' : activeTab/, 'ignored tab should request its own backend status')
+assert.match(source, /label: '已忽略'/, 'ignored tab should have a Chinese label')
+assert.match(source, /confirmMatch\(matchId, \{ ignored: true/, 'single-row ignore should use the ignored confirmation flag')
+assert.match(source, /batchIgnoreMatches\(selectedJobId, payload\)/, 'batch ignore should use the clean job endpoint')
+assert.match(source, /批量忽略/, 'the review toolbar should expose batch ignore')
+assert.match(source, /activeTab === 'ignored' \? \(\s*<Tag color="default">已忽略/, 'ignored detail should show a status tag')
+assert.match(apiSource, /export const batchIgnoreMatches = \(clean_job_id: number, payload: BatchIgnorePayload\)/, 'API should expose batch ignore helper')
+assert.match(apiSource, /data: \{ model_id\?: number; excluded\?: boolean; ignored\?: boolean/, 'single-row API should accept ignored payloads')

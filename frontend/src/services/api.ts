@@ -189,6 +189,7 @@ export interface CleanJobItem {
   pending_count?: number | null
   disputed_count?: number | null
   confirmed_count?: number | null
+  ignored_count?: number | null
   publishable_count?: number | null
   scope_desc?: string | null
   created_at: string
@@ -839,8 +840,32 @@ export const updateMatchPrice = (match_id: number, adjusted_price: number | null
   api.patch<ReviewedMatchResultOut>(`/match/${match_id}/price`, { adjusted_price })
 export const confirmMatch = (
   match_id: number,
-  data: { model_id?: number; excluded?: boolean; disputed?: boolean; reason?: string }
+  data: { model_id?: number; excluded?: boolean; ignored?: boolean; disputed?: boolean; reason?: string }
 ) => api.put(`/match/confirm/${match_id}`, data)
+
+export type BatchIgnoreFilter = Pick<BatchConfirmFilter, 'tab' | 'keyword' | 'search_by' | 'category_name' | 'sort_by' | 'top_brands'> & {
+  price_min?: number | null
+  price_max?: number | null
+  sales_min?: number | null
+  sales_max?: number | null
+}
+
+export type BatchIgnorePayload =
+  | { mode: 'ids'; ids: number[] }
+  | { mode: 'filter'; filter: BatchIgnoreFilter }
+
+export type BatchIgnoreResult = {
+  total: number
+  ignored?: number
+  success?: number
+  failed: number
+  truncated?: boolean
+  matched_total?: number
+  failures?: BatchConfirmFailure[]
+}
+
+export const batchIgnoreMatches = (clean_job_id: number, payload: BatchIgnorePayload) =>
+  api.post<BatchIgnoreResult>(`/match/${clean_job_id}/batch-ignore`, payload)
 
 export type BatchConfirmFilter = {
   tab: 'text_only' | 'pending'

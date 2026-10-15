@@ -21,6 +21,7 @@ from app.models.schemas import (
     DispatchItem,
     PaginatedResponse,
     MatchTransferLog,
+    PublishJob,
     User,
 )
 from app.services.clean_task_snapshot import ACTIVE_TASK_STATUSES, touch_clean_job
@@ -212,7 +213,7 @@ def confirm_single_review(db: Session, mr: MatchResult, model: ModelRecord) -> N
     db.query(MatchResultAttr).filter(MatchResultAttr.match_result_id == mr.id).delete()
 
 
-MANUAL_TERMINAL_STATUSES = {"confirmed", "excluded", "disputed"}
+MANUAL_TERMINAL_STATUSES = {"confirmed", "excluded", "ignored", "disputed"}
 
 
 def _snapshot_prev_state(mr: MatchResult) -> None:
@@ -411,7 +412,7 @@ def get_match_summary(
         return MatchSummary(
             clean_job_id=clean_job_id,
             total=0, url_matched=0, matched=0, text_only=0,
-            pending=0, confirmed=0, excluded=0, disputed=0, disabled=0,
+            pending=0, confirmed=0, excluded=0, ignored=0, disputed=0, disabled=0,
         )
 
     total = len(rows)
@@ -467,6 +468,7 @@ def get_match_summary(
         pending=status_count.get("pending", 0),
         confirmed=status_count.get("confirmed", 0),
         excluded=status_count.get("excluded", 0),
+        ignored=status_count.get("ignored", 0),
         disputed=status_count.get("disputed", 0),
         disabled=disabled_count,
         unidentified_brand=unidentified_brand_count,
@@ -622,7 +624,7 @@ def list_pending(
     current_user: User = Depends(get_current_user),
 ):
     """分页查询复核队列条目。"""
-    allowed_statuses = {"pending", "text_only", "disputed", "matched", "url_matched", "confirmed", "excluded", "invalid_model"}
+    allowed_statuses = {"pending", "text_only", "disputed", "matched", "url_matched", "confirmed", "excluded", "ignored", "invalid_model"}
     if status not in allowed_statuses:
         status = "pending"
 
@@ -1146,9 +1148,10 @@ def confirm_match(
     current_user: User = Depends(get_current_user),
 ):
     """
-    人工确认或排除匹配结果。
+    人工确认、排除或忽略匹配结果。
     payload: { "model_id": 123 }  → 指定型号，status=confirmed
     payload: { "excluded": true } → 标记排除，status=excluded
+    payload: { "ignored": true } → 仅忽略本任务，status=ignored；不会写入排除沉淀库
     """
     mr = _get_visible_match_result_or_404(db, current_user, match_id)
     raw = db.query(RawDataRecord).filter(RawDataRecord.id == mr.raw_data_id).first()
@@ -1156,7 +1159,19 @@ def confirm_match(
 
     reason = (payload.get("reason") or "").strip() or None
 
-    if payload.get("excluded"):
+    if payload.get("ignored"):
+        _ensure_task_can_ignore(db, mr.clean_job_id)
+        if mr.match_status in {"excluded", "ignored"}:
+            raise HTTPException(status_code=400, detail="当前状态不能标记为已忽略")
+        _snapshot_prev_state(mr)
+        mr.match_status = "ignored"
+        mr.model_id = None
+        mr.matched_by = "manual"
+        mr.match_source = "manual"
+        mr.dispute_reason = None
+        mr.review_note = reason
+        mr.reviewed_at = datetime.utcnow()
+    elif payload.get("excluded"):
         _snapshot_prev_state(mr)
         mr.match_status = "excluded"
         mr.model_id = None
@@ -1183,7 +1198,7 @@ def confirm_match(
         confirm_single_review(db, mr, m)
         remove_exclusion_for_raw(db, raw, category_code)
     else:
-        raise HTTPException(status_code=400, detail="需提供 model_id、excluded=true 或 disputed=true")
+        raise HTTPException(status_code=400, detail="需提供 model_id、excluded=true、ignored=true 或 disputed=true")
 
     db.commit()
 
@@ -1235,6 +1250,30 @@ _BATCH_ALLOWED_STATUSES = {"text_only", "pending"}
 _BATCH_IDS_LIMIT = 200
 _BATCH_FILTER_LIMIT = 500
 _INVALID_MODEL_CODES = {None, "", "-", "--"}
+
+# Ignoring is deliberately separate from ``excluded``.  It is a one-task
+# action and therefore never writes item_exclusions or changes another task.
+_BATCH_IGNORE_ALLOWED_STATUSES = {
+    "pending", "text_only", "disputed", "matched", "url_matched", "confirmed",
+}
+_BATCH_IGNORE_MAX_IDS = 500
+
+
+def _ensure_task_can_ignore(db: Session, clean_job_id: int) -> None:
+    """Avoid leaving already-published analytics rows stale after an ignore."""
+    published = (
+        db.query(PublishJob.id)
+        .filter(
+            PublishJob.clean_job_id == clean_job_id,
+            PublishJob.status == "done",
+        )
+        .first()
+    )
+    if published:
+        raise HTTPException(
+            status_code=409,
+            detail="该任务已有发布结果，不能直接忽略；请先重新发布或撤销发布后再处理",
+        )
 
 
 def _pick_top_candidate(db: Session, mr: MatchResult) -> Optional[ModelRecord]:
@@ -1511,6 +1550,182 @@ def batch_confirm_preview(
             for (bc, mc, s), c in top
         ],
     }
+
+
+def _batch_ignore_filter_query(db: Session, clean_job_id: int, filter_payload: dict):
+    """Build a lightweight filtered query for batch task-local ignores.
+
+    The review UI normally sends explicit ids.  Filter mode is kept for
+    select-all semantics and accepts the same common search fields as the
+    review list.  Existing terminal ``excluded``/``ignored`` rows are never
+    selected.
+    """
+    requested = filter_payload.get("status") or filter_payload.get("tab")
+    if requested in (None, "", "all"):
+        statuses = _BATCH_IGNORE_ALLOWED_STATUSES
+    elif requested == "matched":
+        statuses = {"matched", "url_matched"}
+    elif requested in _BATCH_IGNORE_ALLOWED_STATUSES:
+        statuses = {requested}
+    else:
+        raise HTTPException(status_code=400, detail="不支持批量忽略的状态")
+
+    clean_job = db.query(CleanJobRecord).filter(CleanJobRecord.id == clean_job_id).first()
+    dispatch_batch_id = clean_job.dispatch_batch_id if clean_job else None
+    if dispatch_batch_id is not None:
+        di_join_cond = (
+            (DispatchItem.raw_data_id == MatchResult.raw_data_id)
+            & (DispatchItem.batch_id == dispatch_batch_id)
+        )
+    else:
+        di_join_cond = (DispatchItem.raw_data_id == None)  # noqa: E711
+    q = (
+        db.query(MatchResult)
+        .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
+        .outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
+        .outerjoin(DispatchItem, di_join_cond)
+        .outerjoin(Category, DispatchItem.category_code == Category.code)
+        .filter(
+            MatchResult.clean_job_id == clean_job_id,
+            MatchResult.match_status.in_(list(statuses)),
+        )
+    )
+    keyword = (filter_payload.get("keyword") or "").strip()
+    search_by = filter_payload.get("search_by") or "item_name"
+    if keyword:
+        pattern = f"%{keyword}%"
+        if search_by == "brand_raw":
+            q = q.filter(RawDataRecord.brand_raw.ilike(pattern))
+        elif search_by == "shop_name":
+            q = q.filter(RawDataRecord.shop_name.ilike(pattern))
+        elif search_by == "item_id":
+            q = q.filter(RawDataRecord.item_id.ilike(pattern))
+        elif search_by == "brand_code":
+            q = q.outerjoin(BrandRecord, BrandRecord.brand_code == ModelRecord.brand_code).filter(
+                ModelRecord.brand_code.ilike(pattern) | BrandRecord.brand_name.ilike(pattern)
+            )
+        elif search_by == "model_code":
+            q = q.filter(ModelRecord.model_code.ilike(pattern))
+        else:
+            q = q.filter(RawDataRecord.item_name.ilike(pattern))
+    if filter_payload.get("category_name"):
+        category_name = filter_payload["category_name"]
+        if dispatch_batch_id is None:
+            # Snapshot tasks without a dispatch batch carry the category on
+            # clean_jobs rather than dispatch_items.
+            job_category = (clean_job.category_code or clean_job.dispatch_category_code) if clean_job else None
+            if category_name != job_category:
+                q = q.filter(MatchResult.id == -1)
+        else:
+            q = q.filter(Category.code == category_name)
+    if filter_payload.get("top_brands"):
+        try:
+            top_brands = int(filter_payload["top_brands"])
+        except (TypeError, ValueError):
+            top_brands = None
+        if top_brands and top_brands > 0:
+            q = _apply_top_brands_filter(db, q, clean_job_id, top_brands)
+    if filter_payload.get("price_min") is not None:
+        q = q.filter(RawDataRecord.price >= filter_payload["price_min"])
+    if filter_payload.get("price_max") is not None:
+        q = q.filter(RawDataRecord.price <= filter_payload["price_max"])
+    if filter_payload.get("sales_min") is not None:
+        q = q.filter(RawDataRecord.sales_qty >= filter_payload["sales_min"])
+    if filter_payload.get("sales_max") is not None:
+        q = q.filter(RawDataRecord.sales_qty <= filter_payload["sales_max"])
+    sort_by = filter_payload.get("sort_by") or "default"
+    if sort_by == "sales_qty_desc":
+        q = q.order_by(func.isnull(RawDataRecord.sales_qty).asc(), RawDataRecord.sales_qty.desc())
+    elif sort_by == "sales_qty_asc":
+        q = q.order_by(func.isnull(RawDataRecord.sales_qty).asc(), RawDataRecord.sales_qty.asc())
+    elif sort_by == "price_desc":
+        q = q.order_by(func.isnull(RawDataRecord.price).asc(), RawDataRecord.price.desc())
+    elif sort_by == "price_asc":
+        q = q.order_by(func.isnull(RawDataRecord.price).asc(), RawDataRecord.price.asc())
+    else:
+        q = q.order_by(MatchResult.id.asc())
+    return q.distinct()
+
+
+def _run_batch_ignore(db: Session, targets: list[MatchResult], reason: str | None) -> dict:
+    success = 0
+    failures: list[dict] = []
+    now = datetime.utcnow()
+    for mr in targets:
+        rd = db.query(RawDataRecord).filter(RawDataRecord.id == mr.raw_data_id).first()
+        item_name = rd.item_name if rd else None
+        if mr.match_status not in _BATCH_IGNORE_ALLOWED_STATUSES:
+            failures.append({"id": mr.id, "item_name": item_name, "reason": "状态已变更"})
+            continue
+        _snapshot_prev_state(mr)
+        mr.match_status = "ignored"
+        mr.model_id = None
+        mr.matched_by = "manual"
+        mr.match_source = "manual"
+        mr.dispute_reason = None
+        mr.review_note = reason
+        mr.reviewed_at = now
+        success += 1
+    db.commit()
+    return {"success": success, "failed": len(failures), "failures": failures}
+
+
+@router.post("/{clean_job_id}/batch-ignore")
+def batch_ignore(
+    clean_job_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """将当前任务中的一批数据标为「已忽略」。
+
+    ``ignored`` 只属于当前 clean_job，不写入人工排除沉淀库，也不会
+    被发布或导出。支持显式 ``ids`` 和筛选器 ``filter`` 两种模式。
+    """
+    payload = payload or {}
+    _get_visible_match_clean_job_or_404(db, current_user, clean_job_id)
+    mode = payload.get("mode")
+    reason = (payload.get("reason") or "").strip() or None
+    _ensure_task_can_ignore(db, clean_job_id)
+    if mode == "ids":
+        ids = payload.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            raise HTTPException(status_code=400, detail="ids 不能为空")
+        if len(ids) > _BATCH_IGNORE_MAX_IDS:
+            raise HTTPException(status_code=400, detail=f"单次最多忽略 {_BATCH_IGNORE_MAX_IDS} 条")
+        rows = db.query(MatchResult).filter(
+            MatchResult.clean_job_id == clean_job_id,
+            MatchResult.id.in_(ids),
+        ).all()
+        by_id = {mr.id: mr for mr in rows}
+        targets = [by_id[i] for i in ids if i in by_id]
+        result = _run_batch_ignore(db, targets, reason)
+        for missing in [i for i in ids if i not in by_id]:
+            result["failures"].append({"id": missing, "item_name": None, "reason": "状态已变更"})
+            result["failed"] += 1
+        touch_clean_job(db, clean_job_id)
+        db.commit()
+        return {
+            "total": len(ids), "matched_total": len(ids), "truncated": False,
+            "ignored": result["success"], **result,
+        }
+    if mode == "filter":
+        f = payload.get("filter") or {}
+        q = _batch_ignore_filter_query(db, clean_job_id, f)
+        matched_total = q.count()
+        truncated = matched_total > _BATCH_FILTER_LIMIT
+        targets = q.limit(_BATCH_FILTER_LIMIT).all()
+        result = _run_batch_ignore(db, targets, reason)
+        touch_clean_job(db, clean_job_id)
+        db.commit()
+        return {
+            "total": len(targets),
+            "matched_total": matched_total,
+            "truncated": truncated,
+            "ignored": result["success"],
+            **result,
+        }
+    raise HTTPException(status_code=400, detail="mode 必须为 ids 或 filter")
 
 
 # ── 单条撤销：回到操作前的原状态 ─────────────────────────────────────────
@@ -2113,6 +2328,8 @@ def transfer_match(match_id: int, payload: TransferPayload, db: Session = Depend
     )
     if not mr:
         raise HTTPException(status_code=404, detail="匹配记录不存在")
+    if mr.match_status == "ignored":
+        raise HTTPException(status_code=400, detail="已忽略的数据不能直接转移，请先恢复处理")
 
     target_id = payload.target_clean_job_id
     if target_id == mr.clean_job_id:

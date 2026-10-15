@@ -54,8 +54,8 @@ from app.utils.time_utils import format_beijing_datetime
 
 router = APIRouter(prefix="/api/clean", tags=["clean"])
 
-# 「只清洗品牌」默认范围排除的匹配状态：已匹配/已人工确认/已排除
-BRAND_CLEAN_RESOLVED_STATUSES = ("matched", "url_matched", "confirmed", "excluded")
+# 「只清洗品牌」默认范围排除的匹配状态：已匹配/已人工确认/已排除/已忽略
+BRAND_CLEAN_RESOLVED_STATUSES = ("matched", "url_matched", "confirmed", "excluded", "ignored")
 # 可人工补充/覆盖品牌的匹配状态
 BRAND_CLEAN_ACTIONABLE_STATUSES = ("pending", "text_only", "disputed")
 
@@ -204,6 +204,7 @@ def _clean_job_to_dict(
     pending_count = counts.get("pending", 0) + counts.get("text_only", 0)
     disputed_count = counts.get("disputed", 0)
     confirmed_count = counts.get("confirmed", 0)
+    ignored_count = counts.get("ignored", 0)
     publishable_count = (
         counts.get("url_matched", 0)
         + counts.get("matched", 0)
@@ -227,6 +228,7 @@ def _clean_job_to_dict(
         "pending_count": pending_count,
         "disputed_count": disputed_count,
         "confirmed_count": confirmed_count,
+        "ignored_count": ignored_count,
         "publishable_count": publishable_count,
         "created_at": format_beijing_datetime(job.created_at),
         "updated_at": format_beijing_datetime(job.updated_at),
@@ -321,7 +323,7 @@ def _manual_review_snapshot(db: Session, clean_job_id: int) -> dict[int, dict]:
             MatchResult.clean_job_id == clean_job_id,
             MatchResult.raw_data_id.isnot(None),
             MatchResult.matched_by == "manual",
-            MatchResult.match_status.in_(["confirmed", "excluded"]),
+            MatchResult.match_status.in_(["confirmed", "excluded", "ignored"]),
         )
         .all()
     )
@@ -334,6 +336,13 @@ def _manual_review_snapshot(db: Session, clean_job_id: int) -> dict[int, dict]:
             "model_id": row.model_id,
             "reviewed_at": row.reviewed_at,
             "review_note": row.review_note,
+            "prev_match_status": row.prev_match_status,
+            "prev_model_id": row.prev_model_id,
+            "prev_matched_by": row.prev_matched_by,
+            "prev_match_source": row.prev_match_source,
+            "prev_dispute_reason": row.prev_dispute_reason,
+            "prev_review_note": row.prev_review_note,
+            "prev_reviewed_at": row.prev_reviewed_at,
         }
     return snapshot
 
@@ -395,12 +404,25 @@ def _restore_manual_reviews(db: Session, clean_job_id: int, snapshot: dict[int, 
             mr.model_id = None
             mr.match_status = "excluded"
             mr.dispute_reason = None
+        elif saved["match_status"] == "ignored":
+            # Task-local ignore: keep it ignored for this task rerun without
+            # touching the cross-task item_exclusions store.
+            mr.model_id = None
+            mr.match_status = "ignored"
+            mr.dispute_reason = None
         else:
             continue
         mr.matched_by = "manual"
         mr.match_source = "manual"
         mr.review_note = saved.get("review_note")
         mr.reviewed_at = saved.get("reviewed_at") or now
+        mr.prev_match_status = saved.get("prev_match_status")
+        mr.prev_model_id = saved.get("prev_model_id")
+        mr.prev_matched_by = saved.get("prev_matched_by")
+        mr.prev_match_source = saved.get("prev_match_source")
+        mr.prev_dispute_reason = saved.get("prev_dispute_reason")
+        mr.prev_review_note = saved.get("prev_review_note")
+        mr.prev_reviewed_at = saved.get("prev_reviewed_at")
         restored_review_count += 1
     return restored_confirmed_count, restored_review_count, restored_confirmed_ids
 

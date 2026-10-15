@@ -15,10 +15,10 @@ import {
   triggerExport, getExportJob, getDownloadUrl,
   getCleanMonthlyPool, rerunCleanTaskWithCurrentRules,
   listFilteredItems, recoverFilteredItem,
-  batchConfirmMatch, previewBatchConfirmMatch, reassignInvalidModel,
+  batchConfirmMatch, previewBatchConfirmMatch, reassignInvalidModel, batchIgnoreMatches,
   searchCleanTasks, transferMatchItem, getTransferNotice, fetchAllCategories,
 } from '../../services/api'
-import type { CleanJobItem, MatchCandidateOut, MatchReviewDetail, FilteredItemOut, ModelItem, BatchConfirmFilter, BatchConfirmResult, CleanTaskSearchItem, UserProfile } from '../../services/api'
+import type { CleanJobItem, MatchCandidateOut, MatchReviewDetail, FilteredItemOut, ModelItem, BatchConfirmFilter, BatchConfirmResult, BatchIgnoreFilter, CleanTaskSearchItem, UserProfile } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 import ProgressModal from '../../components/ProgressModal'
 import AttributeInsightCard from './components/AttributeInsightCard'
@@ -87,6 +87,7 @@ type MatchSummary = {
   disabled: number
   unidentified_brand?: number
   invalid_model?: number
+  ignored?: number
 }
 
 type PendingItem = {
@@ -153,7 +154,7 @@ type MatchProgress = {
   error?: string
 }
 
-type ReviewTabKey = 'text_only' | 'pending' | 'unidentified_brand' | 'disputed' | 'matched' | 'confirmed' | 'invalid_model' | 'excluded' | 'filtered'
+type ReviewTabKey = 'text_only' | 'pending' | 'unidentified_brand' | 'disputed' | 'matched' | 'confirmed' | 'invalid_model' | 'excluded' | 'ignored' | 'filtered'
 
 type SearchBy = 'item_name' | 'brand_raw' | 'brand_code' | 'shop_name' | 'model_code'
 
@@ -234,9 +235,12 @@ export default function MatchPage() {
   const [activeTab, setActiveTab] = useState<ReviewTabKey>('text_only')
   const [selectedBatchIds, setSelectedBatchIds] = useState<Set<number>>(new Set())
   const [batchConfirming, setBatchConfirming] = useState(false)
+  const [batchIgnoring, setBatchIgnoring] = useState(false)
+  const [batchConfirmIds, setBatchConfirmIds] = useState<number[]>([])
   const [batchAllPages, setBatchAllPages] = useState(false)
   const resetBatchSelection = () => {
     setSelectedBatchIds(new Set())
+    setBatchConfirmIds([])
     setBatchAllPages(false)
   }
   const [selectedReviewId, setSelectedReviewId] = useState<number | null>(null)
@@ -538,10 +542,8 @@ export default function MatchPage() {
     if (!batchAllPages) return
     if (activeTab !== 'text_only' && activeTab !== 'pending') return
     const items: PendingItem[] = pendingData?.items ?? []
-    const validIds = items
-      .filter(item => isCandidateValidForBatch(item).ok)
-      .map(item => item.id)
-    setSelectedBatchIds(new Set(validIds))
+    // 忽略不要求候选型号，跨页选择需要覆盖当前页所有记录（包括未识别品牌）。
+    setSelectedBatchIds(new Set(items.map(item => item.id)))
   }, [batchAllPages, activeTab, pendingData])
 
   useEffect(() => {
@@ -555,6 +557,7 @@ export default function MatchPage() {
       confirmed: summary.confirmed ?? 0,
       invalid_model: summary.invalid_model ?? 0,
       excluded: summary.excluded ?? 0,
+      ignored: summary.ignored ?? 0,
       filtered: filteredData?.total ?? 0,
     }
     if (counts[activeTab] === 0) {
@@ -889,6 +892,7 @@ export default function MatchPage() {
     let truncatedNote = ''
 
     if (useFilterMode) {
+      setBatchConfirmIds([])
       let preview
       try {
         const resp = await previewBatchConfirmMatch(selectedJobId, filter)
@@ -911,11 +915,19 @@ export default function MatchPage() {
       )
     } else {
       if (selectedBatchIds.size === 0) return
-      processCount = selectedBatchIds.size
-      // 本地聚合展示
       const items = pendingData?.items ?? []
+      const confirmableIds = items
+        .filter((i: PendingItem) => selectedBatchIds.has(i.id) && isCandidateValidForBatch(i).ok)
+        .map((i: PendingItem) => i.id)
+      if (confirmableIds.length === 0) {
+        message.info('当前选择中没有可确认的有效候选；仍可点击批量忽略')
+        return
+      }
+      setBatchConfirmIds(confirmableIds)
+      processCount = confirmableIds.length
+      // 本地聚合展示
       const dist = new Map<string, number>()
-      items.filter((i: PendingItem) => selectedBatchIds.has(i.id)).forEach((i: PendingItem) => {
+      items.filter((i: PendingItem) => confirmableIds.includes(i.id)).forEach((i: PendingItem) => {
         const top = getTopCandidate(i)
         if (!top) return
         const k = `[${top.brand_code}]${top.series ? ` [${top.series}]` : ''} ${top.model_code}`
@@ -944,7 +956,7 @@ export default function MatchPage() {
     try {
       const { data } = batchConfirmUseFilterMode
         ? await batchConfirmMatch(selectedJobId, { mode: 'filter', filter: batchConfirmFilter, model_id: batchModelId })
-        : await batchConfirmMatch(selectedJobId, { mode: 'ids', ids: Array.from(selectedBatchIds), model_id: batchModelId })
+        : await batchConfirmMatch(selectedJobId, { mode: 'ids', ids: batchConfirmIds, model_id: batchModelId })
       showBatchResult(data)
       setBatchConfirmModalOpen(false)
       refreshPending()
@@ -954,6 +966,60 @@ export default function MatchPage() {
     } finally {
       setBatchConfirming(false)
     }
+  }
+
+  const handleBatchIgnore = () => {
+    if (!selectedJobId) return
+    const useFilterMode = batchAllPages
+    const filter: BatchIgnoreFilter = {
+      tab: activeTab as BatchIgnoreFilter['tab'],
+      keyword: keyword || null,
+      search_by: searchBy,
+      category_name: categoryName ?? null,
+      sort_by: sortBy as BatchIgnoreFilter['sort_by'],
+      top_brands: topBrandsOnly && isPowerBankJob ? TOP_BRANDS_LIMIT : null,
+      price_min: priceMin,
+      price_max: priceMax,
+      sales_min: salesMin,
+      sales_max: salesMax,
+    }
+    const count = useFilterMode ? (pendingData?.total ?? 0) : selectedBatchIds.size
+    if (count === 0) {
+      message.info('请先选择要忽略的数据')
+      return
+    }
+    Modal.confirm({
+      title: `确认忽略 ${count} 条数据？`,
+      content: '忽略后仅在本次任务中停止处理，不会导出，也不会参与其他匹配；后续仍可通过“已忽略”分类查看。',
+      okText: '确认忽略',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        setBatchIgnoring(true)
+        try {
+          const payload = useFilterMode
+            ? { mode: 'filter' as const, filter }
+            : { mode: 'ids' as const, ids: Array.from(selectedBatchIds) }
+          const { data } = await batchIgnoreMatches(selectedJobId, payload)
+          const ignoredCount = data.ignored ?? data.success ?? 0
+          const failedCount = data.failed ?? 0
+          if (data.truncated) {
+            message.warning(`本次已忽略 ${ignoredCount} 条，超出单次上限的记录请再次执行批量忽略`)
+          } else if (failedCount > 0) {
+            message.warning(`已忽略 ${ignoredCount} 条，${failedCount} 条处理失败`)
+          } else {
+            message.success(`已忽略 ${ignoredCount} 条`)
+          }
+          resetBatchSelection()
+          refreshPending()
+          fetchSummary()
+        } catch (err: any) {
+          message.error(err?.response?.data?.detail || '批量忽略失败')
+        } finally {
+          setBatchIgnoring(false)
+        }
+      },
+    })
   }
 
   const showBatchResult = (data: BatchConfirmResult) => {
@@ -1023,6 +1089,17 @@ export default function MatchPage() {
     try {
       await confirmMatch(matchId, { excluded: true, reason: reason || undefined })
       message.success('已排除')
+      refreshReviewWorkbench(matchId)
+    } finally {
+      setConfirmingIds(prev => { const s = new Set(prev); s.delete(matchId); return s })
+    }
+  }
+
+  const handleIgnore = async (matchId: number) => {
+    setConfirmingIds(prev => new Set(prev).add(matchId))
+    try {
+      await confirmMatch(matchId, { ignored: true, reason: reviewReason.trim() || undefined })
+      message.success('已忽略')
       refreshReviewWorkbench(matchId)
     } finally {
       setConfirmingIds(prev => { const s = new Set(prev); s.delete(matchId); return s })
@@ -1201,6 +1278,7 @@ export default function MatchPage() {
     { key: 'confirmed', label: '已人工确认', count: summaryView?.confirmed ?? 0, color: '#1677ff' },
     { key: 'excluded', label: '已排除', count: summaryView?.excluded ?? 0, color: '#8c8c8c' },
     { key: 'filtered', label: '干扰项过滤', count: filteredData?.total ?? 0, color: '#fa8c16' },
+    { key: 'ignored', label: '已忽略', count: summaryView?.ignored ?? 0, color: '#595959' },
   ]
 
   const currentQueueTitle = queueTabs.find(tab => tab.key === activeTab)?.label ?? '复核'
@@ -1405,6 +1483,7 @@ export default function MatchPage() {
             <Col span={3}><Statistic title="待确认" value={summaryView?.pending ?? 0} valueStyle={{ color: '#d46b08' }} /></Col>
             <Col span={3}><Statistic title="已人工确认" value={summaryView?.confirmed ?? 0} valueStyle={{ color: '#1677ff' }} /></Col>
             <Col span={2}><Statistic title="已排除" value={summaryView?.excluded ?? 0} valueStyle={{ color: '#cf1322' }} /></Col>
+            <Col span={2}><Statistic title="已忽略" value={summaryView?.ignored ?? 0} valueStyle={{ color: '#595959' }} /></Col>
             <Col span={2}><Statistic title="已禁用" value={summaryView?.disabled ?? 0} valueStyle={{ color: '#faad14' }} /></Col>
             <Col span={3}>
               <Statistic
@@ -1433,7 +1512,7 @@ export default function MatchPage() {
             <Space>
               <span>任务复核工作台</span>
               <span style={{ fontSize: 12, color: '#8c8c8c' }}>
-                待处理 {(summaryView?.text_only ?? 0) + (summaryView?.pending ?? 0) + (summaryView?.disputed ?? 0)} 条 · 已匹配/确认 {readyCount} 条 · 已排除 {summaryView?.excluded ?? 0} 条 · 干扰过滤 {filteredData?.total ?? 0} 条
+                待处理 {(summaryView?.text_only ?? 0) + (summaryView?.pending ?? 0) + (summaryView?.disputed ?? 0)} 条 · 已匹配/确认 {readyCount} 条 · 已排除 {summaryView?.excluded ?? 0} 条 · 已忽略 {summaryView?.ignored ?? 0} 条 · 干扰过滤 {filteredData?.total ?? 0} 条
               </span>
             </Space>
           }
@@ -1582,14 +1661,14 @@ export default function MatchPage() {
           />
           {(activeTab === 'text_only' || activeTab === 'pending') && (() => {
             const items: PendingItem[] = pendingData?.items ?? []
-            const validIds = items.filter((item: PendingItem) => isCandidateValidForBatch(item).ok).map((item: PendingItem) => item.id)
-            const selectedOnPage = validIds.filter((id: number) => selectedBatchIds.has(id))
-            const allChecked = validIds.length > 0 && selectedOnPage.length === validIds.length
+            const pageIds = items.map((item: PendingItem) => item.id)
+            const selectedOnPage = pageIds.filter((id: number) => selectedBatchIds.has(id))
+            const allChecked = pageIds.length > 0 && selectedOnPage.length === pageIds.length
             const someChecked = selectedOnPage.length > 0 && !allChecked
             const toggleAll = (checked: boolean) => {
               const next = new Set(selectedBatchIds)
-              if (checked) validIds.forEach((id: number) => next.add(id))
-              else validIds.forEach((id: number) => next.delete(id))
+              if (checked) pageIds.forEach((id: number) => next.add(id))
+              else pageIds.forEach((id: number) => next.delete(id))
               setSelectedBatchIds(next)
             }
             return (
@@ -1597,15 +1676,15 @@ export default function MatchPage() {
                 <Checkbox
                   checked={allChecked}
                   indeterminate={someChecked}
-                  disabled={validIds.length === 0}
+                  disabled={pageIds.length === 0}
                   onChange={e => toggleAll(e.target.checked)}
                 >
-                  全选当前页（{validIds.length}）
+                  全选当前页（{pageIds.length}）
                 </Checkbox>
                 <span style={{ color: '#8c8c8c', fontSize: 12 }}>
                   {batchAllPages
                     ? `已选择全部搜索结果 ${pendingData?.total ?? 0} 条`
-                    : `已选当前页 ${selectedOnPage.length} / ${validIds.length} 条`}
+                    : `已选当前页 ${selectedOnPage.length} / ${pageIds.length} 条`}
                 </span>
                 <div style={{ flex: 1 }} />
                 <Button
@@ -1616,13 +1695,21 @@ export default function MatchPage() {
                 >
                   一键确认（{batchAllPages ? pendingData?.total ?? 0 : selectedBatchIds.size}）
                 </Button>
+                <Button
+                  danger
+                  loading={batchIgnoring}
+                  disabled={batchAllPages ? (pendingData?.total ?? 0) === 0 : selectedBatchIds.size === 0}
+                  onClick={handleBatchIgnore}
+                >
+                  批量忽略（{batchAllPages ? pendingData?.total ?? 0 : selectedBatchIds.size}）
+                </Button>
               </div>
             )
           })()}
           {(activeTab === 'text_only' || activeTab === 'pending') && pendingData && (() => {
             const items: PendingItem[] = pendingData.items ?? []
-            const validIdsOnPage = items.filter((item: PendingItem) => isCandidateValidForBatch(item).ok).map((item: PendingItem) => item.id)
-            const allPageChecked = validIdsOnPage.length > 0 && validIdsOnPage.every((id: number) => selectedBatchIds.has(id))
+            const pageIds = items.map((item: PendingItem) => item.id)
+            const allPageChecked = pageIds.length > 0 && pageIds.every((id: number) => selectedBatchIds.has(id))
             const hasMorePages = pendingData.total > items.length
             if (!allPageChecked || !hasMorePages) return null
             return (
@@ -1630,7 +1717,7 @@ export default function MatchPage() {
                 {batchAllPages ? (
                   <>已选中全部 <b>{pendingData.total}</b> 条搜索结果（含跨页） <Button type="link" size="small" onClick={() => setBatchAllPages(false)}>取消跨页选择</Button></>
                 ) : (
-                  <>已选中当前页 {validIdsOnPage.length} 条 · <Button type="link" size="small" onClick={() => setBatchAllPages(true)}>选择全部搜索结果的 {pendingData.total} 条</Button></>
+                  <>已选中当前页 {pageIds.length} 条 · <Button type="link" size="small" onClick={() => setBatchAllPages(true)}>选择全部搜索结果的 {pendingData.total} 条</Button></>
                 )}
               </div>
             )
@@ -1742,10 +1829,9 @@ export default function MatchPage() {
                           }}
                         >
                           {showCheckbox && (
-                            <Tooltip title={candValidation.ok ? '' : candValidation.reason}>
+                            <Tooltip title={candValidation.ok ? '' : `${candValidation.reason}；仍可勾选后批量忽略`}>
                               <Checkbox
                                 style={{ marginRight: 8, marginTop: 4, alignSelf: 'flex-start' }}
-                                disabled={!candValidation.ok}
                                 checked={checked}
                                 onClick={e => e.stopPropagation()}
                                 onChange={e => {
@@ -1766,6 +1852,7 @@ export default function MatchPage() {
                                 <Space wrap size={4}>
                                   <Tag>{item.category_name || '未归类'}</Tag>
                                   <Tag color="blue">{item.brand_raw || '无原品牌'}</Tag>
+                                  {activeTab === 'ignored' && <Tag color="default">已忽略</Tag>}
                                   {renderMatchSource(item.match_source)}
                                   {item.item_url && <Tag icon={<LinkOutlined />} color="green">有链接</Tag>}
                                 </Space>
@@ -1801,18 +1888,39 @@ export default function MatchPage() {
                   ) : null)
                   : (reviewDetail ? (
                     <Space>
-                      <Button
-                        size="small"
-                        danger
-                        icon={<StopOutlined />}
-                        loading={confirmingIds.has(reviewDetail.id)}
-                        onClick={() => handleExclude(reviewDetail.id)}
-                      >排除</Button>
+                      {activeTab === 'ignored' ? (
+                        <Tag color="default">已忽略（本次任务不处理）</Tag>
+                      ) : (
+                        <>
+                          <Button
+                            size="small"
+                            danger
+                            icon={<StopOutlined />}
+                            loading={confirmingIds.has(reviewDetail.id)}
+                            onClick={() => handleExclude(reviewDetail.id)}
+                          >排除</Button>
+                          <Popconfirm
+                            title="确认忽略此条数据？"
+                            description="仅对本次任务生效，不会导出，也不会参与其他匹配。"
+                            okText="忽略"
+                            cancelText="取消"
+                            onConfirm={() => handleIgnore(reviewDetail.id)}
+                          >
+                            <Button
+                              size="small"
+                              icon={<StopOutlined />}
+                              loading={confirmingIds.has(reviewDetail.id)}
+                            >忽略</Button>
+                          </Popconfirm>
+                        </>
+                      )}
                       {reviewDetail.revertible ? (
                         <Popconfirm
-                          title="撤销此条操作？"
-                          description="将回到操作前的状态；已同步到 URL 映射库的确认记录不会自动回滚。"
-                          okText="撤销"
+                          title={activeTab === 'ignored' ? '恢复此条数据参与处理？' : '撤销此条操作？'}
+                          description={activeTab === 'ignored'
+                            ? '恢复后会回到操作前状态，并重新进入匹配/复核流程。'
+                            : '将回到操作前的状态；已同步到 URL 映射库的确认记录不会自动回滚。'}
+                          okText={activeTab === 'ignored' ? '恢复处理' : '撤销'}
                           cancelText="取消"
                           onConfirm={() => handleRevert(reviewDetail.id)}
                         >
@@ -1820,15 +1928,19 @@ export default function MatchPage() {
                             size="small"
                             icon={<UndoOutlined />}
                             loading={confirmingIds.has(reviewDetail.id)}
-                          >撤销</Button>
+                          >{activeTab === 'ignored' ? '恢复处理' : '撤销'}</Button>
                         </Popconfirm>
                       ) : null}
-                      <Button
-                        size="small"
-                        icon={<SwapOutlined />}
-                        onClick={openTransferModal}
-                      >转移到其他任务</Button>
-                      <Button size="small" onClick={() => refreshReviewWorkbench(reviewDetail.id)}>继续下一条</Button>
+                      {activeTab !== 'ignored' && (
+                        <Button
+                          size="small"
+                          icon={<SwapOutlined />}
+                          onClick={openTransferModal}
+                        >转移到其他任务</Button>
+                      )}
+                      {activeTab !== 'ignored' && (
+                        <Button size="small" onClick={() => refreshReviewWorkbench(reviewDetail.id)}>继续下一条</Button>
+                      )}
                       {reviewDetail.item_url ? <a href={reviewDetail.item_url} target="_blank" rel="noreferrer"><LinkOutlined /> 打开商品</a> : null}
                     </Space>
                   ) : null)}
@@ -1903,6 +2015,11 @@ export default function MatchPage() {
                     <Descriptions size="small" column={2} bordered>
                       <Descriptions.Item label="商品名称" span={2}>{reviewDetail.item_name || '-'}</Descriptions.Item>
                       <Descriptions.Item label="原品牌">{reviewDetail.brand_raw || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="处理状态">
+                        <Tag color={reviewDetail.match_status === 'ignored' ? 'default' : 'blue'}>
+                          {reviewDetail.match_status === 'ignored' ? '已忽略' : reviewDetail.match_status || '待处理'}
+                        </Tag>
+                      </Descriptions.Item>
                       <Descriptions.Item label="店铺">{reviewDetail.shop_name || '-'}</Descriptions.Item>
                       <Descriptions.Item label="入库品牌">{reviewDetail.manual_brand_code || reviewDetail.brand_code || reviewDetail.brand_std || reviewDetail.brand_raw || '-'}</Descriptions.Item>
                       <Descriptions.Item label="当前型号">

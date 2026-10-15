@@ -2,6 +2,7 @@
 import pytest
 from app.models.schemas import (
     CorrectionRule, CleanedDataRecord, UploadFileRecord, CleanJobRecord, RawDataRecord,
+    MatchResult,
 )
 from app.services.correction_engine import apply_correction_rules
 
@@ -93,3 +94,24 @@ def test_negative_result_clamped_to_zero(db):
     apply_correction_rules(db, job_id)
     db.refresh(cd)
     assert cd.corrected_sales_qty == 0
+
+
+def test_ignored_row_is_not_changed_by_correction_rules(db):
+    """Task-local ignored rows stay untouched by downstream correction rules."""
+    job_id, cd = _setup(db)
+    db.add(MatchResult(
+        clean_job_id=job_id,
+        raw_data_id=cd.raw_data_id,
+        match_status="ignored",
+        matched_by="manual",
+    ))
+    db.add(CorrectionRule(
+        name="全局倍率", target="sales_amount", rule_type="multiply",
+        value=0.5, priority=1, is_active=1,
+    ))
+    db.flush()
+
+    apply_correction_rules(db, job_id)
+    db.refresh(cd)
+
+    assert float(cd.corrected_sales_amount) == 10000.0

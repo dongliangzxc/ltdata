@@ -42,9 +42,19 @@ def apply_correction_rules(db: Session, clean_job_id: int) -> dict:
         .filter(
             MatchResult.clean_job_id == clean_job_id,
             MatchResult.raw_data_id.in_(raw_ids),
+            MatchResult.match_status != "ignored",
         )
         .all()
     )
+    ignored_raw_ids = {
+        raw_id for (raw_id,) in db.query(MatchResult.raw_data_id)
+        .filter(
+            MatchResult.clean_job_id == clean_job_id,
+            MatchResult.raw_data_id.in_(raw_ids),
+            MatchResult.match_status == "ignored",
+        )
+        .all()
+    }
     # raw_data_id → {brand_code, model_id, category_code}
     match_index: dict[int, dict] = {}
     for mr, model in match_rows:
@@ -87,6 +97,9 @@ def apply_correction_rules(db: Session, clean_job_id: int) -> dict:
 
     updated = 0
     for cd in cleaned_rows:
+        # Task-local ignored rows must not be changed by correction rules.
+        if cd.raw_data_id in ignored_raw_ids:
+            continue
         qty = float(cd.corrected_sales_qty or 0)
         amt = float(cd.corrected_sales_amount or 0)
         changed = False

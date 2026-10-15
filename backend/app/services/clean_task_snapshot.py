@@ -428,7 +428,10 @@ def create_category_task_snapshot(
 
 
 APPENDABLE_TASK_STATUSES = {"reviewing", "done", "published"}
-REVIEWED_MATCH_STATUSES = {"confirmed", "excluded", "disputed"}
+# Ignoring is a task-local manual decision and therefore counts as reviewed
+# when deciding whether a monthly task has downstream state.  It is kept out
+# of the exclusion-store reuse path; only the status bookkeeping is shared.
+REVIEWED_MATCH_STATUSES = {"confirmed", "excluded", "ignored", "disputed"}
 
 
 def _default_monthly_task_name(db: Session, category_code: str, platform: str, month: int) -> str:

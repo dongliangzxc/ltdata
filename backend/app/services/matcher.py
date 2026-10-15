@@ -386,6 +386,39 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
     progress_cb(processed: int, total: int, matched: int) — 每批次调用一次
     """
     # ── 删除旧结果（支持重跑）────────────────────────────────────
+    # ``ignored`` is a task-local manual decision.  Matching is deliberately
+    # rebuildable, so retain the decision by raw_data_id before deleting the
+    # old rows and restore it below.  It is not loaded from item_exclusions:
+    # that table represents the separate cross-task ``excluded`` behaviour.
+    ignored_snapshot = {
+        raw_data_id: (
+            review_note, reviewed_at,
+            prev_match_status, prev_model_id, prev_matched_by,
+            prev_match_source, prev_dispute_reason, prev_review_note, prev_reviewed_at,
+        )
+        for (
+            raw_data_id, review_note, reviewed_at,
+            prev_match_status, prev_model_id, prev_matched_by,
+            prev_match_source, prev_dispute_reason, prev_review_note, prev_reviewed_at,
+        ) in db.query(
+            MatchResult.raw_data_id,
+            MatchResult.review_note,
+            MatchResult.reviewed_at,
+            MatchResult.prev_match_status,
+            MatchResult.prev_model_id,
+            MatchResult.prev_matched_by,
+            MatchResult.prev_match_source,
+            MatchResult.prev_dispute_reason,
+            MatchResult.prev_review_note,
+            MatchResult.prev_reviewed_at,
+        )
+        .filter(
+            MatchResult.clean_job_id == clean_job_id,
+            MatchResult.match_status == "ignored",
+        )
+        .all()
+    }
+
     old_mr_ids = [
         r.id for r in db.query(MatchResult.id)
         .filter(MatchResult.clean_job_id == clean_job_id)
@@ -422,12 +455,52 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
 
     results: list[MatchResult] = []
     matched_count = 0
+    ignored_count = 0
     BATCH = 500
     total = len(cleaned_rows)
     # raw_data_id → list of (model, score, source) for S1-S4 hits
     raw_data_candidates: dict[int, list[tuple]] = {}
 
     for i, row in enumerate(cleaned_rows):
+        # A task-local ignored row must not enter any matching stage, even on
+        # a rerun.  Restore only the minimal manual metadata needed by the
+        # ignored tab; no model, attributes, URL mapping, or exclusion-store
+        # entry is carried over.
+        if row.raw_data_id in ignored_snapshot:
+            (
+                review_note, reviewed_at,
+                prev_match_status, prev_model_id, prev_matched_by,
+                prev_match_source, prev_dispute_reason, prev_review_note, prev_reviewed_at,
+            ) = ignored_snapshot[row.raw_data_id]
+            results.append(MatchResult(
+                clean_job_id=clean_job_id,
+                raw_data_id=row.raw_data_id,
+                model_id=None,
+                match_status="ignored",
+                matched_by="manual",
+                match_source="manual",
+                review_note=review_note,
+                reviewed_at=reviewed_at,
+                prev_match_status=prev_match_status,
+                prev_model_id=prev_model_id,
+                prev_matched_by=prev_matched_by,
+                prev_match_source=prev_match_source,
+                prev_dispute_reason=prev_dispute_reason,
+                prev_review_note=prev_review_note,
+                prev_reviewed_at=prev_reviewed_at,
+            ))
+            ignored_count += 1
+            if len(results) >= BATCH:
+                db.bulk_save_objects(results)
+                if commit:
+                    db.commit()
+                else:
+                    db.flush()
+                if progress_cb:
+                    progress_cb(i + 1, total, matched_count)
+                results = []
+            continue
+
         item_upper = _norm(row.item_name)
 
         # ── S0: URL精确匹配 ────────────────────────────────────
@@ -648,7 +721,12 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
         else:
             audit_price(db, matched_result_ids, commit=commit)
 
-    return {"total": total, "matched": matched_count, "pending": total - matched_count}
+    return {
+        "total": total,
+        "matched": matched_count,
+        "ignored": ignored_count,
+        "pending": total - matched_count - ignored_count,
+    }
 
 
 def run_match_for_result(

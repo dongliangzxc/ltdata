@@ -878,7 +878,10 @@ class MatchResult(Base):
     clean_job_id = Column(Integer, nullable=False)
     raw_data_id  = Column(Integer, nullable=False)
     model_id     = Column(Integer)
-    match_status = Column(String(20), default="pending")  # matched/pending/confirmed/excluded
+    # matched/pending/confirmed/excluded/ignored.  ``ignored`` is scoped to the
+    # current clean task and must never be copied to the item_exclusions reuse
+    # store (unlike the manual ``excluded`` state).
+    match_status = Column(String(20), default="pending")
     matched_by   = Column(String(20), default="auto")     # auto/manual
     match_source   = Column(String(20), nullable=True)      # s0/s0.2/s0.5/historical/s1/s2/s3/s4/manual
     is_disabled    = Column(SmallInteger, nullable=False, default=0)
@@ -1009,6 +1012,7 @@ class MatchSummary(BaseModel):
     pending:     int
     confirmed:   int
     excluded:    int
+    ignored:     int = 0
     disputed:    int = 0
     disabled:    int = 0
     unidentified_brand: int = 0

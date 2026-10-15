@@ -292,14 +292,19 @@ def models_confirm(
 
         # 型号定位：系列品类同一「品牌+型号」下会有多条记录（仅产品系列不同），
         # 所以规格表必须带上产品系列，按「品牌码+型号码+品类+产品系列」精确匹配。
+        # 键统一按数据库排序规则折叠：规格表与型号表的全半角/括号/大小写写法常不一致
+        # （如 `Ｍ108`/`M108`、`V7（2.0版）`/`V7(2.0版）`），且型号表内同款变体已去重、
+        # 只保留先出现的那种写法，不折叠会导致规格挂不上型号。
         models_by_full_key: dict[tuple, int] = {}
         models_by_key: dict[tuple, list[int]] = {}
         for record in db.query(ModelRecord).all():
-            models_by_full_key[
-                (record.brand_code, record.model_code, record.category_code, record.series or "")
-            ] = record.id
+            key_brand = _db_collation_key(record.brand_code)
+            key_model = _db_collation_key(record.model_code)
+            key_category = _db_collation_key(record.category_code)
+            key_series = _db_collation_key(record.series or "")
+            models_by_full_key[(key_brand, key_model, key_category, key_series)] = record.id
             models_by_key.setdefault(
-                (record.brand_code, record.model_code, record.category_code), []
+                (key_brand, key_model, key_category), []
             ).append(record.id)
 
         if not df_spec.empty:
@@ -344,11 +349,21 @@ def models_confirm(
                         )
                         continue
                     model_id = models_by_full_key.get(
-                        (brand_key, model_key_code, payload.category_code, series or "")
+                        (
+                            _db_collation_key(brand_key),
+                            _db_collation_key(model_key_code),
+                            _db_collation_key(payload.category_code),
+                            _db_collation_key(series or ""),
+                        )
                     )
                     if model_id is None and not series_required:
                         candidates = models_by_key.get(
-                            (brand_key, model_key_code, payload.category_code), []
+                            (
+                                _db_collation_key(brand_key),
+                                _db_collation_key(model_key_code),
+                                _db_collation_key(payload.category_code),
+                            ),
+                            [],
                         )
                         if len(candidates) == 1:
                             model_id = candidates[0]

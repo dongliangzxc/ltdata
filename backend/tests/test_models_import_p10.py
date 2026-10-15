@@ -321,6 +321,63 @@ def test_models_confirm_imports_specs_from_template_second_sheet(client):
         db.close()
 
 
+def test_models_confirm_matches_specs_across_width_and_bracket_variants(client):
+    """规格表型号码与型号表全半角/括号写法不同（Ｍ108 vs M108、全角括号 vs 半角）时，
+    按数据库排序规则折叠后仍应挂上规格，而不是报「找不到对应型号」。"""
+    xlsx_bytes = _make_models_template_xlsx(
+        model_rows=[
+            ["铁将军", "Ｍ108", "CAT001", "铁将军", "Ｍ108", None, None, None, None, None, None],
+            ["德施曼", "V7（2.0版）", "CAT001", "德施曼", "V7（2.0版）", None, None, None, None, None, None],
+        ],
+        spec_rows=[
+            ["铁将军", "M108", "把手形态", "横把手"],
+            ["德施曼", "V7(2.0版）", "把手形态", "横把手"],
+        ],
+    )
+    headers_resp = client.post(
+        "/api/models/headers",
+        files={"file": ("models.xlsx", xlsx_bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert headers_resp.status_code == 200
+
+    confirm_resp = client.post(
+        "/api/models/confirm",
+        json={
+            "temp_file_id": headers_resp.json()["temp_file_id"],
+            "mapping": {
+                "品牌码": "brand_code",
+                "型号码": "model_code",
+                "品类": "category_code",
+                "品牌名称": "brand_name",
+                "型号名称": "model_name",
+                "上市年": "launch_year",
+                "上市月": "launch_month",
+                "上市周": "launch_week",
+                "上市价格": "launch_price",
+                "网址": "url",
+                "产品系列": "series",
+            },
+            "ignore_columns": [],
+            "category_code": "CAT001",
+        },
+    )
+
+    assert confirm_resp.status_code == 200
+    data = confirm_resp.json()
+    assert data["models_inserted"] == 2
+    assert data["specs_inserted"] == 2
+    assert data["errors"] == []
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        tie = db.query(ModelRecord).filter_by(brand_code="铁将军").one()
+        assert db.query(ModelSpec).filter_by(model_id=tie.id).count() == 1
+        de = db.query(ModelRecord).filter_by(brand_code="德施曼").one()
+        assert db.query(ModelSpec).filter_by(model_id=de.id).count() == 1
+    finally:
+        db.close()
+
+
 def test_models_confirm_replaces_existing_specs_for_uploaded_model(client):
     db = next(client.app.dependency_overrides[get_db]())
     try:

@@ -2834,3 +2834,46 @@ def test_brand_rows_allows_manual_override_for_text_only(db):
 
     resp = client.get(f"/api/clean/jobs/{job.id}/brand-rows")
     assert resp.json()["items"][0]["brand_std_manual"] is True
+
+
+def test_brand_rows_exclude_search_sort(db):
+    client = _make_client(db)
+    db.add(Category(code="soundbar", name="回音壁"))
+    upload = UploadFileRecord(filename="e.xlsx", platform="jd", row_count=2, status="done")
+    db.add(upload)
+    db.flush()
+    raw1 = RawDataRecord(file_id=upload.id, platform="jd", item_id="e1", item_name="AAA音响", brand_raw="甲", shop_name="店A", sales_qty=10)
+    raw2 = RawDataRecord(file_id=upload.id, platform="jd", item_id="e2", item_name="BBB音响", brand_raw="乙", shop_name="店B", sales_qty=5)
+    db.add_all([raw1, raw2])
+    db.flush()
+    job = CleanJobRecord(
+        file_ids=[upload.id], rules={"dedup": True}, status="reviewing",
+        row_in=2, row_out=2, category_code="soundbar",
+    )
+    db.add(job)
+    db.flush()
+    cd1 = CleanedDataRecord(raw_data_id=raw1.id, clean_job_id=job.id, item_name="AAA音响", brand_std="甲")
+    cd2 = CleanedDataRecord(raw_data_id=raw2.id, clean_job_id=job.id, item_name="BBB音响", brand_std="乙")
+    db.add_all([cd1, cd2])
+    db.flush()
+    db.add_all([
+        MatchResult(clean_job_id=job.id, raw_data_id=raw1.id, model_id=None, match_status="pending"),
+        MatchResult(clean_job_id=job.id, raw_data_id=raw2.id, model_id=None, match_status="pending"),
+    ])
+    db.commit()
+
+    resp = client.get(f"/api/clean/jobs/{job.id}/brand-rows", params={"search_by": "shop_name", "keyword": "店B"})
+    assert resp.status_code == 200
+    assert [i["raw_data_id"] for i in resp.json()["items"]] == [raw2.id]
+
+    resp = client.get(f"/api/clean/jobs/{job.id}/brand-rows", params={"sort_by": "sales_qty_desc"})
+    assert [i["raw_data_id"] for i in resp.json()["items"]] == [raw1.id, raw2.id]
+
+    resp = client.post(f"/api/clean/jobs/{job.id}/brand-rows/exclude", json={"cleaned_data_ids": [cd1.id, cd2.id]})
+    assert resp.status_code == 200
+    assert resp.json()["excluded"] == 2
+    db.expire_all()
+    assert db.query(MatchResult).filter_by(clean_job_id=job.id, raw_data_id=raw1.id).first().match_status == "excluded"
+
+    resp = client.get(f"/api/clean/jobs/{job.id}/brand-rows")
+    assert resp.json()["total"] == 0

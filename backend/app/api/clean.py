@@ -2,7 +2,7 @@ from datetime import datetime
 import re
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import String, and_, func, or_, select
+from sqlalchemy import String, and_, case, func, or_, select
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from app.core.auth_deps import get_current_user
@@ -43,8 +43,10 @@ from app.services.clean_task_snapshot import (
     create_category_task_snapshot,
     get_clean_pool_summary,
     get_monthly_clean_pool,
+    touch_clean_job,
     upsert_monthly_task_snapshot,
 )
+from app.services.exclusion_store import upsert_exclusion_for_raw
 from app.services.data_cleaner import run_clean, _load_brand_alias_map, manual_brand_std
 from app.services.matcher import run_match
 from app.services.publisher import delete_published_data
@@ -1021,10 +1023,12 @@ def list_clean_job_matched(
 class BrandCleanRow(BaseModel):
     cleaned_data_id: int
     raw_data_id: int
+    match_id: int | None = None
     platform: str | None = None
     item_name: str | None = None
     brand_raw: str | None = None
     brand_std: str | None = None
+    sales_qty: int | None = None
     model_brand_code: str | None = None
     model_brand_name: str | None = None
     has_model: bool = False
@@ -1053,11 +1057,13 @@ class BrandCleanUpdateIn(BaseModel):
 def list_clean_job_brand_rows(
     job_id: int,
     keyword: Optional[str] = Query(None),
+    search_by: str = Query("item_name", description="搜索字段：item_name/brand_raw/brand_code/shop_name/model_code"),
     group: str = Query(
         "actionable",
         description="筛选分类：actionable=待处理 / unidentified_brand=未识别品牌 / "
                     "pending=待确认 / text_only=URL映射待确认 / disputed=争议复核 / all=全部",
     ),
+    sort_by: str = Query("default", description="排序：default/item_name_asc/item_name_desc/sales_qty_desc/sales_qty_asc/price_desc/price_asc"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -1106,13 +1112,64 @@ def list_clean_job_brand_rows(
         )
         q = q.filter(group_exists)
 
+    allowed_search_fields = {"item_name", "brand_raw", "brand_code", "shop_name", "model_code"}
+    if search_by not in allowed_search_fields:
+        search_by = "item_name"
     kw = (keyword or "").strip()
     if kw:
-        q = q.filter(RawDataRecord.item_name.ilike(f"%{kw}%"))
+        pattern = f"%{kw}%"
+        if search_by == "brand_raw":
+            q = q.filter(RawDataRecord.brand_raw.ilike(pattern))
+        elif search_by == "shop_name":
+            q = q.filter(RawDataRecord.shop_name.ilike(pattern))
+        elif search_by == "model_code":
+            model_exists = (
+                db.query(MatchResult.id)
+                .outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
+                .filter(
+                    MatchResult.clean_job_id == job_id,
+                    MatchResult.raw_data_id == CleanedDataRecord.raw_data_id,
+                    ModelRecord.model_code.ilike(pattern),
+                )
+                .correlate(CleanedDataRecord)
+                .exists()
+            )
+            q = q.filter(model_exists)
+        elif search_by == "brand_code":
+            model_exists = (
+                db.query(MatchResult.id)
+                .outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
+                .outerjoin(BrandRecord, BrandRecord.brand_code == ModelRecord.brand_code)
+                .filter(
+                    MatchResult.clean_job_id == job_id,
+                    MatchResult.raw_data_id == CleanedDataRecord.raw_data_id,
+                    or_(ModelRecord.brand_code.ilike(pattern), BrandRecord.brand_name.ilike(pattern)),
+                )
+                .correlate(CleanedDataRecord)
+                .exists()
+            )
+            q = q.filter(or_(CleanedDataRecord.brand_std.ilike(pattern), model_exists))
+        else:  # item_name
+            q = q.filter(RawDataRecord.item_name.ilike(pattern))
+
+    if sort_by == "sales_qty_desc":
+        q = q.order_by(case((RawDataRecord.sales_qty.is_(None), 1), else_=0), RawDataRecord.sales_qty.desc())
+    elif sort_by == "sales_qty_asc":
+        q = q.order_by(case((RawDataRecord.sales_qty.is_(None), 1), else_=0), RawDataRecord.sales_qty.asc())
+    elif sort_by == "price_desc":
+        q = q.order_by(case((RawDataRecord.price.is_(None), 1), else_=0), RawDataRecord.price.desc())
+    elif sort_by == "price_asc":
+        q = q.order_by(case((RawDataRecord.price.is_(None), 1), else_=0), RawDataRecord.price.asc())
+    elif sort_by == "item_name_asc":
+        q = q.order_by(RawDataRecord.item_name.asc())
+    elif sort_by == "item_name_desc":
+        q = q.order_by(RawDataRecord.item_name.desc())
+    else:
+        q = q.order_by(CleanedDataRecord.id)
+
     total = q.count()
     rows = (
-        q.order_by(CleanedDataRecord.id)
-        .offset((page - 1) * page_size)
+        q.offset((page - 1) * page_size)
         .limit(page_size)
         .all()
     )
@@ -1121,9 +1178,11 @@ def list_clean_job_brand_rows(
     model_map: dict[int, tuple[str, str | None]] = {}
     identified_map: dict[int, int] = {}
     editable_raw_ids: set[int] = set()
+    match_id_map: dict[int, int] = {}
     if raw_ids:
         model_rows = (
             db.query(
+                MatchResult.id,
                 MatchResult.raw_data_id,
                 MatchResult.brand_identified,
                 MatchResult.match_status,
@@ -1138,7 +1197,8 @@ def list_clean_job_brand_rows(
             )
             .all()
         )
-        for raw_id, brand_identified, status, is_disabled, brand_code, brand_name in model_rows:
+        for match_id, raw_id, brand_identified, status, is_disabled, brand_code, brand_name in model_rows:
+            match_id_map.setdefault(raw_id, match_id)
             identified_map.setdefault(raw_id, 1 if brand_identified is None else brand_identified)
             if status in BRAND_CLEAN_ACTIONABLE_STATUSES and not is_disabled:
                 editable_raw_ids.add(raw_id)
@@ -1152,10 +1212,12 @@ def list_clean_job_brand_rows(
         items.append(BrandCleanRow(
             cleaned_data_id=cd.id,
             raw_data_id=rd.id,
+            match_id=match_id_map.get(rd.id),
             platform=rd.platform,
             item_name=rd.item_name,
             brand_raw=rd.brand_raw,
             brand_std=cd.brand_std,
+            sales_qty=rd.sales_qty,
             model_brand_code=matched[0] if matched else None,
             model_brand_name=matched[1] if matched else None,
             has_model=matched is not None,
@@ -1232,6 +1294,80 @@ def update_clean_job_brand_rows(
         cd.brand_std = value
     db.commit()
     return {"updated": len(to_update)}
+
+
+class BrandCleanExcludeIn(BaseModel):
+    cleaned_data_ids: list[int]
+    reason: str | None = None
+
+
+def _snapshot_prev_state(mr: MatchResult) -> None:
+    mr.prev_match_status = mr.match_status
+    mr.prev_model_id = mr.model_id
+    mr.prev_matched_by = mr.matched_by
+    mr.prev_match_source = mr.match_source
+    mr.prev_dispute_reason = mr.dispute_reason
+    mr.prev_review_note = mr.review_note
+    mr.prev_reviewed_at = mr.reviewed_at
+
+
+@router.post("/jobs/{job_id}/brand-rows/exclude")
+def exclude_clean_job_brand_rows(
+    job_id: int,
+    payload: BrandCleanExcludeIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """「只清洗品牌」一键排除：把所选行标记为已排除（status=excluded），
+    并写入排除沉淀库，供后续同品类任务沿用。已匹配/已人工确认/已排除/已禁用的行跳过。"""
+    job = _get_visible_clean_job_or_404(db, current_user, job_id)
+    if not payload.cleaned_data_ids:
+        return {"excluded": 0}
+
+    rows = (
+        db.query(CleanedDataRecord)
+        .filter(
+            CleanedDataRecord.clean_job_id == job_id,
+            CleanedDataRecord.id.in_(payload.cleaned_data_ids),
+        )
+        .all()
+    )
+    raw_ids = [cd.raw_data_id for cd in rows]
+    if not raw_ids:
+        return {"excluded": 0}
+
+    category_code = job.category_code or job.dispatch_category_code
+    reason = (payload.reason or "").strip() or None
+    match_rows = (
+        db.query(MatchResult, RawDataRecord)
+        .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
+        .filter(
+            MatchResult.clean_job_id == job_id,
+            MatchResult.raw_data_id.in_(raw_ids),
+        )
+        .all()
+    )
+
+    excluded_count = 0
+    now = datetime.utcnow()
+    for mr, raw in match_rows:
+        if mr.match_status in BRAND_CLEAN_RESOLVED_STATUSES or mr.is_disabled:
+            continue
+        _snapshot_prev_state(mr)
+        mr.match_status = "excluded"
+        mr.model_id = None
+        mr.matched_by = "manual"
+        mr.dispute_reason = None
+        mr.review_note = reason
+        mr.reviewed_at = now
+        upsert_exclusion_for_raw(db, raw, category_code, reason=reason, source="manual")
+        excluded_count += 1
+
+    db.commit()
+    if excluded_count:
+        touch_clean_job(db, job_id)
+        db.commit()
+    return {"excluded": excluded_count}
 
 
 class CleanTaskSearchItem(BaseModel):

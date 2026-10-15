@@ -343,10 +343,12 @@ export const listCleanJobMatched = (jobId: number, params: Record<string, unknow
 export type BrandCleanRow = {
   cleaned_data_id: number
   raw_data_id: number
+  match_id: number | null
   platform: string | null
   item_name: string | null
   brand_raw: string | null
   brand_std: string | null
+  sales_qty: number | null
   model_brand_code: string | null
   model_brand_name: string | null
   has_model: boolean
@@ -359,10 +361,28 @@ export type BrandCleanListResponse = PaginatedResponse<BrandCleanRow>
 
 export type BrandCleanGroup = 'actionable' | 'unidentified_brand' | 'pending' | 'text_only' | 'disputed' | 'all'
 
+export type BrandCleanSearchBy = 'item_name' | 'brand_raw' | 'brand_code' | 'shop_name' | 'model_code'
+
 export const listCleanJobBrandRows = (
   jobId: number,
-  params?: { keyword?: string; group?: BrandCleanGroup; page?: number; page_size?: number },
+  params?: {
+    keyword?: string
+    search_by?: BrandCleanSearchBy
+    group?: BrandCleanGroup
+    sort_by?: string
+    page?: number
+    page_size?: number
+  },
 ) => api.get<BrandCleanListResponse>(`/clean/jobs/${jobId}/brand-rows`, { params })
+
+export const excludeCleanJobBrandRows = (
+  jobId: number,
+  cleanedDataIds: number[],
+  reason?: string,
+) => api.post<{ excluded: number }>(`/clean/jobs/${jobId}/brand-rows/exclude`, {
+  cleaned_data_ids: cleanedDataIds,
+  reason,
+})
 
 export const updateCleanJobBrandRows = (
   jobId: number,

@@ -1,17 +1,18 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
-  Alert, Button, Card, Divider, Input, Radio, Select, Space, Table, Tag, Typography, message,
+  Alert, Button, Card, Divider, Input, Popconfirm, Radio, Select, Space, Table, Tag, Typography, message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { ArrowLeftOutlined, DownloadOutlined, PlusOutlined, SaveOutlined } from '@ant-design/icons'
+import { ArrowLeftOutlined, DownloadOutlined, PlusOutlined, SaveOutlined, StopOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import CreateBrandModal from '../../components/CreateBrandModal'
 import ProgressModal from '../../components/ProgressModal'
 import {
-  getDownloadUrl, getExportJob, listBrands, listCleanJobBrandRows, triggerExport, updateCleanJobBrandRows,
+  excludeCleanJobBrandRows, getDownloadUrl, getExportJob, listBrands,
+  listCleanJobBrandRows, triggerExport, updateCleanJobBrandRows,
 } from '../../services/api'
-import type { BrandCleanGroup, BrandCleanRow, BrandItem } from '../../services/api'
+import type { BrandCleanGroup, BrandCleanRow, BrandCleanSearchBy, BrandItem } from '../../services/api'
 
 const { Text, Title } = Typography
 
@@ -28,6 +29,32 @@ const GROUP_OPTIONS: { label: string; value: BrandCleanGroup }[] = [
   { label: '全部数据行', value: 'all' },
 ]
 
+const SEARCH_OPTIONS: { label: string; value: BrandCleanSearchBy }[] = [
+  { label: '宝贝名称', value: 'item_name' },
+  { label: '原品牌', value: 'brand_raw' },
+  { label: '入库品牌', value: 'brand_code' },
+  { label: '店铺', value: 'shop_name' },
+  { label: '型号', value: 'model_code' },
+]
+
+const SEARCH_PLACEHOLDER: Record<BrandCleanSearchBy, string> = {
+  item_name: '搜索宝贝名称',
+  brand_raw: '搜索原品牌',
+  brand_code: '搜索入库品牌',
+  shop_name: '搜索店铺',
+  model_code: '搜索型号',
+}
+
+const SORT_OPTIONS = [
+  { value: 'default', label: '默认排序' },
+  { value: 'item_name_asc', label: '名称 A→Z' },
+  { value: 'item_name_desc', label: '名称 Z→A' },
+  { value: 'sales_qty_desc', label: '销量从高到低' },
+  { value: 'sales_qty_asc', label: '销量从低到高' },
+  { value: 'price_desc', label: '价格从高到低' },
+  { value: 'price_asc', label: '价格从低到高' },
+]
+
 export default function BrandCleanPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -37,11 +64,14 @@ export default function BrandCleanPage() {
   const [pageSize, setPageSize] = useState(20)
   const [keyword, setKeyword] = useState('')
   const [keywordInput, setKeywordInput] = useState('')
+  const [searchBy, setSearchBy] = useState<BrandCleanSearchBy>('item_name')
+  const [sortBy, setSortBy] = useState('default')
   const [group, setGroup] = useState<BrandCleanGroup>('actionable')
   const [draft, setDraft] = useState<Record<number, string | null | undefined>>({})
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [batchBrand, setBatchBrand] = useState<string | undefined>(undefined)
   const [saving, setSaving] = useState(false)
+  const [excluding, setExcluding] = useState(false)
   const [brandOptions, setBrandOptions] = useState<BrandOption[]>([])
   const [brandModalOpen, setBrandModalOpen] = useState(false)
   const [brandTargetRowId, setBrandTargetRowId] = useState<number | null>(null)
@@ -73,9 +103,11 @@ export default function BrandCleanPage() {
       page,
       page_size: pageSize,
       keyword: keyword || undefined,
+      search_by: searchBy,
       group,
+      sort_by: sortBy,
     }).then(r => r.data),
-    { ready: Number.isFinite(jobId) && jobId > 0, refreshDeps: [jobId, page, pageSize, keyword, group] },
+    { ready: Number.isFinite(jobId) && jobId > 0, refreshDeps: [jobId, page, pageSize, keyword, searchBy, group, sortBy] },
   )
 
   const rows = useMemo(() => data?.items ?? [], [data])
@@ -84,7 +116,7 @@ export default function BrandCleanPage() {
     setDraft({})
     setSelectedIds([])
     setBatchBrand(undefined)
-  }, [page, pageSize, keyword, group, jobId])
+  }, [page, pageSize, keyword, searchBy, group, sortBy, jobId])
 
   const originalValue = (row: BrandCleanRow): string | null => {
     if (row.brand_std_manual) return row.brand_std ?? null
@@ -191,6 +223,20 @@ export default function BrandCleanPage() {
     }
   }
 
+  const handleExclude = async (cleanedDataIds: number[]) => {
+    if (cleanedDataIds.length === 0) return
+    setExcluding(true)
+    try {
+      const res = await excludeCleanJobBrandRows(jobId, cleanedDataIds)
+      message.success(`已排除 ${res.data.excluded} 条`)
+      setSelectedIds([])
+      setDraft({})
+      refresh()
+    } finally {
+      setExcluding(false)
+    }
+  }
+
   const handleExport = async () => {
     if (exportPollRef.current) return
     setExporting(true)
@@ -248,6 +294,7 @@ export default function BrandCleanPage() {
   const columns: ColumnsType<BrandCleanRow> = [
     { title: '平台', dataIndex: 'platform', width: 90, render: formatText },
     { title: '商品名称', dataIndex: 'item_name', ellipsis: true, render: formatText },
+    { title: '销量', dataIndex: 'sales_qty', width: 90, render: (v: number | null) => (v ?? '-') },
     { title: '原品牌', dataIndex: 'brand_raw', width: 140, ellipsis: true, render: formatText },
     {
       title: '当前入库品牌', dataIndex: 'brand_std', width: 200,
@@ -290,6 +337,21 @@ export default function BrandCleanPage() {
         </Space>
       ),
     },
+    {
+      title: '操作', width: 90, fixed: 'right',
+      render: (_: unknown, row) => (
+        row.editable ? (
+          <Popconfirm
+            title="确认排除该行？"
+            okText="排除"
+            cancelText="取消"
+            onConfirm={() => handleExclude([row.cleaned_data_id])}
+          >
+            <Button type="link" danger size="small" icon={<StopOutlined />}>排除</Button>
+          </Popconfirm>
+        ) : <Text type="secondary">-</Text>
+      ),
+    },
   ]
 
   return (
@@ -313,13 +375,25 @@ export default function BrandCleanPage() {
             buttonStyle="solid"
             options={GROUP_OPTIONS}
           />
+          <Select
+            value={searchBy}
+            style={{ width: 110 }}
+            options={SEARCH_OPTIONS}
+            onChange={v => { setSearchBy(v); setKeyword(''); setKeywordInput(''); setPage(1) }}
+          />
           <Input.Search
             allowClear
-            placeholder="按商品名称搜索"
-            style={{ width: 260 }}
+            placeholder={SEARCH_PLACEHOLDER[searchBy]}
+            style={{ width: 200 }}
             value={keywordInput}
             onChange={e => setKeywordInput(e.target.value)}
             onSearch={value => { setKeyword(value.trim()); setPage(1) }}
+          />
+          <Select
+            value={sortBy}
+            style={{ width: 150 }}
+            options={SORT_OPTIONS}
+            onChange={v => { setSortBy(v); setPage(1) }}
           />
           <Select
             showSearch
@@ -343,6 +417,15 @@ export default function BrandCleanPage() {
           >
             保存修改（{changedItems.length}）
           </Button>
+          <Button
+            danger
+            icon={<StopOutlined />}
+            loading={excluding}
+            disabled={selectedIds.length === 0}
+            onClick={() => handleExclude(selectedIds)}
+          >
+            一键排除选中（{selectedIds.length}）
+          </Button>
           <Button icon={<DownloadOutlined />} loading={exporting} onClick={handleExport}>导出全部数据</Button>
         </Space>
         <Table
@@ -351,7 +434,7 @@ export default function BrandCleanPage() {
           rowKey="cleaned_data_id"
           size="small"
           loading={loading}
-          scroll={{ x: 1000 }}
+          scroll={{ x: 1280 }}
           rowSelection={{
             selectedRowKeys: selectedIds,
             onChange: keys => setSelectedIds(keys as number[]),

@@ -238,10 +238,15 @@ def _monthly_jobs_by_scope(
     *,
     category_code: str | None = None,
     platform: str | None = None,
+    category_codes: set[str] | None = None,
 ) -> dict[tuple[str, str, int], CleanJobRecord]:
     q = db.query(CleanJobRecord).filter(CleanJobRecord.category_code.isnot(None))
     if category_code:
         q = q.filter(CleanJobRecord.category_code == category_code)
+    elif category_codes is not None:
+        if not category_codes:
+            return {}
+        q = q.filter(CleanJobRecord.category_code.in_(category_codes))
     normalized_platform = normalize_platform(platform)
     if normalized_platform:
         q = q.filter(func.lower(CleanJobRecord.platform).in_(platform_aliases_for(normalized_platform)))
@@ -264,72 +269,103 @@ def get_monthly_clean_pool(
     month: int | None = None,
     limit: int | None = None,
 ) -> list[dict]:
+    """待入清洗队列（按月/品类/平台聚合）。
+
+    单个聚合查询一次性算完全部 scope，避免按品类逐个查询造成 N 次全表扫描；
+    分组键为 `raw_data.month` 与规范化后的平台，无法走索引，因此把中间行降到最小
+    （只取两个 distinct 计数，pending 由 dispatched - queued 推导）。归档任务与
+    人工/发布状态的判定按 (品类, 平台) 缓存，消除逐行 N+1 查询。
+    """
     platform_label = _platform_label_expr()
     normalized_filter_platform = normalize_platform(platform)
 
-    def build_grouped_query(scoped_category_code: str | None = None):
-        q = (
-            db.query(
-                DispatchItem.category_code.label("category_code"),
-                Category.name.label("category_name"),
-                platform_label.label("platform"),
-                RawDataRecord.month.label("month"),
-                func.count(func.distinct(DispatchItem.raw_data_id)).label("dispatched_count"),
-                func.count(func.distinct(case((CleanJobItemRecord.id.is_(None), DispatchItem.raw_data_id)))).label("pending_count"),
-                func.count(func.distinct(case((CleanJobItemRecord.id.isnot(None), DispatchItem.raw_data_id)))).label("queued_count"),
-            )
-            .join(RawDataRecord, RawDataRecord.id == DispatchItem.raw_data_id)
-            .join(Category, Category.code == DispatchItem.category_code)
-            .outerjoin(
-                CleanJobItemRecord,
-                and_(
-                    CleanJobItemRecord.raw_data_id == DispatchItem.raw_data_id,
-                    CleanJobItemRecord.category_code == DispatchItem.category_code,
-                ),
-            )
-            .filter(RawDataRecord.month.isnot(None))
-        )
-        effective_category_code = scoped_category_code or category_code
-        if effective_category_code:
-            q = q.filter(DispatchItem.category_code == effective_category_code)
-        if normalized_filter_platform:
-            q = q.filter(func.lower(RawDataRecord.platform).in_(platform_aliases_for(normalized_filter_platform)))
-        if month is not None:
-            q = q.filter(RawDataRecord.month == month)
-        return q.group_by(DispatchItem.category_code, Category.name, platform_label, RawDataRecord.month)
+    dispatched_count = func.count(func.distinct(DispatchItem.raw_data_id)).label("dispatched_count")
+    queued_count = func.count(func.distinct(CleanJobItemRecord.raw_data_id)).label("queued_count")
 
-    if limit is not None and not category_code:
-        grouped = []
-        category_codes = [
-            row[0]
-            for row in db.query(Category.code).order_by(Category.code).all()
-        ]
-        for scoped_category_code in category_codes:
-            remaining = limit - len(grouped)
-            if remaining <= 0:
-                break
-            rows = (
-                build_grouped_query(scoped_category_code)
-                .order_by(platform_label, RawDataRecord.month)
-                .limit(remaining)
-                .all()
-            )
-            grouped.extend(rows)
-    else:
-        grouped_query = build_grouped_query().order_by(DispatchItem.category_code, platform_label, RawDataRecord.month)
-        if limit is not None:
-            grouped_query = grouped_query.limit(limit)
-        grouped = grouped_query.all()
-    jobs_by_scope = _monthly_jobs_by_scope(db, category_code=category_code, platform=platform)
+    grouped_query = (
+        db.query(
+            DispatchItem.category_code.label("category_code"),
+            Category.name.label("category_name"),
+            platform_label.label("platform"),
+            RawDataRecord.month.label("month"),
+            dispatched_count,
+            queued_count,
+        )
+        .join(RawDataRecord, RawDataRecord.id == DispatchItem.raw_data_id)
+        .join(Category, Category.code == DispatchItem.category_code)
+        .outerjoin(
+            CleanJobItemRecord,
+            and_(
+                CleanJobItemRecord.raw_data_id == DispatchItem.raw_data_id,
+                CleanJobItemRecord.category_code == DispatchItem.category_code,
+            ),
+        )
+        .filter(RawDataRecord.month.isnot(None))
+    )
+    if category_code:
+        grouped_query = grouped_query.filter(DispatchItem.category_code == category_code)
+    if normalized_filter_platform:
+        grouped_query = grouped_query.filter(func.lower(RawDataRecord.platform).in_(platform_aliases_for(normalized_filter_platform)))
+    if month is not None:
+        grouped_query = grouped_query.filter(RawDataRecord.month == month)
+
+    grouped_query = (
+        grouped_query.group_by(DispatchItem.category_code, Category.name, platform_label, RawDataRecord.month)
+        .order_by(DispatchItem.category_code, platform_label, RawDataRecord.month)
+    )
+    if limit is not None:
+        grouped_query = grouped_query.limit(limit)
+    grouped = grouped_query.all()
+
+    jobs_by_scope = _monthly_jobs_by_scope(
+        db,
+        category_code=category_code,
+        platform=platform,
+        category_codes={row.category_code for row in grouped},
+    )
+
+    archived_candidates: dict[tuple[str, str | None], list[CleanJobRecord]] = {}
+    downstream_state: dict[int, bool] = {}
+
+    def _archived_job_with_downstream(
+        scope_category_code: str,
+        scope_platform: str | None,
+        scope_month: int,
+    ) -> tuple[CleanJobRecord, bool] | None:
+        normalized_platform = normalize_platform(scope_platform)
+        cache_key = (scope_category_code, normalized_platform)
+        if cache_key not in archived_candidates:
+            aliases = platform_aliases_for(normalized_platform)
+            if not aliases:
+                archived_candidates[cache_key] = []
+            else:
+                archived_candidates[cache_key] = (
+                    db.query(CleanJobRecord)
+                    .filter(
+                        CleanJobRecord.category_code == scope_category_code,
+                        CleanJobRecord.status == "archived",
+                        func.lower(CleanJobRecord.platform).in_(aliases),
+                    )
+                    .order_by(CleanJobRecord.id.desc())
+                    .all()
+                )
+        for job in archived_candidates[cache_key]:
+            if scope_month not in _job_months(job):
+                continue
+            if job.id not in downstream_state:
+                downstream_state[job.id] = _has_reviewed_or_published_state(db, job.id)
+            return job, downstream_state[job.id]
+        return None
 
     result = []
     for row in grouped:
         normalized_platform = normalize_platform(row.platform)
         row_month = int(row.month)
+        pending_count = row.dispatched_count - row.queued_count
         job = jobs_by_scope.get((row.category_code, normalized_platform, row_month))
         if job:
             continue
-        archived_job = _monthly_archived_job_with_downstream(db, category_code=row.category_code, platform=row.platform, month=row_month)
+        archived_job = _archived_job_with_downstream(row.category_code, row.platform, row_month)
         if archived_job:
             archived_job_obj, has_downstream = archived_job
             if has_downstream:
@@ -339,7 +375,7 @@ def get_monthly_clean_pool(
                     "platform": normalized_platform,
                     "month": row_month,
                     "dispatched_count": row.dispatched_count,
-                    "pending_count": row.pending_count,
+                    "pending_count": pending_count,
                     "queued_count": row.queued_count,
                     "existing_job_id": archived_job_obj.id,
                     "existing_job_name": archived_job_obj.task_name,
@@ -353,7 +389,7 @@ def get_monthly_clean_pool(
             "platform": normalized_platform,
             "month": row_month,
             "dispatched_count": row.dispatched_count,
-            "pending_count": row.pending_count,
+            "pending_count": pending_count,
             "queued_count": row.queued_count,
             "existing_job_id": None,
             "existing_job_name": None,
@@ -503,33 +539,6 @@ def touch_clean_job(db: Session, clean_job_id: int) -> None:
     db.query(CleanJobRecord).filter(CleanJobRecord.id == clean_job_id).update(
         {CleanJobRecord.updated_at: datetime.utcnow()}
     )
-
-
-def _monthly_archived_job_with_downstream(
-    db: Session,
-    *,
-    category_code: str,
-    platform: str | None,
-    month: int,
-) -> tuple[CleanJobRecord, bool] | None:
-    normalized_platform = normalize_platform(platform)
-    platform_aliases = platform_aliases_for(normalized_platform)
-    if not platform_aliases:
-        return None
-    candidates = (
-        db.query(CleanJobRecord)
-        .filter(
-            CleanJobRecord.category_code == category_code,
-            CleanJobRecord.status == "archived",
-            func.lower(CleanJobRecord.platform).in_(platform_aliases),
-        )
-        .order_by(CleanJobRecord.id.desc())
-        .all()
-    )
-    for job in candidates:
-        if month in _job_months(job):
-            return job, _has_reviewed_or_published_state(db, job.id)
-    return None
 
 
 def upsert_monthly_task_snapshot(

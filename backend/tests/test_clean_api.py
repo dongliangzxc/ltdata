@@ -466,7 +466,7 @@ def test_get_clean_pool_summary_endpoint_returns_pending_counts(db):
     }]
 
 
-def test_get_monthly_clean_pool_uses_category_scoped_query_when_limited(db):
+def test_get_monthly_clean_pool_uses_single_grouped_query_when_limited(db):
     categories = [
         Category(code="action_cameras", name="运动相机"),
         Category(code="router", name="路由器"),
@@ -509,7 +509,7 @@ def test_get_monthly_clean_pool_uses_category_scoped_query_when_limited(db):
 
     assert [row["category_code"] for row in result] == ["action_cameras"]
     assert len(grouped_dispatch_queries) == 1
-    assert "dispatch_items.category_code =" in grouped_dispatch_queries[0]
+    assert " limit " in grouped_dispatch_queries[0]
 
 
 

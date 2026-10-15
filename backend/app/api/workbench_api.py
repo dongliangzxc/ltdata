@@ -106,6 +106,28 @@ def _series_by_match_result(luotu_db: Session, match_result_ids: list[int]) -> d
     return {mr_id: series for mr_id, series in rows}
 
 
+def _series_match_result_ids(luotu_db: Session, series: str) -> list[int]:
+    """产品系列筛选：取该系列下全部型号对应的 match_result_id。
+
+    语义与匹配结果页一致（系列属于型号，按 ``match_results.model_id`` 判定）：
+    先按 ``models.series`` 取型号 ID（小集合），再按 ``match_results.model_id``
+    索引取匹配结果 ID。避免原先先对 ``published_items`` 做
+    ``SELECT DISTINCT match_result_id`` 全表扫描、再去 luotu 库加载全量型号。
+    """
+    model_ids = [
+        model_id
+        for (model_id,) in luotu_db.query(ModelRecord.id).filter(ModelRecord.series == series).all()
+    ]
+    if not model_ids:
+        return []
+    return [
+        match_id
+        for (match_id,) in luotu_db.query(MatchResult.id)
+        .filter(MatchResult.model_id.in_(model_ids))
+        .all()
+    ]
+
+
 def _load_workbench_context(rows: list[PublishedItem]) -> tuple[dict[int, tuple[MatchResult, RawDataRecord]], dict[str, list[str]], dict[int, str]]:
     match_result_ids = [r.match_result_id for r in rows if r.match_result_id]
     if not match_result_ids:
@@ -188,6 +210,25 @@ def _build_query(db: Session, params: dict, visible_category_names: set[str] | N
 _EXPORT_DIR = Path("/app/exports")
 
 
+def _iter_published_items(q, page_size: int):
+    """按 id 倒序 keyset 分页遍历查询结果。
+
+    用 ``id < last_id`` 游标替代 ``OFFSET``：深分页时 OFFSET 会让 MySQL
+    每页都从头扫描 offset 行（对百万行表呈平方级放大，是导出时磁盘读
+    BPS 冲高的主因），游标分页每页只扫描本页数据。
+    """
+    last_id: int | None = None
+    while True:
+        page_q = q.filter(PublishedItem.id < last_id) if last_id is not None else q
+        page_rows = page_q.order_by(PublishedItem.id.desc()).limit(page_size).all()
+        if not page_rows:
+            break
+        yield page_rows
+        last_id = page_rows[-1].id
+        if len(page_rows) < page_size:
+            break
+
+
 def _run_wb_export_thread(job_id: int, params: dict):
     """后台线程：查询数据、构建 DataFrame、写 Excel，更新 job 状态。"""
     db = SessionLocal()          # luotu DB（存 job 记录）
@@ -204,15 +245,8 @@ def _run_wb_export_thread(job_id: int, params: dict):
         visible_category_names = params.get("visible_category_names")
         series_match_ids = None
         if params.get("series"):
-            all_match_ids = [
-                r[0] for r in adb.query(distinct(PublishedItem.match_result_id)).filter(PublishedItem.match_result_id.isnot(None)).all()
-            ]
-            series_match_ids = [
-                mr_id
-                for mr_id, s in _series_by_match_result(db, all_match_ids).items()
-                if s == params.get("series")
-            ]
-        q = _build_query(adb, params, visible_category_names, series_match_ids).order_by(PublishedItem.id.desc())
+            series_match_ids = _series_match_result_ids(db, params.get("series"))
+        q = _build_query(adb, params, visible_category_names, series_match_ids)
 
         total = q.count()
         if total == 0:
@@ -227,9 +261,9 @@ def _run_wb_export_thread(job_id: int, params: dict):
 
         page_size = 5000
         spec_batch_size = 500
+        processed = 0
         all_attr_names: set[str] = set()
-        for offset in range(0, total, page_size):
-            page_rows = q.offset(offset).limit(page_size).all()
+        for page_rows in _iter_published_items(q, page_size):
             item_ids = [r.id for r in page_rows]
             for i in range(0, len(item_ids), spec_batch_size):
                 batch = item_ids[i: i + spec_batch_size]
@@ -241,7 +275,8 @@ def _run_wb_export_thread(job_id: int, params: dict):
                     .all()
                 )
                 all_attr_names.update(name for (name,) in names if name)
-            _wb_progress[job_id] = 10 + int(25 * min(offset + page_size, total) / max(total, 1))
+            processed += len(page_rows)
+            _wb_progress[job_id] = 10 + int(25 * min(processed, total) / max(total, 1))
 
         attr_columns = [f"attr_{name}" for name in sorted(all_attr_names)]
         base_columns = [
@@ -260,8 +295,8 @@ def _run_wb_export_thread(job_id: int, params: dict):
         worksheet = workbook.create_sheet(title="分析数据")
         worksheet.append(base_columns + attr_columns)
 
-        for offset in range(0, total, page_size):
-            page_rows = q.offset(offset).limit(page_size).all()
+        processed = 0
+        for page_rows in _iter_published_items(q, page_size):
             item_ids = [r.id for r in page_rows]
             series_index = _series_by_match_result(db, [r.match_result_id for r in page_rows if r.match_result_id])
             spec_index: dict[int, dict[str, str]] = {}
@@ -301,7 +336,8 @@ def _run_wb_export_thread(job_id: int, params: dict):
                 attrs = spec_index.get(r.id, {})
                 worksheet.append(base_values + [attrs.get(name, "") for name in sorted(all_attr_names)])
 
-            progress = 35 + int(60 * min(offset + page_size, total) / max(total, 1))
+            processed += len(page_rows)
+            progress = 35 + int(60 * min(processed, total) / max(total, 1))
             _wb_progress[job_id] = progress
             job.progress = progress
             db.commit()
@@ -418,15 +454,8 @@ def query_data(
 
     series_match_ids = None
     if series:
-        # 产品系列：按 match_result 定位关联型号的 series，再过滤 published_items
-        all_match_ids = [
-            r[0] for r in db.query(distinct(PublishedItem.match_result_id)).filter(PublishedItem.match_result_id.isnot(None)).all()
-        ]
-        series_match_ids = [
-            mr_id
-            for mr_id, s in _series_by_match_result(luotu_db, all_match_ids).items()
-            if s == series
-        ]
+        # 产品系列：按型号定位（系列属于型号），避免对 published_items 全表扫描
+        series_match_ids = _series_match_result_ids(luotu_db, series)
     q = _build_query(db, params, visible_category_names, series_match_ids)
     total = q.count()
     rows = (

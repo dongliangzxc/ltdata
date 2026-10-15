@@ -54,6 +54,8 @@ CREATE TABLE IF NOT EXISTS raw_data (
     KEY idx_file_id (file_id),
     -- 去重唯一索引：同一商品同一月份同一平台只保留一条
     UNIQUE KEY uq_raw_dedup (item_id, month, platform),
+    -- 待入清洗队列按月/平台聚合：走覆盖索引取 month/platform，避免回表读整行
+    KEY idx_raw_data_month_platform (month, platform),
     CONSTRAINT fk_raw_file FOREIGN KEY (file_id) REFERENCES upload_files(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='原始数据';
 
@@ -412,7 +414,9 @@ CREATE TABLE IF NOT EXISTS published_items (
     KEY idx_pub_model     (model_code),
     KEY idx_pub_model_month (model_code, month),
     KEY idx_pub_category  (category_name),
-    KEY idx_pub_job       (publish_job_id)
+    KEY idx_pub_job       (publish_job_id),
+    KEY ix_published_items_match_result_id (match_result_id),
+    KEY ix_published_items_clean_job_id    (clean_job_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='已发布商品宽表';
 
 -- 已发布商品规格（EAV，按品类动态扩展）

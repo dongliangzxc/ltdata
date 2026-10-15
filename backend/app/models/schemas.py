@@ -51,8 +51,11 @@ class RawDataRecord(Base):
     # Upload deduplication probes (item_id, month, platform) for every batch.
     # Keep this index explicit in ORM metadata so fresh databases and tests
     # receive the same lookup plan as migrated production databases.
+    # idx_raw_data_month_platform lets 待入清洗队列的按月/平台聚合走覆盖索引，
+    # 不再为取 month/platform 回表读取整行（raw_data 含多个 TEXT 宽字段）。
     __table_args__ = (
         Index("idx_raw_dedup_lookup", "item_id", "month", "platform"),
+        Index("idx_raw_data_month_platform", "month", "platform"),
     )
 
     id = Column(Integer, primary_key=True, index=True)

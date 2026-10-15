@@ -25,6 +25,8 @@ class PublishedItem(AnalyticsBase):
     __table_args__ = (
         UniqueConstraint("platform", "item_id", "month", name="uq_published_item"),
         Index("ix_published_items_model_code_month", "model_code", "month"),
+        Index("ix_published_items_match_result_id", "match_result_id"),
+        Index("ix_published_items_clean_job_id", "clean_job_id"),
     )
 
     id                = Column(Integer, primary_key=True, index=True)

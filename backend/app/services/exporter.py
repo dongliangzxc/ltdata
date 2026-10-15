@@ -81,6 +81,25 @@ PAGE_SIZE = 5000
 EXPORTABLE_CLEAN_JOB_STATUSES = ("reviewing", "done", "published")
 
 
+def _iter_keyset(query, id_col, page_size: int = PAGE_SIZE):
+    """按主键升序 keyset 分页遍历查询结果。
+
+    用 ``id > last_id`` 游标替代 ``OFFSET``：深分页时 OFFSET 会让 MySQL
+    每页都从头扫描 offset 行（对几十万行任务呈平方级放大，是导出时磁盘
+    读 BPS 冲高的主因），游标分页每页只扫描本页数据。
+    """
+    last_id = None
+    while True:
+        page_query = query.filter(id_col > last_id) if last_id is not None else query
+        rows = page_query.order_by(id_col).limit(page_size).all()
+        if not rows:
+            break
+        yield rows
+        last_id = rows[-1][0].id
+        if len(rows) < page_size:
+            break
+
+
 def _sheet_name(name: str, used_names: set[str]) -> str:
     base = (name or "Sheet")[:31]
     candidate = base
@@ -293,7 +312,6 @@ def _export_match_jobs(
             MatchResult.match_status.in_(["url_matched", "matched", "confirmed"]),
             MatchResult.is_disabled == 0,
         )
-        .order_by(MatchResult.id)
     )
     pending_query = (
         db.query(MatchResult, RawDataRecord)
@@ -303,7 +321,6 @@ def _export_match_jobs(
             MatchResult.match_status == "pending",
             MatchResult.is_disabled == 0,
         )
-        .order_by(MatchResult.id)
     )
     text_only_query = (
         db.query(MatchResult, RawDataRecord, ModelRecord)
@@ -314,7 +331,6 @@ def _export_match_jobs(
             MatchResult.match_status == "text_only",
             MatchResult.is_disabled == 0,
         )
-        .order_by(MatchResult.id)
     )
     # 争议复核 / 已排除：可能未绑定 model_id，使用外连接
     disputed_query = (
@@ -326,7 +342,6 @@ def _export_match_jobs(
             MatchResult.match_status == "disputed",
             MatchResult.is_disabled == 0,
         )
-        .order_by(MatchResult.id)
     )
     excluded_query = (
         db.query(MatchResult, RawDataRecord, ModelRecord)
@@ -337,7 +352,6 @@ def _export_match_jobs(
             MatchResult.match_status == "excluded",
             MatchResult.is_disabled == 0,
         )
-        .order_by(MatchResult.id)
     )
     # 干扰项过滤：来自独立表 filtered_items，仅导出未恢复条目
     filtered_query = (
@@ -347,7 +361,6 @@ def _export_match_jobs(
             FilteredItem.clean_job_id.in_(clean_job_ids),
             FilteredItem.is_recovered == 0,
         )
-        .order_by(FilteredItem.id)
     )
 
     matched_total = matched_query.count()
@@ -396,8 +409,7 @@ def _export_match_jobs(
             return None
         return brand_names.get(code) or code
 
-    for offset in range(0, matched_total, PAGE_SIZE):
-        matched_rows = matched_query.offset(offset).limit(PAGE_SIZE).all()
+    for matched_rows in _iter_keyset(matched_query, MatchResult.id):
         spec_map = _spec_map_for_models(db, list({mr.model_id for mr, _, _ in matched_rows}))
         for mr, rd, model in matched_rows:
             row = _base_row(rd, model, brand_name_override=_brand_override(mr.clean_job_id, rd.id))
@@ -411,11 +423,10 @@ def _export_match_jobs(
             )
 
     pending_sheet = None
-    for offset in range(0, pending_total, PAGE_SIZE):
+    for pending_rows in _iter_keyset(pending_query, MatchResult.id):
         if pending_sheet is None:
             pending_sheet = workbook.create_sheet(title=_sheet_name("待确认", used_sheet_names))
             pending_sheet.append(BASE_CN_NAMES)
-        pending_rows = pending_query.offset(offset).limit(PAGE_SIZE).all()
         for mr, rd in pending_rows:
             row = _base_row(
                 rd,
@@ -424,8 +435,7 @@ def _export_match_jobs(
             )
             pending_sheet.append([row.get(field) for field in BASE_FIELD_NAMES])
 
-    for offset in range(0, text_only_total, PAGE_SIZE):
-        text_only_rows = text_only_query.offset(offset).limit(PAGE_SIZE).all()
+    for text_only_rows in _iter_keyset(text_only_query, MatchResult.id):
         for mr, rd, model in text_only_rows:
             row = _base_row(
                 rd, model,
@@ -443,8 +453,7 @@ def _export_match_jobs(
             return
         sheet = workbook.create_sheet(title=_sheet_name(title, used_sheet_names))
         sheet.append(BASE_CN_NAMES)
-        for offset in range(0, total, PAGE_SIZE):
-            rows = query.offset(offset).limit(PAGE_SIZE).all()
+        for rows in _iter_keyset(query, MatchResult.id):
             for mr, rd, model in rows:
                 row = _base_row(
                     rd, model,
@@ -460,8 +469,7 @@ def _export_match_jobs(
         FILTERED_EXTRA_COLS = ["命中关键词", "命中规则", "命中原因"]
         filtered_sheet = workbook.create_sheet(title=_sheet_name("干扰项过滤", used_sheet_names))
         filtered_sheet.append(BASE_CN_NAMES + FILTERED_EXTRA_COLS)
-        for offset in range(0, filtered_total, PAGE_SIZE):
-            filtered_rows = filtered_query.offset(offset).limit(PAGE_SIZE).all()
+        for filtered_rows in _iter_keyset(filtered_query, FilteredItem.id):
             for fi, rd in filtered_rows:
                 row = _base_row(rd)
                 filtered_sheet.append(

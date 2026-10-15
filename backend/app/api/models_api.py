@@ -6,6 +6,7 @@
 import io
 import os
 import math
+import unicodedata
 from urllib.parse import quote
 import pandas as pd
 from pathlib import Path
@@ -407,23 +408,37 @@ def _normalize_code(value: str | None) -> str:
     return (value or "").strip()
 
 
+def _db_collation_key(value: str | None) -> str:
+    """近似 MySQL `utf8mb4_0900_ai_ci` 的比较语义（大小写 / 全半角 / 音标不敏感）。
+
+    生产库唯一索引（models.uq_model、brands.brand_code）按该排序规则判定重复，而
+    Python 的 `str.lower()` 只处理大小写：例如型号码 `Ｍ108`（全角 Ｍ）与 `M108`
+    在库中相等，但 Python 视为不同，配合关闭的 autoflush 会造成同批次内重复插入、
+    flush 时撞唯一键（Duplicate entry '铁将军-smart_lock--M108'）。此处把待插入
+    记录的去重键对齐排序规则，避免该冲突。
+    """
+    text = unicodedata.normalize("NFKC", (value or "").strip()).casefold()
+    text = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in text if not unicodedata.combining(ch))
+
+
 def _model_unique_key(
     brand_code: str | None,
     model_code: str | None,
     category_code: str | None,
     series: str | None = None,
 ) -> tuple:
-    """与 MySQL utf8mb4_general_ci 唯一索引（models.uq_model）对齐的去重键。
+    """与 MySQL utf8mb4_0900_ai_ci 唯一索引（models.uq_model）对齐的去重键。
 
-    数据库唯一索引大小写不敏感，同一批次内 `z8h` 与 `Z8H` 属同一型号；
-    这里统一小写，避免 autoflush 关闭时未 flush 的记录查不到而重复插入。
-    系列品类（智能平板/学习平板）的唯一键额外包含 series。
+    数据库唯一索引大小写/全半角/音标不敏感，同一批次内 `z8h`/`Z8H`、`Ｍ108`/`M108`
+    均属同一型号；这里统一按排序规则折叠，避免 autoflush 关闭时未 flush 的记录
+    查不到而重复插入。系列品类（智能平板/学习平板）的唯一键额外包含 series。
     """
     return (
-        (brand_code or "").strip().lower(),
-        (model_code or "").strip().lower(),
-        (category_code or "").strip().lower(),
-        (series or "").strip().lower(),
+        _db_collation_key(brand_code),
+        _db_collation_key(model_code),
+        _db_collation_key(category_code),
+        _db_collation_key(series),
     )
 
 
@@ -475,8 +490,8 @@ def _ensure_import_brand(db: Session, brand_code: str, brand_name: str | None = 
         return
     normalized_name = _normalize_optional_text(brand_name)
     handled: set[str] = db.info.setdefault("_import_brand_codes", set())
-    # brands.brand_code 唯一索引大小写不敏感，这里也用小写键去重
-    handled_key = normalized_code.lower()
+    # brands.brand_code 唯一索引大小写/全半角不敏感，这里也按排序规则折叠去重
+    handled_key = _db_collation_key(normalized_code)
     if handled_key in handled:
         return
     existing = db.query(BrandRecord).filter(BrandRecord.brand_code == normalized_code).first()
@@ -910,7 +925,8 @@ def list_models(
             ModelRecord.model_name.ilike(f"%{keyword}%") |
             ModelRecord.model_code.ilike(f"%{keyword}%") |
             ModelRecord.brand_name.ilike(f"%{keyword}%") |
-            ModelRecord.brand_code.ilike(f"%{keyword}%")
+            ModelRecord.brand_code.ilike(f"%{keyword}%") |
+            ModelRecord.series.ilike(f"%{keyword}%")
         )
     if category_code:
         cq = cq.filter(ModelRecord.category_code == category_code)
@@ -933,7 +949,8 @@ def list_models(
             ModelRecord.model_name.ilike(f"%{keyword}%") |
             ModelRecord.model_code.ilike(f"%{keyword}%") |
             ModelRecord.brand_name.ilike(f"%{keyword}%") |
-            ModelRecord.brand_code.ilike(f"%{keyword}%")
+            ModelRecord.brand_code.ilike(f"%{keyword}%") |
+            ModelRecord.series.ilike(f"%{keyword}%")
         )
     if category_code:
         q = q.filter(ModelRecord.category_code == category_code)
@@ -1090,7 +1107,7 @@ def create_model(
             ModelRecord.series == series_value,
         ).first()
         if existing:
-            raise HTTPException(status_code=409, detail="该品牌+型号+品类已存在")
+            raise HTTPException(status_code=409, detail=f"该品牌+型号+品类+产品系列已存在（型号ID={existing.id}）")
 
     obj = ModelRecord(
         brand_code=brand_code,
@@ -1157,7 +1174,7 @@ def update_model(
             ModelRecord.id != model_id,
         ).first()
         if existing:
-            raise HTTPException(status_code=409, detail="该品牌+型号+品类已存在")
+            raise HTTPException(status_code=409, detail=f"该品牌+型号+品类+产品系列已存在（型号ID={existing.id}）")
 
     obj.brand_code    = brand_code
     obj.model_code    = model_code

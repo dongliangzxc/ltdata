@@ -494,6 +494,31 @@ def test_models_confirm_dedupes_case_variant_model_rows(client):
         db.close()
 
 
+def test_models_confirm_dedupes_width_variant_model_rows(client):
+    """型号码仅全半角不同（Ｍ108 / M108）在 utf8mb4_0900_ai_ci 唯一索引下属同一型号，不应冲突。"""
+    resp = _headers_then_confirm(
+        client,
+        headers=["brand_code", "model_code"],
+        data_rows=[
+            ["铁将军", "Ｍ108"],
+            ["铁将军", "M108"],
+        ],
+        mapping={"brand_code": "brand_code", "model_code": "model_code"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["models_inserted"] == 1
+    assert data["models_updated"] == 1
+    assert data["errors"] == []
+
+    db = next(client.app.dependency_overrides[get_db]())
+    try:
+        rows = db.query(ModelRecord).filter(ModelRecord.brand_code == "铁将军").all()
+        assert len(rows) == 1
+    finally:
+        db.close()
+
+
 def test_models_confirm_column_remapping(client):
     """Confirm supports remapping non-standard column names."""
     resp = _headers_then_confirm(

@@ -33,6 +33,7 @@ from datetime import datetime
 from app.models.database import SessionLocal
 from app.models.schemas import UploadConfirmJob
 from app.utils.time_utils import format_beijing_datetime
+from app.utils.text_utils import title_key
 
 # 内存进度表：job_id → 0-100，线程结束后清除
 _upload_progress: dict[int, int] = {}
@@ -261,6 +262,9 @@ async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db
             category_lv5=r.get("category_lv5"),
             item_id=str(r.get("item_id")) if r.get("item_id") else None,
             item_name=r.get("item_name"),
+            # bulk_save_objects bypasses SQLAlchemy validators, so populate
+            # the indexed same-title key explicitly for upload batches.
+            item_name_norm=title_key(r.get("item_name")) or None,
             item_image=r.get("item_image"),
             item_url=r.get("item_url"),
             ref_price=r.get("ref_price"),

@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.auth_deps import get_current_user
 from app.core.permissions import visible_category_codes
 from app.models.database import get_db, SessionLocal
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, case, exists, func, or_
 from app.models.schemas import (
     MatchResult, MatchResultOut, MatchSummary,
     CleanJobRecord, RawDataRecord, ModelRecord, BrandRecord,
@@ -106,7 +106,11 @@ def _same_title_key(value: str | None) -> str:
     return title_key(value)
 
 
-def _same_title_rows(db: Session, match_id: int):
+def _same_title_rows(
+    db: Session,
+    match_id: int,
+    match_statuses: set[str] | None = None,
+):
     current = (
         db.query(MatchResult, RawDataRecord)
         .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
@@ -121,16 +125,29 @@ def _same_title_rows(db: Session, match_id: int):
     if not key:
         return current_mr, []
 
+    filters = [
+        MatchResult.clean_job_id == current_mr.clean_job_id,
+        RawDataRecord.item_name_norm == key,
+    ]
+    # Batch confirm/exclude only ever mutates actionable statuses.  Applying
+    # that predicate in SQL avoids loading already-confirmed/excluded rows
+    # when a title group is large; preview leaves it unset to preserve its
+    # complete status_counts response.
+    if match_statuses is not None:
+        filters.append(MatchResult.match_status.in_(match_statuses))
+
     candidates = (
         db.query(MatchResult, RawDataRecord, ModelRecord)
         .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
         .outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
-        .filter(MatchResult.clean_job_id == current_mr.clean_job_id)
+        # ``item_name_norm`` is populated at ingest and indexed.  Filtering
+        # by it here keeps the database from materializing every result in a
+        # large clean job just to run title_key() in Python.
+        .filter(*filters)
         .order_by(MatchResult.id)
         .all()
     )
-    rows = [row for row in candidates if _same_title_key(row[1].item_name) == key]
-    return current_mr, rows
+    return current_mr, candidates
 
 
 def _same_title_item_payload(mr: MatchResult, rd: RawDataRecord, model: ModelRecord | None) -> dict:
@@ -363,18 +380,33 @@ def get_match_summary(
     else:
         di_join_cond = (DispatchItem.raw_data_id == None)  # noqa: E711
 
-    q = (
-        db.query(MatchResult.id)
-        .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
-        .outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
-        .outerjoin(DispatchItem, di_join_cond)
-        .outerjoin(Category, DispatchItem.category_code == Category.code)
-        .filter(MatchResult.clean_job_id == clean_job_id)
-    )
-
     allowed_search_fields = {"item_name", "brand_raw", "brand_code", "shop_name", "model_code"}
     if search_by not in allowed_search_fields:
         search_by = "item_name"
+
+    # The default summary has no row-level filters.  Keep that query on the
+    # match_results job/status index and only add joins when a supplied filter
+    # actually needs the related table.
+    needs_raw = (
+        (keyword is not None and search_by in {"item_name", "brand_raw", "shop_name"})
+        or price_min is not None
+        or price_max is not None
+        or sales_min is not None
+        or sales_max is not None
+    )
+    needs_model = keyword is not None and search_by in {"brand_code", "model_code"}
+    needs_dispatch = bool(category_name)
+
+    q = db.query(MatchResult.id).filter(MatchResult.clean_job_id == clean_job_id)
+    if needs_raw:
+        q = q.join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
+    if needs_model:
+        q = q.outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
+    if needs_dispatch:
+        q = q.outerjoin(DispatchItem, di_join_cond).outerjoin(
+            Category, DispatchItem.category_code == Category.code
+        )
+
     if keyword:
         pattern = f"%{keyword}%"
         if search_by == "brand_raw":
@@ -406,74 +438,92 @@ def get_match_summary(
     if top_brands and top_brands > 0:
         q = _apply_top_brands_filter(db, q, clean_job_id, top_brands)
 
-    mr_ids = [mid for (mid,) in q.group_by(MatchResult.id).all()]
-    rows = db.query(MatchResult).filter(MatchResult.id.in_(mr_ids)).all() if mr_ids else []
-    if not rows:
-        return MatchSummary(
-            clean_job_id=clean_job_id,
-            total=0, url_matched=0, matched=0, text_only=0,
-            pending=0, confirmed=0, excluded=0, ignored=0, disputed=0, disabled=0,
+    # Keep the filter semantics above (including the GROUP BY that collapses
+    # duplicate dispatch-item joins), but do all counting in SQL.  The old
+    # implementation materialised every matching ID and then every
+    # MatchResult row in Python, which made opening a large review task read
+    # the whole result set twice.
+    filtered_id_query = q.with_entities(MatchResult.id)
+    if needs_dispatch:
+        # A raw row can have multiple dispatch rows; preserve the old
+        # de-duplication semantics only when that join is present.
+        filtered_id_query = filtered_id_query.group_by(MatchResult.id)
+    filtered_ids = filtered_id_query.subquery()
+    aggregate = (
+        db.query(
+            func.count(MatchResult.id).label("total"),
+            func.sum(case((MatchResult.match_status == "url_matched", 1), else_=0)).label("url_matched"),
+            func.sum(case((MatchResult.match_status == "matched", 1), else_=0)).label("matched"),
+            func.sum(case((MatchResult.match_status == "text_only", 1), else_=0)).label("text_only"),
+            func.sum(case((MatchResult.match_status == "pending", 1), else_=0)).label("pending"),
+            func.sum(case((MatchResult.match_status == "confirmed", 1), else_=0)).label("confirmed"),
+            func.sum(case((MatchResult.match_status == "excluded", 1), else_=0)).label("excluded"),
+            func.sum(case((MatchResult.match_status == "ignored", 1), else_=0)).label("ignored"),
+            func.sum(case((MatchResult.match_status == "disputed", 1), else_=0)).label("disputed"),
+            func.sum(case((MatchResult.is_disabled == 1, 1), else_=0)).label("disabled"),
+            func.sum(case(
+                (and_(MatchResult.match_status == "pending", MatchResult.brand_identified == 0), 1),
+                else_=0,
+            )).label("unidentified_brand"),
+            func.sum(case(
+                (
+                    and_(
+                        MatchResult.match_status.in_(("url_matched", "matched")),
+                        MatchResult.match_source.in_(("s0", "historical")),
+                    ),
+                    1,
+                ),
+                else_=0,
+            )).label("precise_matched"),
+            func.sum(case(
+                (
+                    and_(
+                        MatchResult.match_status.in_(REVIEWABLE_MATCH_STATUSES),
+                        ~exists().where(MatchResultAttr.match_result_id == MatchResult.id),
+                    ),
+                    1,
+                ),
+                else_=0,
+            )).label("missing_attrs"),
+            func.sum(case(
+                (
+                    and_(
+                        MatchResult.match_status.in_(REVIEWABLE_MATCH_STATUSES),
+                        or_(
+                            MatchResult.model_id.is_(None),
+                            ~exists().where(ModelRecord.id == MatchResult.model_id),
+                        ),
+                    ),
+                    1,
+                ),
+                else_=0,
+            )).label("invalid_model"),
         )
-
-    total = len(rows)
-    status_count: dict[str, int] = {}
-    for r in rows:
-        status_count[r.match_status] = status_count.get(r.match_status, 0) + 1
-
-    disabled_count = sum(1 for r in rows if r.is_disabled == 1)
-    unidentified_brand_count = sum(1 for r in rows if getattr(r, 'brand_identified', 1) == 0 and r.match_status == "pending")
-    precise_matched_count = sum(
-        1 for r in rows
-        if r.match_status in ("url_matched", "matched") and r.match_source in ("s0", "historical")
+        .join(filtered_ids, MatchResult.id == filtered_ids.c.id)
+        .one()
     )
 
-    confirmed_ids = {r.id for r in rows if r.match_status in ("matched", "confirmed", "url_matched")}
-    if confirmed_ids:
-        ids_with_attrs = {
-            r.match_result_id
-            for r in db.query(MatchResultAttr.match_result_id)
-                        .filter(MatchResultAttr.match_result_id.in_(confirmed_ids))
-                        .distinct()
-                        .all()
-        }
-        missing_attrs_count = len(confirmed_ids - ids_with_attrs)
-    else:
-        missing_attrs_count = 0
-
-    # 型号失效：已匹配/已确认但 model_id 为空或指向已删除的型号
-    reviewable_model_ids = {
-        r.model_id for r in rows
-        if r.match_status in REVIEWABLE_MATCH_STATUSES and r.model_id is not None
-    }
-    existing_model_ids: set[int] = set()
-    if reviewable_model_ids:
-        existing_model_ids = {
-            mid for (mid,) in db.query(ModelRecord.id)
-            .filter(ModelRecord.id.in_(reviewable_model_ids))
-            .all()
-        }
-    invalid_model_count = sum(
-        1 for r in rows
-        if r.match_status in REVIEWABLE_MATCH_STATUSES
-        and (r.model_id is None or r.model_id not in existing_model_ids)
-    )
+    def count_value(name: str) -> int:
+        # SUM returns NULL on an empty result set (and some drivers return a
+        # decimal/integer wrapper), while the API has always exposed ints.
+        return int(getattr(aggregate, name) or 0)
 
     return MatchSummary(
         clean_job_id=clean_job_id,
-        total=total,
-        url_matched=status_count.get("url_matched", 0),
-        precise_matched=precise_matched_count,
-        matched=status_count.get("matched", 0),
-        text_only=status_count.get("text_only", 0),
-        pending=status_count.get("pending", 0),
-        confirmed=status_count.get("confirmed", 0),
-        excluded=status_count.get("excluded", 0),
-        ignored=status_count.get("ignored", 0),
-        disputed=status_count.get("disputed", 0),
-        disabled=disabled_count,
-        unidentified_brand=unidentified_brand_count,
-        missing_attrs=missing_attrs_count,
-        invalid_model=invalid_model_count,
+        total=count_value("total"),
+        url_matched=count_value("url_matched"),
+        precise_matched=count_value("precise_matched"),
+        matched=count_value("matched"),
+        text_only=count_value("text_only"),
+        pending=count_value("pending"),
+        confirmed=count_value("confirmed"),
+        excluded=count_value("excluded"),
+        ignored=count_value("ignored"),
+        disputed=count_value("disputed"),
+        disabled=count_value("disabled"),
+        unidentified_brand=count_value("unidentified_brand"),
+        missing_attrs=count_value("missing_attrs"),
+        invalid_model=count_value("invalid_model"),
     )
 
 
@@ -512,7 +562,9 @@ def _apply_top_brands_filter(
     """
     top_stds = _top_brand_stds(db, clean_job_id, top_brands)
     if not top_stds:
-        return q.filter(RawDataRecord.id == -1)
+        # Keep this independent of the caller's joins; summary can be built
+        # from match_results alone when no row-level filter is active.
+        return q.filter(MatchResult.id == -1)
     subq = (
         db.query(CleanedDataRecord.raw_data_id)
         .filter(
@@ -799,7 +851,7 @@ def confirm_same_title_matches(match_id: int, payload: dict, db: Session = Depen
         raise HTTPException(status_code=404, detail="型号不存在")
 
     include_statuses = _allowed_same_title_statuses(payload)
-    _current_mr, rows = _same_title_rows(db, match_id)
+    _current_mr, rows = _same_title_rows(db, match_id, include_statuses)
     now = datetime.utcnow()
     affected_ids: list[int] = []
     url_mapping_count = 0
@@ -832,7 +884,7 @@ def confirm_same_title_matches(match_id: int, payload: dict, db: Session = Depen
 def exclude_same_title_matches(match_id: int, payload: dict, db: Session = Depends(get_db)):
     include_statuses = _allowed_same_title_statuses(payload)
     reason = (payload.get("reason") or "").strip() or None
-    _current_mr, rows = _same_title_rows(db, match_id)
+    _current_mr, rows = _same_title_rows(db, match_id, include_statuses)
     category_code = _clean_job_category_code(db, _current_mr.clean_job_id)
     now = datetime.utcnow()
     affected_ids: list[int] = []

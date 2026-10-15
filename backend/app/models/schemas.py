@@ -4,9 +4,10 @@ from sqlalchemy import (
     Column, Integer, String, Numeric, Text, DateTime,
     ForeignKey, JSON, SmallInteger, UniqueConstraint, CheckConstraint, Enum, Index
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, validates
 from pydantic import BaseModel, Field, field_serializer, field_validator
 from app.models.database import Base
+from app.utils.text_utils import title_key
 from app.utils.time_utils import format_beijing_datetime
 
 
@@ -56,6 +57,10 @@ class RawDataRecord(Base):
     __table_args__ = (
         Index("idx_raw_dedup_lookup", "item_id", "month", "platform"),
         Index("idx_raw_data_month_platform", "month", "platform"),
+        # Same-title preview joins by clean_job_id -> raw_data_id and then
+        # looks up the normalized title.  Keep this index narrow enough for
+        # utf8mb4 while retaining the complete value for residual equality.
+        Index("idx_raw_data_item_name_norm", "item_name_norm", "id", mysql_length={"item_name_norm": 255}),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -71,6 +76,10 @@ class RawDataRecord(Base):
     category_lv5 = Column(String(100))
     item_id = Column(String(100))
     item_name = Column(Text)
+    # Python's title_key() is deliberately used instead of a DB collation or
+    # regexp expression so full-width punctuation/casefold semantics stay
+    # identical between matching and the same-title review UI.
+    item_name_norm = Column(String(1000), nullable=True, comment="title_key(item_name) for same-title lookup")
     item_image = Column(Text)
     item_url = Column(Text)
     ref_price = Column(Numeric(12, 2))
@@ -83,6 +92,11 @@ class RawDataRecord(Base):
     model_std = Column(String(100))
     extra_data = Column(JSON)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    @validates("item_name")
+    def _populate_item_name_norm(self, _key, value):
+        self.item_name_norm = title_key(value) or None
+        return value
 
     file = relationship("UploadFileRecord", back_populates="raw_data")
 
@@ -875,6 +889,7 @@ class MatchResult(Base):
     __tablename__ = "match_results"
     __table_args__ = (
         Index("idx_match_results_job_status", "clean_job_id", "match_status"),
+        Index("idx_match_results_job_raw", "clean_job_id", "raw_data_id"),
     )
 
     id           = Column(Integer, primary_key=True, index=True)

@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS raw_data (
     category_lv5   VARCHAR(100)                   COMMENT 'Lv5类目',
     item_id        VARCHAR(100)                   COMMENT '宝贝ID',
     item_name      TEXT                           COMMENT '宝贝名称',
+    item_name_norm VARCHAR(1000)                  COMMENT 'title_key(item_name)，同标题查询键',
     item_image     TEXT                           COMMENT '宝贝图片URL',
     item_url       TEXT                           COMMENT '宝贝链接',
     ref_price      DECIMAL(12,2)                  COMMENT '参考价格',
@@ -56,6 +57,8 @@ CREATE TABLE IF NOT EXISTS raw_data (
     UNIQUE KEY uq_raw_dedup (item_id, month, platform),
     -- 待入清洗队列按月/平台聚合：走覆盖索引取 month/platform，避免回表读整行
     KEY idx_raw_data_month_platform (month, platform),
+    -- 同标题复核按规范化标题缩小 raw_data -> match_results 连接范围
+    KEY idx_raw_data_item_name_norm (item_name_norm(255), id),
     CONSTRAINT fk_raw_file FOREIGN KEY (file_id) REFERENCES upload_files(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='原始数据';
 
@@ -288,6 +291,7 @@ CREATE TABLE IF NOT EXISTS match_results (
     created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     KEY idx_match_clean_job (clean_job_id),
+    KEY idx_match_job_raw (clean_job_id, raw_data_id),
     KEY idx_match_raw_data  (raw_data_id),
     KEY idx_match_model     (model_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='型号匹配结果';

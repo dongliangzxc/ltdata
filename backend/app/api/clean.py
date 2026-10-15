@@ -65,9 +65,9 @@ BRAND_CLEAN_ACTIONABLE_STATUSES = ("pending", "text_only", "disputed")
 # 待入清洗队列（/pool/monthly）是重只读聚合：无品类筛选时会按品类逐个扫描
 # dispatch_items（千万级）并回表 raw_data（千万级宽表）。单次约数秒，多用户/刷新
 # 反复触发会打满云盘读 BPS。这里做进程内短 TTL 缓存（生产单 worker），并在
-# 派发/清洗任务变更时显式失效；TTL 作为兜底（匹配/发布等改动最多延迟这么久）。
-# 测试环境（pytest）不启用，避免跨用例污染。
-_CLEAN_POOL_CACHE_TTL_SECONDS = 20.0
+# 派发/清洗任务变更时显式失效；TTL 只作兜底（匹配/发布等改动最多延迟这么久）。
+_CLEAN_POOL_CACHE_TTL_SECONDS = 60.0
+# 测试环境（pytest）不启用，避免跨用例污染
 _clean_pool_cache_enabled = "pytest" not in sys.modules
 _clean_pool_cache: dict = {}
 _clean_pool_cache_lock = threading.Lock()

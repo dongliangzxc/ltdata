@@ -271,10 +271,13 @@ def get_monthly_clean_pool(
 ) -> list[dict]:
     """待入清洗队列（按月/品类/平台聚合）。
 
-    单个聚合查询一次性算完全部 scope，避免按品类逐个查询造成 N 次全表扫描；
-    分组键为 `raw_data.month` 与规范化后的平台，无法走索引，因此把中间行降到最小
-    （只取两个 distinct 计数，pending 由 dispatched - queued 推导）。归档任务与
-    人工/发布状态的判定按 (品类, 平台) 缓存，消除逐行 N+1 查询。
+    无品类筛选且带 limit 时按 `Category.code` 逐个品类查询并**提前终止**：通常
+    首个（或前几个）品类即可凑满 limit 个 scope，避免一次聚合千万级
+    `dispatch_items`（单条全量聚合会让 MySQL 扫描全部派发明细，实测 >3 分钟）。
+    只取两个 distinct 计数，`pending` 由 `dispatched - queued` 推导
+    （`clean_job_items` 的 `(raw_data_id, category_code)` 唯一键保证等价）；
+    归档任务候选按 (品类, 平台) 缓存、`_has_reviewed_or_published_state` 按任务
+    id 缓存，消除逐行 N+1 查询。
     """
     platform_label = _platform_label_expr()
     normalized_filter_platform = normalize_platform(platform)
@@ -282,40 +285,58 @@ def get_monthly_clean_pool(
     dispatched_count = func.count(func.distinct(DispatchItem.raw_data_id)).label("dispatched_count")
     queued_count = func.count(func.distinct(CleanJobItemRecord.raw_data_id)).label("queued_count")
 
-    grouped_query = (
-        db.query(
-            DispatchItem.category_code.label("category_code"),
-            Category.name.label("category_name"),
-            platform_label.label("platform"),
-            RawDataRecord.month.label("month"),
-            dispatched_count,
-            queued_count,
+    def build_grouped_query(scoped_category_code: str | None = None):
+        q = (
+            db.query(
+                DispatchItem.category_code.label("category_code"),
+                Category.name.label("category_name"),
+                platform_label.label("platform"),
+                RawDataRecord.month.label("month"),
+                dispatched_count,
+                queued_count,
+            )
+            .join(RawDataRecord, RawDataRecord.id == DispatchItem.raw_data_id)
+            .join(Category, Category.code == DispatchItem.category_code)
+            .outerjoin(
+                CleanJobItemRecord,
+                and_(
+                    CleanJobItemRecord.raw_data_id == DispatchItem.raw_data_id,
+                    CleanJobItemRecord.category_code == DispatchItem.category_code,
+                ),
+            )
+            .filter(RawDataRecord.month.isnot(None))
         )
-        .join(RawDataRecord, RawDataRecord.id == DispatchItem.raw_data_id)
-        .join(Category, Category.code == DispatchItem.category_code)
-        .outerjoin(
-            CleanJobItemRecord,
-            and_(
-                CleanJobItemRecord.raw_data_id == DispatchItem.raw_data_id,
-                CleanJobItemRecord.category_code == DispatchItem.category_code,
-            ),
-        )
-        .filter(RawDataRecord.month.isnot(None))
-    )
-    if category_code:
-        grouped_query = grouped_query.filter(DispatchItem.category_code == category_code)
-    if normalized_filter_platform:
-        grouped_query = grouped_query.filter(func.lower(RawDataRecord.platform).in_(platform_aliases_for(normalized_filter_platform)))
-    if month is not None:
-        grouped_query = grouped_query.filter(RawDataRecord.month == month)
+        effective_category_code = scoped_category_code or category_code
+        if effective_category_code:
+            q = q.filter(DispatchItem.category_code == effective_category_code)
+        if normalized_filter_platform:
+            q = q.filter(func.lower(RawDataRecord.platform).in_(platform_aliases_for(normalized_filter_platform)))
+        if month is not None:
+            q = q.filter(RawDataRecord.month == month)
+        return q.group_by(DispatchItem.category_code, Category.name, platform_label, RawDataRecord.month)
 
-    grouped_query = (
-        grouped_query.group_by(DispatchItem.category_code, Category.name, platform_label, RawDataRecord.month)
-        .order_by(DispatchItem.category_code, platform_label, RawDataRecord.month)
-    )
-    if limit is not None:
-        grouped_query = grouped_query.limit(limit)
-    grouped = grouped_query.all()
+    if limit is not None and not category_code:
+        grouped = []
+        category_codes = [
+            row[0]
+            for row in db.query(Category.code).order_by(Category.code).all()
+        ]
+        for scoped_category_code in category_codes:
+            remaining = limit - len(grouped)
+            if remaining <= 0:
+                break
+            rows = (
+                build_grouped_query(scoped_category_code)
+                .order_by(platform_label, RawDataRecord.month)
+                .limit(remaining)
+                .all()
+            )
+            grouped.extend(rows)
+    else:
+        grouped_query = build_grouped_query().order_by(DispatchItem.category_code, platform_label, RawDataRecord.month)
+        if limit is not None:
+            grouped_query = grouped_query.limit(limit)
+        grouped = grouped_query.all()
 
     jobs_by_scope = _monthly_jobs_by_scope(
         db,

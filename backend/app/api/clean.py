@@ -1,5 +1,8 @@
 from datetime import datetime
 import re
+import sys
+import threading
+import time
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import String, and_, case, func, or_, select
@@ -58,6 +61,44 @@ router = APIRouter(prefix="/api/clean", tags=["clean"])
 BRAND_CLEAN_RESOLVED_STATUSES = ("matched", "url_matched", "confirmed", "excluded", "ignored")
 # 可人工补充/覆盖品牌的匹配状态
 BRAND_CLEAN_ACTIONABLE_STATUSES = ("pending", "text_only", "disputed")
+
+# 待入清洗队列（/pool/monthly）是重只读聚合：无品类筛选时会按品类逐个扫描
+# dispatch_items（千万级）并回表 raw_data（千万级宽表）。单次约数秒，多用户/刷新
+# 反复触发会打满云盘读 BPS。这里做进程内短 TTL 缓存（生产单 worker），并在
+# 派发/清洗任务变更时显式失效；TTL 作为兜底（匹配/发布等改动最多延迟这么久）。
+# 测试环境（pytest）不启用，避免跨用例污染。
+_CLEAN_POOL_CACHE_TTL_SECONDS = 20.0
+_clean_pool_cache_enabled = "pytest" not in sys.modules
+_clean_pool_cache: dict = {}
+_clean_pool_cache_lock = threading.Lock()
+
+
+def invalidate_clean_pool_cache() -> None:
+    with _clean_pool_cache_lock:
+        _clean_pool_cache.clear()
+
+
+def _clean_pool_cache_get(key):
+    if not _clean_pool_cache_enabled:
+        return None
+    with _clean_pool_cache_lock:
+        entry = _clean_pool_cache.get(key)
+        if entry is None:
+            return None
+        cached_at, rows = entry
+        if time.monotonic() - cached_at > _CLEAN_POOL_CACHE_TTL_SECONDS:
+            _clean_pool_cache.pop(key, None)
+            return None
+        return rows
+
+
+def _clean_pool_cache_set(key, rows) -> None:
+    if not _clean_pool_cache_enabled:
+        return
+    with _clean_pool_cache_lock:
+        if len(_clean_pool_cache) >= 512:
+            _clean_pool_cache.clear()
+        _clean_pool_cache[key] = (time.monotonic(), rows)
 
 
 def _visible_clean_category_codes(db: Session, current_user: User) -> set[str] | None:
@@ -511,13 +552,19 @@ def get_monthly_clean_pool_endpoint(
     visible_codes = _visible_clean_category_codes(db, current_user)
     if visible_codes is not None and category_code and category_code not in visible_codes:
         return []
-    rows = get_monthly_clean_pool(
-        db,
-        category_code=category_code,
-        platform=platform,
-        month=month,
-        limit=limit,
-    )
+    # 缓存键不含用户可见品类：昂贵的聚合结果按查询条件共享，权限过滤在缓存之后做，
+    # 这样不同权限的用户也能命中同一份结果。
+    cache_key = (category_code, platform, month, limit)
+    rows = _clean_pool_cache_get(cache_key)
+    if rows is None:
+        rows = get_monthly_clean_pool(
+            db,
+            category_code=category_code,
+            platform=platform,
+            month=month,
+            limit=limit,
+        )
+        _clean_pool_cache_set(cache_key, rows)
     if visible_codes is None:
         return rows
     return [row for row in rows if row.get("category_code") in visible_codes]
@@ -581,6 +628,7 @@ def create_clean_task(
             db.commit()
         raise HTTPException(status_code=500, detail=f"创建清洗任务失败: {str(e)}") from e
 
+    invalidate_clean_pool_cache()
     return {"job": job, "snapshot_count": snapshot_count, "match_status": "done"}
 
 
@@ -620,6 +668,7 @@ def upsert_monthly_clean_task(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"更新清洗任务失败: {str(e)}") from e
 
+    invalidate_clean_pool_cache()
     return {"job": job, "snapshot_count": snapshot_count, "action": action, "match_status": "done"}
 
 
@@ -667,6 +716,7 @@ def rerun_clean_task_with_current_rules(
 
     counts = _match_status_counts(db, job.id)
     filtered_count = db.query(FilteredItem).filter(FilteredItem.clean_job_id == job.id).count()
+    invalidate_clean_pool_cache()
     return {
         "clean_job_id": job.id,
         "row_out": job.row_out or 0,
@@ -867,6 +917,7 @@ def delete_clean_job(
     job.status = "archived"
     db.commit()
     db.refresh(job)
+    invalidate_clean_pool_cache()
     return _clean_job_to_dict(db, job)
 
 

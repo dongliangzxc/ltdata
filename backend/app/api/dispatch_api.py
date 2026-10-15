@@ -583,6 +583,9 @@ def _execute_category_dispatch(db: Session, file_id: int, category_code: str | N
         batch.finished_at = datetime.utcnow()
         db.commit()
         db.refresh(batch)
+        # 新增派发明细后，待入清洗队列缓存失效
+        from app.api.clean import invalidate_clean_pool_cache
+        invalidate_clean_pool_cache()
         return batch
     except Exception:
         db.rollback()

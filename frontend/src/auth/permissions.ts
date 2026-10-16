@@ -9,7 +9,6 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
 }
 
 const PATH_PERMISSION_PREFIXES: Array<[string, PermissionKey]> = [
-  ['/upload', 'data_management'],
   ['/dispatch', 'data_management'],
   ['/rawdata', 'data_management'],
   ['/categories', 'data_management'],
@@ -38,6 +37,7 @@ export function hasPermission(user: UserProfile | null, permission?: PermissionK
 
 export function canAccessPath(user: UserProfile | null, path: string) {
   if (!user) return false
+  if (path === '/upload' || path.startsWith('/upload/')) return user.is_admin === 1
   if (path === '/manual') return true
   if (path === '/users') return user.is_admin === 1
   const match = PATH_PERMISSION_PREFIXES.find(([prefix]) => path === prefix || path.startsWith(`${prefix}/`))
@@ -47,7 +47,8 @@ export function canAccessPath(user: UserProfile | null, path: string) {
 
 export function getDefaultPath(user: UserProfile | null) {
   if (!user) return '/login'
-  if (hasPermission(user, 'data_management')) return '/upload'
+  if (canAccessPath(user, '/upload')) return '/upload'
+  if (hasPermission(user, 'data_management')) return '/dispatch'
   if (hasPermission(user, 'processing_workbench')) return '/metadata'
   if (hasPermission(user, 'product_management')) return '/dashboard'
   return '/manual'

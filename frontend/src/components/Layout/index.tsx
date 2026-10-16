@@ -47,7 +47,7 @@ const menuItems: AppMenuItem[] = [
     label: '数据管理',
     permission: 'data_management',
     children: [
-      { key: '/upload',     icon: <UploadOutlined />,     label: '数据上传' },
+      { key: '/upload',     icon: <UploadOutlined />,     label: '数据上传', adminOnly: true },
       { key: '/dispatch',   icon: <FunnelPlotOutlined />, label: '数据分发' },
       { key: '/rawdata',    icon: <DatabaseOutlined />,   label: '原始数据' },
       { key: '/categories', icon: <TagsOutlined />,       label: '品类管理' },

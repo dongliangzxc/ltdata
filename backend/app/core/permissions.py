@@ -82,4 +82,9 @@ def required_permission_for_path(path: str) -> str | None:
 
 
 def is_admin_only_path(path: str) -> bool:
-    return path.startswith("/api/users")
+    # 「数据上传」仅管理员可用：即使拥有 data_management 目录权限也不能访问
+    return (
+        path.startswith("/api/users")
+        or path == "/api/upload"
+        or path.startswith("/api/upload/")
+    )

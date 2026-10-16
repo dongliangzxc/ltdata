@@ -42,6 +42,18 @@ _PLATFORM_MAP = {
 _LEGACY_HEADPHONE_PLATFORMS = {"jd", "tmall", "taobao"}
 
 
+def _clean_cell(value) -> str:
+    """把 Excel 单元格读为去空白字符串；空值/NaN/None 归一为 ''（避免出现 'nan'）。"""
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    return str(value).strip()
+
+
 def _visible_url_mapping_category_codes(db: Session, current_user: User) -> set[str] | None:
     all_codes = [code for code, in db.query(Category.code).order_by(Category.sort_order, Category.name).all()]
     if not all_codes:
@@ -353,17 +365,18 @@ def url_mapping_confirm(
     updated = 0
     skipped = 0
     errors = []
+    warnings = []
     payload_fields = getattr(payload, "model_fields_set", getattr(payload, "__fields_set__", set()))
     seen_keys: dict[tuple[str, str], ItemUrlMapping] = {}
 
     for i, row in enumerate(df.itertuples(index=False), start=2):
         row_dict = row._asdict()
 
-        platform_raw = str(row_dict.get("platform") or "").strip()
-        item_url = str(row_dict.get("item_url") or "").strip()
-        brand_code = str(row_dict.get("brand_code") or "").strip()
-        model_code = str(row_dict.get("model_code") or "").strip()
-        series_value = str(row_dict.get("series") or "").strip() or None
+        platform_raw = _clean_cell(row_dict.get("platform"))
+        item_url = _clean_cell(row_dict.get("item_url"))
+        brand_code = _clean_cell(row_dict.get("brand_code"))
+        model_code = _clean_cell(row_dict.get("model_code"))
+        series_value = _clean_cell(row_dict.get("series")) or None
 
         if not platform_raw or not item_url or not brand_code:
             errors.append(f"Row {i}: missing required field")
@@ -397,9 +410,8 @@ def url_mapping_confirm(
                     errors.append(f"Row {i}: model ({brand_code}, {series_value}) not found")
                     continue
             if model.category_code and payload.category_code and model.category_code != payload.category_code:
-                errors.append(
-                    f"Row {i}: warning — model category ({model.category_code}) "
-                    f"differs from selected ({payload.category_code})"
+                warnings.append(
+                    f"Row {i}: 型号归属品类（{model.category_code}）与所选品类（{payload.category_code}）不一致，已按型号原品类挂接"
                 )
         elif model_code not in ("", "-", "—", "--", "未知"):
             if payload.category_code:
@@ -428,9 +440,8 @@ def url_mapping_confirm(
                     continue
             # Category mismatch warning (non-blocking)
             if model.category_code and payload.category_code and model.category_code != payload.category_code:
-                errors.append(
-                    f"Row {i}: warning — model category ({model.category_code}) "
-                    f"differs from selected ({payload.category_code})"
+                warnings.append(
+                    f"Row {i}: 型号归属品类（{model.category_code}）与所选品类（{payload.category_code}）不一致，已按型号原品类挂接"
                 )
         else:
             model = None
@@ -498,7 +509,7 @@ def url_mapping_confirm(
         except Exception:
             db.rollback()
 
-    return {"inserted": inserted, "updated": updated, "skipped": skipped, "errors": errors}
+    return {"inserted": inserted, "updated": updated, "skipped": skipped, "errors": errors, "warnings": warnings[:20]}
 
 
 @router.post("/import")

@@ -248,6 +248,7 @@ export default function ImportMappingModal({
   ]
 
   const errors = Array.isArray(result.errors) ? result.errors as string[] : []
+  const warnings = Array.isArray(result.warnings) ? result.warnings as string[] : []
 
   return (
     <Modal
@@ -350,10 +351,21 @@ export default function ImportMappingModal({
                 {typeof result.specs_inserted === 'number' && <Text>导入规格：{result.specs_inserted} 条</Text>}
                 {typeof result.updated === 'number' && <Text>更新：{result.updated} 条</Text>}
                 {typeof result.skipped === 'number' && <Text>跳过：{result.skipped} 条</Text>}
+                {warnings.length > 0 && <Text type="secondary">提示：{warnings.length} 条</Text>}
                 {errors.length > 0 && <Text type="warning">异常：{errors.length} 条</Text>}
               </Space>
             }
           />
+          {warnings.length > 0 && (
+            <Collapse>
+              <Panel header={`查看提示详情（${Math.min(warnings.length, 10)} / ${warnings.length}）`} key="w">
+                {warnings.slice(0, 10).map((w, idx) => (
+                  <div key={idx}><Text type="secondary">{w}</Text></div>
+                ))}
+                {warnings.length > 10 && <Text type="secondary">… 仅显示前 10 条</Text>}
+              </Panel>
+            </Collapse>
+          )}
           {errors.length > 0 && (
             <Collapse>
               <Panel header={`查看异常详情（${Math.min(errors.length, 10)} / ${errors.length}）`} key="1">

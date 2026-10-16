@@ -644,7 +644,7 @@ class ItemUrlMapping(Base):
     id         = Column(Integer, primary_key=True, autoincrement=True)
     platform   = Column(String(20), nullable=False)
     item_id    = Column(String(100), nullable=False)
-    item_url   = Column(String(500), nullable=True)
+    item_url   = Column(Text, nullable=True)
     brand_code = Column(String(100), nullable=True)          # 品牌已知但型号未知时填充
     model_id   = Column(Integer, ForeignKey("models.id"), nullable=True)
     category_code = Column(String(50), nullable=True, index=True)  # 导入/创建时记录所属品类；型号匹配后也可用型号品类兜底

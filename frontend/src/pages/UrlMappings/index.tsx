@@ -64,6 +64,7 @@ const PLATFORM_OPTIONS = [
   { value: 'jd', label: '京东 (JD)' },
   { value: 'tmall', label: '天猫 (TMALL)' },
   { value: 'taobao', label: '淘宝 (TAOBAO)' },
+  { value: 'douyin', label: '抖音 (DOUYIN)' },
   { value: 'suning', label: '苏宁 (SUNING)' },
 ]
 

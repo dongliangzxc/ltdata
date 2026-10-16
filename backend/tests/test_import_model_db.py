@@ -65,6 +65,12 @@ def test_normalize_tmall_cn():
 def test_normalize_unknown():
     assert normalize_platform("Suning") == "suning"
 
+def test_normalize_douyin_cn():
+    assert normalize_platform("抖音") == "douyin"
+
+def test_normalize_douyin_code():
+    assert normalize_platform("dy") == "douyin"
+
 
 # ── extract_item_id ─────────────────────────────────────────────
 def test_extract_jd():
@@ -78,6 +84,10 @@ def test_extract_taobao_query_param():
 def test_extract_tmall_query_param():
     url = "https://detail.tmall.com/item.htm?id=987654321&xx=1"
     assert extract_item_id(url, "tmall") == "987654321"
+
+def test_extract_douyin_query_param():
+    url = "https://haohuo.jinritemai.com/ecommerce/trade/detail/index.html?id=3810204610946269592&origin_type=detail_share_v2"
+    assert extract_item_id(url, "douyin") == "3810204610946269592"
 
 def test_extract_fail_jd_no_match():
     assert extract_item_id("https://item.jd.com/xxx.html", "jd") is None

@@ -33,9 +33,10 @@ UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "./uploads")
 # 渠道名称 → platform 规范值
 _PLATFORM_MAP = {
     "JD": "jd", "京东": "jd",
-    "TMALL": "tmall", "天猫": "tmall",
-    "TAOBAO": "taobao", "淘宝": "taobao",
+    "TMALL": "tmall", "天猫": "tmall", "TM": "tmall", "天猫全部": "tmall",
+    "TAOBAO": "taobao", "淘宝": "taobao", "TB": "taobao",
     "SUNING": "suning", "苏宁": "suning",
+    "DOUYIN": "douyin", "抖音": "douyin", "DY": "douyin",
 }
 
 _LEGACY_HEADPHONE_PLATFORMS = {"jd", "tmall", "taobao"}

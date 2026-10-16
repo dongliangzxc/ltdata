@@ -55,6 +55,16 @@ def test_extract_suning_url():
     assert extract_item_id("https://product.suning.com/0070171620/11498580.html") == ("suning", "11498580")
 
 
+def test_extract_douyin_url():
+    assert extract_item_id(
+        "https://haohuo.jinritemai.com/ecommerce/trade/detail/index.html?id=3810204610946269592&origin_type=detail_share_v2"
+    ) == ("douyin", "3810204610946269592")
+
+
+def test_extract_douyin_url_without_id_returns_none():
+    assert extract_item_id("https://haohuo.jinritemai.com/ecommerce/trade/detail/index.html") is None
+
+
 def test_extract_unknown_url_returns_none():
     assert extract_item_id("https://www.amazon.com/dp/B08N5WRWNW") is None
 

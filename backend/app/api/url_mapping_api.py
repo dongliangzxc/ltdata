@@ -645,13 +645,13 @@ def list_url_mappings(
     q = db.query(ItemUrlMapping).outerjoin(ModelRecord, ItemUrlMapping.model_id == ModelRecord.id).filter(
         or_(ItemUrlMapping.brand_code.isnot(None), ItemUrlMapping.model_id.isnot(None))
     )
+    legacy_headphone_filter = and_(
+        ItemUrlMapping.model_id.is_(None),
+        ItemUrlMapping.brand_code.isnot(None),
+        ItemUrlMapping.source.is_(None),
+        ItemUrlMapping.platform.in_(_LEGACY_HEADPHONE_PLATFORMS),
+    )
     if visible_codes is not None:
-        legacy_headphone_filter = and_(
-            ItemUrlMapping.model_id.is_(None),
-            ItemUrlMapping.brand_code.isnot(None),
-            ItemUrlMapping.source.is_(None),
-            ItemUrlMapping.platform.in_(_LEGACY_HEADPHONE_PLATFORMS),
-        )
         q = q.filter(or_(
             ModelRecord.category_code.in_(visible_codes),
             ItemUrlMapping.category_code.in_(visible_codes),
@@ -673,11 +673,28 @@ def list_url_mappings(
                 ModelRecord.brand_code.ilike(kw),
             )
         )
+    # 品类筛选要与列表展示的品类口径一致：展示优先取记录品类
+    # （`ItemUrlMapping.category_code`，占位/导入时记录），为空再回退型号品类。
+    # 若这里仍用「型号品类 OR 记录品类」，会导致型号在 A 品类、记录在 B 品类的行
+    # 出现在 A 品类筛选下却显示为 B 品类（例如 移动电源 记录挂到 door_lock 型号）。
     if category_code:
-        q = q.filter(or_(
-            ModelRecord.category_code == category_code,
+        mapping_category_match = and_(
+            ItemUrlMapping.category_code.isnot(None),
             ItemUrlMapping.category_code == category_code,
-        ))
+        )
+        model_category_match = and_(
+            ItemUrlMapping.category_code.is_(None),
+            ModelRecord.category_code == category_code,
+        )
+        if category_code == "headphone":
+            # 无型号、无记录品类的历史耳机映射，展示口径回退为 headphone
+            q = q.filter(or_(
+                mapping_category_match,
+                model_category_match,
+                legacy_headphone_filter,
+            ))
+        else:
+            q = q.filter(or_(mapping_category_match, model_category_match))
     total = q.count()
     rows = (
         q.options(joinedload(ItemUrlMapping.model).joinedload(ModelRecord.category))

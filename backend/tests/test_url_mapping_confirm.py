@@ -33,6 +33,8 @@ def client(tmp_path, monkeypatch):
     s.add_all([
         Category(code="CAT001", name="测试品类"),
         Category(code="smart_lock", name="智能门锁"),
+        Category(code="door_lock", name="智能门锁"),
+        Category(code="power_bank", name="移动电源"),
     ])
     s.commit()
     s.close()
@@ -118,3 +120,31 @@ def test_confirm_category_mismatch_is_warning_not_error(client, tmp_path):
     assert d["inserted"] == 1
     assert d["errors"] == []
     assert any("不一致" in w for w in d["warnings"])
+
+
+def test_list_category_filter_matches_displayed_category(client):
+    """型号在 A 品类、记录品类在 B 品类时，按 A 筛选不应出现（展示按记录品类 B）。"""
+    from app.models.schemas import ItemUrlMapping
+
+    s = client.session_factory()
+    model = ModelRecord(brand_code="其它", model_code="0", category_code="door_lock", status="active")
+    s.add(model)
+    s.flush()
+    s.add(ItemUrlMapping(
+        platform="jd", item_id="1", item_url="https://item.jd.com/1.html",
+        brand_code="其它", model_id=model.id, category_code="power_bank", source="url_import",
+    ))
+    s.commit()
+    s.close()
+
+    # 型号品类 door_lock（展示会是记录品类 power_bank）→ 不应出现在 door_lock 筛选里
+    r1 = client.get("/api/url-mappings", params={"category_code": "door_lock"})
+    assert r1.status_code == 200
+    assert [i["category_code"] for i in r1.json()["items"]] == []
+
+    # 按记录品类 power_bank 筛选 → 出现在其中，且展示为 power_bank
+    r2 = client.get("/api/url-mappings", params={"category_code": "power_bank"})
+    assert r2.status_code == 200
+    items = r2.json()["items"]
+    assert len(items) == 1
+    assert items[0]["category_code"] == "power_bank"

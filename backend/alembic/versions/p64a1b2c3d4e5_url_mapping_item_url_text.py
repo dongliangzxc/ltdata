@@ -1,7 +1,7 @@
 """url mappings: widen item_url to TEXT
 
-Revision ID: p63a1b2c3d4e5
-Revises: p62a1b2c3d4e5
+Revision ID: p64a1b2c3d4e5
+Revises: p63a1b2c3d4e5
 Create Date: 2026-10-16
 
 抖音商城分享链接（`haohuo.jinritemai.com/...`）带大量埋点/分享参数，长度常超过
@@ -14,8 +14,8 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision: str = "p63a1b2c3d4e5"
-down_revision: Union[str, Sequence[str], None] = "p62a1b2c3d4e5"
+revision: str = "p64a1b2c3d4e5"
+down_revision: Union[str, Sequence[str], None] = "p63a1b2c3d4e5"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

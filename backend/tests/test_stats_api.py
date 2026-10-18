@@ -7,6 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.api import stats_api
 from app.api.stats_api import router
 from app.core.auth_deps import require_admin
 from app.core.permissions import is_admin_only_path
@@ -39,7 +40,7 @@ def session_factory():
 
 
 @pytest.fixture
-def client(session_factory):
+def client(session_factory, monkeypatch):
     app = FastAPI()
     app.include_router(router)
 
@@ -50,6 +51,16 @@ def client(session_factory):
         finally:
             db.close()
 
+    def refresh_sync():
+        db = session_factory()
+        try:
+            stats_api._refresh_slow_counts(db)
+        finally:
+            db.close()
+            stats_api._slow_count_cache["running"] = False
+
+    monkeypatch.setattr(stats_api, "_slow_count_cache", {"values": {}, "computed_at": None, "running": False})
+    monkeypatch.setattr(stats_api, "_refresh_slow_counts_in_background", refresh_sync)
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[require_admin] = lambda: User(username="admin", is_admin=1)
     return TestClient(app)
@@ -117,7 +128,14 @@ def test_stats_overview_aggregates(client, session_factory):
 
     res = client.get("/api/stats/overview")
     assert res.status_code == 200
-    data = res.json()["data"]
+    first = res.json()["data"]
+    # 慢计数首次请求只触发后台刷新，结果为 None；刷新完成后的请求读取缓存
+    assert first["upload"]["raw_rows"] is None
+    assert first["slow_counts_at"] is None
+
+    data = client.get("/api/stats/overview").json()["data"]
+    assert data["slow_counts_at"] is not None
+    assert data["assets"]["historical_mappings"] == 0
 
     assert data["upload"]["file_count"] == 1
     assert data["upload"]["file_rows"] == 3
@@ -163,3 +181,26 @@ def test_stats_overview_aggregates(client, session_factory):
     assert assets["users"] == 2
     assert assets["active_users"] == 1
     assert assets["login_users_30d"] == 1
+
+
+def test_slow_counts_refresh_only_when_expired(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(stats_api, "_refresh_slow_counts_in_background", lambda: calls.append(1))
+
+    client.get("/api/stats/overview")
+    client.get("/api/stats/overview")
+    # 刷新进行中不重复触发
+    assert len(calls) == 1
+
+    stats_api._slow_count_cache.update(
+        values={"raw_rows": 7, "historical_mappings": 1}, computed_at=datetime.utcnow(), running=False,
+    )
+    data = client.get("/api/stats/overview").json()["data"]
+    assert data["upload"]["raw_rows"] == 7
+    assert len(calls) == 1
+
+    stats_api._slow_count_cache["computed_at"] = datetime.utcnow() - stats_api.SLOW_COUNT_TTL * 2
+    data = client.get("/api/stats/overview").json()["data"]
+    # 过期时先返回旧值，同时触发后台刷新
+    assert data["upload"]["raw_rows"] == 7
+    assert len(calls) == 2

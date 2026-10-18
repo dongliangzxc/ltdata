@@ -92,7 +92,7 @@ export interface PlatformStatsOverview {
   upload: {
     file_count: number
     file_rows: number
-    raw_rows: number
+    raw_rows: number | null
     inserted_rows: number
     dedup_skipped_rows: number
     first_uploaded_at: string | null
@@ -150,7 +150,7 @@ export interface PlatformStatsOverview {
     url_mappings_with_model: number
     url_mapping_sources: Array<{ source: string; count: number; with_model: number }>
     exclusions: number
-    historical_mappings: number
+    historical_mappings: number | null
     models: number
     brands: number
     users: number
@@ -158,6 +158,7 @@ export interface PlatformStatsOverview {
     login_users_30d: number
   }
   generated_at: string
+  slow_counts_at: string | null
 }
 
 export const getPlatformStatsOverview = () =>

@@ -1,6 +1,8 @@
 """平台使用统计（仅管理员）：上传量、清洗任务、匹配结果与沉淀资产。"""
 from __future__ import annotations
 
+import logging
+import threading
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends
@@ -8,7 +10,7 @@ from sqlalchemy import case, func, literal_column
 from sqlalchemy.orm import Session
 
 from app.core.auth_deps import require_admin
-from app.models.database import get_db
+from app.models.database import SessionLocal, get_db
 from app.models.schemas import (
     BrandRecord,
     Category,
@@ -28,6 +30,7 @@ from app.utils.time_utils import format_beijing_datetime
 
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
+logger = logging.getLogger(__name__)
 
 # 与清洗任务列表口径一致（app/api/clean.py _serialize_job / 前端 Clean 页）
 PUBLISHABLE_STATUSES = ("url_matched", "matched", "confirmed")
@@ -50,7 +53,52 @@ def _month_expr(db: Session, column):
     return func.date_format(func.date_add(column, literal_column("INTERVAL 8 HOUR")), "%Y-%m")
 
 
-def _upload_stats(db: Session) -> dict:
+# raw_data（千万级）与 historical_mappings（百万级）全表 COUNT 在生产库要 30s+，
+# 改为后台线程定时刷新、接口直接读缓存；首次未算完时返回 None，前端显示「统计中」。
+SLOW_COUNT_TTL = timedelta(hours=1)
+_slow_count_lock = threading.Lock()
+_slow_count_cache: dict = {"values": {}, "computed_at": None, "running": False}
+
+
+def _refresh_slow_counts(db: Session) -> None:
+    values = {
+        "raw_rows": _int(db.query(func.count(RawDataRecord.id)).scalar()),
+        "historical_mappings": _int(db.query(func.count(HistoricalMapping.id)).scalar()),
+    }
+    with _slow_count_lock:
+        _slow_count_cache["values"] = values
+        _slow_count_cache["computed_at"] = datetime.utcnow()
+
+
+def _refresh_slow_counts_in_background() -> None:
+    def run():
+        db = SessionLocal()
+        try:
+            _refresh_slow_counts(db)
+        except Exception:
+            logger.exception("refresh platform slow counts failed")
+        finally:
+            db.close()
+            with _slow_count_lock:
+                _slow_count_cache["running"] = False
+
+    threading.Thread(target=run, name="stats-slow-counts", daemon=True).start()
+
+
+def _slow_counts() -> tuple[dict, datetime | None]:
+    with _slow_count_lock:
+        computed_at = _slow_count_cache["computed_at"]
+        expired = computed_at is None or datetime.utcnow() - computed_at > SLOW_COUNT_TTL
+        should_start = expired and not _slow_count_cache["running"]
+        if should_start:
+            _slow_count_cache["running"] = True
+        values = dict(_slow_count_cache["values"])
+    if should_start:
+        _refresh_slow_counts_in_background()
+    return values, computed_at
+
+
+def _upload_stats(db: Session, slow_counts: dict) -> dict:
     files = db.query(
         func.count(UploadFileRecord.id),
         func.sum(UploadFileRecord.row_count),
@@ -64,7 +112,7 @@ def _upload_stats(db: Session) -> dict:
     return {
         "file_count": _int(files[0]),
         "file_rows": _int(files[1]),
-        "raw_rows": _int(db.query(func.count(RawDataRecord.id)).scalar()),
+        "raw_rows": slow_counts.get("raw_rows"),
         "inserted_rows": _int(confirm[0]),
         "dedup_skipped_rows": _int(confirm[1]),
         "first_uploaded_at": format_beijing_datetime(files[2]) if files[2] else None,
@@ -250,7 +298,7 @@ def _monthly_stats(db: Session) -> list[dict]:
     return [months[key] for key in sorted(months)]
 
 
-def _asset_stats(db: Session) -> dict:
+def _asset_stats(db: Session, slow_counts: dict) -> dict:
     mapping_sources = [
         {"source": source or "", "count": _int(count), "with_model": _int(with_model)}
         for source, count, with_model in db.query(
@@ -270,7 +318,7 @@ def _asset_stats(db: Session) -> dict:
         "url_mappings_with_model": sum(item["with_model"] for item in mapping_sources),
         "url_mapping_sources": sorted(mapping_sources, key=lambda item: item["count"], reverse=True),
         "exclusions": _int(db.query(func.count(ItemExclusion.id)).scalar()),
-        "historical_mappings": _int(db.query(func.count(HistoricalMapping.id)).scalar()),
+        "historical_mappings": slow_counts.get("historical_mappings"),
         "models": _int(db.query(func.count(ModelRecord.id)).scalar()),
         "brands": _int(db.query(func.count(BrandRecord.id)).scalar()),
         "users": _int(users[0]),
@@ -284,16 +332,18 @@ def get_stats_overview(
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
 ):
+    slow_counts, slow_counts_at = _slow_counts()
     return {
         "code": 0,
         "data": {
-            "upload": _upload_stats(db),
+            "upload": _upload_stats(db, slow_counts),
             "clean": _clean_stats(db),
             "match": _match_stats(db),
             "sources": _source_stats(db),
             "categories": _category_stats(db),
             "monthly": _monthly_stats(db),
-            "assets": _asset_stats(db),
+            "assets": _asset_stats(db, slow_counts),
             "generated_at": format_beijing_datetime(datetime.utcnow()),
+            "slow_counts_at": format_beijing_datetime(slow_counts_at) if slow_counts_at else None,
         },
     }

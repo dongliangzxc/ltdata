@@ -133,6 +133,7 @@ export default function PlatformStatsPage() {
           <Space direction="vertical" align="end">
             <Button icon={<ReloadOutlined />} loading={loading} onClick={refresh}>刷新</Button>
             <Text type="secondary">统计时间：{data.generated_at}</Text>
+            <Text type="secondary">入库行数 / 历史对照每小时刷新：{data.slow_counts_at ?? '统计中，稍后刷新'}</Text>
           </Space>
         }
       />
@@ -141,7 +142,7 @@ export default function PlatformStatsPage() {
         <Row gutter={16}>
           <Col span={6}><Statistic title="上传文件数" value={upload.file_count} /></Col>
           <Col span={6}><Statistic title="上传数据行数" value={upload.file_rows} /></Col>
-          <Col span={6}><Statistic title="实际入库行数" value={upload.raw_rows} valueStyle={{ color: '#3f8600' }} /></Col>
+          <Col span={6}><Statistic title="实际入库行数" value={upload.raw_rows ?? '统计中…'} valueStyle={{ color: '#3f8600' }} /></Col>
           <Col span={6}><Statistic title="去重拦截行数" value={upload.dedup_skipped_rows} /></Col>
         </Row>
         <Text type="secondary">
@@ -228,7 +229,7 @@ export default function PlatformStatsPage() {
         <Row gutter={16}>
           <Col span={4}><Statistic title="URL 映射" value={assets.url_mappings} /></Col>
           <Col span={4}><Statistic title="已关联型号的映射" value={assets.url_mappings_with_model} /></Col>
-          <Col span={4}><Statistic title="历史对照" value={assets.historical_mappings} /></Col>
+          <Col span={4}><Statistic title="历史对照" value={assets.historical_mappings ?? '统计中…'} /></Col>
           <Col span={4}><Statistic title="型号 / 品牌" value={`${assets.models.toLocaleString()} / ${assets.brands.toLocaleString()}`} /></Col>
           <Col span={4}><Statistic title="排除库" value={assets.exclusions} /></Col>
           <Col span={4}><Statistic title="用户（启用 / 近30天登录）" value={`${assets.active_users} / ${assets.login_users_30d}`} /></Col>

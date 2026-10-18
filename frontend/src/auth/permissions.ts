@@ -40,6 +40,7 @@ export function canAccessPath(user: UserProfile | null, path: string) {
   if (path === '/upload' || path.startsWith('/upload/')) return user.is_admin === 1
   if (path === '/manual') return true
   if (path === '/users') return user.is_admin === 1
+  if (path === '/stats') return user.is_admin === 1
   const match = PATH_PERMISSION_PREFIXES.find(([prefix]) => path === prefix || path.startsWith(`${prefix}/`))
   if (!match) return true
   return hasPermission(user, match[1])

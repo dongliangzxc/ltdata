@@ -9,7 +9,7 @@ from app.models.database import Base, engine, SessionLocal
 from app.models.analytics_db import AnalyticsBase, analytics_engine
 from app.models.schemas import User
 from app.api import upload, rawdata, clean, export, metadata, models_api, match_api, publish_api, auth, workbench_api, analytics_api, url_mapping_api
-from app.api import rules_api, historical_api, categories_api, correction_rules_api, users_api
+from app.api import rules_api, historical_api, categories_api, correction_rules_api, users_api, stats_api
 from app.api.dispatch_api import router as dispatch_router
 from app.api.upload_templates_api import router as upload_templates_router
 from app.api.brands_api import router as brands_router
@@ -102,6 +102,7 @@ app.include_router(historical_api.router)
 app.include_router(categories_api.router)
 app.include_router(correction_rules_api.router)
 app.include_router(users_api.router)
+app.include_router(stats_api.router)
 app.include_router(dispatch_router)
 app.include_router(upload_templates_router)
 app.include_router(brands_router)

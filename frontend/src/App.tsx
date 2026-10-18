@@ -25,6 +25,7 @@ import CategoriesPage from './pages/Categories'
 import DispatchPage from './pages/Dispatch'
 import BrandsPage from './pages/Brands'
 import UsersPage from './pages/Users'
+import PlatformStatsPage from './pages/PlatformStats'
 
 function DefaultRedirect() {
   const { user } = useAuth()
@@ -67,6 +68,7 @@ export default function App() {
             <Route path="/dispatch" element={<ProtectedPage><DispatchPage /></ProtectedPage>} />
             <Route path="/brands" element={<ProtectedPage><BrandsPage /></ProtectedPage>} />
             <Route path="/users" element={<ProtectedPage><UsersPage /></ProtectedPage>} />
+            <Route path="/stats" element={<ProtectedPage><PlatformStatsPage /></ProtectedPage>} />
           </Route>
         </Route>
         </Routes>

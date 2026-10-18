@@ -87,6 +87,82 @@ export const updateUser = (id: number, payload: UpdateUserPayload) => api.patch<
 export const resetUserPassword = (id: number, password: string) =>
   api.post<ApiResponse<{ id: number }>>(`/users/${id}/reset-password`, { password }).then(r => r.data.data)
 
+// ─── Platform Stats（仅管理员） ───────────────────────────────
+export interface PlatformStatsOverview {
+  upload: {
+    file_count: number
+    file_rows: number
+    raw_rows: number
+    inserted_rows: number
+    dedup_skipped_rows: number
+    first_uploaded_at: string | null
+    last_uploaded_at: string | null
+  }
+  clean: {
+    task_total: number
+    clean_finished: number
+    has_pending: number
+    processing: number
+    failed: number
+    row_in: number
+    row_out: number
+    row_filtered: number
+    published_tasks: number
+    published_rows: number
+    archived: number
+  }
+  match: {
+    total: number
+    url_matched: number
+    matched: number
+    confirmed: number
+    publishable: number
+    publishable_distinct: number
+    excluded: number
+    ignored: number
+    pending: number
+    text_only: number
+    disputed: number
+    actionable: number
+    auto_matched: number
+  }
+  sources: Array<{ source: string; status: string; count: number }>
+  categories: Array<{
+    category_code: string | null
+    category_name: string | null
+    platform: string | null
+    tasks: number
+    total: number
+    publishable: number
+    url_matched: number
+    actionable: number
+  }>
+  monthly: Array<{
+    month: string
+    upload_files: number
+    upload_rows: number
+    tasks_created: number
+    rows_in: number
+    manual_reviewed: number
+  }>
+  assets: {
+    url_mappings: number
+    url_mappings_with_model: number
+    url_mapping_sources: Array<{ source: string; count: number; with_model: number }>
+    exclusions: number
+    historical_mappings: number
+    models: number
+    brands: number
+    users: number
+    active_users: number
+    login_users_30d: number
+  }
+  generated_at: string
+}
+
+export const getPlatformStatsOverview = () =>
+  api.get<ApiResponse<PlatformStatsOverview>>('/stats/overview').then(r => r.data.data)
+
 // ─── Upload ────────────────────────────────────────────────
 export const uploadFile = (formData: FormData) =>
   api.post('/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } })

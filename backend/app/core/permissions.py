@@ -82,4 +82,4 @@ def required_permission_for_path(path: str) -> str | None:
 
 
 def is_admin_only_path(path: str) -> bool:
-    return path.startswith("/api/users")
+    return path.startswith(("/api/users", "/api/stats"))

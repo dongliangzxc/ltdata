@@ -23,6 +23,7 @@ import {
   ContainerOutlined,
   CheckSquareOutlined,
   TeamOutlined,
+  BarChartOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../../auth/AuthContext'
@@ -83,6 +84,7 @@ const menuItems: AppMenuItem[] = [
   },
   { key: '/manual', icon: <QuestionCircleOutlined />, label: '使用手册' },
   { key: '/users', icon: <TeamOutlined />, label: '用户管理', adminOnly: true },
+  { key: '/stats', icon: <BarChartOutlined />, label: '平台统计', adminOnly: true },
 ]
 
 function filterMenuItems(items: AppMenuItem[], user: ReturnType<typeof useAuth>['user']): AppMenuItem[] {

@@ -73,6 +73,9 @@ export default function BrandCleanPage() {
   const [saving, setSaving] = useState(false)
   const [excluding, setExcluding] = useState(false)
   const [brandOptions, setBrandOptions] = useState<BrandOption[]>([])
+  const [brandSearchOptions, setBrandSearchOptions] = useState<BrandOption[]>([])
+  const [brandSearchKeyword, setBrandSearchKeyword] = useState('')
+  const [brandSearchLoading, setBrandSearchLoading] = useState(false)
   const [brandModalOpen, setBrandModalOpen] = useState(false)
   const [brandTargetRowId, setBrandTargetRowId] = useState<number | null>(null)
   const [exporting, setExporting] = useState(false)
@@ -80,6 +83,7 @@ export default function BrandCleanPage() {
   const [exportError, setExportError] = useState('')
   const [exportProgressVisible, setExportProgressVisible] = useState(false)
   const exportPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const brandSearchSeqRef = useRef(0)
 
   useEffect(() => {
     return () => {
@@ -87,16 +91,57 @@ export default function BrandCleanPage() {
     }
   }, [])
 
+  const toBrandOption = (brand: BrandItem): BrandOption => ({
+    value: brand.brand_code,
+    label: brand.brand_name ? `${brand.brand_name}（${brand.brand_code}）` : brand.brand_code,
+  })
+
+  const loadBrandOptions = async (keyword?: string) => {
+    const kw = keyword?.trim() || ''
+    const seq = ++brandSearchSeqRef.current
+    setBrandSearchLoading(true)
+    try {
+      const res = await listBrands({ keyword: kw || undefined, page: 1, page_size: kw ? 50 : 2000 })
+      if (seq !== brandSearchSeqRef.current) return
+      const options = (res.data.items ?? []).map(toBrandOption)
+      if (kw) {
+        setBrandSearchKeyword(kw)
+        setBrandSearchOptions(options)
+      } else {
+        setBrandSearchKeyword('')
+        setBrandSearchOptions([])
+        setBrandOptions(options)
+      }
+    } catch {
+      // keep the previous options on failure
+    } finally {
+      if (seq === brandSearchSeqRef.current) setBrandSearchLoading(false)
+    }
+  }
+
   useEffect(() => {
-    listBrands({ page: 1, page_size: 2000 })
-      .then(r => {
-        setBrandOptions((r.data.items ?? []).map(b => ({
-          value: b.brand_code,
-          label: b.brand_name ? `${b.brand_name}（${b.brand_code}）` : b.brand_code,
-        })))
-      })
-      .catch(() => {})
+    loadBrandOptions()
   }, [])
+
+  const resetBrandSearch = () => {
+    brandSearchSeqRef.current += 1
+    setBrandSearchKeyword('')
+    setBrandSearchOptions([])
+    setBrandSearchLoading(false)
+  }
+
+  const brandSelectOptions = brandSearchKeyword ? brandSearchOptions : brandOptions
+
+  const rememberBrandOption = (value?: string) => {
+    if (!value) return
+    const option = brandSelectOptions.find(o => o.value === value)
+    if (!option) return
+    setBrandOptions(prev => (
+      prev.some(o => o.value === value)
+        ? prev
+        : [...prev, option].sort((a, b) => a.value.localeCompare(b.value))
+    ))
+  }
 
   const { data, loading, refresh } = useRequest(
     () => listCleanJobBrandRows(jobId, {
@@ -139,6 +184,7 @@ export default function BrandCleanPage() {
 
   const handleSet = (row: BrandCleanRow, value: string | undefined) => {
     setDraft(prev => ({ ...prev, [row.cleaned_data_id]: value ?? null }))
+    rememberBrandOption(value)
   }
 
   const openCreateBrand = (rowId?: number) => {
@@ -180,13 +226,14 @@ export default function BrandCleanPage() {
   }
 
   const handleCreatedBrand = (brand: BrandItem) => {
-    setBrandOptions(prev => {
-      if (prev.some(o => o.value === brand.brand_code)) return prev
-      return [...prev, {
-        value: brand.brand_code,
-        label: brand.brand_name ? `${brand.brand_name}（${brand.brand_code}）` : brand.brand_code,
-      }].sort((a, b) => a.value.localeCompare(b.value))
-    })
+    const createdOption = toBrandOption(brand)
+    const mergeOption = (prev: BrandOption[]) => (
+      prev.some(o => o.value === createdOption.value)
+        ? prev
+        : [...prev, createdOption].sort((a, b) => a.value.localeCompare(b.value))
+    )
+    setBrandOptions(mergeOption)
+    setBrandSearchOptions(mergeOption)
     if (brandTargetRowId != null) {
       setDraft(prev => ({ ...prev, [brandTargetRowId]: brand.brand_code }))
       message.success('品牌已创建并设为该行品牌，记得点击保存')
@@ -315,11 +362,14 @@ export default function BrandCleanPage() {
           allowClear
           style={{ width: '100%' }}
           placeholder="选择品牌"
-          options={brandOptions}
+          options={brandSelectOptions}
           value={rowValue(row)}
           disabled={!row.editable}
           popupRender={renderBrandDropdown(row.cleaned_data_id)}
-          filterOption={(input, option) => (option?.label as string ?? '').toLowerCase().includes(input.toLowerCase())}
+          notFoundContent={brandSearchLoading ? '搜索中...' : undefined}
+          filterOption={false}
+          onSearch={loadBrandOptions}
+          onOpenChange={open => { if (!open) resetBrandSearch() }}
           onChange={(value: string | undefined) => handleSet(row, value)}
         />
       ),
@@ -400,11 +450,14 @@ export default function BrandCleanPage() {
             allowClear
             placeholder="批量设置品牌"
             style={{ width: 260 }}
-            options={brandOptions}
+            options={brandSelectOptions}
             value={batchBrand}
             popupRender={renderBrandDropdown()}
-            filterOption={(input, option) => (option?.label as string ?? '').toLowerCase().includes(input.toLowerCase())}
-            onChange={(value: string | undefined) => setBatchBrand(value)}
+            notFoundContent={brandSearchLoading ? '搜索中...' : undefined}
+            filterOption={false}
+            onSearch={loadBrandOptions}
+            onOpenChange={open => { if (!open) resetBrandSearch() }}
+            onChange={(value: string | undefined) => { setBatchBrand(value); rememberBrandOption(value) }}
           />
           <Button icon={<PlusOutlined />} onClick={() => openCreateBrand()}>新建品牌</Button>
           <Button onClick={handleBatchApply} disabled={selectedIds.length === 0}>批量设置选中（{selectedIds.length}）</Button>

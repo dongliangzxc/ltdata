@@ -1221,7 +1221,16 @@ def list_clean_job_brand_rows(
                 .correlate(CleanedDataRecord)
                 .exists()
             )
-            q = q.filter(or_(CleanedDataRecord.brand_std.ilike(pattern), model_exists))
+            # 人工补充的品牌存的是品牌码（cleaned_data.brand_std），
+            # 这里把匹配到的品牌码也纳入，保证按中文品牌名也能搜到。
+            matched_brand_codes = select(BrandRecord.brand_code).where(
+                or_(BrandRecord.brand_code.ilike(pattern), BrandRecord.brand_name.ilike(pattern))
+            )
+            q = q.filter(or_(
+                CleanedDataRecord.brand_std.ilike(pattern),
+                CleanedDataRecord.brand_std.in_(matched_brand_codes),
+                model_exists,
+            ))
         else:  # item_name
             q = q.filter(RawDataRecord.item_name.ilike(pattern))
 

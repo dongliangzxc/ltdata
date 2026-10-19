@@ -2877,3 +2877,35 @@ def test_brand_rows_exclude_search_sort(db):
 
     resp = client.get(f"/api/clean/jobs/{job.id}/brand-rows")
     assert resp.json()["total"] == 0
+
+
+def test_brand_rows_search_brand_code_by_brand_name(db):
+    client = _make_client(db)
+    db.add(Category(code="soundbar", name="回音壁"))
+    db.add(BrandRecord(brand_code="ONEPLUS", brand_name="一加"))
+    upload = UploadFileRecord(filename="b.xlsx", platform="jd", row_count=1, status="done")
+    db.add(upload)
+    db.flush()
+    raw = RawDataRecord(file_id=upload.id, platform="jd", item_id="b1", item_name="一加手机", brand_raw="一加")
+    db.add(raw)
+    db.flush()
+    job = CleanJobRecord(
+        file_ids=[upload.id], rules={"dedup": True}, status="reviewing",
+        row_in=1, row_out=1, category_code="soundbar",
+    )
+    db.add(job)
+    db.flush()
+    db.add(CleanedDataRecord(raw_data_id=raw.id, clean_job_id=job.id, item_name="一加手机", brand_std="ONEPLUS"))
+    db.flush()
+    db.add(MatchResult(clean_job_id=job.id, raw_data_id=raw.id, model_id=None, match_status="pending", brand_identified=0))
+    db.commit()
+
+    resp = client.get(f"/api/clean/jobs/{job.id}/brand-rows", params={"search_by": "brand_code", "keyword": "一加"})
+    assert resp.status_code == 200
+    assert [i["raw_data_id"] for i in resp.json()["items"]] == [raw.id]
+
+    resp = client.get(f"/api/clean/jobs/{job.id}/brand-rows", params={"search_by": "brand_code", "keyword": "ONEPLUS"})
+    assert [i["raw_data_id"] for i in resp.json()["items"]] == [raw.id]
+
+    resp = client.get(f"/api/clean/jobs/{job.id}/brand-rows", params={"search_by": "brand_code", "keyword": "不存在的品牌"})
+    assert resp.json()["total"] == 0

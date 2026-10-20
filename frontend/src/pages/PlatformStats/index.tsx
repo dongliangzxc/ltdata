@@ -1,4 +1,5 @@
-import { Alert, Button, Card, Col, Progress, Row, Space, Statistic, Table, Tag, Typography } from 'antd'
+import { useMemo, useState } from 'react'
+import { Alert, Button, Card, Col, Progress, Row, Select, Space, Statistic, Table, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { ReloadOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
@@ -58,6 +59,7 @@ const renderStatus = (status: string) => {
 }
 
 const categoryColumns: ColumnsType<CategoryRow> = [
+  { title: '月份', dataIndex: 'month', width: 100, render: (v: string | null) => v || '-' },
   {
     title: '品类', dataIndex: 'category_name', width: 160,
     render: (_: string | null, row) => row.category_name || row.category_code || '-',
@@ -112,6 +114,42 @@ const sourceColumns: ColumnsType<SourceRow> = [
 
 export default function PlatformStatsPage() {
   const { data, loading, refresh } = useRequest(getPlatformStatsOverview)
+  const [categoryFilter, setCategoryFilter] = useState<string>()
+  const [platformFilter, setPlatformFilter] = useState<string>()
+  const [monthFilter, setMonthFilter] = useState<string>()
+
+  const categoryOptions = useMemo(() => {
+    const options = new Map<string, string>()
+    for (const row of data?.categories ?? []) {
+      const value = row.category_code ?? ''
+      if (!options.has(value)) options.set(value, row.category_name || row.category_code || '未分类')
+    }
+    return Array.from(options, ([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'))
+  }, [data?.categories])
+
+  const platformOptions = useMemo(() => {
+    const values = new Set((data?.categories ?? []).map(row => row.platform ?? ''))
+    return Array.from(values, value => ({
+      value,
+      label: value ? platformLabelMap[value] ?? value : '未区分',
+    }))
+  }, [data?.categories])
+
+  const monthOptions = useMemo(() => {
+    const values = new Set((data?.categories ?? []).map(row => row.month ?? ''))
+    return Array.from(values, value => ({ value, label: value || '未知' }))
+      .sort((a, b) => b.value.localeCompare(a.value))
+  }, [data?.categories])
+
+  const filteredCategories = useMemo(
+    () => (data?.categories ?? []).filter(row => (
+      (categoryFilter === undefined || (row.category_code ?? '') === categoryFilter)
+      && (platformFilter === undefined || (row.platform ?? '') === platformFilter)
+      && (monthFilter === undefined || (row.month ?? '') === monthFilter)
+    )),
+    [data?.categories, categoryFilter, platformFilter, monthFilter],
+  )
 
   if (!data) {
     return <Card loading={loading} />
@@ -196,12 +234,40 @@ export default function PlatformStatsPage() {
       </Card>
 
       <Card title="品类 / 平台明细">
+        <Space wrap style={{ marginBottom: 16 }}>
+          <Select
+            allowClear
+            showSearch
+            style={{ width: 180 }}
+            placeholder="品类"
+            optionFilterProp="label"
+            value={categoryFilter}
+            options={categoryOptions}
+            onChange={setCategoryFilter}
+          />
+          <Select
+            allowClear
+            style={{ width: 140 }}
+            placeholder="平台"
+            value={platformFilter}
+            options={platformOptions}
+            onChange={setPlatformFilter}
+          />
+          <Select
+            allowClear
+            style={{ width: 140 }}
+            placeholder="月份"
+            value={monthFilter}
+            options={monthOptions}
+            onChange={setMonthFilter}
+          />
+        </Space>
         <Table
-          dataSource={data.categories}
+          dataSource={filteredCategories}
           columns={categoryColumns}
-          rowKey={row => `${row.category_code ?? ''}-${row.platform ?? ''}`}
+          rowKey={row => `${row.month ?? ''}-${row.category_code ?? ''}-${row.platform ?? ''}`}
           size="small"
-          scroll={{ x: 900 }}
+          scroll={{ x: 1000 }}
           pagination={{ pageSize: 20 }}
         />
       </Card>

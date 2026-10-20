@@ -165,7 +165,7 @@ def test_stats_overview_aggregates(client, session_factory):
 
     headphone = next(c for c in data["categories"] if c["category_code"] == "headphone")
     assert headphone == {
-        "category_code": "headphone", "category_name": "耳机", "platform": "jd",
+        "category_code": "headphone", "category_name": "耳机", "platform": "jd", "month": "2026-09",
         "tasks": 2, "total": 5, "publishable": 3, "url_matched": 1, "actionable": 2,
     }
 

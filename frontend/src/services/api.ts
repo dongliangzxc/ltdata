@@ -131,6 +131,7 @@ export interface PlatformStatsOverview {
     category_code: string | null
     category_name: string | null
     platform: string | null
+    month: string | null
     tasks: number
     total: number
     publishable: number

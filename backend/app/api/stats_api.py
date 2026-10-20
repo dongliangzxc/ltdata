@@ -222,11 +222,13 @@ def _source_stats(db: Session) -> list[dict]:
 
 def _category_stats(db: Session) -> list[dict]:
     category_code = func.coalesce(CleanJobRecord.category_code, CleanJobRecord.dispatch_category_code)
+    month = _month_expr(db, CleanJobRecord.created_at)
     status = MatchResult.match_status
     rows = (
         db.query(
             category_code.label("category_code"),
             CleanJobRecord.platform,
+            month.label("month"),
             func.count(func.distinct(CleanJobRecord.id)),
             func.count(MatchResult.id),
             func.sum(case((status.in_(PUBLISHABLE_STATUSES), 1), else_=0)),
@@ -238,7 +240,7 @@ def _category_stats(db: Session) -> list[dict]:
             (MatchResult.clean_job_id == CleanJobRecord.id) & (MatchResult.is_disabled == 0),
         )
         .filter(CleanJobRecord.status != ARCHIVED_STATUS)
-        .group_by(category_code, CleanJobRecord.platform)
+        .group_by(category_code, CleanJobRecord.platform, month)
         .all()
     )
     names = dict(db.query(Category.code, Category.name).all())
@@ -247,15 +249,20 @@ def _category_stats(db: Session) -> list[dict]:
             "category_code": code,
             "category_name": names.get(code) or code,
             "platform": platform,
+            "month": month_value,
             "tasks": _int(tasks),
             "total": _int(total),
             "publishable": _int(publishable),
             "url_matched": _int(url_matched),
             "actionable": _int(actionable),
         }
-        for code, platform, tasks, total, publishable, url_matched, actionable in rows
+        for code, platform, month_value, tasks, total, publishable, url_matched, actionable in rows
     ]
-    return sorted(items, key=lambda item: (item["total"], item["tasks"]), reverse=True)
+    return sorted(
+        items,
+        key=lambda item: (item["month"] or "", item["total"], item["tasks"]),
+        reverse=True,
+    )
 
 
 def _monthly_stats(db: Session) -> list[dict]:

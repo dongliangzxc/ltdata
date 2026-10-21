@@ -14,3 +14,6 @@ assert.match(source, /批量忽略/, 'the review toolbar should expose batch ign
 assert.match(source, /activeTab === 'ignored' \? \(\s*<Tag color="default">已忽略/, 'ignored detail should show a status tag')
 assert.match(apiSource, /export const batchIgnoreMatches = \(clean_job_id: number, payload: BatchIgnorePayload\)/, 'API should expose batch ignore helper')
 assert.match(apiSource, /data: \{ model_id\?: number; excluded\?: boolean; ignored\?: boolean/, 'single-row API should accept ignored payloads')
+assert.match(source, /batchRestoreMatches\(selectedJobId, payload\)/, 'batch restore should use the clean job endpoint')
+assert.match(source, /一键恢复/, 'the ignored toolbar should expose batch restore')
+assert.match(apiSource, /export const batchRestoreMatches = \(clean_job_id: number, payload: BatchRestorePayload\)/, 'API should expose batch restore helper')

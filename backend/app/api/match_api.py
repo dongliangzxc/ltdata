@@ -255,6 +255,27 @@ def _clear_prev_state(mr: MatchResult) -> None:
     mr.prev_reviewed_at = None
 
 
+def _restore_prev_state(mr: MatchResult) -> None:
+    if mr.prev_match_status is not None:
+        mr.match_status = mr.prev_match_status
+        mr.model_id = mr.prev_model_id
+        mr.matched_by = mr.prev_matched_by or "auto"
+        mr.match_source = mr.prev_match_source
+        mr.dispute_reason = mr.prev_dispute_reason
+        mr.review_note = mr.prev_review_note
+        mr.reviewed_at = mr.prev_reviewed_at
+    else:
+        # 老数据没有快照（迁移前误操作的历史记录），兜底重置为 pending
+        mr.match_status = "pending"
+        mr.model_id = None
+        mr.matched_by = "auto"
+        mr.match_source = None
+        mr.dispute_reason = None
+        mr.review_note = None
+        mr.reviewed_at = None
+    _clear_prev_state(mr)
+
+
 def _is_revertible(mr: MatchResult) -> bool:
     # 有 prev_* 快照就精准回滚到操作前状态；即便老数据没有快照，只要当前是人工三态，
     # 也允许撤销——按空快照兜底为 pending，让部署前的历史误操作也能修正
@@ -1604,24 +1625,15 @@ def batch_confirm_preview(
     }
 
 
-def _batch_ignore_filter_query(db: Session, clean_job_id: int, filter_payload: dict):
-    """Build a lightweight filtered query for batch task-local ignores.
+def _batch_status_filter_query(
+    db: Session, clean_job_id: int, filter_payload: dict, statuses: set[str]
+):
+    """Build a lightweight filtered query shared by batch review actions.
 
     The review UI normally sends explicit ids.  Filter mode is kept for
     select-all semantics and accepts the same common search fields as the
-    review list.  Existing terminal ``excluded``/``ignored`` rows are never
-    selected.
+    review list.
     """
-    requested = filter_payload.get("status") or filter_payload.get("tab")
-    if requested in (None, "", "all"):
-        statuses = _BATCH_IGNORE_ALLOWED_STATUSES
-    elif requested == "matched":
-        statuses = {"matched", "url_matched"}
-    elif requested in _BATCH_IGNORE_ALLOWED_STATUSES:
-        statuses = {requested}
-    else:
-        raise HTTPException(status_code=400, detail="不支持批量忽略的状态")
-
     clean_job = db.query(CleanJobRecord).filter(CleanJobRecord.id == clean_job_id).first()
     dispatch_batch_id = clean_job.dispatch_batch_id if clean_job else None
     if dispatch_batch_id is not None:
@@ -1699,6 +1711,25 @@ def _batch_ignore_filter_query(db: Session, clean_job_id: int, filter_payload: d
     return q.distinct()
 
 
+def _batch_ignore_filter_query(db: Session, clean_job_id: int, filter_payload: dict):
+    """Build a filtered query for batch task-local ignores."""
+    requested = filter_payload.get("status") or filter_payload.get("tab")
+    if requested in (None, "", "all"):
+        statuses = _BATCH_IGNORE_ALLOWED_STATUSES
+    elif requested == "matched":
+        statuses = {"matched", "url_matched"}
+    elif requested in _BATCH_IGNORE_ALLOWED_STATUSES:
+        statuses = {requested}
+    else:
+        raise HTTPException(status_code=400, detail="不支持批量忽略的状态")
+    return _batch_status_filter_query(db, clean_job_id, filter_payload, statuses)
+
+
+def _batch_restore_filter_query(db: Session, clean_job_id: int, filter_payload: dict):
+    """Build a filtered query for batch restoring task-local ignored rows."""
+    return _batch_status_filter_query(db, clean_job_id, filter_payload, {"ignored"})
+
+
 def _run_batch_ignore(db: Session, targets: list[MatchResult], reason: str | None) -> dict:
     success = 0
     failures: list[dict] = []
@@ -1732,7 +1763,7 @@ def batch_ignore(
     """将当前任务中的一批数据标为「已忽略」。
 
     ``ignored`` 只属于当前 clean_job，不写入人工排除沉淀库，也不会
-    被发布或导出。支持显式 ``ids`` 和筛选器 ``filter`` 两种模式。
+    参与发布或其他任务匹配。支持显式 ``ids`` 和筛选器 ``filter`` 两种模式。
     """
     payload = payload or {}
     _get_visible_match_clean_job_or_404(db, current_user, clean_job_id)
@@ -1780,6 +1811,78 @@ def batch_ignore(
     raise HTTPException(status_code=400, detail="mode 必须为 ids 或 filter")
 
 
+def _run_batch_restore(db: Session, targets: list[MatchResult]) -> dict:
+    success = 0
+    failures: list[dict] = []
+    for mr in targets:
+        rd = db.query(RawDataRecord).filter(RawDataRecord.id == mr.raw_data_id).first()
+        item_name = rd.item_name if rd else None
+        if mr.match_status != "ignored":
+            failures.append({"id": mr.id, "item_name": item_name, "reason": "状态已变更"})
+            continue
+        _restore_prev_state(mr)
+        success += 1
+    db.commit()
+    return {"success": success, "failed": len(failures), "failures": failures}
+
+
+@router.post("/{clean_job_id}/batch-restore")
+def batch_restore(
+    clean_job_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """将「已忽略」队列中的一批数据恢复到忽略前状态。
+
+    只处理当前任务中 ``match_status='ignored'`` 的记录；有 ``prev_*``
+    快照时精准回滚，没有快照的老数据兜底回退为 pending。支持显式
+    ``ids`` 和筛选器 ``filter`` 两种模式。
+    """
+    payload = payload or {}
+    _get_visible_match_clean_job_or_404(db, current_user, clean_job_id)
+    mode = payload.get("mode")
+    if mode == "ids":
+        ids = payload.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            raise HTTPException(status_code=400, detail="ids 不能为空")
+        if len(ids) > _BATCH_IGNORE_MAX_IDS:
+            raise HTTPException(status_code=400, detail=f"单次最多恢复 {_BATCH_IGNORE_MAX_IDS} 条")
+        rows = db.query(MatchResult).filter(
+            MatchResult.clean_job_id == clean_job_id,
+            MatchResult.id.in_(ids),
+        ).all()
+        by_id = {mr.id: mr for mr in rows}
+        targets = [by_id[i] for i in ids if i in by_id]
+        result = _run_batch_restore(db, targets)
+        for missing in [i for i in ids if i not in by_id]:
+            result["failures"].append({"id": missing, "item_name": None, "reason": "状态已变更"})
+            result["failed"] += 1
+        touch_clean_job(db, clean_job_id)
+        db.commit()
+        return {
+            "total": len(ids), "matched_total": len(ids), "truncated": False,
+            "restored": result["success"], **result,
+        }
+    if mode == "filter":
+        f = payload.get("filter") or {}
+        q = _batch_restore_filter_query(db, clean_job_id, f)
+        matched_total = q.count()
+        truncated = matched_total > _BATCH_FILTER_LIMIT
+        targets = q.limit(_BATCH_FILTER_LIMIT).all()
+        result = _run_batch_restore(db, targets)
+        touch_clean_job(db, clean_job_id)
+        db.commit()
+        return {
+            "total": len(targets),
+            "matched_total": matched_total,
+            "truncated": truncated,
+            "restored": result["success"],
+            **result,
+        }
+    raise HTTPException(status_code=400, detail="mode 必须为 ids 或 filter")
+
+
 # ── 单条撤销：回到操作前的原状态 ─────────────────────────────────────────
 
 @router.post("/items/{match_id}/revert", response_model=MatchResultOut)
@@ -1802,24 +1905,7 @@ def revert_match(match_id: int, db: Session = Depends(get_db)):
 
     # 已确认的记录如果之前把 URL 映射写成新型号，撤销时不动 URL 映射库——
     # 避免误伤后来同链接的匹配；如需一并回滚需要单独在页面上处理。
-    if mr.prev_match_status is not None:
-        mr.match_status = mr.prev_match_status
-        mr.model_id = mr.prev_model_id
-        mr.matched_by = mr.prev_matched_by or "auto"
-        mr.match_source = mr.prev_match_source
-        mr.dispute_reason = mr.prev_dispute_reason
-        mr.review_note = mr.prev_review_note
-        mr.reviewed_at = mr.prev_reviewed_at
-    else:
-        # 老数据没有快照（迁移前误操作的历史记录），兜底重置为 pending
-        mr.match_status = "pending"
-        mr.model_id = None
-        mr.matched_by = "auto"
-        mr.match_source = None
-        mr.dispute_reason = None
-        mr.review_note = None
-        mr.reviewed_at = None
-    _clear_prev_state(mr)
+    _restore_prev_state(mr)
 
     # 撤销后如果又回到有 model_id 的 matched/confirmed，可以重新跑属性匹配；
     # 但为了避免撤销引起额外副作用，这里保持简单：不重跑属性/价格审核。

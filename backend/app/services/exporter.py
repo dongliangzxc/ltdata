@@ -3,7 +3,7 @@
 - 已匹配/已确认的条目 → 按 category_name 分 Sheet，含动态规格列
 - 待确认条目 → 单独"待确认" Sheet，无规格列
 - URL 映射待确认（text_only）→ 按品类分 Sheet，命名"{品类}-URL映射待确认"
-- 争议复核 / 已排除 → 分别一个总 Sheet，基础列
+- 争议复核 / 已排除 / 已忽略 → 分别一个总 Sheet，基础列
 - 干扰项过滤 → 单独 Sheet，基础列 + 命中关键词/规则/原因；仅导出未恢复项
 - 规格列按品类过滤：每个 Sheet 只显示本品类（category_code）的规格列
 - 约定：models.category_name 与 metadata_specs.category_code 使用相同的品类码（如 SOUNDBAR）
@@ -353,6 +353,16 @@ def _export_match_jobs(
             MatchResult.is_disabled == 0,
         )
     )
+    ignored_query = (
+        db.query(MatchResult, RawDataRecord, ModelRecord)
+        .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
+        .outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
+        .filter(
+            MatchResult.clean_job_id.in_(clean_job_ids),
+            MatchResult.match_status == "ignored",
+            MatchResult.is_disabled == 0,
+        )
+    )
     # 干扰项过滤：来自独立表 filtered_items，仅导出未恢复条目
     filtered_query = (
         db.query(FilteredItem, RawDataRecord)
@@ -368,9 +378,11 @@ def _export_match_jobs(
     text_only_total = text_only_query.count()
     disputed_total = disputed_query.count()
     excluded_total = excluded_query.count()
+    ignored_total = ignored_query.count()
     filtered_total = filtered_query.count()
     if (matched_total == 0 and pending_total == 0 and text_only_total == 0
-            and disputed_total == 0 and excluded_total == 0 and filtered_total == 0):
+            and disputed_total == 0 and excluded_total == 0 and ignored_total == 0
+            and filtered_total == 0):
         return []
 
     export_dir = Path(settings.EXPORT_DIR)
@@ -464,6 +476,7 @@ def _export_match_jobs(
 
     _write_simple_match_sheet("争议复核", disputed_total, disputed_query)
     _write_simple_match_sheet("已排除", excluded_total, excluded_query)
+    _write_simple_match_sheet("已忽略", ignored_total, ignored_query)
 
     if filtered_total > 0:
         FILTERED_EXTRA_COLS = ["命中关键词", "命中规则", "命中原因"]

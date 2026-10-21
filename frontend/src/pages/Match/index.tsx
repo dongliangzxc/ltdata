@@ -15,10 +15,10 @@ import {
   triggerExport, getExportJob, getDownloadUrl,
   getCleanMonthlyPool, rerunCleanTaskWithCurrentRules,
   listFilteredItems, recoverFilteredItem,
-  batchConfirmMatch, previewBatchConfirmMatch, reassignInvalidModel, batchIgnoreMatches,
+  batchConfirmMatch, previewBatchConfirmMatch, reassignInvalidModel, batchIgnoreMatches, batchRestoreMatches,
   searchCleanTasks, transferMatchItem, getTransferNotice, fetchAllCategories,
 } from '../../services/api'
-import type { CleanJobItem, MatchCandidateOut, MatchReviewDetail, FilteredItemOut, ModelItem, BatchConfirmFilter, BatchConfirmResult, BatchIgnoreFilter, CleanTaskSearchItem, UserProfile } from '../../services/api'
+import type { CleanJobItem, MatchCandidateOut, MatchReviewDetail, FilteredItemOut, ModelItem, BatchConfirmFilter, BatchConfirmResult, BatchIgnoreFilter, BatchRestoreFilter, CleanTaskSearchItem, UserProfile } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 import ProgressModal from '../../components/ProgressModal'
 import AttributeInsightCard from './components/AttributeInsightCard'
@@ -236,6 +236,7 @@ export default function MatchPage() {
   const [selectedBatchIds, setSelectedBatchIds] = useState<Set<number>>(new Set())
   const [batchConfirming, setBatchConfirming] = useState(false)
   const [batchIgnoring, setBatchIgnoring] = useState(false)
+  const [batchRestoring, setBatchRestoring] = useState(false)
   const [batchConfirmIds, setBatchConfirmIds] = useState<number[]>([])
   const [batchAllPages, setBatchAllPages] = useState(false)
   const resetBatchSelection = () => {
@@ -540,7 +541,7 @@ export default function MatchPage() {
   // 跨页全选模式下翻新页：新页可选项默认全部勾中（§3.3 "翻页保留"）
   useEffect(() => {
     if (!batchAllPages) return
-    if (activeTab !== 'text_only' && activeTab !== 'pending') return
+    if (activeTab !== 'text_only' && activeTab !== 'pending' && activeTab !== 'ignored') return
     const items: PendingItem[] = pendingData?.items ?? []
     // 忽略不要求候选型号，跨页选择需要覆盖当前页所有记录（包括未识别品牌）。
     setSelectedBatchIds(new Set(items.map(item => item.id)))
@@ -990,7 +991,7 @@ export default function MatchPage() {
     }
     Modal.confirm({
       title: `确认忽略 ${count} 条数据？`,
-      content: '忽略后仅在本次任务中停止处理，不会导出，也不会参与其他匹配；后续仍可通过“已忽略”分类查看。',
+      content: '忽略后仅在本次任务中停止处理，不会参与其他匹配；后续仍可通过“已忽略”分类恢复，并会随任务导出到「已忽略」Sheet。',
       okText: '确认忽略',
       cancelText: '取消',
       okButtonProps: { danger: true },
@@ -1017,6 +1018,59 @@ export default function MatchPage() {
           message.error(err?.response?.data?.detail || '批量忽略失败')
         } finally {
           setBatchIgnoring(false)
+        }
+      },
+    })
+  }
+
+  const handleBatchRestore = () => {
+    if (!selectedJobId) return
+    const useFilterMode = batchAllPages
+    const filter: BatchRestoreFilter = {
+      tab: 'ignored',
+      keyword: keyword || null,
+      search_by: searchBy,
+      category_name: categoryName ?? null,
+      sort_by: sortBy as BatchRestoreFilter['sort_by'],
+      top_brands: topBrandsOnly && isPowerBankJob ? TOP_BRANDS_LIMIT : null,
+      price_min: priceMin,
+      price_max: priceMax,
+      sales_min: salesMin,
+      sales_max: salesMax,
+    }
+    const count = useFilterMode ? (pendingData?.total ?? 0) : selectedBatchIds.size
+    if (count === 0) {
+      message.info('请先选择要恢复的数据')
+      return
+    }
+    Modal.confirm({
+      title: `确认恢复 ${count} 条数据？`,
+      content: '恢复后会回到忽略前的状态，并重新进入匹配/复核流程。',
+      okText: '确认恢复',
+      cancelText: '取消',
+      onOk: async () => {
+        setBatchRestoring(true)
+        try {
+          const payload = useFilterMode
+            ? { mode: 'filter' as const, filter }
+            : { mode: 'ids' as const, ids: Array.from(selectedBatchIds) }
+          const { data } = await batchRestoreMatches(selectedJobId, payload)
+          const restoredCount = data.restored ?? data.success ?? 0
+          const failedCount = data.failed ?? 0
+          if (data.truncated) {
+            message.warning(`本次已恢复 ${restoredCount} 条，超出单次上限的记录请再次执行批量恢复`)
+          } else if (failedCount > 0) {
+            message.warning(`已恢复 ${restoredCount} 条，${failedCount} 条处理失败`)
+          } else {
+            message.success(`已恢复 ${restoredCount} 条`)
+          }
+          resetBatchSelection()
+          refreshPending()
+          fetchSummary()
+        } catch (err: any) {
+          message.error(err?.response?.data?.detail || '批量恢复失败')
+        } finally {
+          setBatchRestoring(false)
         }
       },
     })
@@ -1659,7 +1713,7 @@ export default function MatchPage() {
               children: null,
             }))}
           />
-          {(activeTab === 'text_only' || activeTab === 'pending') && (() => {
+          {(activeTab === 'text_only' || activeTab === 'pending' || activeTab === 'ignored') && (() => {
             const items: PendingItem[] = pendingData?.items ?? []
             const pageIds = items.map((item: PendingItem) => item.id)
             const selectedOnPage = pageIds.filter((id: number) => selectedBatchIds.has(id))
@@ -1687,26 +1741,39 @@ export default function MatchPage() {
                     : `已选当前页 ${selectedOnPage.length} / ${pageIds.length} 条`}
                 </span>
                 <div style={{ flex: 1 }} />
-                <Button
-                  type="primary"
-                  loading={batchConfirming}
-                  disabled={batchAllPages ? (pendingData?.total ?? 0) === 0 : selectedBatchIds.size === 0}
-                  onClick={() => handleBatchConfirm()}
-                >
-                  一键确认（{batchAllPages ? pendingData?.total ?? 0 : selectedBatchIds.size}）
-                </Button>
-                <Button
-                  danger
-                  loading={batchIgnoring}
-                  disabled={batchAllPages ? (pendingData?.total ?? 0) === 0 : selectedBatchIds.size === 0}
-                  onClick={handleBatchIgnore}
-                >
-                  批量忽略（{batchAllPages ? pendingData?.total ?? 0 : selectedBatchIds.size}）
-                </Button>
+                {activeTab === 'ignored' ? (
+                  <Button
+                    type="primary"
+                    loading={batchRestoring}
+                    disabled={batchAllPages ? (pendingData?.total ?? 0) === 0 : selectedBatchIds.size === 0}
+                    onClick={handleBatchRestore}
+                  >
+                    一键恢复（{batchAllPages ? pendingData?.total ?? 0 : selectedBatchIds.size}）
+                  </Button>
+                ) : (
+                  <>
+                    <Button
+                      type="primary"
+                      loading={batchConfirming}
+                      disabled={batchAllPages ? (pendingData?.total ?? 0) === 0 : selectedBatchIds.size === 0}
+                      onClick={() => handleBatchConfirm()}
+                    >
+                      一键确认（{batchAllPages ? pendingData?.total ?? 0 : selectedBatchIds.size}）
+                    </Button>
+                    <Button
+                      danger
+                      loading={batchIgnoring}
+                      disabled={batchAllPages ? (pendingData?.total ?? 0) === 0 : selectedBatchIds.size === 0}
+                      onClick={handleBatchIgnore}
+                    >
+                      批量忽略（{batchAllPages ? pendingData?.total ?? 0 : selectedBatchIds.size}）
+                    </Button>
+                  </>
+                )}
               </div>
             )
           })()}
-          {(activeTab === 'text_only' || activeTab === 'pending') && pendingData && (() => {
+          {(activeTab === 'text_only' || activeTab === 'pending' || activeTab === 'ignored') && pendingData && (() => {
             const items: PendingItem[] = pendingData.items ?? []
             const pageIds = items.map((item: PendingItem) => item.id)
             const allPageChecked = pageIds.length > 0 && pageIds.every((id: number) => selectedBatchIds.has(id))
@@ -1816,7 +1883,7 @@ export default function MatchPage() {
                       showSizeChanger: false,
                     }}
                     renderItem={(item: PendingItem) => {
-                      const showCheckbox = activeTab === 'text_only' || activeTab === 'pending'
+                      const showCheckbox = activeTab === 'text_only' || activeTab === 'pending' || activeTab === 'ignored'
                       const candValidation = isCandidateValidForBatch(item)
                       const checked = selectedBatchIds.has(item.id)
                       return (
@@ -1829,7 +1896,7 @@ export default function MatchPage() {
                           }}
                         >
                           {showCheckbox && (
-                            <Tooltip title={candValidation.ok ? '' : `${candValidation.reason}；仍可勾选后批量忽略`}>
+                            <Tooltip title={activeTab === 'ignored' || candValidation.ok ? '' : `${candValidation.reason}；仍可勾选后批量忽略`}>
                               <Checkbox
                                 style={{ marginRight: 8, marginTop: 4, alignSelf: 'flex-start' }}
                                 checked={checked}
@@ -1901,7 +1968,7 @@ export default function MatchPage() {
                           >排除</Button>
                           <Popconfirm
                             title="确认忽略此条数据？"
-                            description="仅对本次任务生效，不会导出，也不会参与其他匹配。"
+                            description="仅对本次任务生效，不会参与其他匹配；恢复后随任务导出到「已忽略」Sheet。"
                             okText="忽略"
                             cancelText="取消"
                             onConfirm={() => handleIgnore(reviewDetail.id)}

@@ -176,6 +176,13 @@ def test_disputed_excluded_filtered_included_in_export(db):
         match_status="excluded", matched_by="manual", is_disabled=0,
     ))
 
+    # 已忽略（保留 model_id，恢复前也可导出）
+    ignored_rd = _make_extra_raw(db, "200005", "忽略商品")
+    db.add(MatchResult(
+        clean_job_id=clean_job_id, raw_data_id=ignored_rd.id, model_id=model.id,
+        match_status="ignored", matched_by="manual", is_disabled=0,
+    ))
+
     # 干扰项过滤：未恢复 + 已恢复 各一条，只应导出未恢复的
     filtered_rd = _make_extra_raw(db, "200003", "干扰商品")
     db.add(FilteredItem(
@@ -197,6 +204,7 @@ def test_disputed_excluded_filtered_included_in_export(db):
     sheets = pd.ExcelFile(path).sheet_names
     assert "争议复核" in sheets
     assert "已排除" in sheets
+    assert "已忽略" in sheets
     assert "干扰项过滤" in sheets
 
     disputed = pd.read_excel(path, sheet_name="争议复核")
@@ -208,6 +216,10 @@ def test_disputed_excluded_filtered_included_in_export(db):
     assert excluded["宝贝ID"].astype(str).tolist() == ["200002"]
     # 已排除 model_id 为空时，入库品牌/型号留空
     assert pd.isna(excluded["入库品牌"].iloc[0]) or excluded["入库品牌"].iloc[0] == ""
+
+    ignored = pd.read_excel(path, sheet_name="已忽略")
+    assert ignored["宝贝ID"].astype(str).tolist() == ["200005"]
+    assert ignored["入库品牌"].iloc[0] == "索尼"
 
     filtered = pd.read_excel(path, sheet_name="干扰项过滤")
     assert filtered["宝贝ID"].astype(str).tolist() == ["200003"], "已恢复的干扰项不应被导出"

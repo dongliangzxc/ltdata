@@ -945,6 +945,25 @@ export type BatchIgnoreResult = {
 export const batchIgnoreMatches = (clean_job_id: number, payload: BatchIgnorePayload) =>
   api.post<BatchIgnoreResult>(`/match/${clean_job_id}/batch-ignore`, payload)
 
+export type BatchRestoreFilter = Omit<BatchIgnoreFilter, 'tab'> & { tab: 'ignored' }
+
+export type BatchRestorePayload =
+  | { mode: 'ids'; ids: number[] }
+  | { mode: 'filter'; filter: BatchRestoreFilter }
+
+export type BatchRestoreResult = {
+  total: number
+  restored?: number
+  success?: number
+  failed: number
+  truncated?: boolean
+  matched_total?: number
+  failures?: BatchConfirmFailure[]
+}
+
+export const batchRestoreMatches = (clean_job_id: number, payload: BatchRestorePayload) =>
+  api.post<BatchRestoreResult>(`/match/${clean_job_id}/batch-restore`, payload)
+
 export type BatchConfirmFilter = {
   tab: 'text_only' | 'pending'
   keyword?: string | null

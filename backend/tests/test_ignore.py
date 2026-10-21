@@ -119,6 +119,55 @@ def test_batch_ignore_ids_only_changes_current_job_rows(db, match_client):
     assert db.get(MatchResult, second.id).match_status == "ignored"
 
 
+def test_batch_restore_ids_returns_ignored_rows_to_previous_state(db, match_client):
+    job, _raw, first = _seed_ignored_row(db, name="恢复第一条")
+    second = _seed_ignored_row(db, name="恢复第二条")[2]
+    second.clean_job_id = job.id
+    db.commit()
+
+    ignored = match_client.post(
+        f"/api/match/{job.id}/batch-ignore",
+        json={"mode": "ids", "ids": [first.id, second.id]},
+    )
+    assert ignored.status_code == 200
+
+    restored = match_client.post(
+        f"/api/match/{job.id}/batch-restore",
+        json={"mode": "ids", "ids": [first.id, second.id]},
+    )
+    assert restored.status_code == 200
+    body = restored.json()
+    assert body["restored"] == 2
+    assert body["failed"] == 0
+    db.refresh(first)
+    db.refresh(second)
+    assert first.match_status == "pending"
+    assert second.match_status == "pending"
+    assert first.prev_match_status is None
+
+
+def test_batch_restore_filter_only_restores_ignored_rows(db, match_client):
+    job, _raw, first = _seed_ignored_row(db, name="只恢复已忽略")
+    second = _seed_ignored_row(db, name="保持待处理")[2]
+    second.clean_job_id = job.id
+    db.commit()
+
+    ignored = match_client.post(
+        f"/api/match/{job.id}/batch-ignore",
+        json={"mode": "ids", "ids": [first.id]},
+    )
+    assert ignored.status_code == 200
+
+    restored = match_client.post(
+        f"/api/match/{job.id}/batch-restore",
+        json={"mode": "filter", "filter": {"tab": "ignored"}},
+    )
+    assert restored.status_code == 200
+    assert restored.json()["restored"] == 1
+    assert db.get(MatchResult, first.id).match_status == "pending"
+    assert db.get(MatchResult, second.id).match_status == "pending"
+
+
 def test_run_match_preserves_ignored_rows_on_rerun(db):
     job, raw, mr = _seed_ignored_row(db, name="保留忽略")
     mr.match_status = "ignored"

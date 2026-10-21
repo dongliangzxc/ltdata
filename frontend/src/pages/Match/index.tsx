@@ -2018,14 +2018,17 @@ export default function MatchPage() {
                   ) : (
                     <Space direction="vertical" size={12} style={{ width: '100%' }}>
                       {filteredDetail.item_image ? (
-                        <div style={{ width: 200, margin: '0 auto', border: '1px solid #f0f0f0', borderRadius: 8, background: '#fafafa', padding: 6, textAlign: 'center' }}>
-                          <Image
-                            src={filteredDetail.item_image}
-                            alt="商品图片"
-                            width={180}
-                            height={180}
-                            style={{ objectFit: 'contain', borderRadius: 6 }}
-                          />
+                        <div style={{ width: 300, margin: '0 auto', border: '1px solid #f0f0f0', borderRadius: 8, background: '#fafafa', padding: 8, textAlign: 'center' }}>
+                          <div className="match-product-image" style={{ display: 'inline-block', borderRadius: 6, background: '#fff' }}>
+                            <Image
+                              src={filteredDetail.item_image}
+                              alt="商品图片"
+                              width={280}
+                              height={280}
+                              style={{ objectFit: 'contain', borderRadius: 6, cursor: 'zoom-in' }}
+                              preview={{ mask: '点击放大查看' }}
+                            />
+                          </div>
                         </div>
                       ) : null}
                       <Descriptions size="small" column={2} bordered>
@@ -2069,14 +2072,17 @@ export default function MatchPage() {
                 ) : (
                   <Space direction="vertical" size={12} style={{ width: '100%' }}>
                     {reviewDetail.item_image ? (
-                      <div style={{ width: 200, margin: '0 auto', border: '1px solid #f0f0f0', borderRadius: 8, background: '#fafafa', padding: 6, textAlign: 'center' }}>
-                        <Image
-                          src={reviewDetail.item_image}
-                          alt="商品图片"
-                          width={180}
-                          height={180}
-                          style={{ objectFit: 'contain', borderRadius: 6 }}
-                        />
+                      <div style={{ width: 300, margin: '0 auto', border: '1px solid #f0f0f0', borderRadius: 8, background: '#fafafa', padding: 8, textAlign: 'center' }}>
+                        <div className="match-product-image" style={{ display: 'inline-block', borderRadius: 6, background: '#fff' }}>
+                          <Image
+                            src={reviewDetail.item_image}
+                            alt="商品图片"
+                            width={280}
+                            height={280}
+                            style={{ objectFit: 'contain', borderRadius: 6, cursor: 'zoom-in' }}
+                            preview={{ mask: '点击放大查看' }}
+                          />
+                        </div>
                       </div>
                     ) : null}
                     <Descriptions size="small" column={2} bordered>

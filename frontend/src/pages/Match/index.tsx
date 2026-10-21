@@ -2087,6 +2087,11 @@ export default function MatchPage() {
                     ) : null}
                     <Descriptions size="small" column={2} bordered>
                       <Descriptions.Item label="商品名称" span={2}>{reviewDetail.item_name || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="商品ID">
+                        {reviewDetail.item_id
+                          ? <Text copyable>{reviewDetail.item_id}</Text>
+                          : '-'}
+                      </Descriptions.Item>
                       <Descriptions.Item label="原品牌">{reviewDetail.brand_raw || '-'}</Descriptions.Item>
                       <Descriptions.Item label="处理状态">
                         <Tag color={reviewDetail.match_status === 'ignored' ? 'default' : 'blue'}>

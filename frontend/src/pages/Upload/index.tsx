@@ -16,8 +16,10 @@ import {
   listUploadTemplates,
   updateUploadTemplate, deleteUploadTemplate,
   getUploadConfirmJob, listUploadConfirmJobs, cancelUploadConfirmJob, deleteUploadConfirmJob,
+  listCountryOptions,
   type UploadConfirmJobResponse,
   type UploadDownloadJob,
+  type CountryOption,
 } from '../../services/api'
 import ProgressModal from '../../components/ProgressModal'
 
@@ -96,6 +98,12 @@ const historyColumns = (
       : <span style={{ color: '#ccc' }}>—</span>,
   },
   {
+    title: '国家',
+    dataIndex: 'country_code',
+    width: 90,
+    render: (v: string | null) => v ? <Tag color="purple">{v}</Tag> : <span style={{ color: '#ccc' }}>—</span>,
+  },
+  {
     title: '年份',
     dataIndex: 'data_year',
     width: 70,
@@ -172,6 +180,15 @@ type HeadersResult = {
   match_score: number
 }
 
+type PendingUploadFile = {
+  uid: string
+  filename: string
+  status: 'uploading' | 'ready' | 'error'
+  headersResult?: HeadersResult
+  countryCode?: string
+  error?: string
+}
+
 type TemplateRow = {
   id: number
   name: string
@@ -189,7 +206,7 @@ function MappingCard({
   templates,
   onSuccess,
   onCancel,
-  dataRegion,
+  countryCode,
   dataYear,
   onJobUpdate,
 }: {
@@ -197,7 +214,7 @@ function MappingCard({
   templates: TemplateRow[]
   onSuccess: (result: Record<string, unknown>) => void
   onCancel: () => void
-  dataRegion?: string
+  countryCode?: string
   dataYear?: number
   onJobUpdate?: () => void
 }) {
@@ -280,7 +297,7 @@ function MappingCard({
         ignore_columns: [...ignoreSet],
         save_template_name: saveSwitch && saveName ? saveName : undefined,
         template_id: selectedTemplateId,
-        data_region: dataRegion,
+        country_code: countryCode,
         data_year: dataYear,
       })
       const { job_id } = res.data as { job_id: number }
@@ -670,7 +687,9 @@ function TemplatesTab({
 // ─── Main Upload Page ─────────────────────────────────────────
 export default function UploadPage() {
   const [step, setStep] = useState<'upload' | 'mapping' | 'preview'>('upload')
-  const [headersResult, setHeadersResult] = useState<HeadersResult | null>(null)
+  const [pendingFiles, setPendingFiles] = useState<PendingUploadFile[]>([])
+  const [activeFileId, setActiveFileId] = useState<string | null>(null)
+  const [batchCountry, setBatchCountry] = useState<string | undefined>(undefined)
   const [previewData, setPreviewData] = useState<Record<string, unknown>[]>([])
   const [previewInfo, setPreviewInfo] = useState<{
     filename: string
@@ -679,12 +698,12 @@ export default function UploadPage() {
     month_range: string
     inserted: number
     skipped: number
+    country_code?: string
   } | null>(null)
-  const [uploading, setUploading] = useState(false)
+  const [uploadingCount, setUploadingCount] = useState(0)
   const [activeJob, setActiveJob] = useState<UploadConfirmJobResponse | null>(null)
   const [jobProgressVisible, setJobProgressVisible] = useState(false)
 
-  const [dataRegion, setDataRegion] = useState<string | undefined>(undefined)
   const [dataYear, setDataYear] = useState<number>(new Date().getFullYear())
 
   const [filterRegion, setFilterRegion] = useState<string | undefined>(undefined)
@@ -735,6 +754,16 @@ export default function UploadPage() {
     { refreshDeps: [] }
   )
 
+  const { data: countryOptionsData } = useRequest(
+    () => listCountryOptions().then(r => r.data),
+    { refreshDeps: [] }
+  )
+  const countryOptions: CountryOption[] = countryOptionsData ?? []
+  const countryName = (code?: string) => {
+    const item = countryOptions.find(option => option.code === code)
+    return item ? `${item.name_cn}（${item.currency_code}）` : code || '-'
+  }
+
   const { data: uploadJobsData, refresh: refreshUploadJobs } = useRequest(
     () => listUploadConfirmJobs({ limit: 20 }).then(r => r.data),
     { pollingInterval: 3000 }
@@ -751,21 +780,45 @@ export default function UploadPage() {
     if (latest) setActiveJob(latest)
   }, [uploadJobsData, activeJob?.job_id])
 
-  const handleUpload = async (file: File) => {
-    setUploading(true)
+  const handleAddFile = async (file: File) => {
+    const uid = `${file.name}-${file.size}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    setPendingFiles(prev => [...prev, { uid, filename: file.name, status: 'uploading' }])
+    setUploadingCount(count => count + 1)
     const formData = new FormData()
     formData.append('file', file)
     try {
       const res = await getUploadHeaders(formData)
-      setHeadersResult(res.data)
-      setStep('mapping')
+      setPendingFiles(prev => prev.map(item => item.uid === uid
+        ? { ...item, status: 'ready', headersResult: res.data as HeadersResult }
+        : item))
     } catch {
-      // handled by interceptor
+      setPendingFiles(prev => prev.map(item => item.uid === uid
+        ? { ...item, status: 'error', error: '表头读取失败' }
+        : item))
     } finally {
-      setUploading(false)
+      setUploadingCount(count => Math.max(0, count - 1))
     }
     return false
   }
+
+  const updatePendingCountry = (uid: string, countryCode: string) => {
+    setPendingFiles(prev => prev.map(item => item.uid === uid ? { ...item, countryCode } : item))
+  }
+
+  const applyBatchCountry = () => {
+    if (!batchCountry) return
+    setPendingFiles(prev => prev.map(item => item.status === 'ready' ? { ...item, countryCode: batchCountry } : item))
+  }
+
+  const removePendingFile = (uid: string) => {
+    setPendingFiles(prev => prev.filter(item => item.uid !== uid))
+    if (activeFileId === uid) {
+      setActiveFileId(null)
+      setStep('upload')
+    }
+  }
+
+  const activeFile = pendingFiles.find(item => item.uid === activeFileId)
 
   const handleMappingSuccess = (result: Record<string, unknown>) => {
     const preview = result.preview as Record<string, unknown>[]
@@ -777,7 +830,12 @@ export default function UploadPage() {
       month_range: String(result.month_range),
       inserted: Number(result.inserted ?? result.row_count),
       skipped: Number(result.skipped ?? 0),
+      country_code: result.country_code as string | undefined,
     })
+    if (activeFileId) {
+      setPendingFiles(prev => prev.filter(item => item.uid !== activeFileId))
+    }
+    setActiveFileId(null)
     setStep('preview')
     runFilesQuery({ data_region: filterRegion, data_year: filterYear })
     refreshTemplates()
@@ -848,21 +906,116 @@ export default function UploadPage() {
         <Card>
           <Dragger
             accept=".xlsx,.xls,.csv"
-            multiple={false}
-            beforeUpload={handleUpload}
+            multiple
+            beforeUpload={handleAddFile}
             showUploadList={false}
-            disabled={uploading}
+            disabled={uploadingCount > 0}
           >
             <p className="ant-upload-drag-icon">
-              {uploading ? <Spin /> : <InboxOutlined />}
+              {uploadingCount > 0 ? <Spin /> : <InboxOutlined />}
             </p>
             <p className="ant-upload-text">
-              {uploading ? '正在读取文件表头…' : '点击或拖拽 Excel / CSV 文件至此上传'}
+              {uploadingCount > 0 ? '正在读取文件表头…' : '点击或拖拽多个 Excel / CSV 文件至此上传'}
             </p>
             <p className="ant-upload-hint">
-              支持 .xlsx / .xls / .csv 格式，系统将自动推荐列映射模板
+              支持一次选择多个文件；文件读取完成后，在下方逐个选择国家
             </p>
           </Dragger>
+          {countryOptions.length === 0 && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginTop: 12 }}
+              message="尚未配置国家，请联系 master 在「国家与汇率」页面先添加国家。"
+            />
+          )}
+        </Card>
+      )}
+
+      {step === 'upload' && pendingFiles.length > 0 && (
+        <Card
+          title="待处理文件"
+          size="small"
+          extra={
+            <Space>
+              <Text type="secondary">批量设置国家</Text>
+              <Select
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                placeholder="选择国家"
+                style={{ width: 200 }}
+                value={batchCountry}
+                onChange={setBatchCountry}
+                options={countryOptions.map(option => ({
+                  value: option.code,
+                  label: `${option.name_cn}（${option.currency_code}）`,
+                }))}
+              />
+              <Button onClick={applyBatchCountry} disabled={!batchCountry}>应用到未入库文件</Button>
+            </Space>
+          }
+        >
+          <Table<PendingUploadFile>
+            rowKey="uid"
+            size="small"
+            dataSource={pendingFiles}
+            pagination={false}
+            columns={[
+              { title: '文件名', dataIndex: 'filename', ellipsis: true },
+              {
+                title: '推荐模板', width: 180, ellipsis: true,
+                render: (_: unknown, row) => row.headersResult?.suggested_template?.name || '-',
+              },
+              {
+                title: '列数', width: 70,
+                render: (_: unknown, row) => row.headersResult?.columns.length ?? '-',
+              },
+              {
+                title: '国家', width: 220,
+                render: (_: unknown, row) => (
+                  <Select
+                    showSearch
+                    optionFilterProp="label"
+                    placeholder="请选择国家"
+                    style={{ width: '100%' }}
+                    value={row.countryCode}
+                    onChange={value => updatePendingCountry(row.uid, value)}
+                    options={countryOptions.map(option => ({
+                      value: option.code,
+                      label: `${option.name_cn}（${option.currency_code}）`,
+                    }))}
+                  />
+                ),
+              },
+              {
+                title: '状态', width: 100,
+                render: (_: unknown, row) => row.status === 'uploading'
+                  ? <Tag color="processing">读取中</Tag>
+                  : row.status === 'error'
+                    ? <Tag color="red">{row.error || '失败'}</Tag>
+                    : <Tag color="green">待入库</Tag>,
+              },
+              {
+                title: '操作', width: 160,
+                render: (_: unknown, row) => (
+                  <Space size={4}>
+                    <Button
+                      type="link"
+                      size="small"
+                      disabled={row.status !== 'ready' || !row.countryCode}
+                      onClick={() => { setActiveFileId(row.uid); setStep('mapping') }}
+                    >
+                      配置映射
+                    </Button>
+                    <Button type="link" size="small" danger onClick={() => removePendingFile(row.uid)}>
+                      移除
+                    </Button>
+                  </Space>
+                ),
+              },
+            ]}
+          />
         </Card>
       )}
 
@@ -942,22 +1095,12 @@ export default function UploadPage() {
       )}
 
       {/* Step 2: Mapping confirmation */}
-      {step === 'mapping' && headersResult && (
+      {step === 'mapping' && activeFile?.headersResult && (
         <>
           <Card style={{ marginBottom: 12 }}>
             <Space size="large">
               <span style={{ fontWeight: 500 }}>数据维度</span>
-              <Select
-                placeholder="国内 / 海外"
-                value={dataRegion}
-                onChange={setDataRegion}
-                style={{ width: 120 }}
-                options={[
-                  { value: 'domestic', label: '国内' },
-                  { value: 'overseas', label: '海外' },
-                ]}
-                allowClear
-              />
+              <Tag color="blue">国家：{countryName(activeFile.countryCode)}</Tag>
               <InputNumber
                 placeholder="年份"
                 value={dataYear}
@@ -969,11 +1112,11 @@ export default function UploadPage() {
             </Space>
           </Card>
           <MappingCard
-            headersResult={headersResult}
+            headersResult={activeFile.headersResult}
             templates={templates}
             onSuccess={handleMappingSuccess}
             onCancel={() => setStep('upload')}
-            dataRegion={dataRegion}
+            countryCode={activeFile.countryCode}
             dataYear={dataYear}
             onJobUpdate={refreshUploadJobs}
           />
@@ -992,6 +1135,7 @@ export default function UploadPage() {
           extra={
             <Space>
               <Tag color="blue">{PLATFORM_LABEL[previewInfo.platform] ?? previewInfo.platform}</Tag>
+              <Tag color="purple">{countryName(previewInfo.country_code)}</Tag>
               <Tag color="geekblue">{previewInfo.month_range}</Tag>
               <Text type="secondary">共 {previewInfo.row_count} 条，展示前 50 行</Text>
               <Button onClick={() => setStep('upload')}>继续上传</Button>

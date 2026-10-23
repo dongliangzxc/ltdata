@@ -21,13 +21,53 @@ CREATE TABLE IF NOT EXISTS upload_files (
     row_count    INT          DEFAULT 0          COMMENT '实际入库行数',
     status       VARCHAR(20)  DEFAULT 'done'     COMMENT 'pending/processing/done/error',
     template_id  INT                             COMMENT '本次上传使用的列模板 ID',
-    uploaded_at  DATETIME     DEFAULT CURRENT_TIMESTAMP
+    data_region  VARCHAR(20)                     COMMENT 'domestic/overseas',
+    country_code VARCHAR(8)                      COMMENT 'ISO 国家码，如 CN/US/DE/JP',
+    data_year    SMALLINT                        COMMENT '数据年份',
+    data_month   SMALLINT                        COMMENT '数据月份 1-12',
+    uploaded_at  DATETIME     DEFAULT CURRENT_TIMESTAMP,
+    KEY ix_upload_files_country_code (country_code)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='上传文件记录';
+
+-- 国家与币种主数据（master 维护）
+CREATE TABLE IF NOT EXISTS countries (
+    id              INT AUTO_INCREMENT PRIMARY KEY,
+    code            VARCHAR(8)   NOT NULL COMMENT 'ISO 国家码，如 CN/US/DE/JP',
+    name_cn         VARCHAR(64)  NOT NULL COMMENT '中文名',
+    name_en         VARCHAR(128) NULL COMMENT '英文名',
+    currency_code   VARCHAR(8)   NOT NULL COMMENT '币种，如 CNY/USD/EUR',
+    currency_symbol VARCHAR(8)   NULL COMMENT '币种符号',
+    region          VARCHAR(16)  NOT NULL DEFAULT 'overseas' COMMENT 'domestic/overseas',
+    is_active       TINYINT      NOT NULL DEFAULT 1,
+    sort_order      INT          NOT NULL DEFAULT 100,
+    created_at      DATETIME     DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME     DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_countries_code (code)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='国家与币种主数据';
+
+INSERT IGNORE INTO countries
+    (code, name_cn, name_en, currency_code, currency_symbol, region, is_active, sort_order)
+VALUES ('CN', '中国', 'China', 'CNY', '¥', 'domestic', 1, 0);
+
+-- 国家汇率：1 单位该国币种 = rate_to_cny 元人民币
+CREATE TABLE IF NOT EXISTS exchange_rates (
+    id            INT AUTO_INCREMENT PRIMARY KEY,
+    country_code  VARCHAR(8)    NOT NULL COMMENT '国家码',
+    currency_code VARCHAR(8)    NOT NULL COMMENT '币种',
+    rate_to_cny   DECIMAL(18,8) NOT NULL COMMENT '1 外币 = N 人民币',
+    source        VARCHAR(32)   NOT NULL DEFAULT 'manual',
+    operator      VARCHAR(100)  NULL,
+    remark        VARCHAR(500)  NULL,
+    created_at    DATETIME      DEFAULT CURRENT_TIMESTAMP,
+    updated_at    DATETIME      DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_fx_country (country_code)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='国家兑人民币汇率';
 
 -- 原始数据（含去重唯一索引）
 CREATE TABLE IF NOT EXISTS raw_data (
     id             INT AUTO_INCREMENT PRIMARY KEY,
     file_id        INT          NOT NULL          COMMENT '关联 upload_files.id',
+    country_code   VARCHAR(8)                     COMMENT 'ISO 国家码，如 CN/US/DE/JP',
     platform       VARCHAR(50)                    COMMENT '平台',
     month          INT                            COMMENT '月份, 如 202507',
     week           VARCHAR(50)                    COMMENT '周，如 W21',
@@ -53,8 +93,10 @@ CREATE TABLE IF NOT EXISTS raw_data (
     extra_data     JSON                           COMMENT '扩展字段（保留）',
     created_at     DATETIME     DEFAULT CURRENT_TIMESTAMP,
     KEY idx_file_id (file_id),
-    -- 去重唯一索引：同一商品同一月份同一平台只保留一条
-    UNIQUE KEY uq_raw_dedup (item_id, month, platform),
+    -- 去重唯一索引：同一国家同一商品同一月份同一平台只保留一条
+    UNIQUE KEY uq_raw_dedup (country_code, item_id, month, platform),
+    KEY idx_raw_dedup_lookup (country_code, item_id, month, platform),
+    KEY ix_raw_data_country_code (country_code),
     -- 待入清洗队列按月/平台聚合：走覆盖索引取 month/platform，避免回表读整行
     KEY idx_raw_data_month_platform (month, platform),
     -- 同标题复核按规范化标题缩小 raw_data -> match_results 连接范围
@@ -78,6 +120,7 @@ CREATE TABLE IF NOT EXISTS cleaned_data (
     id             INT AUTO_INCREMENT PRIMARY KEY,
     raw_data_id    INT                            COMMENT '关联原始数据 id（可为空）',
     clean_job_id   INT          NOT NULL          COMMENT '关联 clean_jobs.id',
+    country_code   VARCHAR(8)                     COMMENT 'ISO 国家码，如 CN/US/DE/JP',
     platform       VARCHAR(50),
     month          INT,
     week           VARCHAR(50),
@@ -103,6 +146,7 @@ CREATE TABLE IF NOT EXISTS cleaned_data (
     corrected_sales_qty    INT,
     corrected_sales_amount DECIMAL(14,2),
     created_at     DATETIME     DEFAULT CURRENT_TIMESTAMP,
+    KEY ix_cleaned_data_country_code (country_code),
     KEY idx_clean_job_id (clean_job_id),
     CONSTRAINT fk_cleaned_job FOREIGN KEY (clean_job_id) REFERENCES clean_jobs(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='清洗后数据';

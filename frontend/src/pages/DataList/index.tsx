@@ -62,6 +62,7 @@ function ResizableTitle(props: React.ThHTMLAttributes<HTMLTableCellElement> & { 
 type ColDef = TableColumnType<Record<string, unknown>> & { dataIndex?: string }
 
 const BASE_COLUMNS: ColDef[] = [
+  { title: '国家', dataIndex: 'country_code', width: 80, fixed: 'left' as const, render: (v: string) => v ? <Tag color="purple">{v}</Tag> : '-' },
   {
     title: '平台', dataIndex: 'platform', width: 90, fixed: 'left' as const,
     render: (v: string) => {

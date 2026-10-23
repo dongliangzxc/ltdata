@@ -15,10 +15,11 @@ import {
   listCleanJobMatched,
   previewCleanJob,
   upsertMonthlyCleanTask,
+  listExchangeRateOptions,
 } from '../../services/api'
 import type {
   CleanJobItem, CleanMonthlyPoolItem, CleanJobListView, UserProfile,
-  CleanMatchedGroup, CleanMatchedItem, CleanMatchedResponse,
+  CleanMatchedGroup, CleanMatchedItem, CleanMatchedResponse, ExchangeRateOption,
 } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 
@@ -26,6 +27,8 @@ type CleanJobStatus = 'created' | 'cleaning' | 'matching' | 'processing' | 'revi
 
 type CleanPreviewRow = {
   id?: number
+  country_code?: string | null
+  currency_code?: string | null
   platform?: string | null
   month?: string | number | null
   brand_std?: string | null
@@ -33,10 +36,14 @@ type CleanPreviewRow = {
   item_name?: string | null
   sales_qty?: number | null
   sales_amount?: number | null
+  sales_amount_cny?: number | null
+  price?: number | null
+  price_cny?: number | null
 }
 
 type CleanPreviewResponse = {
   total: number
+  rates?: Record<string, { currency_code: string; rate_to_cny: number }>
   items: CleanPreviewRow[]
 }
 
@@ -273,32 +280,56 @@ const monthlyQueueColumns = (
   },
 ]
 
-const previewCols: ColumnsType<CleanPreviewRow> = [
-  {
-    title: '平台', dataIndex: 'platform', width: 90,
-    render: formatText,
-  },
-  {
-    title: '月份', dataIndex: 'month', width: 90,
-    render: formatText,
-  },
-  {
-    title: '品牌', dataIndex: 'brand_std', width: 110,
-    render: (_: string | null | undefined, row) => row.brand_std || row.brand || '-',
-  },
-  {
-    title: '宝贝名称', dataIndex: 'item_name', ellipsis: true,
-    render: formatText,
-  },
-  {
-    title: '销量', dataIndex: 'sales_qty', width: 80,
-    render: formatNumber,
-  },
-  {
-    title: '销售额', dataIndex: 'sales_amount', width: 110,
-    render: (v: number | null | undefined) => v != null ? `¥${Number(v).toLocaleString()}` : '-',
-  },
-]
+const buildPreviewCols = (
+  displayCurrency: string,
+  rates?: Record<string, { currency_code: string; rate_to_cny: number }>,
+): ColumnsType<CleanPreviewRow> => {
+  const targetRate = displayCurrency === 'CNY'
+    ? 1
+    : displayCurrency !== 'original'
+      ? rates?.[displayCurrency]?.rate_to_cny
+      : undefined
+  const formatConverted = (row: CleanPreviewRow, original?: number | null, cny?: number | null) => {
+    if (displayCurrency === 'original') {
+      return original != null ? Number(original).toLocaleString() : '-'
+    }
+    if (cny == null) return '-'
+    if (displayCurrency === 'CNY') return `¥${Number(cny).toLocaleString()}`
+    if (!targetRate) return '-'
+    if (row.country_code === displayCurrency) return original != null ? Number(original).toLocaleString() : '-'
+    return Number(cny / targetRate).toLocaleString(undefined, { maximumFractionDigits: 2 })
+  }
+  return [
+    {
+      title: '国家', dataIndex: 'country_code', width: 90,
+      render: (v: string | null | undefined) => v || '-',
+    },
+    {
+      title: '平台', dataIndex: 'platform', width: 90,
+      render: formatText,
+    },
+    {
+      title: '月份', dataIndex: 'month', width: 90,
+      render: formatText,
+    },
+    {
+      title: '品牌', dataIndex: 'brand_std', width: 110,
+      render: (_: string | null | undefined, row) => row.brand_std || row.brand || '-',
+    },
+    {
+      title: '宝贝名称', dataIndex: 'item_name', ellipsis: true,
+      render: formatText,
+    },
+    {
+      title: '销量', dataIndex: 'sales_qty', width: 80,
+      render: formatNumber,
+    },
+    {
+      title: '销售额', dataIndex: 'sales_amount', width: 130,
+      render: (_: unknown, row) => formatConverted(row, row.sales_amount, row.sales_amount_cny),
+    },
+  ]
+}
 
 const MATCH_SOURCE_LABEL: Record<string, string> = {
   s0: 'URL映射命中',
@@ -315,6 +346,10 @@ const MATCH_SOURCE_LABEL: Record<string, string> = {
 const matchedSourceLabel = (source?: string | null) => (source ? MATCH_SOURCE_LABEL[source] ?? source : '-')
 
 const matchedMappingCols: ColumnsType<CleanMatchedItem> = [
+  {
+    title: '国家', dataIndex: 'country_code', width: 80,
+    render: (v: string | null | undefined) => v || '-',
+  },
   {
     title: '平台', dataIndex: 'platform', width: 80,
     render: formatText,
@@ -402,6 +437,7 @@ export default function CleanPage() {
   const [jobSortBy, setJobSortBy] = useState<'created_at' | 'updated_at'>('created_at')
   const [previewJobId, setPreviewJobId] = useState<number | null>(null)
   const [previewPage, setPreviewPage] = useState(1)
+  const [previewCurrency, setPreviewCurrency] = useState('original')
   const [matchedJobId, setMatchedJobId] = useState<number | null>(null)
   const [matchedGroup, setMatchedGroup] = useState<CleanMatchedGroup>('mapping')
   const [matchedPage, setMatchedPage] = useState(1)
@@ -561,6 +597,15 @@ export default function CleanPage() {
     { ready: previewJobId != null, refreshDeps: [previewJobId, previewPage] }
   )
   const currentPreviewData: TaggedCleanPreviewResponse | undefined = previewData?.jobId === previewJobId ? previewData : undefined
+  const { data: rateOptionsData } = useRequest(
+    () => listExchangeRateOptions().then(r => r.data),
+    { refreshDeps: [] }
+  )
+  const rateOptions: ExchangeRateOption[] = rateOptionsData ?? []
+  const previewCols = useMemo(
+    () => buildPreviewCols(previewCurrency, currentPreviewData?.rates),
+    [previewCurrency, currentPreviewData?.rates],
+  )
 
   const { data: matchedData, loading: matchedLoading } = useRequest(
     async () => {
@@ -689,11 +734,30 @@ export default function CleanPage() {
       </Card>
 
       <Modal
-        title={`清洗结果预览（任务 #${previewJobId}）`}
+        title={
+          <Space>
+            <span>{`清洗结果预览（任务 #${previewJobId}）`}</span>
+            <Text type="secondary" style={{ fontSize: 12 }}>显示币种</Text>
+            <Select
+              size="small"
+              style={{ width: 170 }}
+              value={previewCurrency}
+              onChange={setPreviewCurrency}
+              options={[
+                { value: 'original', label: '原币' },
+                { value: 'CNY', label: '人民币（CNY）' },
+                ...rateOptions.filter(option => option.country_code !== 'CN').map(option => ({
+                  value: option.country_code,
+                  label: `${option.country_name}（${option.currency_code}）`,
+                })),
+              ]}
+            />
+          </Space>
+        }
         open={previewJobId != null}
         onCancel={() => setPreviewJobId(null)}
         footer={null}
-        width={1000}
+        width={1100}
       >
         <Table
           dataSource={currentPreviewData?.items ?? []}
@@ -701,7 +765,7 @@ export default function CleanPage() {
           rowKey={(row, index) => String(row.id ?? index)}
           size="small"
           loading={previewLoading}
-          scroll={{ x: 800 }}
+          scroll={{ x: 900 }}
           pagination={{
             current: previewPage,
             pageSize: 20,

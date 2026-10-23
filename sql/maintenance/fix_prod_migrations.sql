@@ -125,6 +125,92 @@ IF NOT EXISTS (
     UPDATE column_templates SET module = 'sales' WHERE is_builtin = 1;
 END IF;
 
+-- 海外国家与汇率
+CREATE TABLE IF NOT EXISTS countries (
+    id              INT AUTO_INCREMENT PRIMARY KEY,
+    code            VARCHAR(8)   NOT NULL,
+    name_cn         VARCHAR(64)  NOT NULL,
+    name_en         VARCHAR(128) NULL,
+    currency_code   VARCHAR(8)   NOT NULL,
+    currency_symbol VARCHAR(8)   NULL,
+    region          VARCHAR(16)  NOT NULL DEFAULT 'overseas',
+    is_active       TINYINT      NOT NULL DEFAULT 1,
+    sort_order      INT          NOT NULL DEFAULT 100,
+    created_at      DATETIME     DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME     DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_countries_code (code)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='国家与币种主数据';
+
+INSERT IGNORE INTO countries
+    (code, name_cn, name_en, currency_code, currency_symbol, region, is_active, sort_order)
+VALUES ('CN', '中国', 'China', 'CNY', '¥', 'domestic', 1, 0);
+
+CREATE TABLE IF NOT EXISTS exchange_rates (
+    id            INT AUTO_INCREMENT PRIMARY KEY,
+    country_code  VARCHAR(8)    NOT NULL,
+    currency_code VARCHAR(8)    NOT NULL,
+    rate_to_cny   DECIMAL(18,8) NOT NULL,
+    source        VARCHAR(32)   NOT NULL DEFAULT 'manual',
+    operator      VARCHAR(100)  NULL,
+    remark        VARCHAR(500)  NULL,
+    created_at    DATETIME      DEFAULT CURRENT_TIMESTAMP,
+    updated_at    DATETIME      DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_fx_country (country_code)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='国家兑人民币汇率';
+
+IF NOT EXISTS (
+    SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='upload_files' AND COLUMN_NAME='country_code'
+) THEN
+    ALTER TABLE upload_files ADD COLUMN country_code VARCHAR(8) NULL;
+    CREATE INDEX ix_upload_files_country_code ON upload_files(country_code);
+END IF;
+
+IF NOT EXISTS (
+    SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='raw_data' AND COLUMN_NAME='country_code'
+) THEN
+    ALTER TABLE raw_data ADD COLUMN country_code VARCHAR(8) NULL;
+    CREATE INDEX ix_raw_data_country_code ON raw_data(country_code);
+END IF;
+
+IF NOT EXISTS (
+    SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='cleaned_data' AND COLUMN_NAME='country_code'
+) THEN
+    ALTER TABLE cleaned_data ADD COLUMN country_code VARCHAR(8) NULL;
+    CREATE INDEX ix_cleaned_data_country_code ON cleaned_data(country_code);
+END IF;
+
+UPDATE upload_files SET country_code='CN'
+WHERE country_code IS NULL AND (data_region IS NULL OR data_region='domestic');
+
+UPDATE raw_data rd JOIN upload_files uf ON uf.id = rd.file_id
+SET rd.country_code='CN'
+WHERE rd.country_code IS NULL AND (uf.data_region IS NULL OR uf.data_region='domestic');
+
+UPDATE cleaned_data cd JOIN raw_data rd ON rd.id = cd.raw_data_id
+SET cd.country_code=rd.country_code WHERE cd.country_code IS NULL;
+
+-- 原始数据去重键加入国家（重建索引）
+IF EXISTS (
+    SELECT 1 FROM INFORMATION_SCHEMA.STATISTICS
+    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='raw_data' AND INDEX_NAME='uq_raw_dedup'
+      AND SEQ_IN_INDEX=1 AND COLUMN_NAME='item_id'
+) THEN
+    ALTER TABLE raw_data DROP INDEX uq_raw_dedup;
+    ALTER TABLE raw_data ADD UNIQUE KEY uq_raw_dedup (country_code, item_id, month, platform);
+END IF;
+
+IF EXISTS (
+    SELECT 1 FROM INFORMATION_SCHEMA.STATISTICS
+    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='raw_data' AND INDEX_NAME='idx_raw_dedup_lookup'
+      AND SEQ_IN_INDEX=1 AND COLUMN_NAME='item_id'
+) THEN
+    ALTER TABLE raw_data DROP INDEX idx_raw_dedup_lookup;
+    ALTER TABLE raw_data ADD KEY idx_raw_dedup_lookup (country_code, item_id, month, platform);
+END IF;
+
 -- 更新 alembic 版本
 UPDATE alembic_version SET version_num = 'p11a1b2c3d4e5';
 

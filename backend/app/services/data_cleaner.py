@@ -328,6 +328,7 @@ def run_clean(
         cleaned.append(CleanedDataRecord(
             raw_data_id=r.id,
             clean_job_id=clean_job_id,
+            country_code=r.country_code,
             platform=r.platform,
             month=r.month,
             week=r.week,

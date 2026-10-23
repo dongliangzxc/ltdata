@@ -165,6 +165,68 @@ export interface PlatformStatsOverview {
 export const getPlatformStatsOverview = () =>
   api.get<ApiResponse<PlatformStatsOverview>>('/stats/overview').then(r => r.data.data)
 
+// ─── Countries & Exchange Rates ─────────────────────────────
+export interface CountryOption {
+  code: string
+  name_cn: string
+  name_en: string | null
+  currency_code: string
+  currency_symbol: string | null
+  region: 'domestic' | 'overseas'
+}
+
+export interface CountryItem extends CountryOption {
+  id: number
+  is_active: number
+  sort_order: number
+}
+
+export interface ExchangeRateOption {
+  country_code: string
+  country_name: string
+  currency_code: string
+  currency_symbol: string | null
+  rate_to_cny: number
+}
+
+export interface ExchangeRateItem extends ExchangeRateOption {
+  id: number
+  source: string
+  operator: string | null
+  remark: string | null
+  updated_at: string | null
+}
+
+export const listCountryOptions = () =>
+  api.get<CountryOption[]>('/countries/options')
+
+export const listCountries = () =>
+  api.get<CountryItem[]>('/countries')
+
+export const createCountry = (payload: Omit<CountryItem, 'id'>) =>
+  api.post<CountryItem>('/countries', payload)
+
+export const updateCountry = (code: string, payload: Partial<Omit<CountryItem, 'id' | 'code'>>) =>
+  api.put<CountryItem>(`/countries/${code}`, payload)
+
+export const deleteCountry = (code: string) =>
+  api.delete<CountryItem>(`/countries/${code}`)
+
+export const listExchangeRateOptions = () =>
+  api.get<ExchangeRateOption[]>('/exchange-rates/options')
+
+export const listExchangeRates = (params?: { country_code?: string }) =>
+  api.get<ExchangeRateItem[]>('/exchange-rates', { params })
+
+export const createExchangeRate = (payload: { country_code: string; rate_to_cny: number; remark?: string }) =>
+  api.post<ExchangeRateItem>('/exchange-rates', payload)
+
+export const updateExchangeRate = (id: number, payload: { rate_to_cny?: number; remark?: string }) =>
+  api.put<ExchangeRateItem>(`/exchange-rates/${id}`, payload)
+
+export const deleteExchangeRate = (id: number) =>
+  api.delete(`/exchange-rates/${id}`)
+
 // ─── Upload ────────────────────────────────────────────────
 export const uploadFile = (formData: FormData) =>
   api.post('/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
@@ -179,12 +241,14 @@ interface UploadFileItem {
   template_id: number | null
   uploaded_at: string
   data_region: string | null
+  country_code: string | null
   data_year: number | null
   data_month: number | null
 }
 
 export const listUploadFiles = (params?: {
   data_region?: string
+  country_code?: string
   data_year?: number
 }) => api.get<UploadFileItem[]>('/upload/files', { params })
 
@@ -405,9 +469,13 @@ export type CleanMatchedItem = {
   shop_name: string | null
   platform: string | null
   item_id: string | null
+  country_code?: string | null
+  currency_code?: string | null
   price: number | null
+  price_cny?: number | null
   sales_qty: number | null
   sales_amount: number | null
+  sales_amount_cny?: number | null
   created_at?: string | null
 }
 
@@ -1255,9 +1323,13 @@ export type FilteredItemOut = {
   shop_name: string | null
   platform: string | null
   item_id: string | null
+  country_code: string | null
+  currency_code: string | null
   price: number | null
+  price_cny: number | null
   sales_qty: number | null
   sales_amount: number | null
+  sales_amount_cny: number | null
   created_at: string | null
 }
 
@@ -1549,6 +1621,13 @@ export interface MatchResultOut {
   corrected_sales_qty?: number | null
   adjusted_sales_qty?: number | null
   category_name?: string | null
+  country_code?: string | null
+  country_name?: string | null
+  currency_code?: string | null
+  price_cny?: number | null
+  ref_price_cny?: number | null
+  sales_amount_cny?: number | null
+  adjusted_price_cny?: number | null
 }
 
 export interface MatchReviewDetail extends MatchResultOut {
@@ -1561,8 +1640,16 @@ export interface MatchReviewDetail extends MatchResultOut {
   item_id?: string | null
   shop_name?: string | null
   ref_price?: number | null
+  ref_price_cny?: number | null
   price?: number | null
+  price_cny?: number | null
   sales_amount?: number | null
+  sales_amount_cny?: number | null
+  adjusted_price_cny?: number | null
+  country_code?: string | null
+  currency_code?: string | null
+  exchange_rate?: number | null
+  rates?: Record<string, { currency_code: string; rate_to_cny: number }>
   url_mapping?: {
     id: number
     model_id: number | null
@@ -1707,6 +1794,7 @@ export const confirmUpload = (payload: {
   save_template_name?: string
   template_id?: number
   data_region?: string
+  country_code?: string
   data_year?: number
 }) => api.post('/upload/confirm', payload, { timeout: 600000 })
 

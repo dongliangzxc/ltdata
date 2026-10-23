@@ -24,6 +24,7 @@ class UploadFileRecord(Base):
     status = Column(String(20), default="done")  # pending/processing/done/error
     template_id  = Column(Integer,       nullable=True)
     data_region  = Column(String(20),    nullable=True, comment='domestic/overseas')
+    country_code = Column(String(8),     nullable=True, index=True, comment='ISO 国家码，如 US/DE/JP')
     data_year    = Column(SmallInteger,  nullable=True, comment='数据年份')
     data_month   = Column(SmallInteger,  nullable=True, comment='数据月份 1-12')
     uploaded_at  = Column(DateTime,      default=datetime.utcnow)
@@ -47,6 +48,44 @@ class UploadDownloadJob(Base):
     file = relationship("UploadFileRecord")
 
 
+class Country(Base):
+    """国家与币种主数据。master 维护，上传时选择。"""
+    __tablename__ = "countries"
+    __table_args__ = (
+        UniqueConstraint("code", name="uq_countries_code"),
+    )
+
+    id              = Column(Integer, primary_key=True, index=True)
+    code            = Column(String(8), nullable=False, index=True, comment='ISO 国家码，如 CN/US/DE/JP')
+    name_cn         = Column(String(64), nullable=False)
+    name_en         = Column(String(128), nullable=True)
+    currency_code   = Column(String(8), nullable=False, comment='币种，如 CNY/USD/EUR')
+    currency_symbol = Column(String(8), nullable=True)
+    region          = Column(String(16), nullable=False, default="overseas", comment='domestic/overseas')
+    is_active       = Column(SmallInteger, nullable=False, default=1)
+    sort_order      = Column(Integer, nullable=False, default=100)
+    created_at      = Column(DateTime, default=datetime.utcnow)
+    updated_at      = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ExchangeRate(Base):
+    """国家当前汇率：1 单位该国币种 = rate_to_cny 元人民币。"""
+    __tablename__ = "exchange_rates"
+    __table_args__ = (
+        UniqueConstraint("country_code", name="uq_fx_country"),
+    )
+
+    id            = Column(Integer, primary_key=True, index=True)
+    country_code  = Column(String(8), nullable=False, index=True)
+    currency_code = Column(String(8), nullable=False)
+    rate_to_cny   = Column(Numeric(18, 8), nullable=False)
+    source        = Column(String(32), nullable=False, default="manual")
+    operator      = Column(String(100), nullable=True)
+    remark        = Column(String(500), nullable=True)
+    created_at    = Column(DateTime, default=datetime.utcnow)
+    updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class RawDataRecord(Base):
     __tablename__ = "raw_data"
     # Upload deduplication probes (item_id, month, platform) for every batch.
@@ -55,7 +94,8 @@ class RawDataRecord(Base):
     # idx_raw_data_month_platform lets 待入清洗队列的按月/平台聚合走覆盖索引，
     # 不再为取 month/platform 回表读取整行（raw_data 含多个 TEXT 宽字段）。
     __table_args__ = (
-        Index("idx_raw_dedup_lookup", "item_id", "month", "platform"),
+        UniqueConstraint("country_code", "item_id", "month", "platform", name="uq_raw_dedup"),
+        Index("idx_raw_dedup_lookup", "country_code", "item_id", "month", "platform"),
         Index("idx_raw_data_month_platform", "month", "platform"),
         # Same-title preview joins by clean_job_id -> raw_data_id and then
         # looks up the normalized title.  Keep this index narrow enough for
@@ -65,6 +105,7 @@ class RawDataRecord(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     file_id = Column(Integer, ForeignKey("upload_files.id"), nullable=False)
+    country_code = Column(String(8), nullable=True, index=True, comment='ISO 国家码，如 US/DE/JP')
     platform = Column(String(50))
     month = Column(Integer)                 # 202507
     week = Column(String(50))
@@ -149,6 +190,7 @@ class CleanedDataRecord(Base):
     id = Column(Integer, primary_key=True, index=True)
     raw_data_id = Column(Integer, ForeignKey("raw_data.id"))
     clean_job_id = Column(Integer, ForeignKey("clean_jobs.id"), nullable=False)
+    country_code = Column(String(8), nullable=True, index=True, comment='ISO 国家码，如 US/DE/JP')
     platform = Column(String(50))
     month = Column(Integer)
     week = Column(String(50))
@@ -181,6 +223,123 @@ class CleanedDataRecord(Base):
 
 # ─────────────────────────── Pydantic Schemas ───────────────────────────
 
+class CountryOut(BaseModel):
+    id: int
+    code: str
+    name_cn: str
+    name_en: Optional[str] = None
+    currency_code: str
+    currency_symbol: Optional[str] = None
+    region: str
+    is_active: int
+    sort_order: int
+
+    model_config = {"from_attributes": True}
+
+
+class CountryOptionOut(BaseModel):
+    code: str
+    name_cn: str
+    name_en: Optional[str] = None
+    currency_code: str
+    currency_symbol: Optional[str] = None
+    region: str
+
+
+class CountryIn(BaseModel):
+    code: str
+    name_cn: str
+    name_en: Optional[str] = None
+    currency_code: str
+    currency_symbol: Optional[str] = None
+    region: str = "overseas"
+    is_active: int = 1
+    sort_order: int = 100
+
+    @field_validator("code", "name_cn", "currency_code")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("不能为空")
+        return value
+
+    @field_validator("region")
+    @classmethod
+    def validate_region(cls, value: str) -> str:
+        value = value.strip().lower()
+        if value not in {"domestic", "overseas"}:
+            raise ValueError("region 只能为 domestic 或 overseas")
+        return value
+
+
+class CountryUpdate(BaseModel):
+    name_cn: Optional[str] = None
+    name_en: Optional[str] = None
+    currency_code: Optional[str] = None
+    currency_symbol: Optional[str] = None
+    region: Optional[str] = None
+    is_active: Optional[int] = None
+    sort_order: Optional[int] = None
+
+    @field_validator("region")
+    @classmethod
+    def validate_region(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        value = value.strip().lower()
+        if value not in {"domestic", "overseas"}:
+            raise ValueError("region 只能为 domestic 或 overseas")
+        return value
+
+
+class ExchangeRateOut(BaseModel):
+    id: int
+    country_code: str
+    country_name: Optional[str] = None
+    currency_code: str
+    currency_symbol: Optional[str] = None
+    rate_to_cny: float
+    source: str
+    operator: Optional[str] = None
+    remark: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class ExchangeRateIn(BaseModel):
+    country_code: str
+    rate_to_cny: float
+    remark: Optional[str] = None
+
+    @field_validator("country_code")
+    @classmethod
+    def validate_country_code(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("不能为空")
+        return value
+
+    @field_validator("rate_to_cny")
+    @classmethod
+    def validate_rate(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("汇率必须大于 0")
+        return value
+
+
+class ExchangeRateUpdate(BaseModel):
+    rate_to_cny: Optional[float] = None
+    remark: Optional[str] = None
+
+
+class ExchangeRateOptionOut(BaseModel):
+    country_code: str
+    country_name: str
+    currency_code: str
+    currency_symbol: Optional[str] = None
+    rate_to_cny: float
+
+
 class UploadFileOut(BaseModel):
     id: int
     filename: str
@@ -190,6 +349,7 @@ class UploadFileOut(BaseModel):
     status: str
     template_id: Optional[int] = None
     data_region:  Optional[str] = None
+    country_code: Optional[str] = None
     data_year:    Optional[int] = None
     data_month:   Optional[int] = None
     uploaded_at: str
@@ -214,6 +374,7 @@ class UploadDownloadJobOut(BaseModel):
 class RawDataOut(BaseModel):
     id: int
     file_id: int
+    country_code: Optional[str] = None
     platform: Optional[str]
     month: Optional[int]
     category_lv0: Optional[str]
@@ -335,6 +496,9 @@ class CreateCleanTaskOut(BaseModel):
 class CleanedDataOut(BaseModel):
     id: int
     clean_job_id: int
+    country_code: Optional[str] = None
+    currency_code: Optional[str] = None
+    exchange_rate: Optional[float] = None
     platform: Optional[str]
     month: Optional[int]
     category_lv1: Optional[str]
@@ -343,11 +507,14 @@ class CleanedDataOut(BaseModel):
     item_name: Optional[str]
     item_url: Optional[str]
     ref_price: Optional[float]
+    ref_price_cny: Optional[float] = None
     brand_raw: Optional[str]
     shop_name: Optional[str]
     sales_qty: Optional[int]
     sales_amount: Optional[float]
+    sales_amount_cny: Optional[float] = None
     price: Optional[float]
+    price_cny: Optional[float] = None
     brand_std: Optional[str]
     model_std: Optional[str]
 
@@ -1012,6 +1179,13 @@ class MatchResultOut(BaseModel):
     corrected_sales_qty: Optional[int] = None
     adjusted_sales_qty: Optional[int] = None
     category_name: Optional[str] = None
+    country_code: Optional[str] = None
+    country_name: Optional[str] = None
+    currency_code: Optional[str] = None
+    price_cny: Optional[float] = None
+    ref_price_cny: Optional[float] = None
+    sales_amount_cny: Optional[float] = None
+    adjusted_price_cny: Optional[float] = None
 
     @field_serializer("reviewed_at")
     def serialize_reviewed_at(self, value: datetime | None):

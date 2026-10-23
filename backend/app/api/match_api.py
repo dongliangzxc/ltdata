@@ -26,6 +26,7 @@ from app.models.schemas import (
 )
 from app.services.clean_task_snapshot import ACTIVE_TASK_STATUSES, touch_clean_job
 from app.services.data_cleaner import _load_brand_alias_map, manual_brand_std
+from app.services.currency_service import amount_to_cny, build_rate_map
 from app.services.exclusion_store import (
     remove_exclusion_for_raw,
     upsert_exclusion_for_raw,
@@ -815,8 +816,11 @@ def list_pending(
                 )
             )
 
+    rates = build_rate_map(db)
     items = []
     for mr, rd, model, cat, attr_count in rows:
+        rate_info = rates.get(rd.country_code or "")
+        rate = rate_info["rate_to_cny"] if rate_info else None
         items.append(MatchResultOut(
             id=mr.id,
             clean_job_id=mr.clean_job_id,
@@ -841,6 +845,11 @@ def list_pending(
             candidates=candidates_by_mr.get(mr.id, []),
             sales_qty=rd.sales_qty,
             category_name=cat.name if cat else None,
+            country_code=rd.country_code,
+            currency_code=rate_info["currency_code"] if rate_info else None,
+            price_cny=amount_to_cny(rd.price, rate),
+            ref_price_cny=amount_to_cny(rd.ref_price, rate),
+            sales_amount_cny=amount_to_cny(rd.sales_amount, rate),
         ))
 
     return PaginatedResponse(total=total, page=page, page_size=page_size, items=items)
@@ -1014,6 +1023,10 @@ def get_match_review_detail(match_id: int, db: Session = Depends(get_db)):
     if not cat and category_code:
         cat = db.query(Category).filter(Category.code == category_code).first()
 
+    rates = build_rate_map(db)
+    rate_info = rates.get(rd.country_code or "")
+    rate = rate_info["rate_to_cny"] if rate_info else None
+
     return {
         "id": mr.id,
         "clean_job_id": mr.clean_job_id,
@@ -1047,10 +1060,18 @@ def get_match_review_detail(match_id: int, db: Session = Depends(get_db)):
         "brand_raw": rd.brand_raw,
         "brand_std": (cleaned.brand_std if cleaned else None) or live_brand_std or rd.brand_std,
         "shop_name": rd.shop_name,
+        "country_code": rd.country_code,
+        "currency_code": rate_info["currency_code"] if rate_info else None,
+        "exchange_rate": rate,
         "ref_price": float(rd.ref_price) if rd.ref_price is not None else None,
+        "ref_price_cny": amount_to_cny(rd.ref_price, rate),
         "price": float(rd.price) if rd.price is not None else None,
+        "price_cny": amount_to_cny(rd.price, rate),
+        "adjusted_price_cny": amount_to_cny(mr.adjusted_price, rate),
         "sales_qty": rd.sales_qty,
         "sales_amount": float(rd.sales_amount) if rd.sales_amount is not None else None,
+        "sales_amount_cny": amount_to_cny(rd.sales_amount, rate),
+        "rates": rates,
         "url_mapping": {
             "id": mapping.id,
             "model_id": mapping.model_id,
@@ -2015,8 +2036,11 @@ def _build_match_results_summary(rows) -> dict:
     }
 
 
-def _reviewed_row_payload(mr, rd, model=None, cat=None, attr_count: int = 0, cleaned_qty: Optional[int] = None) -> MatchResultOut:
+def _reviewed_row_payload(mr, rd, model=None, cat=None, attr_count: int = 0, cleaned_qty: Optional[int] = None, rate_map=None) -> MatchResultOut:
     corrected_qty, adjusted_qty = _quantity_preview(cleaned_qty, rd.sales_qty if rd else None, mr.sales_coefficient)
+    country_code = getattr(rd, "country_code", None) if rd else None
+    rate_info = (rate_map or {}).get(country_code or "") if rd else None
+    rate = rate_info["rate_to_cny"] if rate_info else None
     return MatchResultOut(
         id=mr.id,
         clean_job_id=mr.clean_job_id,
@@ -2046,6 +2070,12 @@ def _reviewed_row_payload(mr, rd, model=None, cat=None, attr_count: int = 0, cle
         corrected_sales_qty=corrected_qty,
         adjusted_sales_qty=adjusted_qty,
         category_name=cat.name if cat else None,
+        country_code=country_code,
+        currency_code=rate_info["currency_code"] if rate_info else None,
+        price_cny=amount_to_cny(getattr(rd, "price", None), rate) if rd else None,
+        ref_price_cny=amount_to_cny(getattr(rd, "ref_price", None), rate) if rd else None,
+        sales_amount_cny=amount_to_cny(getattr(rd, "sales_amount", None), rate) if rd else None,
+        adjusted_price_cny=amount_to_cny(mr.adjusted_price, rate),
         revertible=_is_revertible(mr),
     )
 
@@ -2095,8 +2125,9 @@ def list_reviewed(
     )
     total = q.count()
     rows = q.order_by(MatchResult.id).offset((page - 1) * page_size).limit(page_size).all()
+    rates = build_rate_map(db)
     items = [
-        _reviewed_row_payload(mr, rd, model, cat, attr_count, cleaned_qty)
+        _reviewed_row_payload(mr, rd, model, cat, attr_count, cleaned_qty, rates)
         for mr, rd, model, cat, attr_count, cleaned_qty in rows
     ]
     return PaginatedResponse(total=total, page=page, page_size=page_size, items=items)

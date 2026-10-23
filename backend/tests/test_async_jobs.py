@@ -484,3 +484,83 @@ def test_upload_confirm_job_not_found(db, monkeypatch):
     app.dependency_overrides.clear()
 
     assert resp.status_code == 404
+
+
+def test_upload_confirm_requires_country_for_overseas(db, monkeypatch, tmp_path):
+    from app.core import config
+    from app.models.database import get_db
+
+    fake_id = "overseas-no-country"
+    upload_tmp = tmp_path / "tmp"
+    upload_tmp.mkdir()
+    (upload_tmp / f"{fake_id}_test.xlsx").write_bytes(b"fake")
+    monkeypatch.setattr(config.settings, "UPLOAD_DIR", str(tmp_path))
+
+    app = _patch_app(db, monkeypatch)
+    app.dependency_overrides[get_db] = lambda: (yield db)
+    client = TestClient(app, raise_server_exceptions=True)
+    resp = client.post(
+        "/api/upload/confirm",
+        json={
+            "temp_file_id": fake_id,
+            "data_region": "overseas",
+            "mapping": {
+                "col_item_id": "item_id", "col_month": "month", "col_platform": "platform",
+                "col_item_name": "item_name", "col_sales_qty": "sales_qty",
+                "col_amount": "sales_amount", "col_price": "price",
+            },
+            "ignore_columns": [],
+        },
+    )
+    app.dependency_overrides.clear()
+    assert resp.status_code == 400
+    assert "国家" in resp.json()["detail"]
+
+
+def test_upload_confirm_passes_country_to_background_job(db, monkeypatch, tmp_path):
+    from app.core import config
+    from app.models.database import get_db
+    from app.models.schemas import Country
+
+    db.add(Country(
+        code="US", name_cn="美国", currency_code="USD", region="overseas", is_active=1,
+    ))
+    db.commit()
+
+    fake_id = "overseas-with-country"
+    upload_tmp = tmp_path / "tmp"
+    upload_tmp.mkdir()
+    (upload_tmp / f"{fake_id}_test.xlsx").write_bytes(b"fake")
+    monkeypatch.setattr(config.settings, "UPLOAD_DIR", str(tmp_path))
+
+    captured = {}
+
+    class FakeThread:
+        def __init__(self, target=None, args=(), daemon=None, **kwargs):
+            captured["args"] = args
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(threading, "Thread", FakeThread)
+
+    app = _patch_app(db, monkeypatch)
+    app.dependency_overrides[get_db] = lambda: (yield db)
+    client = TestClient(app, raise_server_exceptions=True)
+    resp = client.post(
+        "/api/upload/confirm",
+        json={
+            "temp_file_id": fake_id,
+            "country_code": "us",
+            "mapping": {
+                "col_item_id": "item_id", "col_month": "month", "col_platform": "platform",
+                "col_item_name": "item_name", "col_sales_qty": "sales_qty",
+                "col_amount": "sales_amount", "col_price": "price",
+            },
+            "ignore_columns": [],
+        },
+    )
+    app.dependency_overrides.clear()
+    assert resp.status_code == 202
+    assert captured["args"][7] == "overseas"
+    assert captured["args"][8] == "US"

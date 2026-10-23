@@ -22,6 +22,7 @@ from app.models.schemas import (
 )
 from app.services.excel_parser import parse_raw_excel, parse_with_mapping
 from app.core.config import settings
+from app.services.currency_service import get_country
 from app.services.import_helper import (
     col_fingerprint as _ih_col_fingerprint,
     read_columns as _ih_read_columns,
@@ -298,6 +299,7 @@ async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db
 @router.get("/files", response_model=list[UploadFileOut])
 def list_upload_files(
     data_region: Optional[str] = Query(None),
+    country_code: Optional[str] = Query(None),
     data_year: Optional[int] = Query(None),
     data_month: Optional[int] = Query(None),
     db: Session = Depends(get_db),
@@ -314,6 +316,8 @@ def list_upload_files(
         )
     elif data_region is not None:
         q = q.filter(UploadFileRecord.data_region == data_region)
+    if country_code:
+        q = q.filter(UploadFileRecord.country_code == country_code.strip().upper())
     if data_year is not None:
         q = q.filter(UploadFileRecord.data_year == data_year)
     if data_month is not None:
@@ -328,6 +332,7 @@ def list_upload_files(
             "status": record.status,
             "template_id": record.template_id,
             "data_region": record.data_region,
+            "country_code": record.country_code,
             "data_year": record.data_year,
             "data_month": record.data_month,
             "uploaded_at": format_beijing_datetime(record.uploaded_at),
@@ -463,6 +468,7 @@ def _run_upload_confirm_thread(
     save_template_name,
     template_id_use,
     data_region: str | None = None,
+    country_code: str | None = None,
     data_year: int | None = None,
     data_month: int | None = None,
 ):
@@ -572,7 +578,7 @@ def _run_upload_confirm_thread(
             if item_id is None:
                 candidate_records.append(record)
                 continue
-            key = (str(item_id), record.get("month"), record.get("platform"))
+            key = (country_code, str(item_id), record.get("month"), record.get("platform"))
             if key in seen_upload_keys:
                 continue
             seen_upload_keys.add(key)
@@ -588,7 +594,7 @@ def _run_upload_confirm_thread(
             item_id = record.get("item_id")
             if item_id is None:
                 continue
-            scope = (record.get("month"), record.get("platform"))
+            scope = (country_code, record.get("month"), record.get("platform"))
             keys_by_scope.setdefault(scope, []).append(str(item_id))
 
         total_keys = sum(len(item_ids) for item_ids in keys_by_scope.values())
@@ -597,7 +603,7 @@ def _run_upload_confirm_thread(
             DEDUP_BATCH = 10000
             processed = 0
             batch_no = 0
-            for (month, platform), item_ids in keys_by_scope.items():
+            for (scope_country, month, platform), item_ids in keys_by_scope.items():
                 for i in range(0, len(item_ids), DEDUP_BATCH):
                     batch_no += 1
                     chunk = item_ids[i: i + DEDUP_BATCH]
@@ -607,10 +613,15 @@ def _run_upload_confirm_thread(
                             return
 
                     query = db.query(
+                        RawDataRecord.country_code,
                         RawDataRecord.item_id,
                         RawDataRecord.month,
                         RawDataRecord.platform,
                     ).filter(RawDataRecord.item_id.in_(chunk))
+                    if scope_country is None:
+                        query = query.filter(RawDataRecord.country_code.is_(None))
+                    else:
+                        query = query.filter(RawDataRecord.country_code == scope_country)
                     if month is None:
                         query = query.filter(RawDataRecord.month.is_(None))
                     else:
@@ -620,7 +631,7 @@ def _run_upload_confirm_thread(
                     else:
                         query = query.filter(RawDataRecord.platform == platform)
                     rows = query.all()
-                    existing_set.update((e.item_id, e.month, e.platform) for e in rows)
+                    existing_set.update((e.country_code, e.item_id, e.month, e.platform) for e in rows)
                     processed += len(chunk)
                     if batch_no % PROGRESS_BATCH_INTERVAL == 1 or is_last_batch:
                         _update_upload_job_progress(
@@ -633,7 +644,7 @@ def _run_upload_confirm_thread(
                         )
         to_insert = [
             r for r in candidate_records
-            if (str(r.get("item_id")), r.get("month"), r.get("platform")) not in existing_set
+            if (country_code, str(r.get("item_id")), r.get("month"), r.get("platform")) not in existing_set
         ]
         skipped = len(records) - len(to_insert)
         _update_upload_job_progress(
@@ -659,6 +670,7 @@ def _run_upload_confirm_thread(
             status="done",
             template_id=saved_template_id,
             data_region=data_region,
+            country_code=country_code,
             data_year=data_year,
             data_month=data_month,
         )
@@ -690,6 +702,7 @@ def _run_upload_confirm_thread(
                     [
                         {
                             "file_id":      file_record.id,
+                            "country_code": country_code,
                             "platform":     r.get("platform"),
                             "month":        r.get("month"),
                             "category_lv0": r.get("category_lv0"),
@@ -761,6 +774,7 @@ def _run_upload_confirm_thread(
             "total_rows":  len(records),
             "inserted":    len(to_insert),
             "skipped":     skipped,
+            "country_code": country_code,
             "preview":     records[:50],
         }
         job.file_id = file_record.id
@@ -875,6 +889,19 @@ async def upload_confirm(payload: dict, db: Session = Depends(get_db)):
     save_template_name = payload.get("save_template_name")
     template_id_use = payload.get("template_id")
     data_region: str | None = payload.get("data_region")
+    country_code: str | None = payload.get("country_code")
+    country_code = country_code.strip().upper() if isinstance(country_code, str) and country_code.strip() else None
+    if country_code:
+        if country_code != "CN":
+            country = get_country(db, country_code)
+            if country is None or country.is_active != 1:
+                raise HTTPException(status_code=400, detail="国家不存在或已停用")
+        data_region = "domestic" if country_code == "CN" else "overseas"
+    elif data_region == "overseas":
+        raise HTTPException(status_code=400, detail="海外数据必须选择国家")
+    else:
+        country_code = "CN"
+        data_region = "domestic"
     data_year_raw = payload.get("data_year")
     data_year: int | None = int(data_year_raw) if data_year_raw is not None else None
     data_month_raw = payload.get("data_month")
@@ -923,6 +950,7 @@ async def upload_confirm(payload: dict, db: Session = Depends(get_db)):
             save_template_name,
             template_id_use,
             data_region,
+            country_code,
             data_year,
             data_month,
         ),

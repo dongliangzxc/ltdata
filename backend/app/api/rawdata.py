@@ -30,10 +30,13 @@ def build_query(
     price_min=None,
     price_max=None,
     months=None,
+    country_code=None,
 ):
     q = db.query(RawDataRecord)
     if file_id is not None:
         q = q.filter(RawDataRecord.file_id == file_id)
+    if country_code:
+        q = q.filter(RawDataRecord.country_code == country_code.strip().upper())
     if platform and platform.strip():
         q = q.filter(RawDataRecord.platform.ilike(f"%{platform.strip()}%"))
     if months:
@@ -54,6 +57,7 @@ def build_query(
 
 
 EXPORT_COLUMNS = [
+    ("country_code", "国家"),
     ("platform",     "平台"),
     ("month",        "月份"),
     ("category_lv0", "一级品类"),
@@ -77,6 +81,7 @@ def export_raw_data(
     platform: Optional[str] = Query(None),
     month: Optional[int] = Query(None),
     months: Optional[List[int]] = Query(None),
+    country_code: Optional[str] = Query(None),
     brand_std: Optional[str] = Query(None),
     brand_raw: Optional[str] = Query(None),
     item_name: Optional[str] = Query(None),
@@ -96,6 +101,7 @@ def export_raw_data(
         price_min,
         price_max,
         months,
+        country_code,
     )
     total = query.count()
     ensure_export_row_limit(total, max_rows=MAX_SYNC_EXPORT_ROWS, label="原始数据导出")
@@ -122,6 +128,7 @@ def list_raw_data(
     platform: Optional[str] = Query(None),
     month: Optional[int] = Query(None),
     months: Optional[List[int]] = Query(None),
+    country_code: Optional[str] = Query(None),
     brand_std: Optional[str] = Query(None),
     brand_raw: Optional[str] = Query(None),
     item_name: Optional[str] = Query(None),
@@ -133,7 +140,7 @@ def list_raw_data(
     page_size: int = Query(20, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
-    q = build_query(db, file_id, platform, month, brand_std, brand_raw, item_name, price_min, price_max, months)
+    q = build_query(db, file_id, platform, month, brand_std, brand_raw, item_name, price_min, price_max, months, country_code)
     total = q.count()
 
     # 排序
@@ -158,6 +165,7 @@ def get_stats(
     platform: Optional[str] = Query(None),
     month: Optional[int] = Query(None),
     months: Optional[List[int]] = Query(None),
+    country_code: Optional[str] = Query(None),
     brand_std: Optional[str] = Query(None),
     brand_raw: Optional[str] = Query(None),
     item_name: Optional[str] = Query(None),
@@ -165,7 +173,7 @@ def get_stats(
     price_max: Optional[float] = Query(None, ge=0),
     db: Session = Depends(get_db),
 ):
-    q = build_query(db, file_id, platform, month, brand_std, brand_raw, item_name, price_min, price_max, months)
+    q = build_query(db, file_id, platform, month, brand_std, brand_raw, item_name, price_min, price_max, months, country_code)
     result = q.with_entities(
         func.sum(RawDataRecord.sales_qty).label("total_qty"),
         func.sum(RawDataRecord.sales_amount).label("total_amount"),
@@ -186,4 +194,5 @@ def get_filters(db: Session = Depends(get_db)):
     platforms = [r[0] for r in db.query(distinct(RawDataRecord.platform)).filter(RawDataRecord.platform.isnot(None)).all()]
     months = sorted([r[0] for r in db.query(distinct(RawDataRecord.month)).filter(RawDataRecord.month.isnot(None)).all()])
     brands = sorted([r[0] for r in db.query(distinct(RawDataRecord.brand_std)).filter(RawDataRecord.brand_std.isnot(None)).all()])
-    return {"platforms": platforms, "months": months, "brands": brands}
+    countries = sorted([r[0] for r in db.query(distinct(RawDataRecord.country_code)).filter(RawDataRecord.country_code.isnot(None)).all()])
+    return {"platforms": platforms, "months": months, "brands": brands, "countries": countries}

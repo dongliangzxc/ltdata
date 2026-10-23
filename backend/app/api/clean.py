@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from app.core.auth_deps import get_current_user
 from app.core.permissions import visible_category_codes
+from app.services.currency_service import amount_to_cny, build_rate_map
 from app.models.database import get_db
 from app.models.analytics_db import AnalyticsSession
 from app.models.schemas import (
@@ -934,12 +935,43 @@ def preview_clean_job(
     q = db.query(CleanedDataRecord).filter(CleanedDataRecord.clean_job_id == job_id)
     total = q.count()
     items = q.offset((page - 1) * page_size).limit(page_size).all()
+    rates = build_rate_map(db)
+
+    def _item(r: CleanedDataRecord) -> dict:
+        info = rates.get(r.country_code or "")
+        rate = info["rate_to_cny"] if info else None
+        return {
+            "id": r.id,
+            "clean_job_id": r.clean_job_id,
+            "country_code": r.country_code,
+            "currency_code": info["currency_code"] if info else None,
+            "exchange_rate": rate,
+            "platform": r.platform,
+            "month": r.month,
+            "category_lv1": r.category_lv1,
+            "category_lv2": r.category_lv2,
+            "item_id": r.item_id,
+            "item_name": r.item_name,
+            "item_url": r.item_url,
+            "ref_price": float(r.ref_price) if r.ref_price is not None else None,
+            "ref_price_cny": amount_to_cny(r.ref_price, rate),
+            "brand_raw": r.brand_raw,
+            "shop_name": r.shop_name,
+            "sales_qty": r.sales_qty,
+            "sales_amount": float(r.sales_amount) if r.sales_amount is not None else None,
+            "sales_amount_cny": amount_to_cny(r.sales_amount, rate),
+            "price": float(r.price) if r.price is not None else None,
+            "price_cny": amount_to_cny(r.price, rate),
+            "brand_std": r.brand_std,
+            "model_std": r.model_std,
+        }
 
     return {
         "total": total,
         "page": page,
         "page_size": page_size,
-        "items": [CleanedDataOut.model_validate(r) for r in items],
+        "rates": rates,
+        "items": [_item(r) for r in items],
     }
 
 
@@ -1023,8 +1055,12 @@ def list_clean_job_matched(
         q = _apply_price_filter(q)
         total = q.count()
         rows = q.order_by(MatchResult.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
-        items = [
-            {
+        rates = build_rate_map(db)
+        items = []
+        for mr, rd, model in rows:
+            info = rates.get(rd.country_code or "")
+            rate = info["rate_to_cny"] if info else None
+            items.append({
                 "id": mr.id,
                 "raw_data_id": mr.raw_data_id,
                 "match_status": mr.match_status,
@@ -1038,12 +1074,15 @@ def list_clean_job_matched(
                 "shop_name": rd.shop_name,
                 "platform": rd.platform,
                 "item_id": rd.item_id,
+                "country_code": rd.country_code,
+                "currency_code": info["currency_code"] if info else None,
+                "exchange_rate": rate,
                 "price": float(rd.price) if rd.price is not None else None,
+                "price_cny": amount_to_cny(rd.price, rate),
                 "sales_qty": rd.sales_qty,
                 "sales_amount": float(rd.sales_amount) if rd.sales_amount is not None else None,
-            }
-            for mr, rd, model in rows
-        ]
+                "sales_amount_cny": amount_to_cny(rd.sales_amount, rate),
+            })
     else:
         q = (
             db.query(FilteredItem, RawDataRecord)
@@ -1062,6 +1101,7 @@ def list_clean_job_matched(
         q = _apply_price_filter(q)
         total = q.count()
         rows = q.order_by(FilteredItem.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
+        rates = build_rate_map(db)
         items = [
             {
                 "id": fi.id,
@@ -1075,9 +1115,13 @@ def list_clean_job_matched(
                 "shop_name": rd.shop_name,
                 "platform": rd.platform,
                 "item_id": rd.item_id,
+                "country_code": rd.country_code,
+                "currency_code": (rates.get(rd.country_code or "") or {}).get("currency_code"),
                 "price": float(rd.price) if rd.price is not None else None,
+                "price_cny": amount_to_cny(rd.price, (rates.get(rd.country_code or "") or {}).get("rate_to_cny")),
                 "sales_qty": rd.sales_qty,
                 "sales_amount": float(rd.sales_amount) if rd.sales_amount is not None else None,
+                "sales_amount_cny": amount_to_cny(rd.sales_amount, (rates.get(rd.country_code or "") or {}).get("rate_to_cny")),
                 "created_at": format_beijing_datetime(fi.created_at),
             }
             for fi, rd in rows

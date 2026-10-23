@@ -7,12 +7,13 @@ from app.core.permissions import is_admin_only_path, required_permission_for_pat
 from app.core.security import verify_token, hash_password
 from app.models.database import Base, engine, SessionLocal
 from app.models.analytics_db import AnalyticsBase, analytics_engine
-from app.models.schemas import User
+from app.models.schemas import Country, User
 from app.api import upload, rawdata, clean, export, metadata, models_api, match_api, publish_api, auth, workbench_api, analytics_api, url_mapping_api
 from app.api import rules_api, historical_api, categories_api, correction_rules_api, users_api, stats_api
 from app.api.dispatch_api import router as dispatch_router
 from app.api.upload_templates_api import router as upload_templates_router
 from app.api.brands_api import router as brands_router
+from app.api.countries_api import router as countries_router
 
 
 # 不需要鉴权的路径（精确匹配或前缀匹配）
@@ -35,6 +36,13 @@ async def lifespan(app: FastAPI):
     try:
         if db.query(User).count() == 0:
             db.add(User(username="admin", hashed_password=hash_password("luotu123"), name="管理员", is_admin=1, permissions=[]))
+            db.commit()
+        if db.query(Country).filter(Country.code == "CN").first() is None:
+            db.add(Country(
+                code="CN", name_cn="中国", name_en="China",
+                currency_code="CNY", currency_symbol="¥",
+                region="domestic", is_active=1, sort_order=0,
+            ))
             db.commit()
     finally:
         db.close()
@@ -106,6 +114,7 @@ app.include_router(stats_api.router)
 app.include_router(dispatch_router)
 app.include_router(upload_templates_router)
 app.include_router(brands_router)
+app.include_router(countries_router)
 
 
 @app.get("/health")

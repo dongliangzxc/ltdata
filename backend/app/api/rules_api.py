@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from app.core.auth_deps import get_current_user
 from app.core.permissions import visible_category_codes
 from app.models.database import get_db
+from app.services.currency_service import amount_to_cny, build_rate_map
 from app.models.schemas import (
     NoiseWord, FilteredItem, BrandAlias, MatchRule,
     AttrRule, MatchResultAttr,
@@ -792,6 +793,7 @@ def list_filtered_items(
 
     total = q.count()
     rows = q.order_by(FilteredItem.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    rates = build_rate_map(db)
 
     items = [
         {
@@ -809,9 +811,13 @@ def list_filtered_items(
             "shop_name": rd.shop_name,
             "platform": rd.platform,
             "item_id": rd.item_id,
+            "country_code": rd.country_code,
+            "currency_code": (rates.get(rd.country_code or "") or {}).get("currency_code"),
             "price": float(rd.price) if rd.price is not None else None,
+            "price_cny": amount_to_cny(rd.price, (rates.get(rd.country_code or "") or {}).get("rate_to_cny")),
             "sales_qty": rd.sales_qty,
             "sales_amount": float(rd.sales_amount) if rd.sales_amount is not None else None,
+            "sales_amount_cny": amount_to_cny(rd.sales_amount, (rates.get(rd.country_code or "") or {}).get("rate_to_cny")),
             "created_at": format_beijing_datetime(fi.created_at),
         }
         for fi, rd in rows
@@ -828,6 +834,7 @@ def _recover_one(fi: FilteredItem, db: Session) -> None:
     db.add(CleanedDataRecord(
         raw_data_id=raw.id,
         clean_job_id=fi.clean_job_id,
+        country_code=raw.country_code,
         platform=raw.platform,
         month=raw.month,
         category_lv1=raw.category_lv1,

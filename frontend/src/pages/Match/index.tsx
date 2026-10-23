@@ -17,8 +17,9 @@ import {
   listFilteredItems, recoverFilteredItem,
   batchConfirmMatch, previewBatchConfirmMatch, reassignInvalidModel, batchIgnoreMatches, batchRestoreMatches,
   searchCleanTasks, transferMatchItem, getTransferNotice, fetchAllCategories,
+  listExchangeRateOptions,
 } from '../../services/api'
-import type { CleanJobItem, MatchCandidateOut, MatchReviewDetail, FilteredItemOut, ModelItem, BatchConfirmFilter, BatchConfirmResult, BatchIgnoreFilter, BatchRestoreFilter, CleanTaskSearchItem, UserProfile } from '../../services/api'
+import type { CleanJobItem, MatchCandidateOut, MatchReviewDetail, FilteredItemOut, ModelItem, BatchConfirmFilter, BatchConfirmResult, BatchIgnoreFilter, BatchRestoreFilter, CleanTaskSearchItem, UserProfile, ExchangeRateOption } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 import ProgressModal from '../../components/ProgressModal'
 import AttributeInsightCard from './components/AttributeInsightCard'
@@ -108,6 +109,11 @@ type PendingItem = {
   candidates?: MatchCandidateOut[]
   brand_identified?: number
   sales_qty?: number | null
+  country_code?: string | null
+  currency_code?: string | null
+  price_cny?: number | null
+  ref_price_cny?: number | null
+  sales_amount_cny?: number | null
 }
 
 type DisabledItem = {
@@ -222,6 +228,7 @@ export default function MatchPage() {
   const [salesMin, setSalesMin] = useState<number | null>(null)
   const [salesMax, setSalesMax] = useState<number | null>(null)
   const [topBrandsOnly, setTopBrandsOnly] = useState(false)
+  const [displayCurrency, setDisplayCurrency] = useState('original')
   const [page, setPage] = useState(1)
   const [confirmingIds, setConfirmingIds] = useState<Set<number>>(new Set())
   const [recoveringFilteredIds, setRecoveringFilteredIds] = useState<Set<number>>(new Set())
@@ -253,6 +260,37 @@ export default function MatchPage() {
   const [interventionModalOpen, setInterventionModalOpen] = useState(false)
   const [rerunningRules, setRerunningRules] = useState(false)
   const { data: jobsData, refresh: refreshJobs, refreshAsync: refreshJobsAsync } = useRequest(() => listCleanJobs().then(r => r.data))
+  const { data: rateOptionsData } = useRequest(
+    () => listExchangeRateOptions().then(r => r.data),
+    { refreshDeps: [] }
+  )
+  const rateOptions: ExchangeRateOption[] = rateOptionsData ?? []
+  const rateMap = useMemo(
+    () => Object.fromEntries(rateOptions.map(option => [option.country_code, option])),
+    [rateOptions]
+  )
+  const currencySymbol = (countryCode?: string | null) => {
+    if (!countryCode) return ''
+    if (countryCode === 'CN') return '¥'
+    return rateMap[countryCode]?.currency_symbol || rateMap[countryCode]?.currency_code || ''
+  }
+  const formatConverted = (amount?: number | null, cny?: number | null, sourceCountry?: string | null) => {
+    if (amount == null) return '-'
+    if (displayCurrency === 'original') return `${currencySymbol(sourceCountry)}${Number(amount).toLocaleString()}`
+    if (displayCurrency === 'CNY') return cny == null ? '-' : `¥${Number(cny).toLocaleString()}`
+    if (displayCurrency === sourceCountry) return `${currencySymbol(sourceCountry)}${Number(amount).toLocaleString()}`
+    const target = rateMap[displayCurrency]
+    if (!target || cny == null) return '-'
+    return `${target.currency_symbol || target.currency_code}${(cny / target.rate_to_cny).toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+  }
+  const displayCurrencyOptions = useMemo(() => [
+    { value: 'original', label: '原币' },
+    { value: 'CNY', label: '人民币（CNY）' },
+    ...rateOptions.filter(option => option.country_code !== 'CN').map(option => ({
+      value: option.country_code,
+      label: `${option.country_name}（${option.currency_code}）`,
+    })),
+  ], [rateOptions])
   const selectedJob = (jobsData ?? []).find((job: CleanJobItem) => job.id === selectedJobId)
   const isPowerBankJob = selectedJob?.category_code === POWER_BANK_CATEGORY || selectedJob?.dispatch_category_code === POWER_BANK_CATEGORY
   const fetchSummary = (jobId?: number) => {
@@ -1377,6 +1415,17 @@ export default function MatchPage() {
               }))}
             />
           </Col>
+          <Col>
+            <Space size={4}>
+              <Text type="secondary">显示币种</Text>
+              <Select
+                style={{ width: 170 }}
+                value={displayCurrency}
+                onChange={setDisplayCurrency}
+                options={displayCurrencyOptions}
+              />
+            </Space>
+          </Col>
           {canRetryMatch && (
             <Col>
               <Button
@@ -1857,6 +1906,7 @@ export default function MatchPage() {
                             <Space direction="vertical" size={4} style={{ width: '100%' }}>
                               <Space wrap size={4}>
                                 <Tag color="orange">干扰过滤</Tag>
+                                {item.country_code && <Tag color="purple">{item.country_code}</Tag>}
                                 <Tag color="blue">{item.brand_raw || '无原品牌'}</Tag>
                                 {item.item_url && <Tag icon={<LinkOutlined />} color="green">有链接</Tag>}
                               </Space>
@@ -1918,6 +1968,7 @@ export default function MatchPage() {
                               <Space direction="vertical" size={4} style={{ width: '100%' }}>
                                 <Space wrap size={4}>
                                   <Tag>{item.category_name || '未归类'}</Tag>
+                                  {item.country_code && <Tag color="purple">{item.country_code}</Tag>}
                                   <Tag color="blue">{item.brand_raw || '无原品牌'}</Tag>
                                   {activeTab === 'ignored' && <Tag color="default">已忽略</Tag>}
                                   {renderMatchSource(item.match_source)}
@@ -2037,9 +2088,10 @@ export default function MatchPage() {
                         <Descriptions.Item label="店铺">{filteredDetail.shop_name || '-'}</Descriptions.Item>
                         <Descriptions.Item label="平台">{filteredDetail.platform || '-'}</Descriptions.Item>
                         <Descriptions.Item label="商品ID">{filteredDetail.item_id || '-'}</Descriptions.Item>
-                        <Descriptions.Item label="价格">{filteredDetail.price != null ? `¥${filteredDetail.price}` : '-'}</Descriptions.Item>
+                        <Descriptions.Item label="国家">{filteredDetail.country_code || '-'}</Descriptions.Item>
+                        <Descriptions.Item label="价格">{formatConverted(filteredDetail.price, filteredDetail.price_cny, filteredDetail.country_code)}</Descriptions.Item>
                         <Descriptions.Item label="销量">{formatNumber(filteredDetail.sales_qty)}</Descriptions.Item>
-                        <Descriptions.Item label="销售额">{filteredDetail.sales_amount != null ? `¥${formatNumber(filteredDetail.sales_amount)}` : '-'}</Descriptions.Item>
+                        <Descriptions.Item label="销售额">{formatConverted(filteredDetail.sales_amount, filteredDetail.sales_amount_cny, filteredDetail.country_code)}</Descriptions.Item>
                         <Descriptions.Item label="过滤时间">{filteredDetail.created_at || '-'}</Descriptions.Item>
                         <Descriptions.Item label="命中规则">{filteredDetail.intervention_rule_name || '-'}</Descriptions.Item>
                         <Descriptions.Item label="命中关键词">{filteredDetail.matched_keyword || '-'}</Descriptions.Item>
@@ -2141,7 +2193,8 @@ export default function MatchPage() {
                           </Button>
                         </Space>
                       </Descriptions.Item>
-                      <Descriptions.Item label="价格">{reviewDetail.price != null ? `¥${reviewDetail.price}` : '-'}</Descriptions.Item>
+                      <Descriptions.Item label="国家">{reviewDetail.country_code || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="价格">{formatConverted(reviewDetail.price, reviewDetail.price_cny, reviewDetail.country_code)}</Descriptions.Item>
                       <Descriptions.Item label="销量">{formatNumber(reviewDetail.sales_qty)}</Descriptions.Item>
                     </Descriptions>
 
@@ -2212,8 +2265,9 @@ export default function MatchPage() {
             <Descriptions size="small" column={1} bordered>
               <Descriptions.Item label="商品名称">{reviewDetail.item_name || '-'}</Descriptions.Item>
               <Descriptions.Item label="原品牌">{reviewDetail.brand_raw || '-'}</Descriptions.Item>
+              <Descriptions.Item label="国家">{reviewDetail.country_code || '-'}</Descriptions.Item>
               <Descriptions.Item label="价格">
-                {reviewDetail.price != null ? `¥${reviewDetail.price}` : '-'}
+                {formatConverted(reviewDetail.price, reviewDetail.price_cny, reviewDetail.country_code)}
               </Descriptions.Item>
               <Descriptions.Item label="商品ID">{reviewDetail.item_id || '-'}</Descriptions.Item>
               <Descriptions.Item label="当前任务">

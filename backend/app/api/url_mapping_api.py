@@ -37,6 +37,8 @@ _PLATFORM_MAP = {
     "TAOBAO": "taobao", "淘宝": "taobao", "TB": "taobao",
     "SUNING": "suning", "苏宁": "suning",
     "DOUYIN": "douyin", "抖音": "douyin", "DY": "douyin",
+    "AMAZON": "amazon", "亚马逊": "amazon", "AMZ": "amazon",
+    "SHOPEE": "shopee", "虾皮": "shopee", "西皮": "shopee",
 }
 
 _LEGACY_HEADPHONE_PLATFORMS = {"jd", "tmall", "taobao"}

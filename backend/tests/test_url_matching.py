@@ -65,8 +65,19 @@ def test_extract_douyin_url_without_id_returns_none():
     assert extract_item_id("https://haohuo.jinritemai.com/ecommerce/trade/detail/index.html") is None
 
 
+def test_extract_amazon_url():
+    assert extract_item_id("https://www.amazon.com/dp/B0G4RV4MVD") == ("amazon", "B0G4RV4MVD")
+    assert extract_item_id("https://www.amazon.de/gp/product/B0G4RV4MVD/ref=ppx_yo_dt_b_asin_title_o00_s00") == ("amazon", "B0G4RV4MVD")
+    assert extract_item_id("https://www.amazon.co.uk/Some-Title/dp/B0G4RV4MVD?th=1") == ("amazon", "B0G4RV4MVD")
+
+
+def test_extract_shopee_url():
+    assert extract_item_id("https://shopee.sg/product/20001/123456") == ("shopee", "123456")
+    assert extract_item_id("https://shopee.co.id/Product-Name-i.98765.1234567?sp_atk=abc") == ("shopee", "1234567")
+
+
 def test_extract_unknown_url_returns_none():
-    assert extract_item_id("https://www.amazon.com/dp/B08N5WRWNW") is None
+    assert extract_item_id("https://example.com/dp/B08N5WRWNW") is None
 
 
 def test_extract_none_returns_none():

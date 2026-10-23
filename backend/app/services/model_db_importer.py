@@ -149,9 +149,17 @@ def extract_item_id(url, platform: str) -> Optional[str]:
     if platform == "jd":
         m = re.search(r"/(\d+)\.html", s)
         return m.group(1) if m else None
-    else:
-        m = re.search(r"[?&]id=(\d+)", s)
-        return m.group(1) if m else None
+    if platform == "amazon":
+        m = re.search(r"/(?:dp|gp/product|gp/aw/d|ASIN)/([A-Za-z0-9]{10})(?:[/?]|$)", s, re.IGNORECASE)
+        return m.group(1).upper() if m else None
+    if platform == "shopee":
+        m = re.search(r"/product/\d+/(\d+)", s)
+        if m:
+            return m.group(1)
+        m = re.search(r"-i\.(\d+)\.(\d+)", s)
+        return m.group(2) if m else None
+    m = re.search(r"[?&]id=(\d+)", s)
+    return m.group(1) if m else None
 
 
 def has_attributes(row: dict, attr_cols: list) -> bool:

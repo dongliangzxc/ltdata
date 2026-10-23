@@ -66,6 +66,8 @@ const PLATFORM_OPTIONS = [
   { value: 'taobao', label: '淘宝 (TAOBAO)' },
   { value: 'douyin', label: '抖音 (DOUYIN)' },
   { value: 'suning', label: '苏宁 (SUNING)' },
+  { value: 'amazon', label: '亚马逊 (AMAZON)' },
+  { value: 'shopee', label: '虾皮 (SHOPEE)' },
 ]
 
 export default function UrlMappingsPage() {

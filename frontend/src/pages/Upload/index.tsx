@@ -1416,6 +1416,40 @@ export default function UploadPage() {
         skippedRows={activeJob?.skipped_rows}
         onClose={() => setJobProgressVisible(false)}
       />
+
+      <Modal
+        title="批量确认入库"
+        open={batchModalOpen}
+        onCancel={() => { if (!batchConfirming) setBatchModalOpen(false) }}
+        footer={batchConfirming ? null : <Button onClick={() => setBatchModalOpen(false)}>关闭</Button>}
+        closable={!batchConfirming}
+        maskClosable={false}
+        width={760}
+      >
+        <Table<BatchConfirmItem>
+          rowKey="uid"
+          size="small"
+          dataSource={batchItems}
+          pagination={false}
+          columns={[
+            { title: '文件名', dataIndex: 'filename', ellipsis: true },
+            {
+              title: '状态', dataIndex: 'status', width: 90,
+              render: (status: BatchConfirmItem['status']) => {
+                if (status === 'done') return <Tag color="green">完成</Tag>
+                if (status === 'error') return <Tag color="red">失败</Tag>
+                if (status === 'running') return <Tag color="processing">处理中</Tag>
+                return <Tag>等待</Tag>
+              },
+            },
+            {
+              title: '进度', dataIndex: 'progress', width: 160,
+              render: (value: number) => <Progress percent={value} size="small" status={value >= 100 ? 'normal' : 'active'} />,
+            },
+            { title: '说明', dataIndex: 'message', ellipsis: true, render: (value?: string) => value || '-' },
+          ]}
+        />
+      </Modal>
     </Space>
   )
 }

@@ -2909,3 +2909,14 @@ def test_brand_rows_search_brand_code_by_brand_name(db):
 
     resp = client.get(f"/api/clean/jobs/{job.id}/brand-rows", params={"search_by": "brand_code", "keyword": "不存在的品牌"})
     assert resp.json()["total"] == 0
+
+
+def test_normalize_platform_aliases_for_overseas():
+    from app.services.clean_task_snapshot import normalize_platform, platform_aliases_for
+
+    assert normalize_platform("亚马逊") == "amazon"
+    assert normalize_platform("AMAZON") == "amazon"
+    assert normalize_platform("西皮") == "shopee"
+    assert normalize_platform("Shopee") == "shopee"
+    assert "亚马逊" in platform_aliases_for("amazon")
+    assert "西皮" in platform_aliases_for("shopee")

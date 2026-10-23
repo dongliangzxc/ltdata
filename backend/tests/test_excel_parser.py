@@ -157,3 +157,36 @@ def test_parse_with_mapping_ext_explicit(tmp_path):
     records, _, _ = parse_with_mapping(tmp, mapping, ignore_columns=[])
 
     assert records[0]["extra_data"]["备注"] == "保留进ext"
+
+
+import pytest
+
+
+@pytest.mark.parametrize("raw_platform,expected_label,expected_value", [
+    ("Amazon", "AMAZON", "amazon"),
+    ("亚马逊", "AMAZON", "amazon"),
+    ("amazon", "AMAZON", "amazon"),
+    ("Shopee", "SHOPEE", "shopee"),
+    ("西皮", "SHOPEE", "shopee"),
+    ("虾皮", "SHOPEE", "shopee"),
+])
+def test_parse_with_mapping_normalizes_overseas_platforms(tmp_path, raw_platform, expected_label, expected_value):
+    import csv
+    tmp = tmp_path / "overseas.csv"
+    with open(tmp, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=["平台", "月", "宝贝ID", "宝贝名称", "销量", "销售额", "价格"])
+        writer.writeheader()
+        writer.writerow({
+            "平台": raw_platform, "月": "202609", "宝贝ID": "A1",
+            "宝贝名称": "Test", "销量": "10", "销售额": "100", "价格": "10",
+        })
+
+    mapping = {
+        "平台": "platform", "月": "month", "宝贝ID": "item_id",
+        "宝贝名称": "item_name", "销量": "sales_qty",
+        "销售额": "sales_amount", "价格": "price",
+    }
+    records, platform, _ = parse_with_mapping(tmp, mapping, ignore_columns=[])
+
+    assert platform == expected_label
+    assert records[0]["platform"] == expected_value

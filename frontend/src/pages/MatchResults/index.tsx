@@ -25,6 +25,13 @@ const MATCH_SOURCE_OPTIONS = [
   { value: 'manual',     label: '人工确认' },
 ]
 
+const PLATFORM_LABELS: Record<string, string> = {
+  jd: '京东', tmall: '天猫', taobao: '淘宝', douyin: '抖音',
+  amazon: '亚马逊', shopee: '西皮',
+  JD: '京东', TMALL: '天猫', TAOBAO: '淘宝', DOUYIN: '抖音',
+  AMAZON: '亚马逊', SHOPEE: '西皮',
+}
+
 const PRICE_FLAG_OPTIONS = [
   { value: 'below',  label: '偏低' },
   { value: 'above',  label: '偏高' },
@@ -148,7 +155,7 @@ export default function MatchResultsPage() {
   )
   const platformOptions = useMemo(() => Array.from(new Set(
     (jobsData ?? []).map((job: CleanJobItem) => job.platform).filter(Boolean) as string[]
-  )).sort((a, b) => a.localeCompare(b)).map(platform => ({ value: platform, label: platform })), [jobsData])
+  )).sort((a, b) => a.localeCompare(b)).map(platform => ({ value: platform, label: PLATFORM_LABELS[platform] ?? PLATFORM_LABELS[platform.toLowerCase()] ?? platform })), [jobsData])
 
   const { data: categoriesData } = useRequest(() => listCategories().then(r => r.data))
   const categoryOptions = useMemo(

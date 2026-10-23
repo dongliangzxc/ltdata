@@ -21,6 +21,8 @@ _PLATFORM_ALIAS_GROUPS = {
     "jd": {"jd", "jingdong", "京东"},
     "tmall": {"tmall", "天猫"},
     "taobao": {"taobao", "淘宝", "tb"},
+    "amazon": {"amazon", "亚马逊", "amz"},
+    "shopee": {"shopee", "西皮", "虾皮"},
 }
 
 _PLATFORM_ALIASES = {

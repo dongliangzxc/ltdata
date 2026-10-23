@@ -9,7 +9,11 @@ import {
 import { useRequest } from 'ahooks'
 import { listRawData, getRawStats, getRawFilters, exportRawData } from '../../services/api'
 
-const PLATFORM_LABEL: Record<string, string> = { JD: '京东', TM: '天猫', TB: '淘宝' }
+const PLATFORM_LABEL: Record<string, string> = {
+  JD: '京东', TM: '天猫', TB: '淘宝',
+  jd: '京东', tmall: '天猫', taobao: '淘宝', suning: '苏宁', douyin: '抖音',
+  AMAZON: '亚马逊', SHOPEE: '西皮', amazon: '亚马逊', shopee: '西皮',
+}
 
 const renderVal = (v: unknown) => (v == null || v === '' ? '-' : String(v))
 
@@ -67,7 +71,7 @@ const BASE_COLUMNS: ColDef[] = [
     title: '平台', dataIndex: 'platform', width: 90, fixed: 'left' as const,
     render: (v: string) => {
       if (!v) return '-'
-      const label = Object.entries(PLATFORM_LABEL).find(([, name]) => v.includes(name))?.[1] ?? v
+      const label = PLATFORM_LABEL[v] ?? PLATFORM_LABEL[v.toLowerCase()] ?? v
       return <Tag color="blue">{label}</Tag>
     }
   },

@@ -460,7 +460,7 @@ function MappingTab() {
           placeholder="平台"
           allowClear
           style={{ width: 120 }}
-          options={['jd', 'tmall', 'taobao', 'suning'].map(p => ({ value: p, label: p }))}
+          options={['jd', 'tmall', 'taobao', 'suning', 'amazon', 'shopee'].map(p => ({ value: p, label: p }))}
           onChange={v => { setPlatform(v); resetPage() }}
         />
         <Select

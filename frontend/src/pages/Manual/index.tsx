@@ -96,7 +96,7 @@ export default function ManualPage() {
           <Title level={3} id="upload"><UploadOutlined /> 数据上传</Title>
           <Paragraph>
             将原始销售数据 Excel（<Text code>.xlsx / .xls</Text>）拖拽到上传区域或点击选择文件。
-            系统自动识别平台（京东 / 天猫 / 淘宝 / 苏宁）和月份范围，上传成功后展示前 50 行预览。
+            系统自动识别平台（京东 / 天猫 / 淘宝 / 苏宁 / 亚马逊 / 西皮）和月份范围，上传成功后展示前 50 行预览。
           </Paragraph>
           <Paragraph>
             <S>上传历史</S>：页面下方列出所有已上传文件，支持删除（删除后对应原始数据一并移除）。
@@ -190,7 +190,7 @@ export default function ManualPage() {
             ③ <S>编辑/删除</S>：已有映射支持行内编辑和单条删除。
           </Paragraph>
           <Alert type="info" showIcon style={{ marginBottom: 16 }}
-            message="platform 字段大小写不敏感，导入时自动转为小写（jd/tmall/taobao/suning）。" />
+            message="platform 字段大小写不敏感，导入时自动转为小写（jd/tmall/taobao/suning/amazon/shopee）。" />
 
           <Divider />
 
@@ -205,7 +205,7 @@ export default function ManualPage() {
             <S>Excel 格式</S>（每行一条映射关系）：
           </Paragraph>
           <Paragraph>
-            <Tag>platform</Tag> 平台，jd/tmall/taobao/suning（自动转小写）<br />
+            <Tag>platform</Tag> 平台，jd/tmall/taobao/suning/amazon/shopee（自动转小写）<br />
             <Tag>item_id</Tag> 商品 ID（与原始数据一致）<br />
             <Tag>model_code</Tag> 型号编码（必须存在于型号库中，否则该行报错跳过）
           </Paragraph>

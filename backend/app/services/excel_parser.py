@@ -1,6 +1,6 @@
 """
 Excel 解析服务：将原始上传的 Excel 文件统一解析为标准字段结构。
-支持京东/天猫/淘宝三种原始数据格式差异。
+支持京东/天猫/淘宝以及海外 Amazon / Shopee 平台的原始数据格式差异。
 """
 import pandas as pd
 from pathlib import Path
@@ -122,12 +122,16 @@ def parse_raw_excel(file_path: str | Path) -> tuple[list[dict], str, str]:
         month_range = ""
 
     # 推断并标准化 platform 值（从数据中读取，统一写成小写标准值）
-    _PLATFORM_NORM = {"京东": "jd", "天猫": "tmall", "淘宝": "taobao", "苏宁": "suning", "抖音": "douyin"}
+    _PLATFORM_NORM = {
+    "京东": "jd", "天猫": "tmall", "淘宝": "taobao", "苏宁": "suning", "抖音": "douyin",
+    "亚马逊": "amazon", "amazon": "amazon", "amz": "amazon",
+    "西皮": "shopee", "虾皮": "shopee", "shopee": "shopee",
+}
     if "platform" in df.columns and df["platform"].notna().any():
         platform_val = df["platform"].dropna().iloc[0]
-        platform_str = str(platform_val)
+        platform_str = str(platform_val).lower()
         for kw, std in _PLATFORM_NORM.items():
-            if kw in platform_str:
+            if kw.lower() in platform_str:
                 platform = std.upper()   # 文件级别沿用大写（JD/TM/TB 约定）
                 break
         # 每行的 platform 字段也标准化为小写（jd/tmall/taobao）
@@ -135,8 +139,9 @@ def parse_raw_excel(file_path: str | Path) -> tuple[list[dict], str, str]:
             if v is None:
                 return None
             s = str(v)
+            s_lower = s.lower()
             for kw, std in _PLATFORM_NORM.items():
-                if kw in s:
+                if kw.lower() in s_lower:
                     return std
             return v
         df["platform"] = df["platform"].apply(_norm_platform)
@@ -173,7 +178,11 @@ def parse_raw_excel(file_path: str | Path) -> tuple[list[dict], str, str]:
 STANDARD_FIELD_SET = set(STANDARD_FIELDS)
 
 #: Platform keyword → lowercase standard code
-_PLATFORM_NORM = {"京东": "jd", "天猫": "tmall", "淘宝": "taobao", "苏宁": "suning", "抖音": "douyin"}
+_PLATFORM_NORM = {
+    "京东": "jd", "天猫": "tmall", "淘宝": "taobao", "苏宁": "suning", "抖音": "douyin",
+    "亚马逊": "amazon", "amazon": "amazon", "amz": "amazon",
+    "西皮": "shopee", "虾皮": "shopee", "shopee": "shopee",
+}
 
 
 def parse_with_mapping(
@@ -247,9 +256,9 @@ def parse_with_mapping(
     # Normalize platform — derive file-level label and per-row lowercase value
     platform_label = "UNKNOWN"
     if df_std["platform"].notna().any():
-        first_val = str(df_std["platform"].dropna().iloc[0])
+        first_val = str(df_std["platform"].dropna().iloc[0]).lower()
         for kw, std in _PLATFORM_NORM.items():
-            if kw in first_val:
+            if kw.lower() in first_val:
                 platform_label = std.upper()
                 break
 
@@ -257,8 +266,9 @@ def parse_with_mapping(
             if v is None:
                 return None
             s = str(v)
+            s_lower = s.lower()
             for kw, std_val in _PLATFORM_NORM.items():
-                if kw in s:
+                if kw.lower() in s_lower:
                     return std_val
             return v
 

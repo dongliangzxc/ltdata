@@ -227,7 +227,13 @@ def _clean_decimal(value) -> Optional[Decimal]:
 
 def _normalize_platform(value: Optional[str]) -> Optional[str]:
     text = _clean_value(value)
-    return text.lower() if text else None
+    if not text:
+        return None
+    mapping = {
+        "亚马逊": "amazon", "amazon": "amazon",
+        "西皮": "shopee", "虾皮": "shopee", "shopee": "shopee",
+    }
+    return mapping.get(text.lower(), text.lower())
 
 
 def _normalize_item_name(value: Optional[str]) -> Optional[str]:

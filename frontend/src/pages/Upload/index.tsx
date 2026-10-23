@@ -14,7 +14,7 @@ import {
   listUploadFiles, deleteUploadFile,
   createUploadDownloadJob, listUploadDownloadJobs, getUploadDownloadJobUrl,
   listUploadTemplates,
-  updateUploadTemplate, deleteUploadTemplate,
+  createUploadTemplate, updateUploadTemplate, deleteUploadTemplate,
   getUploadConfirmJob, listUploadConfirmJobs, cancelUploadConfirmJob, deleteUploadConfirmJob,
   listCountryOptions,
   type UploadConfirmJobResponse,
@@ -191,16 +191,17 @@ type PendingUploadFile = {
   error?: string
 }
 
-const buildAutoMapping = (headersResult: HeadersResult) => {
+const buildAutoMapping = (headersResult: HeadersResult, overrideTemplate?: TemplateRow | null) => {
   const columns = headersResult.columns
   const standardFields = new Set(STANDARD_FIELD_OPTIONS.map(option => option.value))
   const mapping: Record<string, string> = {}
   for (const col of columns) {
     if (standardFields.has(col)) mapping[col] = col
   }
-  if (headersResult.suggested_template) {
+  const template = overrideTemplate ?? headersResult.suggested_template
+  if (template) {
     for (const col of columns) {
-      const target = headersResult.suggested_template.mapping[col]
+      const target = template.mapping[col]
       if (target && target !== '__ext__') mapping[col] = target
     }
   }
@@ -208,7 +209,7 @@ const buildAutoMapping = (headersResult: HeadersResult) => {
   const missing = [...REQUIRED_FIELDS].filter(field => !targets.has(field))
   return {
     mapping,
-    ignoreColumns: headersResult.suggested_template?.ignore_columns ?? [],
+    ignoreColumns: template?.ignore_columns ?? [],
     missing,
   }
 }
@@ -241,6 +242,7 @@ function MappingCard({
   countryCode,
   dataYear,
   onJobUpdate,
+  onTemplateSaved,
 }: {
   headersResult: HeadersResult
   templates: TemplateRow[]
@@ -249,6 +251,7 @@ function MappingCard({
   countryCode?: string
   dataYear?: number
   onJobUpdate?: () => void
+  onTemplateSaved?: (templateId: number) => void
 }) {
   const { columns, suggested_template, match_score, temp_file_id, filename } = headersResult
 
@@ -273,6 +276,7 @@ function MappingCard({
     suggested_template?.id
   )
   const [confirming, setConfirming] = useState(false)
+  const [savingTemplate, setSavingTemplate] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [uploadError, setUploadError] = useState('')
   const [uploadProgressVisible, setUploadProgressVisible] = useState(false)
@@ -310,6 +314,47 @@ function MappingCard({
       }
     }
   }, [])
+
+  const handleSaveTemplate = async () => {
+    const name = saveName.trim()
+    if (!name) {
+      message.warning('请先填写模板名称')
+      return
+    }
+    setSavingTemplate(true)
+    try {
+      const selected = templates.find(t => t.id === selectedTemplateId)
+      const existingByName = templates.find(t => t.name === name && t.is_builtin === 0)
+      const target = selected && selected.is_builtin === 0 ? selected : existingByName
+      if (!target && templates.some(t => t.name === name)) {
+        message.warning('模板名称已存在，请换一个名称')
+        return
+      }
+      let templateId: number
+      if (target) {
+        const res = await updateUploadTemplate(target.id, {
+          name,
+          platform: target.platform,
+          mapping,
+          ignore_columns: [...ignoreSet],
+        })
+        templateId = (res.data as { id: number }).id
+      } else {
+        const res = await createUploadTemplate({
+          name,
+          platform: null,
+          mapping,
+          ignore_columns: [...ignoreSet],
+        })
+        templateId = (res.data as { id: number }).id
+      }
+      message.success('模板已保存，已设为批量入库模板')
+      onTemplateSaved?.(templateId)
+      onCancel()
+    } finally {
+      setSavingTemplate(false)
+    }
+  }
 
   const handleConfirm = async () => {
     if (pollRef.current) return
@@ -496,6 +541,9 @@ function MappingCard({
           )}
           <div style={{ marginLeft: 'auto' }}>
             <Space>
+              <Button onClick={handleSaveTemplate} loading={savingTemplate} disabled={!saveName.trim()}>
+                保存模板并返回
+              </Button>
               <Button onClick={onCancel}>取消</Button>
               <Button
                 type="primary"
@@ -738,6 +786,7 @@ export default function UploadPage() {
   const [batchConfirming, setBatchConfirming] = useState(false)
   const [batchModalOpen, setBatchModalOpen] = useState(false)
   const [batchItems, setBatchItems] = useState<BatchConfirmItem[]>([])
+  const [batchTemplateId, setBatchTemplateId] = useState<number | undefined>(undefined)
   const [activeJob, setActiveJob] = useState<UploadConfirmJobResponse | null>(null)
   const [jobProgressVisible, setJobProgressVisible] = useState(false)
 
@@ -807,6 +856,7 @@ export default function UploadPage() {
   )
 
   const templates: TemplateRow[] = (templatesData as TemplateRow[] | undefined) ?? []
+  const batchTemplate = templates.find(template => template.id === batchTemplateId)
   const uploadJobs: UploadConfirmJobResponse[] = (uploadJobsData ?? []).filter(job => (
     Boolean(job.filename) && ['pending', 'running', 'error'].includes(job.status)
   ))
@@ -860,7 +910,7 @@ export default function UploadPage() {
     try {
       for (const item of readyFiles) {
         const headers = item.headersResult!
-        const auto = buildAutoMapping(headers)
+        const auto = buildAutoMapping(headers, batchTemplate)
         if (auto.missing.length > 0) {
           failedCount += 1
           updateBatchItem(item.uid, {
@@ -1088,7 +1138,7 @@ export default function UploadPage() {
           title="待处理文件"
           size="small"
           extra={
-            <Space>
+            <Space wrap>
               <Text type="secondary">批量设置国家</Text>
               <Select
                 allowClear
@@ -1104,6 +1154,20 @@ export default function UploadPage() {
                 }))}
               />
               <Button onClick={applyBatchCountry} disabled={!batchCountry}>应用到未入库文件</Button>
+              <Text type="secondary">批量套用模板</Text>
+              <Select
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                placeholder="可选"
+                style={{ width: 200 }}
+                value={batchTemplateId}
+                onChange={setBatchTemplateId}
+                options={templates.map(template => ({
+                  value: template.id,
+                  label: `${template.is_builtin ? '★ ' : ''}${template.name}`,
+                }))}
+              />
               <Button
                 type="primary"
                 loading={batchConfirming}
@@ -1140,7 +1204,7 @@ export default function UploadPage() {
                 title: '自动映射', width: 110,
                 render: (_: unknown, row) => {
                   if (!row.headersResult) return '-'
-                  const auto = buildAutoMapping(row.headersResult)
+                  const auto = buildAutoMapping(row.headersResult, batchTemplate)
                   return auto.missing.length === 0
                     ? <Tag color="green">可批量</Tag>
                     : <Tag color="orange">需手动</Tag>
@@ -1294,6 +1358,10 @@ export default function UploadPage() {
             countryCode={activeFile.countryCode}
             dataYear={dataYear}
             onJobUpdate={refreshUploadJobs}
+            onTemplateSaved={(templateId) => {
+              setBatchTemplateId(templateId)
+              refreshTemplates()
+            }}
           />
         </>
       )}

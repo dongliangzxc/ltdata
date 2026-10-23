@@ -231,6 +231,9 @@ export const deleteExchangeRate = (id: number) =>
 export const uploadFile = (formData: FormData) =>
   api.post('/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
 
+export const downloadUploadSample = () =>
+  api.get('/upload/sample-template', { responseType: 'blob' })
+
 interface UploadFileItem {
   id: number
   filename: string

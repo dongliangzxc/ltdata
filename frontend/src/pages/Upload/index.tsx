@@ -10,7 +10,7 @@ import {
 } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import {
-  getUploadHeaders, confirmUpload,
+  getUploadHeaders, confirmUpload, downloadUploadSample,
   listUploadFiles, deleteUploadFile,
   createUploadDownloadJob, listUploadDownloadJobs, getUploadDownloadJobUrl,
   listUploadTemplates,
@@ -780,6 +780,19 @@ export default function UploadPage() {
     if (latest) setActiveJob(latest)
   }, [uploadJobsData, activeJob?.job_id])
 
+  const handleDownloadSample = async () => {
+    const res = await downloadUploadSample()
+    const blob = new Blob([res.data], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = '数据上传示例.xlsx'
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
   const handleAddFile = async (file: File) => {
     const uid = `${file.name}-${file.size}-${Date.now()}-${Math.random().toString(36).slice(2)}`
     setPendingFiles(prev => [...prev, { uid, filename: file.name, status: 'uploading' }])
@@ -921,6 +934,11 @@ export default function UploadPage() {
               支持一次选择多个文件；文件读取完成后，在下方逐个选择国家
             </p>
           </Dragger>
+          <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
+            <Button icon={<DownloadOutlined />} onClick={handleDownloadSample}>
+              下载示例 Excel
+            </Button>
+          </div>
           {countryOptions.length === 0 && (
             <Alert
               type="warning"

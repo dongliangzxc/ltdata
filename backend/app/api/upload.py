@@ -1,10 +1,12 @@
 import os
 import shutil
 import uuid
+from io import BytesIO
 from pathlib import Path
+from urllib.parse import quote
 from typing import Optional
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import func, or_, select, tuple_, text
 from sqlalchemy.orm import Session
 from app.models.database import get_db
@@ -832,6 +834,79 @@ def _cleanup_old_tmp(tmp_dir: Path, max_age_hours: int = 24) -> None:
 
 def _read_columns(file_path) -> list:
     return _ih_read_columns(Path(file_path))
+
+
+UPLOAD_SAMPLE_FILENAME = "数据上传示例.xlsx"
+UPLOAD_SAMPLE_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+@router.get("/sample-template")
+def download_upload_sample():
+    """下载数据上传示例 Excel。"""
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "上传示例"
+
+    headers = [
+        "平台", "月", "Lv0类目名称(逐月固定)", "Lv1类目名称(逐月固定)",
+        "Lv2类目名称(逐月固定)", "宝贝ID", "宝贝名称", "宝贝图片",
+        "宝贝链接", "参考价格", "宝贝品牌(bid)", "宝贝店铺名称",
+        "销量", "销售额", "价格", "品牌", "机型",
+    ]
+    ws.append(headers)
+    ws.append([
+        "amazon", 202609, "Electronics", "Headphones", "Wireless Earbuds",
+        "AMZ-US-10001", "Wireless Noise Cancelling Earbuds",
+        "https://example.com/images/earbuds.jpg",
+        "https://www.amazon.com/dp/AMZ-US-10001", 89.99, "SoundCore",
+        "SoundCore Official", 1200, 107988.00, 89.99, "SoundCore", "A30",
+    ])
+    ws.append([
+        "shopee", 202609, "Consumer Electronics", "Audio", "Bluetooth Speakers",
+        "SHP-SG-20001", "Portable Bluetooth Speaker",
+        "https://example.com/images/speaker.jpg",
+        "https://shopee.sg/product/20001", 39.90, "JBL",
+        "JBL Official Store", 860, 34314.00, 39.90, "JBL", "GO3",
+    ])
+
+    notes = wb.create_sheet("字段说明")
+    notes.append(["字段", "是否必填", "说明"])
+    notes.append(["平台", "是", "文件的平台字段，如 amazon / shopee / jd / tmall；也可以在文件名中体现"])
+    notes.append(["月", "是", "数据月份，格式 YYYYMM，例如 202609"])
+    notes.append(["宝贝ID", "是", "商品唯一 ID，同一国家+月份+平台下用于去重"])
+    notes.append(["宝贝名称", "是", "商品标题"])
+    notes.append(["销量", "是", "整数"])
+    notes.append(["销售额", "是", "原币金额，不是人民币；币种由上传时选择的国家决定"])
+    notes.append(["价格", "是", "原币单价"])
+    notes.append(["参考价格", "否", "原币参考价，可留空"])
+    notes.append(["宝贝品牌(bid)", "否", "原始品牌文本"])
+    notes.append(["品牌", "否", "标准化品牌，可留空，后续在平台维护"])
+    notes.append(["机型", "否", "型号编码/型号名称，可留空"])
+    notes.append(["宝贝店铺名称", "否", "店铺名称"])
+    notes.append(["宝贝链接", "否", "商品链接，强烈建议填写，便于 URL 映射复用"])
+    notes.append(["宝贝图片", "否", "商品图片 URL"])
+    notes.append(["Lv0-Lv2 类目名称", "否", "平台原始类目，可留空"])
+    notes.append(["", "", ""])
+    notes.append(["注意", "", "国家不在 Excel 中填写。上传多个文件后，在每个文件行单独选择国家。"])
+    notes.append(["注意", "", "列名可以不同，上传后按页面提示完成列映射即可。"])
+    notes.append(["注意", "", "同一文件只对应一个国家；海外金额请填写当地币种原币。"])
+
+    for sheet in (ws, notes):
+        for column_cells in sheet.columns:
+            width = max(len(str(cell.value or "")) for cell in column_cells)
+            sheet.column_dimensions[column_cells[0].column_letter].width = min(max(width + 2, 10), 60)
+
+    buffer = BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    filename = quote(UPLOAD_SAMPLE_FILENAME)
+    return Response(
+        content=buffer.getvalue(),
+        media_type=UPLOAD_SAMPLE_MEDIA_TYPE,
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
+    )
 
 
 @router.post("/headers")

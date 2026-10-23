@@ -140,3 +140,10 @@ def test_list_upload_files_filter_by_year_month(client):
     items = r.json()
     assert len(items) == 1
     assert items[0]["filename"] == "c.xlsx"
+
+
+def test_upload_sample_template_download(client):
+    res = client.get("/api/upload/sample-template")
+    assert res.status_code == 200
+    assert "spreadsheetml" in res.headers["content-type"]
+    assert len(res.content) > 1000

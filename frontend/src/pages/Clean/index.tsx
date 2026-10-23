@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import type { Key } from 'react'
 import {
   Card, Button, Table, Tag, Modal, Row, Col,
-  Space, Statistic, Select, message, Tabs, Popconfirm, Input, InputNumber
+  Space, Statistic, Select, message, Tabs, Popconfirm, Input, InputNumber, Typography
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { EyeOutlined, AimOutlined, CheckCircleFilled, DeleteOutlined, LineChartOutlined, FileSearchOutlined, TagsOutlined } from '@ant-design/icons'
@@ -22,6 +22,8 @@ import type {
   CleanMatchedGroup, CleanMatchedItem, CleanMatchedResponse, ExchangeRateOption,
 } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
+
+const { Text } = Typography
 
 type CleanJobStatus = 'created' | 'cleaning' | 'matching' | 'processing' | 'reviewing' | 'published' | 'failed' | 'done' | 'error' | 'archived'
 

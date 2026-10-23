@@ -195,14 +195,13 @@ const buildAutoMapping = (headersResult: HeadersResult) => {
   const columns = headersResult.columns
   const standardFields = new Set(STANDARD_FIELD_OPTIONS.map(option => option.value))
   const mapping: Record<string, string> = {}
+  for (const col of columns) {
+    if (standardFields.has(col)) mapping[col] = col
+  }
   if (headersResult.suggested_template) {
     for (const col of columns) {
       const target = headersResult.suggested_template.mapping[col]
       if (target && target !== '__ext__') mapping[col] = target
-    }
-  } else {
-    for (const col of columns) {
-      if (standardFields.has(col)) mapping[col] = col
     }
   }
   const targets = new Set(Object.values(mapping))

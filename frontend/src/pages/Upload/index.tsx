@@ -188,6 +188,8 @@ type PendingUploadFile = {
   status: 'uploading' | 'ready' | 'error'
   headersResult?: HeadersResult
   countryCode?: string
+  templateId?: number
+  templateOverride?: TemplateRow
   error?: string
 }
 
@@ -795,8 +797,7 @@ export default function UploadPage() {
   const [batchConfirming, setBatchConfirming] = useState(false)
   const [batchModalOpen, setBatchModalOpen] = useState(false)
   const [batchItems, setBatchItems] = useState<BatchConfirmItem[]>([])
-  const [batchTemplateId, setBatchTemplateId] = useState<number | undefined>(undefined)
-  const [batchTemplateOverride, setBatchTemplateOverride] = useState<TemplateRow | null>(null)
+  const [bulkTemplateId, setBulkTemplateId] = useState<number | undefined>(undefined)
   const [activeJob, setActiveJob] = useState<UploadConfirmJobResponse | null>(null)
   const [jobProgressVisible, setJobProgressVisible] = useState(false)
 
@@ -866,7 +867,6 @@ export default function UploadPage() {
   )
 
   const templates: TemplateRow[] = (templatesData as TemplateRow[] | undefined) ?? []
-  const batchTemplate = batchTemplateOverride ?? templates.find(template => template.id === batchTemplateId)
   const uploadJobs: UploadConfirmJobResponse[] = (uploadJobsData ?? []).filter(job => (
     Boolean(job.filename) && ['pending', 'running', 'error'].includes(job.status)
   ))
@@ -920,8 +920,9 @@ export default function UploadPage() {
     try {
       for (const item of readyFiles) {
         const headers = item.headersResult!
-        let auto = buildAutoMapping(headers, batchTemplate)
-        if (auto.missing.length > 0 && batchTemplate && headers.suggested_template) {
+        const selectedTemplate = item.templateOverride ?? templates.find(template => template.id === item.templateId)
+        let auto = buildAutoMapping(headers, selectedTemplate)
+        if (auto.missing.length > 0 && selectedTemplate && headers.suggested_template) {
           const fallback = buildAutoMapping(headers, null)
           if (fallback.missing.length === 0) auto = fallback
         }
@@ -940,7 +941,7 @@ export default function UploadPage() {
             temp_file_id: headers.temp_file_id,
             mapping: auto.mapping,
             ignore_columns: auto.ignoreColumns,
-            template_id: batchTemplate?.id ?? headers.suggested_template?.id,
+            template_id: selectedTemplate?.id ?? headers.suggested_template?.id,
             country_code: item.countryCode,
             data_year: dataYear,
           })
@@ -1000,7 +1001,12 @@ export default function UploadPage() {
     try {
       const res = await getUploadHeaders(formData)
       setPendingFiles(prev => prev.map(item => item.uid === uid
-        ? { ...item, status: 'ready', headersResult: res.data as HeadersResult }
+        ? {
+            ...item,
+            status: 'ready',
+            headersResult: res.data as HeadersResult,
+            templateId: (res.data as HeadersResult).suggested_template?.id,
+          }
         : item))
     } catch {
       setPendingFiles(prev => prev.map(item => item.uid === uid
@@ -1014,6 +1020,21 @@ export default function UploadPage() {
 
   const updatePendingCountry = (uid: string, countryCode: string) => {
     setPendingFiles(prev => prev.map(item => item.uid === uid ? { ...item, countryCode } : item))
+  }
+
+  const updatePendingTemplate = (uid: string, templateId?: number) => {
+    const template = templateId ? templates.find(item => item.id === templateId) : undefined
+    setPendingFiles(prev => prev.map(item => item.uid === uid
+      ? { ...item, templateId, templateOverride: template }
+      : item))
+  }
+
+  const applyBulkTemplate = () => {
+    if (!bulkTemplateId) return
+    const template = templates.find(item => item.id === bulkTemplateId)
+    setPendingFiles(prev => prev.map(item => item.status === 'ready'
+      ? { ...item, templateId: bulkTemplateId, templateOverride: template }
+      : item))
   }
 
   const applyBatchCountry = () => {
@@ -1169,20 +1190,21 @@ export default function UploadPage() {
                 }))}
               />
               <Button onClick={applyBatchCountry} disabled={!batchCountry}>应用到未入库文件</Button>
-              <Text type="secondary">批量套用模板</Text>
+              <Text type="secondary">批量设置模板</Text>
               <Select
                 allowClear
                 showSearch
                 optionFilterProp="label"
                 placeholder="可选"
                 style={{ width: 200 }}
-                value={batchTemplateId}
-                onChange={(value) => { setBatchTemplateId(value); setBatchTemplateOverride(null) }}
+                value={bulkTemplateId}
+                onChange={setBulkTemplateId}
                 options={templates.map(template => ({
                   value: template.id,
                   label: `${template.is_builtin ? '★ ' : ''}${template.name}`,
                 }))}
               />
+              <Button onClick={applyBulkTemplate} disabled={!bulkTemplateId}>应用模板到未入库文件</Button>
               <Button
                 type="primary"
                 loading={batchConfirming}
@@ -1216,10 +1238,29 @@ export default function UploadPage() {
                 render: (_: unknown, row) => row.headersResult?.columns.length ?? '-',
               },
               {
+                title: '模板', width: 220,
+                render: (_: unknown, row) => (
+                  <Select
+                    allowClear
+                    showSearch
+                    optionFilterProp="label"
+                    placeholder="自动/推荐"
+                    style={{ width: '100%' }}
+                    value={row.templateId}
+                    onChange={value => updatePendingTemplate(row.uid, value)}
+                    options={templates.map(template => ({
+                      value: template.id,
+                      label: `${template.is_builtin ? '★ ' : ''}${template.name}`,
+                    }))}
+                  />
+                ),
+              },
+              {
                 title: '自动映射', width: 110,
                 render: (_: unknown, row) => {
                   if (!row.headersResult) return '-'
-                  const auto = buildAutoMapping(row.headersResult, batchTemplate)
+                  const selectedTemplate = row.templateOverride ?? templates.find(template => template.id === row.templateId)
+                  const auto = buildAutoMapping(row.headersResult, selectedTemplate)
                   return auto.missing.length === 0
                     ? <Tag color="green">可批量</Tag>
                     : <Tag color="orange">需手动</Tag>
@@ -1374,8 +1415,11 @@ export default function UploadPage() {
             dataYear={dataYear}
             onJobUpdate={refreshUploadJobs}
             onTemplateSaved={(template) => {
-              setBatchTemplateId(template.id)
-              setBatchTemplateOverride(template)
+              if (activeFileId) {
+                setPendingFiles(prev => prev.map(item => item.uid === activeFileId
+                  ? { ...item, templateId: template.id, templateOverride: template }
+                  : item))
+              }
               refreshTemplates()
             }}
           />

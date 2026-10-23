@@ -43,7 +43,7 @@ COUNTRIES = [
 
 def upgrade() -> None:
     values = ",\n".join(
-        "('{code}', '{name_cn}', '{name_en}', '{currency}', '{symbol}', 'overseas', 1, {sort})".format(
+        "('{code}', '{name_cn}', '{name_en}', '{currency}', '{symbol}', 'overseas', 1, {sort}, NOW(), NOW())".format(
             code=code,
             name_cn=name_cn,
             name_en=name_en.replace("'", "''"),

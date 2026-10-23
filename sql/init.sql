@@ -47,7 +47,29 @@ CREATE TABLE IF NOT EXISTS countries (
 
 INSERT IGNORE INTO countries
     (code, name_cn, name_en, currency_code, currency_symbol, region, is_active, sort_order)
-VALUES ('CN', '中国', 'China', 'CNY', '¥', 'domestic', 1, 0);
+VALUES
+    ('CN', '中国', 'China', 'CNY', '¥', 'domestic', 1, 0),
+    ('AE', '阿联酋', 'United Arab Emirates', 'AED', 'AED', 'overseas', 1, 10),
+    ('AU', '澳大利亚', 'Australia', 'AUD', 'A$', 'overseas', 1, 20),
+    ('BR', '巴西', 'Brazil', 'BRL', 'R$', 'overseas', 1, 30),
+    ('CA', '加拿大', 'Canada', 'CAD', 'C$', 'overseas', 1, 40),
+    ('DE', '德国', 'Germany', 'EUR', '€', 'overseas', 1, 50),
+    ('ES', '西班牙', 'Spain', 'EUR', '€', 'overseas', 1, 60),
+    ('FR', '法国', 'France', 'EUR', '€', 'overseas', 1, 70),
+    ('GB', '英国', 'United Kingdom', 'GBP', '£', 'overseas', 1, 80),
+    ('IN', '印度', 'India', 'INR', '₹', 'overseas', 1, 90),
+    ('IT', '意大利', 'Italy', 'EUR', '€', 'overseas', 1, 100),
+    ('JP', '日本', 'Japan', 'JPY', '¥', 'overseas', 1, 110),
+    ('MX', '墨西哥', 'Mexico', 'MXN', 'MX$', 'overseas', 1, 120),
+    ('SA', '沙特阿拉伯', 'Saudi Arabia', 'SAR', 'SAR', 'overseas', 1, 130),
+    ('US', '美国', 'United States', 'USD', '$', 'overseas', 1, 140),
+    ('ID', '印度尼西亚', 'Indonesia', 'IDR', 'Rp', 'overseas', 1, 150),
+    ('MY', '马来西亚', 'Malaysia', 'MYR', 'RM', 'overseas', 1, 160),
+    ('PH', '菲律宾', 'Philippines', 'PHP', '₱', 'overseas', 1, 170),
+    ('SG', '新加坡', 'Singapore', 'SGD', 'S$', 'overseas', 1, 180),
+    ('TH', '泰国', 'Thailand', 'THB', '฿', 'overseas', 1, 190),
+    ('TW', '中国台湾', 'Taiwan, China', 'TWD', 'NT$', 'overseas', 1, 200),
+    ('VN', '越南', 'Vietnam', 'VND', '₫', 'overseas', 1, 210);
 
 -- 国家汇率：1 单位该国币种 = rate_to_cny 元人民币
 CREATE TABLE IF NOT EXISTS exchange_rates (

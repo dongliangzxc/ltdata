@@ -251,7 +251,7 @@ function MappingCard({
   countryCode?: string
   dataYear?: number
   onJobUpdate?: () => void
-  onTemplateSaved?: (templateId: number) => void
+  onTemplateSaved?: (template: TemplateRow) => void
 }) {
   const { columns, suggested_template, match_score, temp_file_id, filename } = headersResult
 
@@ -349,7 +349,16 @@ function MappingCard({
         templateId = (res.data as { id: number }).id
       }
       message.success('模板已保存，已设为批量入库模板')
-      onTemplateSaved?.(templateId)
+      onTemplateSaved?.({
+        id: templateId,
+        name,
+        platform: target?.platform ?? null,
+        col_fingerprint: null,
+        mapping,
+        ignore_columns: [...ignoreSet],
+        is_builtin: 0,
+        updated_at: null,
+      })
       onCancel()
     } finally {
       setSavingTemplate(false)
@@ -787,6 +796,7 @@ export default function UploadPage() {
   const [batchModalOpen, setBatchModalOpen] = useState(false)
   const [batchItems, setBatchItems] = useState<BatchConfirmItem[]>([])
   const [batchTemplateId, setBatchTemplateId] = useState<number | undefined>(undefined)
+  const [batchTemplateOverride, setBatchTemplateOverride] = useState<TemplateRow | null>(null)
   const [activeJob, setActiveJob] = useState<UploadConfirmJobResponse | null>(null)
   const [jobProgressVisible, setJobProgressVisible] = useState(false)
 
@@ -856,7 +866,7 @@ export default function UploadPage() {
   )
 
   const templates: TemplateRow[] = (templatesData as TemplateRow[] | undefined) ?? []
-  const batchTemplate = templates.find(template => template.id === batchTemplateId)
+  const batchTemplate = batchTemplateOverride ?? templates.find(template => template.id === batchTemplateId)
   const uploadJobs: UploadConfirmJobResponse[] = (uploadJobsData ?? []).filter(job => (
     Boolean(job.filename) && ['pending', 'running', 'error'].includes(job.status)
   ))
@@ -910,7 +920,11 @@ export default function UploadPage() {
     try {
       for (const item of readyFiles) {
         const headers = item.headersResult!
-        const auto = buildAutoMapping(headers, batchTemplate)
+        let auto = buildAutoMapping(headers, batchTemplate)
+        if (auto.missing.length > 0 && batchTemplate && headers.suggested_template) {
+          const fallback = buildAutoMapping(headers, null)
+          if (fallback.missing.length === 0) auto = fallback
+        }
         if (auto.missing.length > 0) {
           failedCount += 1
           updateBatchItem(item.uid, {
@@ -926,7 +940,7 @@ export default function UploadPage() {
             temp_file_id: headers.temp_file_id,
             mapping: auto.mapping,
             ignore_columns: auto.ignoreColumns,
-            template_id: headers.suggested_template?.id,
+            template_id: batchTemplate?.id ?? headers.suggested_template?.id,
             country_code: item.countryCode,
             data_year: dataYear,
           })
@@ -942,10 +956,11 @@ export default function UploadPage() {
           setPendingFiles(prev => prev.filter(file => file.uid !== item.uid))
         } catch (error) {
           failedCount += 1
+          const detail = (error as { response?: { data?: { detail?: string; message?: string } } })?.response?.data
           updateBatchItem(item.uid, {
             status: 'error',
             progress: 100,
-            message: error instanceof Error ? error.message : '处理失败',
+            message: detail?.detail || detail?.message || (error instanceof Error ? error.message : '处理失败'),
           })
         }
       }
@@ -1162,7 +1177,7 @@ export default function UploadPage() {
                 placeholder="可选"
                 style={{ width: 200 }}
                 value={batchTemplateId}
-                onChange={setBatchTemplateId}
+                onChange={(value) => { setBatchTemplateId(value); setBatchTemplateOverride(null) }}
                 options={templates.map(template => ({
                   value: template.id,
                   label: `${template.is_builtin ? '★ ' : ''}${template.name}`,
@@ -1358,8 +1373,9 @@ export default function UploadPage() {
             countryCode={activeFile.countryCode}
             dataYear={dataYear}
             onJobUpdate={refreshUploadJobs}
-            onTemplateSaved={(templateId) => {
-              setBatchTemplateId(templateId)
+            onTemplateSaved={(template) => {
+              setBatchTemplateId(template.id)
+              setBatchTemplateOverride(template)
               refreshTemplates()
             }}
           />

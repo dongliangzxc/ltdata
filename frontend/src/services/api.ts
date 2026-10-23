@@ -697,6 +697,9 @@ export interface DispatchUnmatchedResponse {
 export const runDispatch = (fileId: number, categoryCode?: string) =>
   api.post('/dispatch/run', categoryCode ? { file_id: fileId, category_code: categoryCode } : { file_id: fileId })
 
+export const runDispatchBatch = (batchKey: string, categoryCode?: string) =>
+  api.post('/dispatch/run', categoryCode ? { batch_key: batchKey, category_code: categoryCode } : { batch_key: batchKey })
+
 export const enqueueDispatchCategoryForClean = (batchId: number, categoryCode: string) =>
   api.post<{
     dispatch_batch_id: number

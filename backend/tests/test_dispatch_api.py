@@ -1753,3 +1753,33 @@ def test_list_and_get_redispatch_jobs_are_scoped(client_and_db, monkeypatch):
     assert item_payload["filename"] == "scoped-redispatch.xlsx"
     assert item_payload["category_count"] == 1
     assert item_payload["dispatched_rows"] == 2
+
+
+def test_run_dispatch_by_batch_key_processes_all_files(client_and_db):
+    client, db = client_and_db
+    file_one = UploadFileRecord(filename="a.xlsx", platform="amazon", row_count=1, status="done", batch_key="batch-dispatch-1")
+    file_two = UploadFileRecord(filename="b.xlsx", platform="amazon", row_count=1, status="done", batch_key="batch-dispatch-1")
+    db.add_all([file_one, file_two])
+    db.flush()
+    db.add(DispatchRule(
+        category_code="headphone",
+        platform="amazon",
+        field="category_lv1",
+        match_type="contains",
+        value="耳机",
+        priority=1,
+        is_active=1,
+    ))
+    db.add(RawDataRecord(file_id=file_one.id, platform="amazon", item_id="a-1", item_name="无线耳机", category_lv1="耳机"))
+    db.add(RawDataRecord(file_id=file_two.id, platform="amazon", item_id="b-1", item_name="降噪耳机", category_lv1="耳机"))
+    db.commit()
+
+    response = client.post("/api/dispatch/run", json={"batch_key": "batch-dispatch-1"})
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["batch_key"] == "batch-dispatch-1"
+    batch = db.query(DispatchBatch).filter(DispatchBatch.id == payload["id"]).one()
+    assert batch.total_rows == 2
+    items = db.query(DispatchItem).filter(DispatchItem.batch_id == batch.id).all()
+    assert len(items) == 2

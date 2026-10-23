@@ -125,6 +125,15 @@ IF NOT EXISTS (
     UPDATE column_templates SET module = 'sales' WHERE is_builtin = 1;
 END IF;
 
+-- 分发批次关联上传批次
+IF NOT EXISTS (
+    SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='dispatch_batches' AND COLUMN_NAME='batch_key'
+) THEN
+    ALTER TABLE dispatch_batches ADD COLUMN batch_key VARCHAR(64) NULL;
+    CREATE INDEX ix_dispatch_batches_batch_key ON dispatch_batches(batch_key);
+END IF;
+
 -- 海外国家与汇率
 CREATE TABLE IF NOT EXISTS countries (
     id              INT AUTO_INCREMENT PRIMARY KEY,

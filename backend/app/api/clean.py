@@ -497,13 +497,24 @@ def _run_clean_for_dispatch_category(
 ) -> CleanJobRecord:
     from app.models.schemas import RawDataRecord
 
+    batch = db.query(DispatchBatch).filter(DispatchBatch.id == dispatch_batch_id).first()
+    file_ids = [file_id]
+    if batch and batch.batch_key:
+        file_ids = [
+            record_id
+            for record_id, in db.query(UploadFileRecord.id)
+            .filter(UploadFileRecord.batch_key == batch.batch_key)
+            .order_by(UploadFileRecord.id)
+            .all()
+        ] or [file_id]
+
     raw_data_ids = select(DispatchItem.raw_data_id).filter(
         DispatchItem.batch_id == dispatch_batch_id,
         DispatchItem.category_code == dispatch_category_code,
     )
     row_in = db.query(RawDataRecord).filter(RawDataRecord.id.in_(raw_data_ids)).count()
     job = CleanJobRecord(
-        file_ids=[file_id],
+        file_ids=file_ids,
         rules=rules,
         status="processing",
         row_in=row_in,
@@ -515,7 +526,7 @@ def _run_clean_for_dispatch_category(
     db.flush()
 
     try:
-        row_out = run_clean(db, job.id, [file_id], rules, dispatch_batch_id, dispatch_category_code)
+        row_out = run_clean(db, job.id, file_ids, rules, dispatch_batch_id, dispatch_category_code)
         job.row_out = row_out
         job.status = "done"
         db.commit()

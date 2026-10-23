@@ -27,9 +27,14 @@ const { Text } = Typography
 // ─── Types ───────────────────────────────────────────────────
 interface UploadFile {
   id: number; filename: string; platform: string; month_range: string; row_count: number
+  batch_key?: string | null
+}
+interface DispatchFileRow extends UploadFile {
+  is_batch?: boolean
+  file_count?: number
 }
 interface DispatchBatch {
-  id: number; file_id: number; status: string
+  id: number; file_id: number; batch_key?: string | null; status: string
   total_rows: number | null; dispatched_rows: number | null; unmatched_rows: number | null
   created_at: string; finished_at: string | null
 }
@@ -143,9 +148,40 @@ function useVisibleCategories() {
   return { visibleCategories, loading }
 }
 
+const groupDispatchFiles = (files: UploadFile[]): DispatchFileRow[] => {
+  const groups = new Map<string, UploadFile[]>()
+  const order: string[] = []
+  for (const file of files) {
+    const key = file.batch_key ? `batch:${file.batch_key}` : `file:${file.id}`
+    if (!groups.has(key)) {
+      groups.set(key, [])
+      order.push(key)
+    }
+    groups.get(key)!.push(file)
+  }
+  return order.map(key => {
+    const group = groups.get(key)!
+    if (!key.startsWith('batch:')) {
+      return { ...group[0], is_batch: false }
+    }
+    const first = group[0]
+    const platforms = Array.from(new Set(group.map(file => file.platform).filter(Boolean)))
+    const months = Array.from(new Set(group.map(file => file.month_range).filter(Boolean)))
+    return {
+      ...first,
+      filename: `批量上传（${group.length} 个文件）`,
+      platform: platforms.join(' / '),
+      month_range: months.join(' / '),
+      row_count: group.reduce((sum, file) => sum + (file.row_count || 0), 0),
+      is_batch: true,
+      file_count: group.length,
+    }
+  })
+}
+
 // ─── Tab 1: 分发管理 ──────────────────────────────────────────
 function DispatchManagementTab({ onRulesChanged, visibleCategories }: { onRulesChanged: () => void; visibleCategories: CategoryOption[] }) {
-  const [runningIds, setRunningIds] = useState<Set<number>>(new Set())
+  const [runningKeys, setRunningKeys] = useState<Set<string>>(new Set())
   const [runningCategoryKeys, setRunningCategoryKeys] = useState<Set<string>>(new Set())
   const [statsVisible, setStatsVisible] = useState(false)
   const [statsData, setStatsData] = useState<DispatchBatchStatsResponse | null>(null)
@@ -164,6 +200,7 @@ function DispatchManagementTab({ onRulesChanged, visibleCategories }: { onRulesC
   )
 
   const { data: files } = useRequest(() => listUploadFiles().then(r => r.data as UploadFile[]))
+  const fileRows = useMemo(() => groupDispatchFiles(files ?? []), [files])
   const { data: batches, refresh: refreshBatches } = useRequest(
     () => listDispatchBatches().then(r => r.data as DispatchBatch[])
   )
@@ -183,22 +220,33 @@ function DispatchManagementTab({ onRulesChanged, visibleCategories }: { onRulesC
       refreshDeps: [currentStatsBatch?.id, unmatchedPage, unmatchedPageSize, unmatchedKeyword],
     }
   )
-  // 构建 file_id → latest done batch 映射
+  // 构建 file_id / batch_key → latest done batch 映射
   const batchByFile = (batches ?? []).reduce<Record<number, DispatchBatch>>((acc, b) => {
-    if (b.status === 'done') {
+    if (b.status === 'done' && !b.batch_key) {
       if (!acc[b.file_id] || b.id > acc[b.file_id].id) acc[b.file_id] = b
     }
     return acc
   }, {})
+  const batchByKey = (batches ?? []).reduce<Record<string, DispatchBatch>>((acc, b) => {
+    if (b.status === 'done' && b.batch_key) {
+      if (!acc[b.batch_key] || b.id > acc[b.batch_key].id) acc[b.batch_key] = b
+    }
+    return acc
+  }, {})
 
-  const handleRun = async (fileId: number) => {
-    setRunningIds(prev => new Set(prev).add(fileId))
+  const handleRun = async (row: DispatchFileRow) => {
+    const key = row.is_batch && row.batch_key ? `batch:${row.batch_key}` : `file:${row.id}`
+    setRunningKeys(prev => new Set(prev).add(key))
     try {
-      await runDispatch(fileId)
-      message.success('分发完成')
+      if (row.is_batch && row.batch_key) {
+        await runDispatchBatch(row.batch_key)
+      } else {
+        await runDispatch(row.id)
+      }
+      message.success(row.is_batch ? '整批分发完成' : '分发完成')
       refreshBatches()
     } finally {
-      setRunningIds(prev => { const s = new Set(prev); s.delete(fileId); return s })
+      setRunningKeys(prev => { const s = new Set(prev); s.delete(key); return s })
     }
   }
 
@@ -291,9 +339,9 @@ function DispatchManagementTab({ onRulesChanged, visibleCategories }: { onRulesC
     { title: '数据量', dataIndex: 'row_count', width: 80 },
     {
       title: '分发状态', width: 180,
-      render: (_: unknown, row: UploadFile) => {
-        const batch = batchByFile[row.id]
-        if (runningIds.has(row.id)) return <Tag color="processing">分发中...</Tag>
+      render: (_: unknown, row: DispatchFileRow) => {
+        const batch = row.is_batch && row.batch_key ? batchByKey[row.batch_key] : batchByFile[row.id]
+        if (runningKeys.has(row.is_batch && row.batch_key ? `batch:${row.batch_key}` : `file:${row.id}`)) return <Tag color="processing">分发中...</Tag>
         if (!batch) return <Tag>未分发</Tag>
         return (
           <Space direction="vertical" size={0}>
@@ -307,14 +355,15 @@ function DispatchManagementTab({ onRulesChanged, visibleCategories }: { onRulesC
     },
     {
       title: '操作', width: 260,
-      render: (_: unknown, row: UploadFile) => {
-        const batch = batchByFile[row.id]
+      render: (_: unknown, row: DispatchFileRow) => {
+        const batch = row.is_batch && row.batch_key ? batchByKey[row.batch_key] : batchByFile[row.id]
+        const runKey = row.is_batch && row.batch_key ? `batch:${row.batch_key}` : `file:${row.id}`
         return (
           <Space>
             <Button
               type="link" size="small" icon={<PlayCircleOutlined />}
-              loading={runningIds.has(row.id)}
-              onClick={() => handleRun(row.id)}
+              loading={runningKeys.has(runKey)}
+              onClick={() => handleRun(row)}
             >
               {batch ? '重新分发' : '执行分发'}
             </Button>
@@ -334,8 +383,8 @@ function DispatchManagementTab({ onRulesChanged, visibleCategories }: { onRulesC
   return (
     <>
       <Table
-        rowKey="id"
-        dataSource={files ?? []}
+        rowKey={(row) => row.is_batch && row.batch_key ? `batch-${row.batch_key}` : `file-${row.id}`}
+        dataSource={fileRows}
         columns={columns}
         size="small"
         pagination={{ pageSize: 20 }}

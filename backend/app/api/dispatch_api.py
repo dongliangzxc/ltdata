@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 import pandas as pd
 from openpyxl import Workbook
 from pydantic import BaseModel, Field
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import String, case, cast, func, or_, select
 from sqlalchemy.orm import Session
 from app.core.auth_deps import get_current_user
 from app.core.config import settings
@@ -326,13 +326,20 @@ def _latest_dispatch_export_query(
     months: list[int] | None = None,
     allowed_category_codes: list[str] | None = None,
 ):
+    batch_identity = func.coalesce(
+        DispatchBatch.batch_key,
+        cast(DispatchBatch.file_id, String),
+    )
     latest_batches = (
         db.query(
-            DispatchBatch.file_id.label("file_id"),
+            batch_identity.label("batch_identity"),
             func.max(DispatchBatch.id).label("batch_id"),
         )
-        .filter(DispatchBatch.status == "done", DispatchBatch.file_id.isnot(None))
-        .group_by(DispatchBatch.file_id)
+        .filter(
+            DispatchBatch.status == "done",
+            or_(DispatchBatch.file_id.isnot(None), DispatchBatch.batch_key.isnot(None)),
+        )
+        .group_by(batch_identity)
         .subquery()
     )
     query = (
@@ -384,6 +391,11 @@ def _split_item_name_keywords(keyword: str | None) -> list[str]:
 
 def _rule_matches(row: RawDataRecord, rule: DispatchRule) -> bool:
     """判断一条规则是否命中该行"""
+    row_platform = (getattr(row, "platform", None) or "").strip().lower()
+    rule_platform = (rule.platform or "").strip().lower()
+    if rule_platform and rule_platform != row_platform:
+        return False
+
     val = _field_value(row, rule.field)
     match_values = _split_match_values(rule.value)
     if rule.match_type == "contains":
@@ -405,7 +417,8 @@ def _rule_matches(row: RawDataRecord, rule: DispatchRule) -> bool:
 
 
 def _count_rule_matches_for_batch(db: Session, batch: DispatchBatch, rule_ids: list[int]) -> dict[int, int]:
-    if not batch.file_id or not rule_ids:
+    file_ids = _batch_file_ids(db, batch)
+    if not file_ids or not rule_ids:
         return {}
     rules = db.query(DispatchRule).filter(DispatchRule.id.in_(rule_ids)).all()
     if not rules:
@@ -417,6 +430,7 @@ def _count_rule_matches_for_batch(db: Session, batch: DispatchBatch, rule_ids: l
         rows = (
             db.query(
                 RawDataRecord.id,
+                RawDataRecord.platform,
                 RawDataRecord.category_lv0,
                 RawDataRecord.category_lv1,
                 RawDataRecord.category_lv2,
@@ -425,7 +439,7 @@ def _count_rule_matches_for_batch(db: Session, batch: DispatchBatch, rule_ids: l
                 RawDataRecord.category_lv5,
                 RawDataRecord.item_name,
             )
-            .filter(RawDataRecord.file_id == batch.file_id, RawDataRecord.id > last_id)
+            .filter(RawDataRecord.file_id.in_(file_ids), RawDataRecord.id > last_id)
             .order_by(RawDataRecord.id)
             .limit(DISPATCH_PAGE_SIZE)
             .all()
@@ -440,22 +454,65 @@ def _count_rule_matches_for_batch(db: Session, batch: DispatchBatch, rule_ids: l
     return counts
 
 
-def _execute_category_dispatch(db: Session, file_id: int, category_code: str | None) -> DispatchBatch:
-    """对指定 file_id 执行品类局部分发，返回新建的 batch。
+def _batch_file_ids(db: Session, batch: DispatchBatch) -> list[int]:
+    if batch.batch_key:
+        ids = [
+            file_id
+            for file_id, in db.query(UploadFileRecord.id)
+            .filter(UploadFileRecord.batch_key == batch.batch_key)
+            .order_by(UploadFileRecord.id)
+            .all()
+        ]
+        if ids:
+            return ids
+    return [batch.file_id] if batch.file_id else []
 
-    category_code 为空时执行全量分发；非空时只跑该品类规则，
-    并把该文件最新已完成批次中其它品类的分发结果复制进新批次。
-    供 run_dispatch 与批量补分发后台线程共用。
-    """
-    file_record = db.query(UploadFileRecord).filter(UploadFileRecord.id == file_id).first()
-    if not file_record:
-        raise HTTPException(status_code=404, detail="文件不存在")
 
-    platform = (file_record.platform or "").lower()
-    rule_filters = [
-        DispatchRule.is_active == 1,
-        (DispatchRule.platform.is_(None)) | (DispatchRule.platform == platform),
-    ]
+def _resolve_dispatch_files(
+    db: Session,
+    file_id: int | None,
+    batch_key: str | None,
+) -> tuple[list[int], list[str], str | None]:
+    if batch_key:
+        files = (
+            db.query(UploadFileRecord)
+            .filter(UploadFileRecord.batch_key == batch_key)
+            .order_by(UploadFileRecord.id)
+            .all()
+        )
+    elif file_id:
+        file_record = db.query(UploadFileRecord).filter(UploadFileRecord.id == file_id).first()
+        files = [file_record] if file_record else []
+    else:
+        files = []
+    if not files:
+        raise HTTPException(status_code=404, detail="上传文件不存在")
+
+    file_ids = [record.id for record in files]
+    platforms = sorted({
+        (record.platform or "").strip().lower()
+        for record in files
+        if (record.platform or "").strip()
+    })
+    return file_ids, platforms, batch_key
+
+
+def _execute_category_dispatch(
+    db: Session,
+    file_id: int | None,
+    category_code: str | None,
+    batch_key: str | None = None,
+) -> DispatchBatch:
+    """对单文件或一次批量上传的所有文件执行品类局部分发。"""
+    file_ids, platforms, batch_key = _resolve_dispatch_files(db, file_id, batch_key)
+
+    rule_filters = [DispatchRule.is_active == 1]
+    if platforms:
+        rule_filters.append(
+            or_(DispatchRule.platform.is_(None), DispatchRule.platform.in_(platforms))
+        )
+    else:
+        rule_filters.append(DispatchRule.platform.is_(None))
     if category_code:
         rule_filters.append(DispatchRule.category_code == category_code)
 
@@ -469,8 +526,8 @@ def _execute_category_dispatch(db: Session, file_id: int, category_code: str | N
     if category_code and not rules:
         raise HTTPException(status_code=400, detail="该品类没有可用分发规则")
 
-    # 1. 创建 batch
-    batch = DispatchBatch(file_id=file_id, status="running")
+    # 1. 创建 batch（多文件批次仍记录首个 file_id 兼容旧逻辑）
+    batch = DispatchBatch(file_id=file_ids[0], batch_key=batch_key, status="running")
     db.add(batch)
     db.commit()
     db.refresh(batch)
@@ -479,7 +536,7 @@ def _execute_category_dispatch(db: Session, file_id: int, category_code: str | N
     try:
         total_rows = (
             db.query(func.count(RawDataRecord.id))
-            .filter(RawDataRecord.file_id == file_id)
+            .filter(RawDataRecord.file_id.in_(file_ids))
             .scalar()
             or 0
         )
@@ -494,7 +551,7 @@ def _execute_category_dispatch(db: Session, file_id: int, category_code: str | N
                 )
                 .join(DispatchBatch, DispatchItem.batch_id == DispatchBatch.id)
                 .filter(
-                    DispatchBatch.file_id == file_id,
+                    (DispatchBatch.batch_key == batch_key) if batch_key else (DispatchBatch.file_id == file_ids[0]),
                     DispatchBatch.status == "done",
                     DispatchBatch.id != batch_id,
                     DispatchItem.category_code != category_code,
@@ -532,6 +589,7 @@ def _execute_category_dispatch(db: Session, file_id: int, category_code: str | N
             rows = (
                 db.query(
                     RawDataRecord.id,
+                    RawDataRecord.platform,
                     RawDataRecord.category_lv0,
                     RawDataRecord.category_lv1,
                     RawDataRecord.category_lv2,
@@ -540,7 +598,7 @@ def _execute_category_dispatch(db: Session, file_id: int, category_code: str | N
                     RawDataRecord.category_lv5,
                     RawDataRecord.item_name,
                 )
-                .filter(RawDataRecord.file_id == file_id, RawDataRecord.id > last_id)
+                .filter(RawDataRecord.file_id.in_(file_ids), RawDataRecord.id > last_id)
                 .order_by(RawDataRecord.id)
                 .limit(DISPATCH_PAGE_SIZE)
                 .all()
@@ -598,12 +656,18 @@ def _execute_category_dispatch(db: Session, file_id: int, category_code: str | N
 
 @router.post("/run", response_model=DispatchBatchOut)
 def run_dispatch(payload: dict, db: Session = Depends(get_db)):
-    """对指定 file_id 执行分发，返回新建的 batch"""
-    file_id: int = payload.get("file_id")
+    """对单个文件或一次批量上传的文件执行分发。"""
+    file_id = payload.get("file_id")
+    batch_key = (payload.get("batch_key") or "").strip() or None
     category_code = (payload.get("category_code") or "").strip() or None
-    if not file_id:
-        raise HTTPException(status_code=400, detail="file_id 不能为空")
-    return _execute_category_dispatch(db, file_id, category_code)
+    if not file_id and not batch_key:
+        raise HTTPException(status_code=400, detail="file_id 或 batch_key 不能为空")
+    return _execute_category_dispatch(
+        db,
+        int(file_id) if file_id else None,
+        category_code,
+        batch_key,
+    )
 
 
 @router.get("/batches", response_model=list[DispatchBatchOut])
@@ -909,7 +973,8 @@ def get_batch_unmatched(
         DispatchItem.category_code.in_(scoped_codes),
     ).first():
         raise HTTPException(status_code=403, detail="无权限访问该品类")
-    if batch.file_id is None:
+    file_ids = _batch_file_ids(db, batch)
+    if not file_ids:
         return {"total": 0, "page": page, "page_size": page_size, "items": []}
 
     dispatched_raw_ids = select(DispatchItem.raw_data_id).where(
@@ -918,7 +983,7 @@ def get_batch_unmatched(
     )
     q = (
         db.query(RawDataRecord)
-        .filter(RawDataRecord.file_id == batch.file_id)
+        .filter(RawDataRecord.file_id.in_(file_ids))
         .filter(~RawDataRecord.id.in_(dispatched_raw_ids))
     )
     if keyword:

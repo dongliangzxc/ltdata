@@ -1495,6 +1495,7 @@ class DispatchBatch(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     file_id = Column(Integer, ForeignKey("upload_files.id", ondelete="SET NULL"), nullable=True)
+    batch_key = Column(String(64), nullable=True, index=True, comment='上传批次标识；为空表示单文件分发')
     status = Column(String(20), nullable=False, default="running")
     total_rows = Column(Integer, nullable=True)
     dispatched_rows = Column(Integer, nullable=True)
@@ -1625,6 +1626,7 @@ class DispatchBatchOut(BaseModel):
 
     id: int
     file_id: Optional[int]
+    batch_key: Optional[str] = None
     status: str
     total_rows: Optional[int]
     dispatched_rows: Optional[int]

@@ -1785,6 +1785,17 @@ export const deleteCategory = (id: number) =>
   api.delete(`/categories/${id}`)
 
 // ─── Upload Templates ──────────────────────────────────────
+export interface UploadFilenameHints {
+  month?: number | null
+  platform?: string | null
+  country_code?: string | null
+  country_name?: string | null
+  month_ambiguous?: boolean
+  platform_ambiguous?: boolean
+  country_ambiguous?: boolean
+  warnings?: string[]
+}
+
 export const getUploadHeaders = (formData: FormData) =>
   api.post<{
     temp_file_id: string
@@ -1798,6 +1809,7 @@ export const getUploadHeaders = (formData: FormData) =>
       ignore_columns: string[]
     } | null
     match_score: number
+    filename_hints?: UploadFilenameHints
   }>('/upload/headers', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
 
 export const confirmUpload = (payload: {

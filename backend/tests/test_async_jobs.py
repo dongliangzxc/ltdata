@@ -566,3 +566,82 @@ def test_upload_confirm_passes_country_to_background_job(db, monkeypatch, tmp_pa
     assert captured["args"][7] == "overseas"
     assert captured["args"][8] == "US"
     assert captured["args"][9] == "batch-test-001"
+
+
+def test_upload_confirm_accepts_missing_month_platform_when_filename_infers_them(db, monkeypatch, tmp_path):
+    from app.core import config
+    from app.models.database import get_db
+    from app.models.schemas import Country
+
+    db.add(Country(code="US", name_cn="美国", currency_code="USD", region="overseas", is_active=1))
+    db.commit()
+
+    fake_id = "filename-hints"
+    upload_tmp = tmp_path / "tmp"
+    upload_tmp.mkdir()
+    (upload_tmp / f"{fake_id}_202609_amazon_US_Fryers.xlsx").write_bytes(b"fake")
+    monkeypatch.setattr(config.settings, "UPLOAD_DIR", str(tmp_path))
+
+    captured = {}
+
+    class FakeThread:
+        def __init__(self, target=None, args=(), daemon=None, **kwargs):
+            captured["args"] = args
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(threading, "Thread", FakeThread)
+
+    app = _patch_app(db, monkeypatch)
+    app.dependency_overrides[get_db] = lambda: (yield db)
+    client = TestClient(app, raise_server_exceptions=True)
+    resp = client.post(
+        "/api/upload/confirm",
+        json={
+            "temp_file_id": fake_id,
+            "mapping": {
+                "ASIN": "item_id", "产品名称": "item_name",
+                "销量": "sales_qty", "销额": "sales_amount", "价格": "price",
+            },
+            "ignore_columns": [],
+        },
+    )
+    app.dependency_overrides.clear()
+
+    assert resp.status_code == 202, resp.text
+    assert captured["args"][7] == "overseas"
+    assert captured["args"][8] == "US"
+    assert captured["args"][10] == 202609
+    assert captured["args"][11] == "amazon"
+
+
+def test_upload_confirm_rejects_missing_month_platform_without_filename_hints(db, monkeypatch, tmp_path):
+    from app.core import config
+    from app.models.database import get_db
+
+    fake_id = "no-filename-hints"
+    upload_tmp = tmp_path / "tmp"
+    upload_tmp.mkdir()
+    (upload_tmp / f"{fake_id}_plain.xlsx").write_bytes(b"fake")
+    monkeypatch.setattr(config.settings, "UPLOAD_DIR", str(tmp_path))
+
+    app = _patch_app(db, monkeypatch)
+    app.dependency_overrides[get_db] = lambda: (yield db)
+    client = TestClient(app, raise_server_exceptions=True)
+    resp = client.post(
+        "/api/upload/confirm",
+        json={
+            "temp_file_id": fake_id,
+            "mapping": {
+                "ASIN": "item_id", "产品名称": "item_name",
+                "销量": "sales_qty", "销额": "sales_amount", "价格": "price",
+            },
+            "ignore_columns": [],
+        },
+    )
+    app.dependency_overrides.clear()
+
+    assert resp.status_code == 422
+    assert "month" in resp.json()["detail"]
+    assert "platform" in resp.json()["detail"]

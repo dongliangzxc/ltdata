@@ -21,6 +21,7 @@ import {
   type UploadDownloadJob,
   type CountryOption,
   type UploadFileItem,
+  type UploadFilenameHints,
 } from '../../services/api'
 import ProgressModal from '../../components/ProgressModal'
 
@@ -256,6 +257,7 @@ type HeadersResult = {
     ignore_columns: string[]
   } | null
   match_score: number
+  filename_hints?: UploadFilenameHints
 }
 
 type PendingUploadFile = {
@@ -266,7 +268,15 @@ type PendingUploadFile = {
   countryCode?: string
   templateId?: number
   templateOverride?: TemplateRow
+  filenameHints?: UploadFilenameHints
   error?: string
+}
+
+const inferredFieldSet = (headersResult: HeadersResult): Set<string> => {
+  const inferred = new Set<string>()
+  if (headersResult.filename_hints?.month != null) inferred.add('month')
+  if (headersResult.filename_hints?.platform) inferred.add('platform')
+  return inferred
 }
 
 const buildAutoMapping = (headersResult: HeadersResult, overrideTemplate?: TemplateRow | null) => {
@@ -284,7 +294,8 @@ const buildAutoMapping = (headersResult: HeadersResult, overrideTemplate?: Templ
     }
   }
   const targets = new Set(Object.values(mapping))
-  const missing = [...REQUIRED_FIELDS].filter(field => !targets.has(field))
+  const inferred = inferredFieldSet(headersResult)
+  const missing = [...REQUIRED_FIELDS].filter(field => !targets.has(field) && !inferred.has(field))
   return {
     mapping,
     ignoreColumns: template?.ignore_columns ?? [],
@@ -373,9 +384,10 @@ function MappingCard({
     setSaveName(tmpl.name)
   }
 
-  const allRequiredMapped = [...REQUIRED_FIELDS].every(f =>
-    Object.values(mapping).includes(f)
-  )
+  const inferredFields = inferredFieldSet(headersResult)
+  const allRequiredMapped = [...REQUIRED_FIELDS]
+    .filter(field => !inferredFields.has(field))
+    .every(field => Object.values(mapping).includes(field))
 
   const stopPoll = () => {
     if (pollRef.current) {
@@ -1089,6 +1101,8 @@ export default function UploadPage() {
             status: 'ready',
             headersResult: res.data as HeadersResult,
             templateId: (res.data as HeadersResult).suggested_template?.id,
+            filenameHints: (res.data as HeadersResult).filename_hints,
+            countryCode: (res.data as HeadersResult).filename_hints?.country_code ?? item.countryCode,
           }
         : item))
     } catch {
@@ -1372,20 +1386,43 @@ export default function UploadPage() {
                 },
               },
               {
+                title: '识别月份', width: 100,
+                render: (_: unknown, row) => {
+                  const hints = row.filenameHints
+                  if (hints?.month_ambiguous) return <Tag color="orange">歧义</Tag>
+                  return hints?.month != null ? <Tag color="green">{hints.month}</Tag> : <Tag>需映射</Tag>
+                },
+              },
+              {
+                title: '识别平台', width: 110,
+                render: (_: unknown, row) => {
+                  const hints = row.filenameHints
+                  if (hints?.platform_ambiguous) return <Tag color="orange">歧义</Tag>
+                  return hints?.platform
+                    ? <Tag color="green">{PLATFORM_LABEL[hints.platform] ?? hints.platform}</Tag>
+                    : <Tag>需映射</Tag>
+                },
+              },
+              {
                 title: '国家', width: 220,
                 render: (_: unknown, row) => (
-                  <Select
-                    showSearch
-                    optionFilterProp="label"
-                    placeholder="请选择国家"
-                    style={{ width: '100%' }}
-                    value={row.countryCode}
-                    onChange={value => updatePendingCountry(row.uid, value)}
-                    options={countryOptions.map(option => ({
-                      value: option.code,
-                      label: `${option.name_cn}（${option.currency_code}）`,
-                    }))}
-                  />
+                  <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                    <Select
+                      showSearch
+                      optionFilterProp="label"
+                      placeholder="请选择国家"
+                      style={{ width: '100%' }}
+                      value={row.countryCode}
+                      onChange={value => updatePendingCountry(row.uid, value)}
+                      options={countryOptions.map(option => ({
+                        value: option.code,
+                        label: `${option.name_cn}（${option.currency_code}）`,
+                      }))}
+                    />
+                    {row.filenameHints?.country_ambiguous && (
+                      <Tag color="orange">文件名国家有歧义</Tag>
+                    )}
+                  </Space>
                 ),
               },
               {
@@ -1501,6 +1538,15 @@ export default function UploadPage() {
             <Space size="large">
               <span style={{ fontWeight: 500 }}>数据维度</span>
               <Tag color="blue">国家：{countryName(activeFile.countryCode)}</Tag>
+              {activeFile.filenameHints?.month != null && (
+                <Tag color="green">识别月份：{activeFile.filenameHints.month}</Tag>
+              )}
+              {activeFile.filenameHints?.platform && (
+                <Tag color="green">识别平台：{PLATFORM_LABEL[activeFile.filenameHints.platform] ?? activeFile.filenameHints.platform}</Tag>
+              )}
+              {(activeFile.filenameHints?.month_ambiguous || activeFile.filenameHints?.platform_ambiguous) && (
+                <Tag color="orange">文件名有歧义，请手动映射</Tag>
+              )}
               <InputNumber
                 placeholder="年份"
                 value={dataYear}

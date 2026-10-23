@@ -26,6 +26,7 @@ from app.models.schemas import (
 from app.services.excel_parser import parse_raw_excel, parse_with_mapping
 from app.core.config import settings
 from app.services.currency_service import get_country
+from app.services.filename_metadata import parse_filename_metadata
 from app.services.import_helper import (
     col_fingerprint as _ih_col_fingerprint,
     read_columns as _ih_read_columns,
@@ -547,6 +548,8 @@ def _run_upload_confirm_thread(
     data_region: str | None = None,
     country_code: str | None = None,
     batch_key: str | None = None,
+    filename_month: int | None = None,
+    filename_platform: str | None = None,
     data_year: int | None = None,
     data_month: int | None = None,
 ):
@@ -587,6 +590,16 @@ def _run_upload_confirm_thread(
                 finished_at=datetime.utcnow(),
             )
             return
+
+        if filename_month is not None:
+            for record in records:
+                record["month"] = filename_month
+        if filename_platform:
+            for record in records:
+                record["platform"] = filename_platform
+            platform = filename_platform.upper()
+        if filename_month is not None:
+            month_range = str(filename_month)
         _update_upload_job_progress(
             db,
             job,
@@ -1024,12 +1037,15 @@ async def upload_headers(
             "ignore_columns": best_tmpl.ignore_columns or [],
         }
 
+    filename_hints = parse_filename_metadata(safe_filename, db).to_dict()
+
     return {
         "temp_file_id": temp_file_id,
         "filename": file.filename,
         "columns": columns,
         "suggested_template": suggested,
         "match_score": score,
+        "filename_hints": filename_hints,
     }
 
 
@@ -1046,6 +1062,21 @@ async def upload_confirm(payload: dict, db: Session = Depends(get_db)):
     country_code = country_code.strip().upper() if isinstance(country_code, str) and country_code.strip() else None
     batch_key: str | None = payload.get("batch_key")
     batch_key = batch_key.strip()[:64] if isinstance(batch_key, str) and batch_key.strip() else None
+
+    if not temp_file_id:
+        raise HTTPException(status_code=400, detail="temp_file_id 不能为空")
+
+    # 找临时文件（同步检查，快）
+    tmp_dir = Path(settings.UPLOAD_DIR) / "tmp"
+    matches = list(tmp_dir.glob(f"{temp_file_id}_*"))
+    if not matches:
+        raise HTTPException(status_code=404, detail="临时文件不存在或已过期，请重新上传")
+    tmp_path = matches[0]
+    original_filename = tmp_path.name[len(temp_file_id) + 1:]
+    filename_hints = parse_filename_metadata(original_filename, db)
+
+    if not country_code and filename_hints.country_code:
+        country_code = filename_hints.country_code
     if country_code:
         if country_code != "CN":
             country = get_country(db, country_code)
@@ -1061,21 +1092,20 @@ async def upload_confirm(payload: dict, db: Session = Depends(get_db)):
     data_year: int | None = int(data_year_raw) if data_year_raw is not None else None
     data_month_raw = payload.get("data_month")
     data_month: int | None = int(data_month_raw) if data_month_raw is not None else None
+    if filename_hints.month is not None:
+        if data_year is None:
+            data_year = filename_hints.month // 100
+        if data_month is None:
+            data_month = filename_hints.month % 100
 
-    if not temp_file_id:
-        raise HTTPException(status_code=400, detail="temp_file_id 不能为空")
-
-    # 找临时文件（同步检查，快）
-    tmp_dir = Path(settings.UPLOAD_DIR) / "tmp"
-    matches = list(tmp_dir.glob(f"{temp_file_id}_*"))
-    if not matches:
-        raise HTTPException(status_code=404, detail="临时文件不存在或已过期，请重新上传")
-    tmp_path = matches[0]
-    original_filename = tmp_path.name[len(temp_file_id) + 1:]
-
-    # 校验必填字段映射（同步校验，快）
+    # 校验必填字段映射（同步校验，快）；文件名已识别的字段不再要求映射
     mapped_targets = {v for v in mapping.values() if v != "__ext__"}
-    missing = REQUIRED_FIELDS - mapped_targets
+    inferred_fields = set()
+    if filename_hints.month is not None:
+        inferred_fields.add("month")
+    if filename_hints.platform is not None:
+        inferred_fields.add("platform")
+    missing = REQUIRED_FIELDS - mapped_targets - inferred_fields
     if missing:
         raise HTTPException(
             status_code=422,
@@ -1107,6 +1137,8 @@ async def upload_confirm(payload: dict, db: Session = Depends(get_db)):
             data_region,
             country_code,
             batch_key,
+            filename_hints.month,
+            filename_hints.platform,
             data_year,
             data_month,
         ),

@@ -335,6 +335,7 @@ def list_upload_files(
             "template_id": record.template_id,
             "data_region": record.data_region,
             "country_code": record.country_code,
+            "batch_key": record.batch_key,
             "data_year": record.data_year,
             "data_month": record.data_month,
             "uploaded_at": format_beijing_datetime(record.uploaded_at),
@@ -471,6 +472,7 @@ def _run_upload_confirm_thread(
     template_id_use,
     data_region: str | None = None,
     country_code: str | None = None,
+    batch_key: str | None = None,
     data_year: int | None = None,
     data_month: int | None = None,
 ):
@@ -673,6 +675,7 @@ def _run_upload_confirm_thread(
             template_id=saved_template_id,
             data_region=data_region,
             country_code=country_code,
+            batch_key=batch_key,
             data_year=data_year,
             data_month=data_month,
         )
@@ -777,6 +780,7 @@ def _run_upload_confirm_thread(
             "inserted":    len(to_insert),
             "skipped":     skipped,
             "country_code": country_code,
+            "batch_key": batch_key,
             "preview":     records[:50],
         }
         job.file_id = file_record.id
@@ -966,6 +970,8 @@ async def upload_confirm(payload: dict, db: Session = Depends(get_db)):
     data_region: str | None = payload.get("data_region")
     country_code: str | None = payload.get("country_code")
     country_code = country_code.strip().upper() if isinstance(country_code, str) and country_code.strip() else None
+    batch_key: str | None = payload.get("batch_key")
+    batch_key = batch_key.strip()[:64] if isinstance(batch_key, str) and batch_key.strip() else None
     if country_code:
         if country_code != "CN":
             country = get_country(db, country_code)
@@ -1026,6 +1032,7 @@ async def upload_confirm(payload: dict, db: Session = Depends(get_db)):
             template_id_use,
             data_region,
             country_code,
+            batch_key,
             data_year,
             data_month,
         ),

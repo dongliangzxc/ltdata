@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import {
   Card, Upload, Table, Tag, Button, Popconfirm, Select, Checkbox,
   message, Space, Typography, Spin, Alert, Tabs, Switch, Input,
@@ -20,6 +20,7 @@ import {
   type UploadConfirmJobResponse,
   type UploadDownloadJob,
   type CountryOption,
+  type UploadFileItem,
 } from '../../services/api'
 import ProgressModal from '../../components/ProgressModal'
 
@@ -72,6 +73,55 @@ const uploadJobStatusTag = (status: string) => {
   return <Tag>等待中</Tag>
 }
 
+type UploadHistoryRow = UploadFileItem & {
+  is_batch?: boolean
+  file_count?: number
+  children?: UploadHistoryRow[]
+}
+
+const groupUploadHistory = (files: UploadFileItem[]): UploadHistoryRow[] => {
+  const groups = new Map<string, UploadFileItem[]>()
+  const order: string[] = []
+  for (const file of files) {
+    const key = file.batch_key ? `batch:${file.batch_key}` : `file:${file.id}`
+    if (!groups.has(key)) {
+      groups.set(key, [])
+      order.push(key)
+    }
+    groups.get(key)!.push(file)
+  }
+
+  return order.map(key => {
+    const group = groups.get(key)!
+    if (!key.startsWith('batch:') || group.length <= 1) {
+      return { ...group[0], is_batch: false }
+    }
+    const first = group[0]
+    const platforms = Array.from(new Set(group.map(file => file.platform).filter(Boolean) as string[]))
+    const monthRanges = Array.from(new Set(group.map(file => file.month_range).filter(Boolean) as string[]))
+    const regions = Array.from(new Set(group.map(file => file.data_region).filter(Boolean) as string[]))
+    const countries = Array.from(new Set(group.map(file => file.country_code).filter(Boolean) as string[]))
+    const years = Array.from(new Set(group.map(file => file.data_year).filter((value): value is number => value != null)))
+    const months = Array.from(new Set(group.map(file => file.data_month).filter((value): value is number => value != null)))
+    return {
+      ...first,
+      id: first.id,
+      filename: `批量上传（${group.length} 个文件）`,
+      platform: platforms.length === 1 ? platforms[0] : platforms.join(' / '),
+      month_range: monthRanges.length === 1 ? monthRanges[0] : monthRanges.join(' / '),
+      row_count: group.reduce((sum, file) => sum + (file.row_count || 0), 0),
+      status: group.every(file => file.status === 'done') ? 'done' : 'batch',
+      data_region: regions.length === 1 ? regions[0] : null,
+      country_code: countries.length === 1 ? countries[0] : null,
+      data_year: years.length === 1 ? years[0] : null,
+      data_month: months.length === 1 ? months[0] : null,
+      is_batch: true,
+      file_count: group.length,
+      children: group.map(file => ({ ...file, is_batch: false })),
+    }
+  })
+}
+
 // ─── Upload history table columns ────────────────────────────
 const historyColumns = (
   onDelete: (id: number) => void,
@@ -113,10 +163,10 @@ const historyColumns = (
   },
   { title: '数据量', dataIndex: 'row_count', width: 80 },
   {
-    title: '状态', dataIndex: 'status', width: 80,
-    render: (v: string) => (
-      <Tag color={v === 'done' ? 'green' : 'orange'}>{v === 'done' ? '已完成' : v}</Tag>
-    ),
+    title: '状态', dataIndex: 'status', width: 100,
+    render: (v: string, row: UploadHistoryRow) => row.is_batch
+      ? <Tag color="blue">{row.file_count} 个文件</Tag>
+      : <Tag color={v === 'done' ? 'green' : 'orange'}>{v === 'done' ? '已完成' : v}</Tag>,
   },
   {
     title: '上传时间', dataIndex: 'uploaded_at', width: 170,
@@ -125,7 +175,8 @@ const historyColumns = (
   {
     title: '下载状态',
     width: 180,
-    render: (_: unknown, row: { id: number }) => {
+    render: (_: unknown, row: UploadHistoryRow) => {
+      if (row.is_batch) return <span style={{ color: '#999' }}>展开后单个下载</span>
       const job = downloadJobsByFileId[row.id]
       if (!job) return <span style={{ color: '#999' }}>未开始</span>
       if (job.status === 'done') {
@@ -139,7 +190,8 @@ const historyColumns = (
   },
   {
     title: '操作', width: 150,
-    render: (_: unknown, row: { id: number; filename: string }) => {
+    render: (_: unknown, row: UploadHistoryRow) => {
+      if (row.is_batch) return <span style={{ color: '#999' }}>-</span>
       const job = downloadJobsByFileId[row.id]
       const preparing = job?.status === 'pending' || job?.status === 'running'
       return (
@@ -811,6 +863,10 @@ export default function UploadPage() {
       listUploadFiles(params).then(r => r.data),
     { manual: true }
   )
+  const historyRows = useMemo(
+    () => groupUploadHistory(((filesData as UploadFileItem[] | undefined) ?? [])),
+    [filesData]
+  )
   const [downloadJobsByFileId, setDownloadJobsByFileId] = useState<Record<number, UploadDownloadJob>>({})
   const downloadJobsPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const visibleUploadFileIds = ((filesData as { id: number }[] | undefined) ?? []).map(file => file.id)
@@ -911,6 +967,7 @@ export default function UploadPage() {
       progress: 0,
       message: '等待处理',
     }))
+    const batchKey = `batch-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
     setBatchItems(items)
     setBatchModalOpen(true)
     setBatchConfirming(true)
@@ -943,6 +1000,7 @@ export default function UploadPage() {
             ignore_columns: auto.ignoreColumns,
             template_id: selectedTemplate?.id ?? headers.suggested_template?.id,
             country_code: item.countryCode,
+            batch_key: batchKey,
             data_year: dataYear,
           })
           const { job_id } = res.data as { job_id: number }
@@ -1505,9 +1563,9 @@ export default function UploadPage() {
                     </Button>
                   </Space>
                   <Table
-                    dataSource={(filesData as { id: number; filename: string }[] | undefined) ?? []}
+                    dataSource={historyRows}
                     columns={historyColumns(handleDelete, startDownloadJob, downloadJobsByFileId)}
-                    rowKey="id"
+                    rowKey={(row) => row.is_batch ? `batch-${row.batch_key}` : `file-${row.id}`}
                     size="small"
                     loading={filesLoading}
                     pagination={{ pageSize: 10 }}

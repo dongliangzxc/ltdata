@@ -234,7 +234,7 @@ export const uploadFile = (formData: FormData) =>
 export const downloadUploadSample = () =>
   api.get('/upload/sample-template', { responseType: 'blob' })
 
-interface UploadFileItem {
+export interface UploadFileItem {
   id: number
   filename: string
   platform: string | null
@@ -242,6 +242,7 @@ interface UploadFileItem {
   row_count: number
   status: string
   template_id: number | null
+  batch_key: string | null
   uploaded_at: string
   data_region: string | null
   country_code: string | null
@@ -1798,6 +1799,7 @@ export const confirmUpload = (payload: {
   template_id?: number
   data_region?: string
   country_code?: string
+  batch_key?: string
   data_year?: number
 }) => api.post('/upload/confirm', payload, { timeout: 600000 })
 

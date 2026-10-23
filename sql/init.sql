@@ -21,12 +21,14 @@ CREATE TABLE IF NOT EXISTS upload_files (
     row_count    INT          DEFAULT 0          COMMENT '实际入库行数',
     status       VARCHAR(20)  DEFAULT 'done'     COMMENT 'pending/processing/done/error',
     template_id  INT                             COMMENT '本次上传使用的列模板 ID',
+    batch_key    VARCHAR(64)                     COMMENT '一次批量确认入库的批次标识',
     data_region  VARCHAR(20)                     COMMENT 'domestic/overseas',
     country_code VARCHAR(8)                      COMMENT 'ISO 国家码，如 CN/US/DE/JP',
     data_year    SMALLINT                        COMMENT '数据年份',
     data_month   SMALLINT                        COMMENT '数据月份 1-12',
     uploaded_at  DATETIME     DEFAULT CURRENT_TIMESTAMP,
-    KEY ix_upload_files_country_code (country_code)
+    KEY ix_upload_files_country_code (country_code),
+    KEY ix_upload_files_batch_key (batch_key)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='上传文件记录';
 
 -- 国家与币种主数据（master 维护）

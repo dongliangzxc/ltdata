@@ -182,6 +182,14 @@ CREATE TABLE IF NOT EXISTS exchange_rates (
 
 IF NOT EXISTS (
     SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='upload_files' AND COLUMN_NAME='batch_key'
+) THEN
+    ALTER TABLE upload_files ADD COLUMN batch_key VARCHAR(64) NULL;
+    CREATE INDEX ix_upload_files_batch_key ON upload_files(batch_key);
+END IF;
+
+IF NOT EXISTS (
+    SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='upload_files' AND COLUMN_NAME='country_code'
 ) THEN
     ALTER TABLE upload_files ADD COLUMN country_code VARCHAR(8) NULL;

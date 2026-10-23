@@ -552,6 +552,7 @@ def test_upload_confirm_passes_country_to_background_job(db, monkeypatch, tmp_pa
         json={
             "temp_file_id": fake_id,
             "country_code": "us",
+            "batch_key": "batch-test-001",
             "mapping": {
                 "col_item_id": "item_id", "col_month": "month", "col_platform": "platform",
                 "col_item_name": "item_name", "col_sales_qty": "sales_qty",
@@ -564,3 +565,4 @@ def test_upload_confirm_passes_country_to_background_job(db, monkeypatch, tmp_pa
     assert resp.status_code == 202
     assert captured["args"][7] == "overseas"
     assert captured["args"][8] == "US"
+    assert captured["args"][9] == "batch-test-001"

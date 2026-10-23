@@ -23,6 +23,7 @@ class UploadFileRecord(Base):
     row_count = Column(Integer, default=0)
     status = Column(String(20), default="done")  # pending/processing/done/error
     template_id  = Column(Integer,       nullable=True)
+    batch_key    = Column(String(64),    nullable=True, index=True, comment='一次批量确认入库的批次标识')
     data_region  = Column(String(20),    nullable=True, comment='domestic/overseas')
     country_code = Column(String(8),     nullable=True, index=True, comment='ISO 国家码，如 US/DE/JP')
     data_year    = Column(SmallInteger,  nullable=True, comment='数据年份')
@@ -348,6 +349,7 @@ class UploadFileOut(BaseModel):
     row_count: int
     status: str
     template_id: Optional[int] = None
+    batch_key:    Optional[str] = None
     data_region:  Optional[str] = None
     country_code: Optional[str] = None
     data_year:    Optional[int] = None

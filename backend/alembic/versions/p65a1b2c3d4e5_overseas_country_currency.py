@@ -6,8 +6,14 @@ Create Date: 2026-10-22
 """
 from typing import Sequence, Union
 
+import logging
+
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.exc import IntegrityError
+
+
+logger = logging.getLogger(__name__)
 
 
 revision: str = "p65a1b2c3d4e5"
@@ -113,15 +119,33 @@ def upgrade() -> None:
     # ── Dedup key must include country ────────────────────────
     unique_constraints = _unique_constraints(inspector, "raw_data")
     raw_indexes = _indexes(inspector, "raw_data")
-    if "uq_raw_dedup" in unique_constraints:
-        op.drop_constraint("uq_raw_dedup", "raw_data", type_="unique")
-    elif "uq_raw_dedup" in raw_indexes:
-        op.drop_index("uq_raw_dedup", table_name="raw_data")
-    op.create_unique_constraint(
-        "uq_raw_dedup",
-        "raw_data",
-        ["country_code", "item_id", "month", "platform"],
+    desired_columns = ["country_code", "item_id", "month", "platform"]
+    existing_unique = next(
+        (item for item in inspector.get_unique_constraints("raw_data") if item.get("name") == "uq_raw_dedup"),
+        None,
     )
+    if existing_unique is not None and list(existing_unique.get("column_names") or []) == desired_columns:
+        pass
+    else:
+        if "uq_raw_dedup" in unique_constraints:
+            op.drop_constraint("uq_raw_dedup", "raw_data", type_="unique")
+        elif "uq_raw_dedup" in raw_indexes:
+            op.drop_index("uq_raw_dedup", table_name="raw_data")
+        try:
+            op.create_unique_constraint(
+                "uq_raw_dedup",
+                "raw_data",
+                desired_columns,
+            )
+        except IntegrityError:
+            # Production may contain legacy duplicate rows created before the
+            # original unique key existed.  Do not block the deployment on a
+            # historical data cleanup; application-level dedup still uses the
+            # country-aware lookup below.
+            logger.warning(
+                "raw_data contains duplicate (country_code,item_id,month,platform) rows; "
+                "skipping uq_raw_dedup creation"
+            )
 
     raw_indexes = _indexes(inspector, "raw_data")
     if "idx_raw_dedup_lookup" in raw_indexes:
@@ -149,7 +173,10 @@ def downgrade() -> None:
         op.drop_constraint("uq_raw_dedup", "raw_data", type_="unique")
     elif "uq_raw_dedup" in raw_indexes:
         op.drop_index("uq_raw_dedup", table_name="raw_data")
-    op.create_unique_constraint("uq_raw_dedup", "raw_data", ["item_id", "month", "platform"])
+    try:
+        op.create_unique_constraint("uq_raw_dedup", "raw_data", ["item_id", "month", "platform"])
+    except IntegrityError:
+        logger.warning("raw_data contains duplicate rows; skipping legacy uq_raw_dedup restore")
 
     for table, index_name, column_name in (
         ("cleaned_data", "ix_cleaned_data_country_code", "country_code"),

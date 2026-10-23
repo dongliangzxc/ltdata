@@ -96,7 +96,7 @@ export default function ManualPage() {
           <Title level={3} id="upload"><UploadOutlined /> 数据上传</Title>
           <Paragraph>
             将原始销售数据 Excel（<Text code>.xlsx / .xls</Text>）拖拽到上传区域或点击选择文件。
-            系统自动识别平台（京东 / 天猫 / 淘宝 / 苏宁 / 亚马逊 / 西皮）和月份范围，上传成功后展示前 50 行预览。
+            系统自动识别平台（京东 / 天猫 / 淘宝 / 苏宁 / 亚马逊 / 虾皮）和月份范围，上传成功后展示前 50 行预览。
           </Paragraph>
           <Paragraph>
             <S>上传历史</S>：页面下方列出所有已上传文件，支持删除（删除后对应原始数据一并移除）。

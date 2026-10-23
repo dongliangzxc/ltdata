@@ -56,7 +56,7 @@ const PLATFORM_OPTIONS = [
   { value: 'taobao', label: '淘宝' },
   { value: 'douyin', label: '抖音' },
   { value: 'amazon', label: '亚马逊' },
-  { value: 'shopee', label: '西皮' },
+  { value: 'shopee', label: '虾皮' },
 ]
 
 const formatRuleDescription = (rule: DispatchRuleStat) => {

@@ -56,8 +56,8 @@ const REQUIRED_FIELDS = new Set(['item_id', 'month', 'platform', 'item_name', 's
 const PLATFORM_LABEL: Record<string, string> = {
   JD: '京东', TM: '天猫', TB: '淘宝',
   jd: '京东', tmall: '天猫', taobao: '淘宝', suning: '苏宁', douyin: '抖音',
-  AMAZON: '亚马逊', SHOPEE: '西皮',
-  amazon: '亚马逊', shopee: '西皮',
+  AMAZON: '亚马逊', SHOPEE: '虾皮',
+  amazon: '亚马逊', shopee: '虾皮',
   UNKNOWN: '未知平台',
 }
 
@@ -629,7 +629,7 @@ function TemplatesTab({
                   <Option value="taobao">淘宝</Option>
                   <Option value="suning">苏宁</Option>
                   <Option value="amazon">亚马逊</Option>
-                  <Option value="shopee">西皮</Option>
+                  <Option value="shopee">虾皮</Option>
                 </Select>
               </Form.Item>
             </Form>

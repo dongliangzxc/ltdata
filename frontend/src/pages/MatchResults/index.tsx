@@ -27,9 +27,9 @@ const MATCH_SOURCE_OPTIONS = [
 
 const PLATFORM_LABELS: Record<string, string> = {
   jd: '京东', tmall: '天猫', taobao: '淘宝', douyin: '抖音',
-  amazon: '亚马逊', shopee: '西皮',
+  amazon: '亚马逊', shopee: '虾皮',
   JD: '京东', TMALL: '天猫', TAOBAO: '淘宝', DOUYIN: '抖音',
-  AMAZON: '亚马逊', SHOPEE: '西皮',
+  AMAZON: '亚马逊', SHOPEE: '虾皮',
 }
 
 const PRICE_FLAG_OPTIONS = [

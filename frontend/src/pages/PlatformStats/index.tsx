@@ -17,7 +17,7 @@ const platformLabelMap: Record<string, string> = {
   taobao: '淘宝',
   douyin: '抖音',
   amazon: '亚马逊',
-  shopee: '西皮',
+  shopee: '虾皮',
 }
 
 const sourceLabelMap: Record<string, string> = {

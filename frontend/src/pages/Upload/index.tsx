@@ -191,6 +191,37 @@ type PendingUploadFile = {
   error?: string
 }
 
+const buildAutoMapping = (headersResult: HeadersResult) => {
+  const columns = headersResult.columns
+  const standardFields = new Set(STANDARD_FIELD_OPTIONS.map(option => option.value))
+  const mapping: Record<string, string> = {}
+  if (headersResult.suggested_template) {
+    for (const col of columns) {
+      const target = headersResult.suggested_template.mapping[col]
+      if (target && target !== '__ext__') mapping[col] = target
+    }
+  } else {
+    for (const col of columns) {
+      if (standardFields.has(col)) mapping[col] = col
+    }
+  }
+  const targets = new Set(Object.values(mapping))
+  const missing = [...REQUIRED_FIELDS].filter(field => !targets.has(field))
+  return {
+    mapping,
+    ignoreColumns: headersResult.suggested_template?.ignore_columns ?? [],
+    missing,
+  }
+}
+
+type BatchConfirmItem = {
+  uid: string
+  filename: string
+  status: 'pending' | 'running' | 'done' | 'error'
+  progress: number
+  message?: string
+}
+
 type TemplateRow = {
   id: number
   name: string
@@ -705,6 +736,9 @@ export default function UploadPage() {
     country_code?: string
   } | null>(null)
   const [uploadingCount, setUploadingCount] = useState(0)
+  const [batchConfirming, setBatchConfirming] = useState(false)
+  const [batchModalOpen, setBatchModalOpen] = useState(false)
+  const [batchItems, setBatchItems] = useState<BatchConfirmItem[]>([])
   const [activeJob, setActiveJob] = useState<UploadConfirmJobResponse | null>(null)
   const [jobProgressVisible, setJobProgressVisible] = useState(false)
 
@@ -783,6 +817,102 @@ export default function UploadPage() {
     const latest = uploadJobs.find(job => job.job_id === activeJob.job_id)
     if (latest) setActiveJob(latest)
   }, [uploadJobsData, activeJob?.job_id])
+
+  const updateBatchItem = (uid: string, patch: Partial<BatchConfirmItem>) => {
+    setBatchItems(prev => prev.map(item => item.uid === uid ? { ...item, ...patch } : item))
+  }
+
+  const waitForConfirmJob = async (jobId: number, uid: string) => {
+    for (;;) {
+      await new Promise(resolve => setTimeout(resolve, 1000))
+      const job = (await getUploadConfirmJob(jobId)).data
+      updateBatchItem(uid, { progress: job.progress ?? 0, message: job.stage_label ?? undefined })
+      if (job.status === 'done') return { ok: true as const, job }
+      if (job.status === 'error' || job.status === 'cancelled') {
+        return { ok: false as const, error: job.error_msg || '处理失败' }
+      }
+    }
+  }
+
+  const handleBatchConfirm = async () => {
+    const readyFiles = pendingFiles.filter(item => item.status === 'ready' && item.headersResult)
+    if (readyFiles.length === 0) {
+      message.warning('没有可批量入库的文件')
+      return
+    }
+    const missingCountry = readyFiles.filter(item => !item.countryCode)
+    if (missingCountry.length > 0) {
+      message.warning(`请先为 ${missingCountry.length} 个文件选择国家`)
+      return
+    }
+    const items: BatchConfirmItem[] = readyFiles.map(item => ({
+      uid: item.uid,
+      filename: item.filename,
+      status: 'pending',
+      progress: 0,
+      message: '等待处理',
+    }))
+    setBatchItems(items)
+    setBatchModalOpen(true)
+    setBatchConfirming(true)
+    let successCount = 0
+    let failedCount = 0
+
+    try {
+      for (const item of readyFiles) {
+        const headers = item.headersResult!
+        const auto = buildAutoMapping(headers)
+        if (auto.missing.length > 0) {
+          failedCount += 1
+          updateBatchItem(item.uid, {
+            status: 'error',
+            progress: 100,
+            message: `缺少必填字段：${auto.missing.join(', ')}，请手动映射`,
+          })
+          continue
+        }
+        updateBatchItem(item.uid, { status: 'running', progress: 0, message: '正在提交' })
+        try {
+          const res = await confirmUpload({
+            temp_file_id: headers.temp_file_id,
+            mapping: auto.mapping,
+            ignore_columns: auto.ignoreColumns,
+            template_id: headers.suggested_template?.id,
+            country_code: item.countryCode,
+            data_year: dataYear,
+          })
+          const { job_id } = res.data as { job_id: number }
+          const result = await waitForConfirmJob(job_id, item.uid)
+          if (!result.ok) {
+            failedCount += 1
+            updateBatchItem(item.uid, { status: 'error', progress: 100, message: result.error })
+            continue
+          }
+          successCount += 1
+          updateBatchItem(item.uid, { status: 'done', progress: 100, message: '已完成' })
+          setPendingFiles(prev => prev.filter(file => file.uid !== item.uid))
+        } catch (error) {
+          failedCount += 1
+          updateBatchItem(item.uid, {
+            status: 'error',
+            progress: 100,
+            message: error instanceof Error ? error.message : '处理失败',
+          })
+        }
+      }
+    } finally {
+      setBatchConfirming(false)
+      runFilesQuery({ data_region: filterRegion, data_year: filterYear })
+      refreshTemplates()
+      refreshUploadJobs()
+    }
+
+    if (failedCount === 0) {
+      message.success(`批量入库完成，共 ${successCount} 个文件`)
+    } else {
+      message.warning(`批量入库完成：成功 ${successCount} 个，失败 ${failedCount} 个`)
+    }
+  }
 
   const handleDownloadSample = async () => {
     const res = await downloadUploadSample()
@@ -975,9 +1105,23 @@ export default function UploadPage() {
                 }))}
               />
               <Button onClick={applyBatchCountry} disabled={!batchCountry}>应用到未入库文件</Button>
+              <Button
+                type="primary"
+                loading={batchConfirming}
+                onClick={handleBatchConfirm}
+                disabled={!pendingFiles.some(item => item.status === 'ready' && item.headersResult)}
+              >
+                批量确认入库
+              </Button>
             </Space>
           }
         >
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message="批量确认会使用推荐模板或标准列名自动映射；标记为「需手动」的文件请点「配置映射」处理。"
+          />
           <Table<PendingUploadFile>
             rowKey="uid"
             size="small"
@@ -992,6 +1136,16 @@ export default function UploadPage() {
               {
                 title: '列数', width: 70,
                 render: (_: unknown, row) => row.headersResult?.columns.length ?? '-',
+              },
+              {
+                title: '自动映射', width: 110,
+                render: (_: unknown, row) => {
+                  if (!row.headersResult) return '-'
+                  const auto = buildAutoMapping(row.headersResult)
+                  return auto.missing.length === 0
+                    ? <Tag color="green">可批量</Tag>
+                    : <Tag color="orange">需手动</Tag>
+                },
               },
               {
                 title: '国家', width: 220,

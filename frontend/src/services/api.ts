@@ -258,6 +258,12 @@ export const listUploadFiles = (params?: {
 
 export const deleteUploadFile = (fileId: number) => api.delete(`/upload/files/${fileId}`)
 
+export const downloadUploadBatch = (batchKey: string) =>
+  api.get(`/upload/batches/${encodeURIComponent(batchKey)}/download`, { responseType: 'blob' })
+
+export const deleteUploadBatch = (batchKey: string) =>
+  api.delete(`/upload/batches/${encodeURIComponent(batchKey)}`)
+
 export const downloadUploadFile = (fileId: number) =>
   api.get(`/upload/files/${fileId}/download`, { responseType: 'blob' })
 

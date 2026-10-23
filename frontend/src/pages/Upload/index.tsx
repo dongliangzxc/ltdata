@@ -11,7 +11,7 @@ import {
 import { useRequest } from 'ahooks'
 import {
   getUploadHeaders, confirmUpload, downloadUploadSample,
-  listUploadFiles, deleteUploadFile,
+  listUploadFiles, deleteUploadFile, downloadUploadBatch, deleteUploadBatch,
   createUploadDownloadJob, listUploadDownloadJobs, getUploadDownloadJobUrl,
   listUploadTemplates,
   createUploadTemplate, updateUploadTemplate, deleteUploadTemplate,
@@ -76,7 +76,6 @@ const uploadJobStatusTag = (status: string) => {
 type UploadHistoryRow = UploadFileItem & {
   is_batch?: boolean
   file_count?: number
-  children?: UploadHistoryRow[]
 }
 
 const groupUploadHistory = (files: UploadFileItem[]): UploadHistoryRow[] => {
@@ -117,7 +116,6 @@ const groupUploadHistory = (files: UploadFileItem[]): UploadHistoryRow[] => {
       data_month: months.length === 1 ? months[0] : null,
       is_batch: true,
       file_count: group.length,
-      children: group.map(file => ({ ...file, is_batch: false })),
     }
   })
 }
@@ -127,6 +125,9 @@ const historyColumns = (
   onDelete: (id: number) => void,
   startDownloadJob: (id: number) => void,
   downloadJobsByFileId: Record<number, UploadDownloadJob>,
+  onBatchDownload: (batchKey: string) => void,
+  onBatchDelete: (batchKey: string) => void,
+  batchDownloadingKey: string | null,
 ) => [
   { title: 'ID', dataIndex: 'id', width: 60 },
   {
@@ -176,7 +177,7 @@ const historyColumns = (
     title: '下载状态',
     width: 180,
     render: (_: unknown, row: UploadHistoryRow) => {
-      if (row.is_batch) return <span style={{ color: '#999' }}>展开后单个下载</span>
+      if (row.is_batch) return <span style={{ color: '#999' }}>整批下载</span>
       const job = downloadJobsByFileId[row.id]
       if (!job) return <span style={{ color: '#999' }}>未开始</span>
       if (job.status === 'done') {
@@ -191,7 +192,30 @@ const historyColumns = (
   {
     title: '操作', width: 150,
     render: (_: unknown, row: UploadHistoryRow) => {
-      if (row.is_batch) return <span style={{ color: '#999' }}>-</span>
+      if (row.is_batch) {
+        return (
+          <Space size="small">
+            <Button
+              type="link"
+              icon={<DownloadOutlined />}
+              size="small"
+              loading={batchDownloadingKey === row.batch_key}
+              onClick={() => row.batch_key && onBatchDownload(row.batch_key)}
+            >
+              下载整批
+            </Button>
+            <Popconfirm
+              title={`确认删除整批 ${row.file_count} 个文件？`}
+              description="整批文件及其原始数据会一起删除，且不可恢复。"
+              onConfirm={() => row.batch_key && onBatchDelete(row.batch_key)}
+              okText="删除整批"
+              cancelText="取消"
+            >
+              <Button type="link" danger icon={<DeleteOutlined />} size="small">删除整批</Button>
+            </Popconfirm>
+          </Space>
+        )
+      }
       const job = downloadJobsByFileId[row.id]
       const preparing = job?.status === 'pending' || job?.status === 'running'
       return (
@@ -867,6 +891,7 @@ export default function UploadPage() {
     () => groupUploadHistory(((filesData as UploadFileItem[] | undefined) ?? [])),
     [filesData]
   )
+  const [batchDownloadingKey, setBatchDownloadingKey] = useState<string | null>(null)
   const [downloadJobsByFileId, setDownloadJobsByFileId] = useState<Record<number, UploadDownloadJob>>({})
   const downloadJobsPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const visibleUploadFileIds = ((filesData as { id: number }[] | undefined) ?? []).map(file => file.id)
@@ -1150,6 +1175,28 @@ export default function UploadPage() {
         v != null ? `¥${Number(v).toFixed(2)}` : <Text type="secondary">-</Text>,
     },
   ]
+
+  const handleBatchDownload = async (batchKey: string) => {
+    setBatchDownloadingKey(batchKey)
+    try {
+      const res = await downloadUploadBatch(batchKey)
+      const blob = new Blob([res.data], { type: 'application/zip' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `批量上传_${batchKey.slice(0, 8)}.zip`
+      link.click()
+      URL.revokeObjectURL(url)
+    } finally {
+      setBatchDownloadingKey(null)
+    }
+  }
+
+  const handleBatchDelete = async (batchKey: string) => {
+    await deleteUploadBatch(batchKey)
+    message.success('整批已删除')
+    runFilesQuery({ data_region: filterRegion, data_year: filterYear })
+  }
 
   const handleDelete = async (id: number) => {
     try {
@@ -1564,7 +1611,14 @@ export default function UploadPage() {
                   </Space>
                   <Table
                     dataSource={historyRows}
-                    columns={historyColumns(handleDelete, startDownloadJob, downloadJobsByFileId)}
+                    columns={historyColumns(
+                      handleDelete,
+                      startDownloadJob,
+                      downloadJobsByFileId,
+                      handleBatchDownload,
+                      handleBatchDelete,
+                      batchDownloadingKey,
+                    )}
                     rowKey={(row) => row.is_batch ? `batch-${row.batch_key}` : `file-${row.id}`}
                     size="small"
                     loading={filesLoading}

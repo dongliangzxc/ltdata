@@ -1,6 +1,7 @@
 import os
 import shutil
 import uuid
+import zipfile
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import quote
@@ -419,6 +420,79 @@ def download_upload_download_job_file(job_id: int, db: Session = Depends(get_db)
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="原始上传文件不存在，无法下载")
     return FileResponse(file_path, filename=job.filename)
+
+
+@router.get("/batches/{batch_key}/download")
+def download_upload_batch(batch_key: str, db: Session = Depends(get_db)):
+    """把同一次批量确认入库的原始文件打包成 ZIP 下载。"""
+    records = (
+        db.query(UploadFileRecord)
+        .filter(UploadFileRecord.batch_key == batch_key)
+        .order_by(UploadFileRecord.id)
+        .all()
+    )
+    if not records:
+        raise HTTPException(status_code=404, detail="批次不存在")
+
+    buffer = BytesIO()
+    added = 0
+    used_names: set[str] = set()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for record in records:
+            safe_filename = Path(record.filename).name
+            file_path = Path(settings.UPLOAD_DIR) / safe_filename
+            if not file_path.exists() or not file_path.is_file():
+                continue
+            archive_name = safe_filename
+            if archive_name in used_names:
+                archive_name = f"{record.id}_{safe_filename}"
+            used_names.add(archive_name)
+            archive.write(file_path, arcname=archive_name)
+            added += 1
+
+    if added == 0:
+        raise HTTPException(status_code=404, detail="批次内原始文件都不存在，无法下载")
+
+    buffer.seek(0)
+    filename = quote(f"批量上传_{batch_key[:8]}.zip")
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
+    )
+
+
+@router.delete("/batches/{batch_key}")
+def delete_upload_batch(batch_key: str, db: Session = Depends(get_db)):
+    """删除整批上传记录；批次内任一文件已进入分发/清洗时拒绝。"""
+    records = (
+        db.query(UploadFileRecord)
+        .filter(UploadFileRecord.batch_key == batch_key)
+        .all()
+    )
+    if not records:
+        raise HTTPException(status_code=404, detail="批次不存在")
+
+    file_ids = [record.id for record in records]
+    raw_data_ids = select(RawDataRecord.id).filter(RawDataRecord.file_id.in_(file_ids))
+    has_downstream_refs = (
+        db.query(CleanJobItemRecord.id).filter(CleanJobItemRecord.raw_data_id.in_(raw_data_ids)).first()
+        or db.query(CleanedDataRecord.id).filter(CleanedDataRecord.raw_data_id.in_(raw_data_ids)).first()
+        or db.query(FilteredItem.id).filter(FilteredItem.raw_data_id.in_(raw_data_ids)).first()
+    )
+    if has_downstream_refs:
+        raise HTTPException(
+            status_code=400,
+            detail="批次中有文件已进入分发/清洗任务，不能直接删除。请先处理或保留相关清洗任务记录。",
+        )
+
+    placeholders = ",".join(f":fid{i}" for i in range(len(file_ids)))
+    params = {f"fid{i}": file_id for i, file_id in enumerate(file_ids)}
+    db.execute(text(f"DELETE FROM raw_data WHERE file_id IN ({placeholders})"), params)
+    db.execute(text(f"UPDATE dispatch_batches SET file_id = NULL WHERE file_id IN ({placeholders})"), params)
+    db.query(UploadFileRecord).filter(UploadFileRecord.id.in_(file_ids)).delete(synchronize_session=False)
+    db.commit()
+    return {"message": "已删除", "deleted_files": len(file_ids)}
 
 
 @router.delete("/files/{file_id}")

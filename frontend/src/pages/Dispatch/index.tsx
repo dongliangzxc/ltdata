@@ -10,7 +10,7 @@ import {
 import { useRequest } from 'ahooks'
 import dayjs from 'dayjs'
 import {
-  listUploadFiles, listDispatchBatches, runDispatch, enqueueDispatchCategoryForClean,
+  listUploadFiles, listDispatchBatches, runDispatch, runDispatchBatch, enqueueDispatchCategoryForClean,
   getDispatchBatchStats, listDispatchUnmatched, listDispatchRules,
   createDispatchRule, updateDispatchRule, deleteDispatchRule,
   createDispatchExportJob, listDispatchExportJobs, deleteDispatchExportJob, downloadDispatchExport,

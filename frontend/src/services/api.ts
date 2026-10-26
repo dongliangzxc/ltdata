@@ -1790,9 +1790,12 @@ export interface UploadFilenameHints {
   platform?: string | null
   country_code?: string | null
   country_name?: string | null
+  category_code?: string | null
+  category_name?: string | null
   month_ambiguous?: boolean
   platform_ambiguous?: boolean
   country_ambiguous?: boolean
+  category_ambiguous?: boolean
   warnings?: string[]
 }
 

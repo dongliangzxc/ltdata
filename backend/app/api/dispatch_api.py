@@ -370,6 +370,8 @@ def _field_value(row: RawDataRecord, field: str) -> str:
         "category_lv3": row.category_lv3,
         "category_lv4": row.category_lv4,
         "category_lv5": row.category_lv5,
+        "source_category_name": row.source_category_name,
+        "source_category_code": row.source_category_code,
         "item_name": row.item_name,
     }
     return (field_map.get(field) or "")
@@ -431,6 +433,8 @@ def _count_rule_matches_for_batch(db: Session, batch: DispatchBatch, rule_ids: l
             db.query(
                 RawDataRecord.id,
                 RawDataRecord.platform,
+                RawDataRecord.source_category_code,
+                RawDataRecord.source_category_name,
                 RawDataRecord.category_lv0,
                 RawDataRecord.category_lv1,
                 RawDataRecord.category_lv2,
@@ -590,6 +594,8 @@ def _execute_category_dispatch(
                 db.query(
                     RawDataRecord.id,
                     RawDataRecord.platform,
+                    RawDataRecord.source_category_code,
+                    RawDataRecord.source_category_name,
                     RawDataRecord.category_lv0,
                     RawDataRecord.category_lv1,
                     RawDataRecord.category_lv2,

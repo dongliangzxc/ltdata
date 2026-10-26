@@ -1404,6 +1404,15 @@ export default function UploadPage() {
                 },
               },
               {
+                title: '识别品类', width: 150,
+                render: (_: unknown, row) => {
+                  const hints = row.filenameHints
+                  if (hints?.category_ambiguous) return <Tag color="orange">歧义</Tag>
+                  const label = hints?.category_name || hints?.category_code
+                  return label ? <Tag color="green">{label}</Tag> : <Tag>未识别</Tag>
+                },
+              },
+              {
                 title: '国家', width: 220,
                 render: (_: unknown, row) => (
                   <Space direction="vertical" size={2} style={{ width: '100%' }}>
@@ -1544,7 +1553,10 @@ export default function UploadPage() {
               {activeFile.filenameHints?.platform && (
                 <Tag color="green">识别平台：{PLATFORM_LABEL[activeFile.filenameHints.platform] ?? activeFile.filenameHints.platform}</Tag>
               )}
-              {(activeFile.filenameHints?.month_ambiguous || activeFile.filenameHints?.platform_ambiguous) && (
+              {(activeFile.filenameHints?.category_name || activeFile.filenameHints?.category_code) && (
+                <Tag color="green">识别品类：{activeFile.filenameHints.category_name || activeFile.filenameHints.category_code}</Tag>
+              )}
+              {(activeFile.filenameHints?.month_ambiguous || activeFile.filenameHints?.platform_ambiguous || activeFile.filenameHints?.category_ambiguous) && (
                 <Tag color="orange">文件名有歧义，请手动映射</Tag>
               )}
               <InputNumber

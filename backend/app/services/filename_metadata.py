@@ -7,7 +7,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from app.models.schemas import Country
+from app.models.schemas import Category, Country
 
 
 PLATFORM_ALIASES = {
@@ -21,6 +21,7 @@ PLATFORM_ALIASES = {
 
 _MONTH_RE = re.compile(r"(?<!\d)(20\d{2})-?(0[1-9]|1[0-2])(?!\d)")
 _TOKEN_RE = re.compile(r"[_\-\s]+")
+_CATEGORY_BRACKET_RE = re.compile(r"\[([^\]]+)\]")
 
 
 @dataclass
@@ -29,9 +30,12 @@ class FilenameMetadata:
     platform: str | None = None
     country_code: str | None = None
     country_name: str | None = None
+    category_code: str | None = None
+    category_name: str | None = None
     month_ambiguous: bool = False
     platform_ambiguous: bool = False
     country_ambiguous: bool = False
+    category_ambiguous: bool = False
     warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -40,9 +44,12 @@ class FilenameMetadata:
             "platform": self.platform,
             "country_code": self.country_code,
             "country_name": self.country_name,
+            "category_code": self.category_code,
+            "category_name": self.category_name,
             "month_ambiguous": self.month_ambiguous,
             "platform_ambiguous": self.platform_ambiguous,
             "country_ambiguous": self.country_ambiguous,
+            "category_ambiguous": self.category_ambiguous,
             "warnings": self.warnings,
         }
 
@@ -109,5 +116,25 @@ def parse_filename_metadata(filename: str | None, db: Session) -> FilenameMetada
         country = next(iter(matched_countries.values()))
         result.country_code = country.code
         result.country_name = country.name_cn
+
+    # Category: explicit bracket segment, e.g. 202609_amazon_US_[运动相机]_xxx.xlsx
+    bracket_values = {
+        value.strip()
+        for value in _CATEGORY_BRACKET_RE.findall(stem)
+        if value.strip()
+    }
+    if len(bracket_values) > 1:
+        result.category_ambiguous = True
+    elif bracket_values:
+        value = next(iter(bracket_values))
+        categories = db.query(Category).all()
+        by_code = {category.code.strip().lower(): category for category in categories}
+        by_name = {category.name.strip(): category for category in categories}
+        category = by_code.get(value.lower()) or by_name.get(value)
+        if category:
+            result.category_code = category.code
+            result.category_name = category.name
+        else:
+            result.warnings.append(f"文件名品类「{value}」未匹配到系统品类")
 
     return result

@@ -1,5 +1,5 @@
 """Filename month/platform/country inference tests."""
-from app.models.schemas import Country
+from app.models.schemas import Category, Country
 from app.services.filename_metadata import parse_filename_metadata
 
 
@@ -10,6 +10,8 @@ def _seed_countries(db):
         Country(code="CA", name_cn="加拿大", name_en="Canada", currency_code="CAD", region="overseas", is_active=1),
         Country(code="MX", name_cn="墨西哥", name_en="Mexico", currency_code="MXN", region="overseas", is_active=1),
         Country(code="DE", name_cn="德国", name_en="Germany", currency_code="EUR", region="overseas", is_active=0),
+        Category(code="action_cameras", name="运动相机"),
+        Category(code="router", name="路由器"),
     ])
     db.commit()
 
@@ -70,3 +72,32 @@ def test_parse_date_token_does_not_become_month(db):
     assert hints.month == 202608
     assert hints.platform is None
     assert hints.country_code is None
+
+
+def test_parse_category_from_brackets_by_name(db):
+    _seed_countries(db)
+    hints = parse_filename_metadata("202609_amazon_US_[运动相机]_Fryers.xlsx", db)
+    assert hints.category_code == "action_cameras"
+    assert hints.category_name == "运动相机"
+
+
+def test_parse_category_from_brackets_by_code(db):
+    _seed_countries(db)
+    hints = parse_filename_metadata("202609_amazon_US_[action_cameras]_Fryers.xlsx", db)
+    assert hints.category_code == "action_cameras"
+    assert hints.category_name == "运动相机"
+
+
+def test_parse_ambiguous_category_is_unresolved(db):
+    _seed_countries(db)
+    hints = parse_filename_metadata("202609_amazon_US_[运动相机]_[路由器]_file.xlsx", db)
+    assert hints.category_code is None
+    assert hints.category_ambiguous is True
+
+
+def test_parse_unknown_category_leaves_empty_with_warning(db):
+    _seed_countries(db)
+    hints = parse_filename_metadata("202609_amazon_US_[不存在的品类]_file.xlsx", db)
+    assert hints.category_code is None
+    assert hints.category_name is None
+    assert hints.warnings

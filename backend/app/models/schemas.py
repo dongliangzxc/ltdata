@@ -107,6 +107,8 @@ class RawDataRecord(Base):
     id = Column(Integer, primary_key=True, index=True)
     file_id = Column(Integer, ForeignKey("upload_files.id"), nullable=False)
     country_code = Column(String(8), nullable=True, index=True, comment='ISO 国家码，如 US/DE/JP')
+    source_category_code = Column(String(50), nullable=True, index=True, comment='文件名识别出的品类码')
+    source_category_name = Column(String(200), nullable=True, comment='文件名识别出的品类名称')
     platform = Column(String(50))
     month = Column(Integer)                 # 202507
     week = Column(String(50))
@@ -377,6 +379,8 @@ class RawDataOut(BaseModel):
     id: int
     file_id: int
     country_code: Optional[str] = None
+    source_category_code: Optional[str] = None
+    source_category_name: Optional[str] = None
     platform: Optional[str]
     month: Optional[int]
     category_lv0: Optional[str]

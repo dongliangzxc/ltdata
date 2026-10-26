@@ -207,6 +207,21 @@ END IF;
 
 IF NOT EXISTS (
     SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='raw_data' AND COLUMN_NAME='source_category_code'
+) THEN
+    ALTER TABLE raw_data ADD COLUMN source_category_code VARCHAR(50) NULL;
+    CREATE INDEX ix_raw_data_source_category_code ON raw_data(source_category_code);
+END IF;
+
+IF NOT EXISTS (
+    SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='raw_data' AND COLUMN_NAME='source_category_name'
+) THEN
+    ALTER TABLE raw_data ADD COLUMN source_category_name VARCHAR(200) NULL;
+END IF;
+
+IF NOT EXISTS (
+    SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='raw_data' AND COLUMN_NAME='country_code'
 ) THEN
     ALTER TABLE raw_data ADD COLUMN country_code VARCHAR(8) NULL;

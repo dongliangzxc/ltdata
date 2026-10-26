@@ -92,6 +92,8 @@ CREATE TABLE IF NOT EXISTS raw_data (
     id             INT AUTO_INCREMENT PRIMARY KEY,
     file_id        INT          NOT NULL          COMMENT '关联 upload_files.id',
     country_code   VARCHAR(8)                     COMMENT 'ISO 国家码，如 CN/US/DE/JP',
+    source_category_code VARCHAR(50)              COMMENT '文件名识别出的品类码',
+    source_category_name VARCHAR(200)             COMMENT '文件名识别出的品类名称',
     platform       VARCHAR(50)                    COMMENT '平台',
     month          INT                            COMMENT '月份, 如 202507',
     week           VARCHAR(50)                    COMMENT '周，如 W21',
@@ -121,6 +123,7 @@ CREATE TABLE IF NOT EXISTS raw_data (
     UNIQUE KEY uq_raw_dedup (country_code, item_id, month, platform),
     KEY idx_raw_dedup_lookup (country_code, item_id, month, platform),
     KEY ix_raw_data_country_code (country_code),
+    KEY ix_raw_data_source_category_code (source_category_code),
     -- 待入清洗队列按月/平台聚合：走覆盖索引取 month/platform，避免回表读整行
     KEY idx_raw_data_month_platform (month, platform),
     -- 同标题复核按规范化标题缩小 raw_data -> match_results 连接范围

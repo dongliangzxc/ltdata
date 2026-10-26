@@ -550,6 +550,8 @@ def _run_upload_confirm_thread(
     batch_key: str | None = None,
     filename_month: int | None = None,
     filename_platform: str | None = None,
+    filename_category_code: str | None = None,
+    filename_category_name: str | None = None,
     data_year: int | None = None,
     data_month: int | None = None,
 ):
@@ -598,6 +600,9 @@ def _run_upload_confirm_thread(
             for record in records:
                 record["platform"] = filename_platform
             platform = filename_platform.upper()
+        for record in records:
+            record["source_category_code"] = filename_category_code
+            record["source_category_name"] = filename_category_name
         if filename_month is not None:
             month_range = str(filename_month)
         _update_upload_job_progress(
@@ -795,6 +800,8 @@ def _run_upload_confirm_thread(
                         {
                             "file_id":      file_record.id,
                             "country_code": country_code,
+                            "source_category_code": r.get("source_category_code"),
+                            "source_category_name": r.get("source_category_name"),
                             "platform":     r.get("platform"),
                             "month":        r.get("month"),
                             "category_lv0": r.get("category_lv0"),
@@ -1139,6 +1146,8 @@ async def upload_confirm(payload: dict, db: Session = Depends(get_db)):
             batch_key,
             filename_hints.month,
             filename_hints.platform,
+            filename_hints.category_code,
+            filename_hints.category_name,
             data_year,
             data_month,
         ),

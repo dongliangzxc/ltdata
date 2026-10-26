@@ -1783,3 +1783,33 @@ def test_run_dispatch_by_batch_key_processes_all_files(client_and_db):
     assert batch.total_rows == 2
     items = db.query(DispatchItem).filter(DispatchItem.batch_id == batch.id).all()
     assert len(items) == 2
+
+
+def test_run_dispatch_matches_filename_source_category(client_and_db):
+    client, db = client_and_db
+    file_record = UploadFileRecord(filename="202609_amazon_US_[运动相机]_x.xlsx", platform="amazon", row_count=1, status="done")
+    db.add(file_record)
+    db.flush()
+    db.add(DispatchRule(
+        category_code="action_cameras",
+        platform="amazon",
+        field="source_category_name",
+        match_type="equals",
+        value="运动相机",
+        priority=1,
+        is_active=1,
+    ))
+    db.add(RawDataRecord(
+        file_id=file_record.id, platform="amazon", item_id="cam-1", item_name="运动相机 1",
+        source_category_code="action_cameras", source_category_name="运动相机",
+    ))
+    db.commit()
+
+    response = client.post("/api/dispatch/run", json={"file_id": file_record.id})
+
+    assert response.status_code == 200, response.text
+    batch_id = response.json()["id"]
+    items = db.query(DispatchItem).filter(DispatchItem.batch_id == batch_id).all()
+    assert len(items) == 1
+    assert items[0].category_code == "action_cameras"
+    assert items[0].matched_rule_id is not None

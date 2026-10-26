@@ -520,7 +520,7 @@ def test_upload_confirm_requires_country_for_overseas(db, monkeypatch, tmp_path)
 def test_upload_confirm_passes_country_to_background_job(db, monkeypatch, tmp_path):
     from app.core import config
     from app.models.database import get_db
-    from app.models.schemas import Country
+    from app.models.schemas import Category, Country
 
     db.add(Country(
         code="US", name_cn="美国", currency_code="USD", region="overseas", is_active=1,
@@ -571,15 +571,16 @@ def test_upload_confirm_passes_country_to_background_job(db, monkeypatch, tmp_pa
 def test_upload_confirm_accepts_missing_month_platform_when_filename_infers_them(db, monkeypatch, tmp_path):
     from app.core import config
     from app.models.database import get_db
-    from app.models.schemas import Country
+    from app.models.schemas import Category, Country
 
     db.add(Country(code="US", name_cn="美国", currency_code="USD", region="overseas", is_active=1))
+    db.add(Category(code="action_cameras", name="运动相机"))
     db.commit()
 
     fake_id = "filename-hints"
     upload_tmp = tmp_path / "tmp"
     upload_tmp.mkdir()
-    (upload_tmp / f"{fake_id}_202609_amazon_US_Fryers.xlsx").write_bytes(b"fake")
+    (upload_tmp / f"{fake_id}_202609_amazon_US_[运动相机]_Fryers.xlsx").write_bytes(b"fake")
     monkeypatch.setattr(config.settings, "UPLOAD_DIR", str(tmp_path))
 
     captured = {}
@@ -614,6 +615,8 @@ def test_upload_confirm_accepts_missing_month_platform_when_filename_infers_them
     assert captured["args"][8] == "US"
     assert captured["args"][10] == 202609
     assert captured["args"][11] == "amazon"
+    assert captured["args"][12] == "action_cameras"
+    assert captured["args"][13] == "运动相机"
 
 
 def test_upload_confirm_rejects_missing_month_platform_without_filename_hints(db, monkeypatch, tmp_path):

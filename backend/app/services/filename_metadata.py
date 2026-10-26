@@ -58,6 +58,15 @@ def _tokens(stem: str) -> list[str]:
     return [token for token in _TOKEN_RE.split(stem) if token]
 
 
+def _match_category(categories: list[Category], value: str) -> Category | None:
+    normalized = value.strip()
+    if not normalized:
+        return None
+    by_code = {category.code.strip().lower(): category for category in categories}
+    by_name = {category.name.strip(): category for category in categories}
+    return by_code.get(normalized.lower()) or by_name.get(normalized)
+
+
 def parse_filename_metadata(filename: str | None, db: Session) -> FilenameMetadata:
     """Parse filename using the `YYYYMM_platform_country_description` convention.
 
@@ -123,18 +132,35 @@ def parse_filename_metadata(filename: str | None, db: Session) -> FilenameMetada
         for value in _CATEGORY_BRACKET_RE.findall(stem)
         if value.strip()
     }
+    categories = db.query(Category).all()
     if len(bracket_values) > 1:
         result.category_ambiguous = True
     elif bracket_values:
         value = next(iter(bracket_values))
-        categories = db.query(Category).all()
-        by_code = {category.code.strip().lower(): category for category in categories}
-        by_name = {category.name.strip(): category for category in categories}
-        category = by_code.get(value.lower()) or by_name.get(value)
+        category = _match_category(categories, value)
         if category:
             result.category_code = category.code
             result.category_name = category.name
         else:
             result.warnings.append(f"文件名品类「{value}」未匹配到系统品类")
+    elif len(tokens) >= 4:
+        # Alternative format: YYYYMM_platform_country_category.xlsx
+        # Category is the remaining tail, so codes with underscores like
+        # action_cameras are reconstructed correctly.
+        token_month = None
+        if re.fullmatch(r"20\d{2}(0[1-9]|1[0-2])", tokens[0]):
+            token_month = int(tokens[0])
+        token_platform = PLATFORM_ALIASES.get(tokens[1].lower())
+        token_country = (
+            by_code.get(tokens[2].upper())
+            or by_name.get(tokens[2])
+            or by_en.get(tokens[2].lower())
+        )
+        if token_month and token_platform and token_country:
+            tail = "_".join(tokens[3:])
+            category = _match_category(categories, tail)
+            if category:
+                result.category_code = category.code
+                result.category_name = category.name
 
     return result

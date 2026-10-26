@@ -20,19 +20,25 @@
 
 ### 2.1 标准格式
 
+支持两种写法：
+
 ```text
+{YYYYMM}_{平台}_{国家}_{品类}.xlsx
 {YYYYMM}_{平台}_{国家}_[{品类}]_{描述}.xlsx
 ```
 
 示例：
 
 ```text
+202609_amazon_US_运动相机.xlsx
+202609_amazon_US_action_cameras.xlsx
 202609_amazon_US_[运动相机]_Fryers.xlsx
-202609_shopee_MX_[路由器]_AirPurifiers.xlsx
-2026-09_amazon-CA_[运动相机]_数据看板导出.xlsx
+2026-09_shopee_MX_[路由器]_数据看板导出.xlsx
 ```
 
-品类放在方括号里，避免品类码中的下划线被分隔符拆开。
+- 简单格式：品类放在最后，适合一个文件一个品类、没有描述的场景。
+- 带描述格式：品类用方括号包住，避免描述文本干扰识别。
+- `action_cameras` 这类带下划线的品类码会按剩余尾段拼接后匹配。
 
 分隔符支持：下划线 `_`、短横线 `-`、空格。
 
@@ -293,12 +299,15 @@ ASIN, 产品名称, Listing月销量, Listing月销额, 实际价格
 ### 11.1 文件名格式
 
 ```text
+YYYYMM_平台_国家_品类.xlsx
 YYYYMM_平台_国家_[品类]_描述.xlsx
 ```
 
 示例：
 
 ```text
+202609_amazon_US_运动相机.xlsx
+202609_amazon_US_action_cameras.xlsx
 202609_amazon_US_[运动相机]_Fryers.xlsx
 202609_amazon_US_[action_cameras]_Fryers.xlsx
 ```

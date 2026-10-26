@@ -101,3 +101,22 @@ def test_parse_unknown_category_leaves_empty_with_warning(db):
     assert hints.category_code is None
     assert hints.category_name is None
     assert hints.warnings
+
+
+def test_parse_category_from_simple_tail_format(db):
+    _seed_countries(db)
+    hints = parse_filename_metadata("202609_amazon_US_action_cameras.xlsx", db)
+    assert hints.category_code == "action_cameras"
+    assert hints.category_name == "运动相机"
+
+
+def test_parse_chinese_category_from_simple_tail_format(db):
+    _seed_countries(db)
+    hints = parse_filename_metadata("202609_amazon_US_运动相机.xlsx", db)
+    assert hints.category_code == "action_cameras"
+
+
+def test_simple_tail_format_with_description_does_not_guess_category(db):
+    _seed_countries(db)
+    hints = parse_filename_metadata("202609_amazon_US_运动相机_描述.xlsx", db)
+    assert hints.category_code is None

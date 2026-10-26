@@ -1,12 +1,15 @@
 import { useState, useMemo, useEffect } from 'react'
 import {
   Card, Space, Select, Input, Button, Tabs, Table, Typography, Badge, Row, Col, message,
+  Upload, Modal, Alert, InputNumber,
 } from 'antd'
-import { ReloadOutlined } from '@ant-design/icons'
+import { ReloadOutlined, DownloadOutlined, UploadOutlined, ControlOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
-import { listCleanJobs, updateMatchCoefficient, updateMatchPrice, listModelExtraFields, listCategories, listMatchSeries,
-         type CleanJobItem, type ReviewedMatchResultOut,
-         type MatchResultsTab } from '../../services/api'
+import {
+  listCleanJobs, updateMatchCoefficient, updateMatchPrice, listModelExtraFields, listCategories, listMatchSeries,
+  bulkUpdateReviewedCoefficient, exportReviewedCorrectionTemplate, importReviewedCorrection,
+  type CleanJobItem, type ReviewedMatchResultOut,
+  type MatchResultsTab, type MatchCorrectionPreview, type BulkCoefficientPayload } from '../../services/api'
 import { buildMatchResultsColumns } from './columns'
 import { useMatchResultsQuery } from './useMatchResultsQuery'
 import ReselectModal from '../Match/components/ReselectModal'
@@ -58,6 +61,15 @@ export default function MatchResultsPage() {
   const [priceCoefficientDrafts, setPriceCoefficientDrafts] = useState<Record<number, number | null>>({})
   const [editedPriceIds, setEditedPriceIds] = useState<Set<number>>(new Set())
   const [savingPriceIds, setSavingPriceIds] = useState<Set<number>>(new Set())
+  const [bulkOpen, setBulkOpen] = useState(false)
+  const [bulkTarget, setBulkTarget] = useState<'price' | 'sales'>('sales')
+  const [bulkCoefficient, setBulkCoefficient] = useState<number | null>(null)
+  const [bulkSaving, setBulkSaving] = useState(false)
+  const [correctionFile, setCorrectionFile] = useState<File | null>(null)
+  const [correctionPreview, setCorrectionPreview] = useState<MatchCorrectionPreview | null>(null)
+  const [correctionOpen, setCorrectionOpen] = useState(false)
+  const [correctionUploading, setCorrectionUploading] = useState(false)
+  const [correctionApplying, setCorrectionApplying] = useState(false)
 
   useEffect(() => {
     setKeywordInput(state.keyword ?? '')
@@ -211,6 +223,78 @@ export default function MatchResultsPage() {
       showSeriesFilter,
     ],
   )
+
+  const buildFilterPayload = (): Omit<BulkCoefficientPayload, 'target' | 'coefficient'> => ({
+    tab: state.tab,
+    clean_job_id: state.cleanJobId,
+    match_source: state.matchSource.length > 0 ? state.matchSource : undefined,
+    price_flag: state.priceFlag,
+    keyword: state.keyword || undefined,
+    platform: state.platform,
+    brand_keyword: state.brandKeyword || undefined,
+    model_keyword: state.modelKeyword || undefined,
+    category_code: state.categoryCode,
+    series: state.series,
+    coefficient_filter: state.coefficientFilter,
+  })
+
+  const handleBulkConfirm = async () => {
+    setBulkSaving(true)
+    try {
+      const res = await bulkUpdateReviewedCoefficient({
+        ...buildFilterPayload(),
+        target: bulkTarget,
+        coefficient: bulkCoefficient,
+      })
+      message.success(`已批量更新 ${res.data.updated_count} 条`)
+      setBulkOpen(false)
+      refresh()
+    } finally {
+      setBulkSaving(false)
+    }
+  }
+
+  const handleExportCorrection = async () => {
+    const res = await exportReviewedCorrectionTemplate(buildFilterPayload())
+    const blob = new Blob([res.data], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = '匹配结果修正模板.xlsx'
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const handleCorrectionFile = async (file: File) => {
+    setCorrectionUploading(true)
+    try {
+      const res = await importReviewedCorrection(file, true)
+      setCorrectionFile(file)
+      setCorrectionPreview(res.data as MatchCorrectionPreview)
+      setCorrectionOpen(true)
+    } finally {
+      setCorrectionUploading(false)
+    }
+    return false
+  }
+
+  const handleCorrectionConfirm = async () => {
+    if (!correctionFile) return
+    setCorrectionApplying(true)
+    try {
+      const res = await importReviewedCorrection(correctionFile, false)
+      const result = res.data as { updated_count: number }
+      message.success(`已修正 ${result.updated_count} 条`)
+      setCorrectionOpen(false)
+      setCorrectionPreview(null)
+      setCorrectionFile(null)
+      refresh()
+    } finally {
+      setCorrectionApplying(false)
+    }
+  }
 
   const counts = data?.counts ?? { all: 0, pending_review: 0, confirmed: 0 }
   const items: ReviewedMatchResultOut[] = data?.items ?? []
@@ -387,6 +471,27 @@ export default function MatchResultsPage() {
       </Card>
 
       <Card>
+        <Space style={{ marginBottom: 12 }} wrap>
+          <Button icon={<ControlOutlined />} onClick={() => setBulkOpen(true)} disabled={total === 0}>
+            批量调整系数
+          </Button>
+          <Button icon={<DownloadOutlined />} onClick={handleExportCorrection} disabled={total === 0}>
+            导出修正模板
+          </Button>
+          <Upload
+            accept=".xlsx,.xls,.csv"
+            showUploadList={false}
+            beforeUpload={handleCorrectionFile}
+            disabled={correctionUploading}
+          >
+            <Button icon={<UploadOutlined />} loading={correctionUploading}>
+              上传修正文件
+            </Button>
+          </Upload>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            批量/修正均作用于当前筛选结果，不是当前页
+          </Text>
+        </Space>
         <Tabs
           activeKey={state.tab}
           items={tabItems}

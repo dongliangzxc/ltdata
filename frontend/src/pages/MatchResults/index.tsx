@@ -514,6 +514,121 @@ export default function MatchResultsPage() {
         />
       </Card>
 
+      <Modal
+        title="批量调整系数"
+        open={bulkOpen}
+        onOk={handleBulkConfirm}
+        onCancel={() => setBulkOpen(false)}
+        confirmLoading={bulkSaving}
+        okText="确认调整"
+        cancelText="取消"
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Alert
+            type="info"
+            showIcon
+            message={`当前筛选共 ${total} 条（当前 Tab），将对这些结果整体生效。`}
+          />
+          <Space>
+            <Text>调整对象</Text>
+            <Select
+              style={{ width: 160 }}
+              value={bulkTarget}
+              onChange={value => setBulkTarget(value as 'price' | 'sales')}
+              options={[
+                { value: 'sales', label: '销量系数' },
+                { value: 'price', label: '价格系数' },
+              ]}
+            />
+          </Space>
+          <Space>
+            <Text>{bulkTarget === 'sales' ? '销量系数' : '价格系数'}</Text>
+            <InputNumber
+              min={0}
+              max={999.9999}
+              step={0.01}
+              precision={4}
+              placeholder="留空=清除"
+              value={bulkCoefficient}
+              onChange={value => setBulkCoefficient(value == null ? null : Number(value))}
+              style={{ width: 180 }}
+            />
+          </Space>
+          <Text type="secondary">
+            价格系数：调整后价格 = 原价格 × 系数；销量系数：调整后销量 = 原销量 × 系数。留空表示清除该系数。
+          </Text>
+        </Space>
+      </Modal>
+
+      <Modal
+        title="修正文件预览"
+        open={correctionOpen}
+        onCancel={() => { if (!correctionApplying) setCorrectionOpen(false) }}
+        footer={
+          <Space>
+            <Button onClick={() => setCorrectionOpen(false)} disabled={correctionApplying}>取消</Button>
+            <Button
+              type="primary"
+              loading={correctionApplying}
+              disabled={!correctionPreview || correctionPreview.changed_count === 0 || correctionPreview.published}
+              onClick={handleCorrectionConfirm}
+            >
+              确认覆盖
+            </Button>
+          </Space>
+        }
+        width={1000}
+      >
+        {correctionPreview && (
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            {correctionPreview.published && (
+              <Alert
+                type="error"
+                showIcon
+                message={`任务 ${correctionPreview.published_job_ids.join(', ')} 已发布，不能直接覆盖。请先处理发布数据。`}
+              />
+            )}
+            <Space wrap size={16}>
+              <Text>总行数：{correctionPreview.total_rows}</Text>
+              <Text>可修改：{correctionPreview.changed_count}</Text>
+              <Text type="danger">错误：{correctionPreview.errors.length}</Text>
+            </Space>
+            {correctionPreview.errors.length > 0 && (
+              <Alert
+                type="warning"
+                showIcon
+                message={`有 ${correctionPreview.errors.length} 行未处理`}
+                description={correctionPreview.errors.slice(0, 5).map(item => `第 ${item.row} 行：${item.reason}`).join('；')}
+              />
+            )}
+            <Table
+              rowKey="match_result_id"
+              size="small"
+              dataSource={correctionPreview.changes}
+              pagination={{ pageSize: 10 }}
+              scroll={{ x: 800 }}
+              columns={[
+                { title: '行号', dataIndex: 'row', width: 70 },
+                { title: '商品ID', dataIndex: 'item_id', width: 140 },
+                { title: '商品名称', dataIndex: 'item_name', ellipsis: true },
+                {
+                  title: '变更',
+                  render: (_: unknown, row) => (
+                    <Space direction="vertical" size={2}>
+                      {row.fields.map(field => (
+                        <Text key={field.field} style={{ fontSize: 12 }}>
+                          {field.field}: {String(field.old ?? '-')} → {String(field.new ?? '-')}
+                        </Text>
+                      ))}
+                    </Space>
+                  ),
+                },
+              ]}
+            />
+          </Space>
+        )}
+      </Modal>
+
       <ReselectModal
         open={reselectOpen}
         matchId={reselectMatchId}

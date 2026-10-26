@@ -990,6 +990,7 @@ def download_upload_sample():
     notes.append(["注意", "", "国家不在 Excel 中填写。上传多个文件后，在每个文件行单独选择国家。"])
     notes.append(["注意", "", "列名可以不同，上传后按页面提示完成列映射即可。"])
     notes.append(["注意", "", "同一文件只对应一个国家；海外金额请填写当地币种原币。"])
+    notes.append(["文件命名", "", "推荐：YYYYMM_平台_国家_品类.xlsx，如 202609_amazon_US_运动相机.xlsx；带描述时用 [品类]，如 202609_amazon_US_[运动相机]_Fryers.xlsx"])
 
     for sheet in (ws, notes):
         for column_cells in sheet.columns:

@@ -99,6 +99,15 @@ export default function ManualPage() {
             系统自动识别平台（京东 / 天猫 / 淘宝 / 苏宁 / 亚马逊 / 虾皮）和月份范围，上传成功后展示前 50 行预览。
           </Paragraph>
           <Paragraph>
+            <S>文件名命名</S>：系统可以从文件名识别月份、平台、国家和品类，推荐使用：
+            <br />
+            <Text code>YYYYMM_平台_国家_品类.xlsx</Text>，例如 <Text code>202609_amazon_US_运动相机.xlsx</Text>
+            <br />
+            带描述时使用：<Text code>YYYYMM_平台_国家_[品类]_描述.xlsx</Text>，例如 <Text code>202609_amazon_US_[运动相机]_Fryers.xlsx</Text>
+            <br />
+            国家必须是「国家与汇率」中已启用的国家；识别失败时仍可在列映射中手动指定。
+          </Paragraph>
+          <Paragraph>
             <S>上传历史</S>：页面下方列出所有已上传文件，支持删除（删除后对应原始数据一并移除）。
           </Paragraph>
           <Alert type="warning" showIcon style={{ marginBottom: 16 }}

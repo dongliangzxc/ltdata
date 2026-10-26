@@ -6,7 +6,7 @@ import {
 } from 'antd'
 import {
   InboxOutlined, DeleteOutlined, ReloadOutlined,
-  CheckCircleOutlined, EditOutlined, DownloadOutlined,
+  CheckCircleOutlined, EditOutlined, DownloadOutlined, QuestionCircleOutlined,
 } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import {
@@ -884,6 +884,7 @@ export default function UploadPage() {
   const [uploadingCount, setUploadingCount] = useState(0)
   const [batchConfirming, setBatchConfirming] = useState(false)
   const [batchModalOpen, setBatchModalOpen] = useState(false)
+  const [namingHelpOpen, setNamingHelpOpen] = useState(false)
   const [batchItems, setBatchItems] = useState<BatchConfirmItem[]>([])
   const [bulkTemplateId, setBulkTemplateId] = useState<number | undefined>(undefined)
   const [activeJob, setActiveJob] = useState<UploadConfirmJobResponse | null>(null)
@@ -1273,9 +1274,14 @@ export default function UploadPage() {
             </p>
           </Dragger>
           <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
-            <Button icon={<DownloadOutlined />} onClick={handleDownloadSample}>
-              下载示例 Excel
-            </Button>
+            <Space>
+              <Button icon={<QuestionCircleOutlined />} onClick={() => setNamingHelpOpen(true)}>
+                文件名命名说明
+              </Button>
+              <Button icon={<DownloadOutlined />} onClick={handleDownloadSample}>
+                下载示例 Excel
+              </Button>
+            </Space>
           </div>
           {countryOptions.length === 0 && (
             <Alert
@@ -1713,6 +1719,53 @@ export default function UploadPage() {
         skippedRows={activeJob?.skipped_rows}
         onClose={() => setJobProgressVisible(false)}
       />
+
+      <Modal
+        title="文件名命名说明"
+        open={namingHelpOpen}
+        onCancel={() => setNamingHelpOpen(false)}
+        footer={<Button onClick={() => setNamingHelpOpen(false)}>知道了</Button>}
+        width={720}
+      >
+        <Space direction="vertical" size={14} style={{ width: '100%' }}>
+          <Alert
+            type="info"
+            showIcon
+            message="文件名可以自动识别月份、平台、国家、品类；识别不到时仍可在列映射中手动指定。"
+          />
+          <div>
+            <Text strong>格式一：品类写在最后</Text>
+            <div><Text code>YYYYMM_平台_国家_品类.xlsx</Text></div>
+            <Text type="secondary">示例：202609_amazon_US_运动相机.xlsx</Text>
+          </div>
+          <div>
+            <Text strong>格式二：带描述时用品类方括号</Text>
+            <div><Text code>YYYYMM_平台_国家_[品类]_描述.xlsx</Text></div>
+            <Text type="secondary">示例：202609_amazon_US_[运动相机]_Fryers.xlsx</Text>
+          </div>
+          <div>
+            <Text strong>平台</Text>
+            <div>amazon / amz / 亚马逊；shopee / 虾皮 / 西皮</div>
+          </div>
+          <div>
+            <Text strong>国家</Text>
+            <div>ISO 国家码或中文名，如 US、美国、MX、墨西哥；必须是「国家与汇率」里已启用的国家。</div>
+          </div>
+          <div>
+            <Text strong>月份</Text>
+            <div>202609 或 2026-09。</div>
+          </div>
+          <div>
+            <Text strong>品类</Text>
+            <div>中文名或品类码都可以，如 运动相机、action_cameras；多个方括号或匹配不到时视为未识别。</div>
+          </div>
+          <Alert
+            type="warning"
+            showIcon
+            message="文件名识别出的月份、平台会覆盖 Excel 中的同名字段。文件名中出现多个候选值时视为歧义，不会自动识别，需要在列映射中手动指定。"
+          />
+        </Space>
+      </Modal>
 
       <Modal
         title="批量确认入库"

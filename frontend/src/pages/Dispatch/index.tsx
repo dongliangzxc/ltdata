@@ -50,7 +50,6 @@ const FIELD_OPTIONS = [
   { value: 'category_lv2', label: 'Lv2类目' },
   { value: 'category_lv3', label: 'Lv3类目' },
   { value: 'source_category_name', label: '文件名品类名称' },
-  { value: 'source_category_code', label: '文件名品类码' },
   { value: 'item_name', label: '商品名称' },
 ]
 const MATCH_TYPE_OPTIONS = [

@@ -371,7 +371,6 @@ def _field_value(row: RawDataRecord, field: str) -> str:
         "category_lv4": row.category_lv4,
         "category_lv5": row.category_lv5,
         "source_category_name": row.source_category_name,
-        "source_category_code": row.source_category_code,
         "item_name": row.item_name,
     }
     return (field_map.get(field) or "")

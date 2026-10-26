@@ -134,6 +134,21 @@ IF NOT EXISTS (
     CREATE INDEX ix_dispatch_batches_batch_key ON dispatch_batches(batch_key);
 END IF;
 
+-- 商品名称翻译缓存
+CREATE TABLE IF NOT EXISTS translation_cache (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    source_hash     CHAR(64)    NOT NULL,
+    source_text     TEXT        NULL,
+    source_lang     VARCHAR(16) NOT NULL DEFAULT 'auto',
+    target_lang     VARCHAR(16) NOT NULL DEFAULT 'zh-CN',
+    provider        VARCHAR(32) NOT NULL,
+    translated_text TEXT        NOT NULL,
+    created_at      DATETIME    DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME    DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_translation_cache (source_hash, target_lang, provider),
+    KEY idx_translation_cache_hash (source_hash)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='商品名称翻译缓存';
+
 -- 海外国家与汇率
 CREATE TABLE IF NOT EXISTS countries (
     id              INT AUTO_INCREMENT PRIMARY KEY,

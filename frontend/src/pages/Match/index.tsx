@@ -17,7 +17,7 @@ import {
   listFilteredItems, recoverFilteredItem,
   batchConfirmMatch, previewBatchConfirmMatch, reassignInvalidModel, batchIgnoreMatches, batchRestoreMatches,
   searchCleanTasks, transferMatchItem, getTransferNotice, fetchAllCategories,
-  listExchangeRateOptions,
+  listExchangeRateOptions, getTranslationStatus, translateTexts,
 } from '../../services/api'
 import type { CleanJobItem, MatchCandidateOut, MatchReviewDetail, FilteredItemOut, ModelItem, BatchConfirmFilter, BatchConfirmResult, BatchIgnoreFilter, BatchRestoreFilter, CleanTaskSearchItem, UserProfile, ExchangeRateOption } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
@@ -229,6 +229,10 @@ export default function MatchPage() {
   const [salesMax, setSalesMax] = useState<number | null>(null)
   const [topBrandsOnly, setTopBrandsOnly] = useState(false)
   const [displayCurrency, setDisplayCurrency] = useState('original')
+  const [showTranslation, setShowTranslation] = useState(() => localStorage.getItem('show_translation') !== '0')
+  const [translationEnabled, setTranslationEnabled] = useState(false)
+  const [translationMap, setTranslationMap] = useState<Record<string, string>>({})
+  const translationInFlight = useRef<Set<string>>(new Set())
   const [page, setPage] = useState(1)
   const [confirmingIds, setConfirmingIds] = useState<Set<number>>(new Set())
   const [recoveringFilteredIds, setRecoveringFilteredIds] = useState<Set<number>>(new Set())
@@ -264,6 +268,53 @@ export default function MatchPage() {
     () => listExchangeRateOptions().then(r => r.data),
     { refreshDeps: [] }
   )
+  const { data: translationStatus } = useRequest(
+    () => getTranslationStatus().then(r => r.data),
+    { refreshDeps: [] }
+  )
+  useEffect(() => {
+    setTranslationEnabled(Boolean(translationStatus?.enabled))
+  }, [translationStatus?.enabled])
+  const requestTranslations = async (texts: Array<string | null | undefined>) => {
+    if (!translationEnabled || !showTranslation) return
+    const needed = Array.from(new Set(
+      texts
+        .map(text => (text || '').trim())
+        .filter(text => text && !translationMap[text] && !translationInFlight.current.has(text))
+    )).slice(0, 50)
+    if (needed.length === 0) return
+    needed.forEach(text => translationInFlight.current.add(text))
+    try {
+      const res = await translateTexts(needed)
+      const updates: Record<string, string> = {}
+      for (const item of res.data.translations ?? []) {
+        if (item.translated_text && item.translated_text !== item.source_text) {
+          updates[item.source_text] = item.translated_text
+        }
+      }
+      if (Object.keys(updates).length > 0) {
+        setTranslationMap(prev => ({ ...prev, ...updates }))
+      }
+    } catch {
+      // 翻译失败时保留原文，不打断复核流程
+    } finally {
+      needed.forEach(text => translationInFlight.current.delete(text))
+    }
+  }
+  const toggleTranslation = (value: boolean) => {
+    setShowTranslation(value)
+    localStorage.setItem('show_translation', value ? '1' : '0')
+  }
+  const translatedName = (name?: string | null, countryCode?: string | null) => {
+    if (!translationEnabled || !showTranslation || !name || countryCode === 'CN') return null
+    const translated = translationMap[name.trim()]
+    if (!translated || translated === name) return null
+    return (
+      <div style={{ fontSize: 12, color: '#8c8c8c', marginTop: 2, lineHeight: '18px' }}>
+        【中文】{translated}
+      </div>
+    )
+  }
   const rateOptions: ExchangeRateOption[] = rateOptionsData ?? []
   const rateMap = useMemo(
     () => Object.fromEntries(rateOptions.map(option => [option.country_code, option])),
@@ -530,6 +581,30 @@ export default function MatchPage() {
       refreshDeps: [selectedJobId, keyword, searchBy, page, activeTab],
     }
   )
+
+  useEffect(() => {
+    const texts = (pendingData?.items ?? [])
+      .filter((item: PendingItem) => item.country_code !== 'CN')
+      .map((item: PendingItem) => item.item_name)
+    void requestTranslations(texts)
+  }, [translationEnabled, showTranslation, pendingData])
+
+  useEffect(() => {
+    const texts = (filteredData?.items ?? [])
+      .filter((item: FilteredItemOut) => item.country_code !== 'CN')
+      .map((item: FilteredItemOut) => item.item_name)
+    void requestTranslations(texts)
+  }, [translationEnabled, showTranslation, filteredData])
+
+  useEffect(() => {
+    if (reviewDetail?.country_code === 'CN') return
+    void requestTranslations([reviewDetail?.item_name])
+  }, [translationEnabled, showTranslation, reviewDetail])
+
+  useEffect(() => {
+    if (filteredDetail?.country_code === 'CN') return
+    void requestTranslations([filteredDetail?.item_name])
+  }, [translationEnabled, showTranslation, filteredDetail])
 
   useEffect(() => {
     if (activeTab === 'filtered') return
@@ -1426,6 +1501,14 @@ export default function MatchPage() {
               />
             </Space>
           </Col>
+          {translationEnabled && (
+            <Col>
+              <Space size={4}>
+                <Text type="secondary">显示中文翻译</Text>
+                <Switch checked={showTranslation} onChange={toggleTranslation} size="small" />
+              </Space>
+            </Col>
+          )}
           {canRetryMatch && (
             <Col>
               <Button
@@ -1900,7 +1983,10 @@ export default function MatchPage() {
                       >
                         <List.Item.Meta
                           title={
+                            <div>
                             <Text strong style={{ display: 'block', wordBreak: 'break-all', lineHeight: '20px' }}>{item.item_name || '-'}</Text>
+                            {translatedName(item.item_name, item.country_code)}
+                          </div>
                           }
                           description={
                             <Space direction="vertical" size={4} style={{ width: '100%' }}>
@@ -1962,7 +2048,10 @@ export default function MatchPage() {
                           )}
                           <List.Item.Meta
                             title={
-                              <Text strong style={{ display: 'block', wordBreak: 'break-all', lineHeight: '20px' }}>{item.item_name || '-'}</Text>
+                              <div>
+                                <Text strong style={{ display: 'block', wordBreak: 'break-all', lineHeight: '20px' }}>{item.item_name || '-'}</Text>
+                                {translatedName(item.item_name, item.country_code)}
+                              </div>
                             }
                             description={
                               <Space direction="vertical" size={4} style={{ width: '100%' }}>
@@ -2083,7 +2172,12 @@ export default function MatchPage() {
                         </div>
                       ) : null}
                       <Descriptions size="small" column={2} bordered>
-                        <Descriptions.Item label="商品名称" span={2}>{filteredDetail.item_name || '-'}</Descriptions.Item>
+                        <Descriptions.Item label="商品名称" span={2}>
+                          <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                            <span>{filteredDetail.item_name || '-'}</span>
+                            {translatedName(filteredDetail.item_name, filteredDetail.country_code)}
+                          </Space>
+                        </Descriptions.Item>
                         <Descriptions.Item label="原品牌">{filteredDetail.brand_raw || '-'}</Descriptions.Item>
                         <Descriptions.Item label="店铺">{filteredDetail.shop_name || '-'}</Descriptions.Item>
                         <Descriptions.Item label="平台">{filteredDetail.platform || '-'}</Descriptions.Item>
@@ -2138,7 +2232,12 @@ export default function MatchPage() {
                       </div>
                     ) : null}
                     <Descriptions size="small" column={2} bordered>
-                      <Descriptions.Item label="商品名称" span={2}>{reviewDetail.item_name || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="商品名称" span={2}>
+                        <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                          <span>{reviewDetail.item_name || '-'}</span>
+                          {translatedName(reviewDetail.item_name, reviewDetail.country_code)}
+                        </Space>
+                      </Descriptions.Item>
                       <Descriptions.Item label="商品ID">
                         {reviewDetail.item_id
                           ? <Text copyable>{reviewDetail.item_id}</Text>
@@ -2263,7 +2362,12 @@ export default function MatchPage() {
         {reviewDetail ? (
           <Space direction="vertical" size={12} style={{ width: '100%' }}>
             <Descriptions size="small" column={1} bordered>
-              <Descriptions.Item label="商品名称">{reviewDetail.item_name || '-'}</Descriptions.Item>
+              <Descriptions.Item label="商品名称">
+                <Space direction="vertical" size={2}>
+                  <span>{reviewDetail.item_name || '-'}</span>
+                  {translatedName(reviewDetail.item_name, reviewDetail.country_code)}
+                </Space>
+              </Descriptions.Item>
               <Descriptions.Item label="原品牌">{reviewDetail.brand_raw || '-'}</Descriptions.Item>
               <Descriptions.Item label="国家">{reviewDetail.country_code || '-'}</Descriptions.Item>
               <Descriptions.Item label="价格">

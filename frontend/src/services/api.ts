@@ -165,6 +165,30 @@ export interface PlatformStatsOverview {
 export const getPlatformStatsOverview = () =>
   api.get<ApiResponse<PlatformStatsOverview>>('/stats/overview').then(r => r.data.data)
 
+// ─── Translation ───────────────────────────────────────────
+export interface TranslationStatus {
+  enabled: boolean
+  configured: boolean
+  provider: string
+  target_lang: string
+}
+
+export interface TranslationItem {
+  source_hash: string
+  source_text: string
+  translated_text: string
+}
+
+export const getTranslationStatus = () =>
+  api.get<TranslationStatus>('/translation/status')
+
+export const translateTexts = (texts: string[], targetLang?: string) =>
+  api.post<{
+    provider: string
+    target_lang: string
+    translations: TranslationItem[]
+  }>('/translation/translate', { texts, target_lang: targetLang })
+
 // ─── Countries & Exchange Rates ─────────────────────────────
 export interface CountryOption {
   code: string

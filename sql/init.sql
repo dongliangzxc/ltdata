@@ -87,6 +87,21 @@ CREATE TABLE IF NOT EXISTS exchange_rates (
     UNIQUE KEY uq_fx_country (country_code)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='国家兑人民币汇率';
 
+-- 商品名称翻译缓存
+CREATE TABLE IF NOT EXISTS translation_cache (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    source_hash     CHAR(64)    NOT NULL COMMENT '原文 SHA-256',
+    source_text     TEXT        NULL COMMENT '原文',
+    source_lang     VARCHAR(16) NOT NULL DEFAULT 'auto',
+    target_lang     VARCHAR(16) NOT NULL DEFAULT 'zh-CN',
+    provider        VARCHAR(32) NOT NULL,
+    translated_text TEXT        NOT NULL,
+    created_at      DATETIME    DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME    DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_translation_cache (source_hash, target_lang, provider),
+    KEY idx_translation_cache_hash (source_hash)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='商品名称翻译缓存';
+
 -- 原始数据（含去重唯一索引）
 CREATE TABLE IF NOT EXISTS raw_data (
     id             INT AUTO_INCREMENT PRIMARY KEY,

@@ -87,6 +87,25 @@ class ExchangeRate(Base):
     updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class TranslationCache(Base):
+    """商品名称翻译缓存。"""
+    __tablename__ = "translation_cache"
+    __table_args__ = (
+        UniqueConstraint("source_hash", "target_lang", "provider", name="uq_translation_cache"),
+        Index("idx_translation_cache_hash", "source_hash"),
+    )
+
+    id              = Column(Integer, primary_key=True, autoincrement=True)
+    source_hash     = Column(String(64), nullable=False)
+    source_text     = Column(Text, nullable=True)
+    source_lang     = Column(String(16), nullable=False, default="auto")
+    target_lang     = Column(String(16), nullable=False, default="zh-CN")
+    provider        = Column(String(32), nullable=False)
+    translated_text = Column(Text, nullable=False)
+    created_at      = Column(DateTime, default=datetime.utcnow)
+    updated_at      = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class RawDataRecord(Base):
     __tablename__ = "raw_data"
     # Upload deduplication probes (item_id, month, platform) for every batch.

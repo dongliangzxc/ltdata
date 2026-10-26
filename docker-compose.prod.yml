@@ -36,6 +36,13 @@ services:
       ANALYTICS_DATABASE_URL: mysql+pymysql://luotu:${MYSQL_PASSWORD:-luotu123}@mysql:3306/luotu_analytics
       UPLOAD_DIR: /app/uploads
       EXPORT_DIR: /app/exports
+      TRANSLATION_ENABLED: ${TRANSLATION_ENABLED:-false}
+      TRANSLATION_PROVIDER: ${TRANSLATION_PROVIDER:-azure}
+      TRANSLATION_TARGET_LANG: ${TRANSLATION_TARGET_LANG:-zh-Hans}
+      TRANSLATION_TIMEOUT_SECONDS: ${TRANSLATION_TIMEOUT_SECONDS:-10}
+      AZURE_TRANSLATOR_KEY: ${AZURE_TRANSLATOR_KEY:-}
+      AZURE_TRANSLATOR_REGION: ${AZURE_TRANSLATOR_REGION:-}
+      AZURE_TRANSLATOR_ENDPOINT: ${AZURE_TRANSLATOR_ENDPOINT:-https://api.cognitive.microsofttranslator.com}
     volumes:
       - /data/luotu/uploads:/app/uploads
       - /data/luotu/exports:/app/exports

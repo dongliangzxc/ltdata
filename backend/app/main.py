@@ -14,6 +14,7 @@ from app.api.dispatch_api import router as dispatch_router
 from app.api.upload_templates_api import router as upload_templates_router
 from app.api.brands_api import router as brands_router
 from app.api.countries_api import router as countries_router
+from app.api.translation_api import router as translation_router
 
 
 # 不需要鉴权的路径（精确匹配或前缀匹配）
@@ -115,6 +116,7 @@ app.include_router(dispatch_router)
 app.include_router(upload_templates_router)
 app.include_router(brands_router)
 app.include_router(countries_router)
+app.include_router(translation_router)
 
 
 @app.get("/health")

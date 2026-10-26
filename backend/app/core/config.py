@@ -15,6 +15,13 @@ class Settings(BaseSettings):
     EXPORT_DIR: str = "./exports"
     MAX_UPLOAD_SIZE_MB: int = 50
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:3000"]
+    TRANSLATION_ENABLED: bool = False
+    TRANSLATION_PROVIDER: str = "azure"
+    TRANSLATION_TARGET_LANG: str = "zh-Hans"
+    TRANSLATION_TIMEOUT_SECONDS: int = 10
+    AZURE_TRANSLATOR_KEY: str = ""
+    AZURE_TRANSLATOR_REGION: str = ""
+    AZURE_TRANSLATOR_ENDPOINT: str = "https://api.cognitive.microsofttranslator.com"
 
     model_config = {"env_file": ".env"}
 

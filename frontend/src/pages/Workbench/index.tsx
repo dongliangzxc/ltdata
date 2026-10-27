@@ -133,11 +133,20 @@ export default function WorkbenchPage({ mode = 'default' }: WorkbenchPageProps) 
     const allOptions = categoryOptions
       .filter(c => optionNames.has(c.label))
       .map(c => ({ value: c.label, label: c.label, code: c.value }))
-    if (!currentUser) return allOptions
-    if (currentUser.is_admin === 1) return allOptions
-    if (!currentUser.category_permissions?.length) return allOptions
-    const allowed = new Set(currentUser.category_permissions)
-    return allOptions.filter(c => allowed.has(c.code))
+    const scopedOptions = (() => {
+      if (!currentUser) return allOptions
+      if (currentUser.is_admin === 1) return allOptions
+      if (!currentUser.category_permissions?.length) return allOptions
+      const allowed = new Set(currentUser.category_permissions)
+      return allOptions.filter(c => allowed.has(c.code))
+    })()
+    // 数据调整按品类名称筛选；主数据存在同名品类时只保留一个选项。
+    const seen = new Set<string>()
+    return scopedOptions.filter(option => {
+      if (seen.has(option.label)) return false
+      seen.add(option.label)
+      return true
+    })
   }, [categoryOptions, currentUser, filters.categories])
 
   // 页面加载时拉取筛选枚举

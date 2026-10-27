@@ -13,6 +13,7 @@ import uuid
 from pathlib import Path
 
 from openpyxl import Workbook
+from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
 from app.models.schemas import (
@@ -56,6 +57,17 @@ MATCHED_EXTRA_COLS = [
 ]
 MATCHED_EXTRA_FIELD_NAMES = [f for f, _ in MATCHED_EXTRA_COLS]
 MATCHED_EXTRA_CN_NAMES    = [cn for _, cn in MATCHED_EXTRA_COLS]
+
+# 「已处理」Sheet 的调整口径列：原始价格/销量/销售额之外，同时保留调整后值。
+MATCHED_ADJUSTMENT_COLS = [
+    ("price_coefficient",  "价格调整系数"),
+    ("adjusted_price",     "调整后价格"),
+    ("sales_coefficient",  "销量调整系数"),
+    ("adjusted_sales_qty", "调整后销量"),
+    ("adjusted_sales_amount", "调整后销售额"),
+]
+MATCHED_ADJUSTMENT_FIELD_NAMES = [f for f, _ in MATCHED_ADJUSTMENT_COLS]
+MATCHED_ADJUSTMENT_CN_NAMES = [cn for _, cn in MATCHED_ADJUSTMENT_COLS]
 
 
 def _matched_base_field_names() -> list[str]:
@@ -117,9 +129,11 @@ def _base_row(
     model: ModelRecord | None = None,
     brand_name_fallback: str | None = None,
     brand_name_override: str | None = None,
+    match_result: MatchResult | None = None,
+    cleaned: CleanedDataRecord | None = None,
 ) -> dict:
     row = {}
-    for field in BASE_FIELD_NAMES + MATCHED_EXTRA_FIELD_NAMES:
+    for field in BASE_FIELD_NAMES + MATCHED_EXTRA_FIELD_NAMES + MATCHED_ADJUSTMENT_FIELD_NAMES:
         if field == "brand_std":
             row[field] = rd.brand_std or rd.brand_raw or ""
         elif field == "model_code":
@@ -133,6 +147,47 @@ def _base_row(
             row[field] = model.model_name if model else ""
         elif field == "series":
             row[field] = model.series if model else ""
+        elif field == "price_coefficient":
+            if match_result and match_result.adjusted_price is not None and rd.price not in (None, 0):
+                row[field] = round(float(match_result.adjusted_price) / float(rd.price), 4)
+            else:
+                row[field] = None
+        elif field == "adjusted_price":
+            row[field] = (
+                float(match_result.adjusted_price)
+                if match_result and match_result.adjusted_price is not None
+                else float(rd.price) if rd.price is not None else None
+            )
+        elif field == "sales_coefficient":
+            row[field] = (
+                float(match_result.sales_coefficient)
+                if match_result and match_result.sales_coefficient is not None
+                else None
+            )
+        elif field == "adjusted_sales_qty":
+            base_qty = (
+                cleaned.corrected_sales_qty
+                if cleaned and cleaned.corrected_sales_qty is not None
+                else rd.sales_qty
+            )
+            coefficient = match_result.sales_coefficient if match_result else None
+            row[field] = (
+                round(base_qty * float(coefficient))
+                if base_qty is not None and coefficient is not None
+                else base_qty
+            )
+        elif field == "adjusted_sales_amount":
+            base_amount = (
+                cleaned.corrected_sales_amount
+                if cleaned and cleaned.corrected_sales_amount is not None
+                else rd.sales_amount
+            )
+            coefficient = match_result.sales_coefficient if match_result else None
+            row[field] = (
+                round(float(base_amount) * float(coefficient), 2)
+                if base_amount is not None and coefficient is not None
+                else float(base_amount) if base_amount is not None else None
+            )
         else:
             row[field] = getattr(rd, field, None)
     return row
@@ -304,9 +359,16 @@ def _export_match_jobs(
         category_spec_names.setdefault(s.category_code, []).append(s.spec_name)
 
     matched_query = (
-        db.query(MatchResult, RawDataRecord, ModelRecord)
+        db.query(MatchResult, RawDataRecord, ModelRecord, CleanedDataRecord)
         .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
         .join(ModelRecord, MatchResult.model_id == ModelRecord.id)
+        .outerjoin(
+            CleanedDataRecord,
+            and_(
+                CleanedDataRecord.clean_job_id == MatchResult.clean_job_id,
+                CleanedDataRecord.raw_data_id == MatchResult.raw_data_id,
+            ),
+        )
         .filter(
             MatchResult.clean_job_id.in_(clean_job_ids),
             MatchResult.match_status.in_(["url_matched", "matched", "confirmed"]),
@@ -402,7 +464,7 @@ def _export_match_jobs(
                 if sn not in MATCHED_EXTRA_CN_NAMES
             ]
             worksheet = workbook.create_sheet(title=_sheet_name(f"{cat}-已处理", used_sheet_names))
-            worksheet.append(_matched_base_cn_names() + spec_names)
+            worksheet.append(_matched_base_cn_names() + MATCHED_ADJUSTMENT_CN_NAMES + spec_names)
             category_sheets[cat] = (worksheet, spec_names)
         return category_sheets[cat]
 
@@ -422,15 +484,21 @@ def _export_match_jobs(
         return brand_names.get(code) or code
 
     for matched_rows in _iter_keyset(matched_query, MatchResult.id):
-        spec_map = _spec_map_for_models(db, list({mr.model_id for mr, _, _ in matched_rows}))
-        for mr, rd, model in matched_rows:
-            row = _base_row(rd, model, brand_name_override=_brand_override(mr.clean_job_id, rd.id))
+        spec_map = _spec_map_for_models(db, list({mr.model_id for mr, _, _, _ in matched_rows}))
+        for mr, rd, model, cleaned in matched_rows:
+            row = _base_row(
+                rd, model,
+                brand_name_override=_brand_override(mr.clean_job_id, rd.id),
+                match_result=mr,
+                cleaned=cleaned,
+            )
             cat_code = model.category_code or ""
             cat = cat_map.get(cat_code, cat_code) or "未知品类"
             worksheet, spec_names = get_category_sheet(cat, cat_code)
             model_specs = spec_map.get(mr.model_id, {})
             worksheet.append(
                 [row.get(field) for field in _matched_base_field_names()]
+                + [row.get(field) for field in MATCHED_ADJUSTMENT_FIELD_NAMES]
                 + [model_specs.get(sn, "") for sn in spec_names]
             )
 

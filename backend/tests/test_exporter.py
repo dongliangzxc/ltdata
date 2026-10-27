@@ -318,3 +318,38 @@ def test_text_only_sheet_uses_manual_brand_override(db):
     row = xl[xl["宝贝ID"].astype(str) == "400001"]
     # 型号品牌是「索尼」，人工设为 JBL 应覆盖
     assert row["入库品牌"].iloc[0] == "JBL"
+
+
+def test_matched_sheet_exports_adjusted_price_and_sales(db):
+    clean_job_id = _seed(db)
+    mr = db.query(MatchResult).filter_by(clean_job_id=clean_job_id).one()
+    rd = db.query(RawDataRecord).filter_by(id=mr.raw_data_id).one()
+    mr.adjusted_price = 450.0
+    mr.sales_coefficient = 1.5
+    db.add(CleanedDataRecord(
+        raw_data_id=rd.id,
+        clean_job_id=clean_job_id,
+        platform=rd.platform,
+        month=rd.month,
+        item_id=rd.item_id,
+        item_name=rd.item_name,
+        sales_qty=rd.sales_qty,
+        sales_amount=rd.sales_amount,
+        price=rd.price,
+        corrected_sales_qty=90,
+        corrected_sales_amount=45000.0,
+    ))
+    db.commit()
+
+    result = export_match_job(db, clean_job_id)
+    xl = pd.read_excel(result[0]["path"], sheet_name="耳机-已处理")
+
+    assert "价格调整系数" in xl.columns
+    assert "调整后价格" in xl.columns
+    assert "销量调整系数" in xl.columns
+    assert "调整后销量" in xl.columns
+    assert "调整后销售额" in xl.columns
+    assert xl["调整后价格"].iloc[0] == 450.0
+    assert xl["价格调整系数"].iloc[0] == 0.9
+    assert xl["调整后销量"].iloc[0] == 135
+    assert xl["调整后销售额"].iloc[0] == 67500.0

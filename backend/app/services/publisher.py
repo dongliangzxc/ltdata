@@ -45,10 +45,21 @@ def delete_published_data(analytics_db: Session, clean_job_id: int) -> None:
 
 def _build_published_item_params(r, clean_job_id: int, published_at: datetime) -> dict:
     base_corrected_qty = r["corrected_sales_qty"] if r["corrected_sales_qty"] is not None else r["sales_qty"]
+    base_corrected_amount = (
+        r["corrected_sales_amount"]
+        if r["corrected_sales_amount"] is not None
+        else r["sales_amount"]
+    )
     if r["sales_coefficient"] is not None:
         corrected_sales_qty = round(base_corrected_qty * r["sales_coefficient"])
+        corrected_sales_amount = (
+            round(base_corrected_amount * r["sales_coefficient"], 2)
+            if base_corrected_amount is not None
+            else None
+        )
     else:
         corrected_sales_qty = base_corrected_qty
+        corrected_sales_amount = base_corrected_amount
 
     return {
         "publish_job_id":          0,   # 占位，稍后回填
@@ -78,7 +89,7 @@ def _build_published_item_params(r, clean_job_id: int, published_at: datetime) -
         "category_name":           r["category_name"],
         "calc_price":              r["calc_price"],  # NULL when no cleaned_data row (pre-P1 data or unmatched) — intentional
         "corrected_sales_qty":     corrected_sales_qty,
-        "corrected_sales_amount":  r["corrected_sales_amount"] if r["corrected_sales_amount"] is not None else r["sales_amount"],
+        "corrected_sales_amount":  corrected_sales_amount,
         "published_at":            published_at,
     }
 

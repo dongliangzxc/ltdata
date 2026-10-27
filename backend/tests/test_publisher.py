@@ -68,7 +68,7 @@ def test_build_published_item_zero_coefficient_writes_zero_quantity():
     assert item["corrected_sales_qty"] == 0
 
 
-def test_build_published_item_keeps_raw_sales_and_amounts_unchanged():
+def test_build_published_item_scales_corrected_amount_with_sales_coefficient():
     item = _build_published_item_params(
         _row(
             sales_qty=100,
@@ -83,7 +83,7 @@ def test_build_published_item_keeps_raw_sales_and_amounts_unchanged():
 
     assert item["sales_qty"] == 100
     assert item["sales_amount"] == Decimal("19900.00")
-    assert item["corrected_sales_amount"] == Decimal("15920.00")
+    assert item["corrected_sales_amount"] == Decimal("31840.00")
 
 
 def test_count_unique_published_items_matches_analytics_unique_key():

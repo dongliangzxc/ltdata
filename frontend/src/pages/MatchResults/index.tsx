@@ -1,15 +1,15 @@
 import { useState, useMemo, useEffect } from 'react'
 import {
   Card, Space, Select, Input, Button, Tabs, Table, Typography, Badge, Row, Col, message,
-  Upload, Modal, Alert, InputNumber,
+  Modal, Alert, InputNumber,
 } from 'antd'
-import { ReloadOutlined, DownloadOutlined, UploadOutlined, ControlOutlined } from '@ant-design/icons'
+import { ReloadOutlined, ControlOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import {
   listCleanJobs, updateMatchCoefficient, updateMatchPrice, listModelExtraFields, listCategories, listMatchSeries,
-  bulkUpdateReviewedCoefficient, exportReviewedCorrectionTemplate, importReviewedCorrection,
+  bulkUpdateReviewedCoefficient,
   type CleanJobItem, type ReviewedMatchResultOut,
-  type MatchResultsTab, type MatchCorrectionPreview, type BulkCoefficientPayload } from '../../services/api'
+  type MatchResultsTab, type BulkCoefficientPayload } from '../../services/api'
 import { buildMatchResultsColumns } from './columns'
 import { useMatchResultsQuery } from './useMatchResultsQuery'
 import ReselectModal from '../Match/components/ReselectModal'
@@ -53,6 +53,7 @@ export default function MatchResultsPage() {
   const [reselectOpen, setReselectOpen] = useState(false)
   const [reselectMatchId, setReselectMatchId] = useState<number | null>(null)
   const [keywordInput, setKeywordInput] = useState<string>(state.keyword ?? '')
+  const [idInput, setIdInput] = useState<string>(state.idKeyword ?? '')
   const [brandInput, setBrandInput] = useState<string>(state.brandKeyword ?? '')
   const [modelInput, setModelInput] = useState<string>(state.modelKeyword ?? '')
   const [coefficientDrafts, setCoefficientDrafts] = useState<Record<number, number | null>>({})
@@ -65,15 +66,23 @@ export default function MatchResultsPage() {
   const [bulkTarget, setBulkTarget] = useState<'price' | 'sales'>('sales')
   const [bulkCoefficient, setBulkCoefficient] = useState<number | null>(null)
   const [bulkSaving, setBulkSaving] = useState(false)
-  const [correctionFile, setCorrectionFile] = useState<File | null>(null)
-  const [correctionPreview, setCorrectionPreview] = useState<MatchCorrectionPreview | null>(null)
-  const [correctionOpen, setCorrectionOpen] = useState(false)
-  const [correctionUploading, setCorrectionUploading] = useState(false)
-  const [correctionApplying, setCorrectionApplying] = useState(false)
+  const [excludedIds, setExcludedIds] = useState<Set<number>>(new Set())
 
   useEffect(() => {
     setKeywordInput(state.keyword ?? '')
   }, [state.keyword])
+
+  useEffect(() => {
+    setIdInput(state.idKeyword ?? '')
+  }, [state.idKeyword])
+
+  useEffect(() => {
+    setExcludedIds(new Set())
+  }, [
+    state.cleanJobId, state.tab, state.matchSource.join(','), state.priceFlag,
+    state.keyword, state.idKeyword, state.platform, state.brandKeyword,
+    state.modelKeyword, state.categoryCode, state.series, state.coefficientFilter,
+  ])
 
   useEffect(() => {
     setBrandInput(state.brandKeyword ?? '')
@@ -230,6 +239,7 @@ export default function MatchResultsPage() {
     match_source: state.matchSource.length > 0 ? state.matchSource : undefined,
     price_flag: state.priceFlag,
     keyword: state.keyword || undefined,
+    id_keyword: state.idKeyword || undefined,
     platform: state.platform,
     brand_keyword: state.brandKeyword || undefined,
     model_keyword: state.modelKeyword || undefined,
@@ -245,6 +255,7 @@ export default function MatchResultsPage() {
         ...buildFilterPayload(),
         target: bulkTarget,
         coefficient: bulkCoefficient,
+        exclude_ids: [...excludedIds],
       })
       message.success(`已批量更新 ${res.data.updated_count} 条`)
       setBulkOpen(false)
@@ -254,51 +265,11 @@ export default function MatchResultsPage() {
     }
   }
 
-  const handleExportCorrection = async () => {
-    const res = await exportReviewedCorrectionTemplate(buildFilterPayload())
-    const blob = new Blob([res.data], {
-      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = '匹配结果修正模板.xlsx'
-    link.click()
-    URL.revokeObjectURL(url)
-  }
-
-  const handleCorrectionFile = async (file: File) => {
-    setCorrectionUploading(true)
-    try {
-      const res = await importReviewedCorrection(file, true)
-      setCorrectionFile(file)
-      setCorrectionPreview(res.data as MatchCorrectionPreview)
-      setCorrectionOpen(true)
-    } finally {
-      setCorrectionUploading(false)
-    }
-    return false
-  }
-
-  const handleCorrectionConfirm = async () => {
-    if (!correctionFile) return
-    setCorrectionApplying(true)
-    try {
-      const res = await importReviewedCorrection(correctionFile, false)
-      const result = res.data as { updated_count: number }
-      message.success(`已修正 ${result.updated_count} 条`)
-      setCorrectionOpen(false)
-      setCorrectionPreview(null)
-      setCorrectionFile(null)
-      refresh()
-    } finally {
-      setCorrectionApplying(false)
-    }
-  }
-
   const counts = data?.counts ?? { all: 0, pending_review: 0, confirmed: 0 }
   const items: ReviewedMatchResultOut[] = data?.items ?? []
   const total = data?.total ?? 0
+  const selectedCount = Math.max(0, total - excludedIds.size)
+  const currentPageSelectedKeys = items.filter(item => !excludedIds.has(item.id)).map(item => item.id)
   const summary = data?.summary
 
   const tabItems = [
@@ -420,6 +391,16 @@ export default function MatchResultsPage() {
               onChange={coefficientFilter => setState({ coefficientFilter })}
             />
           </Col>
+          <Col>
+            <Input.Search
+              allowClear
+              placeholder="商品ID / 链接"
+              value={idInput}
+              onChange={e => setIdInput(e.target.value)}
+              onSearch={v => setState({ idKeyword: v.trim() })}
+              style={{ width: 220 }}
+            />
+          </Col>
           <Col flex="auto">
             <Input.Search
               allowClear
@@ -472,25 +453,21 @@ export default function MatchResultsPage() {
 
       <Card>
         <Space style={{ marginBottom: 12 }} wrap>
-          <Button icon={<ControlOutlined />} onClick={() => setBulkOpen(true)} disabled={total === 0}>
+          <Button
+            icon={<ControlOutlined />}
+            onClick={() => setBulkOpen(true)}
+            disabled={selectedCount === 0}
+          >
             批量调整系数
           </Button>
-          <Button icon={<DownloadOutlined />} onClick={handleExportCorrection} disabled={total === 0}>
-            导出修正模板
-          </Button>
-          <Upload
-            accept=".xlsx,.xls,.csv"
-            showUploadList={false}
-            beforeUpload={handleCorrectionFile}
-            disabled={correctionUploading}
-          >
-            <Button icon={<UploadOutlined />} loading={correctionUploading}>
-              上传修正文件
-            </Button>
-          </Upload>
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            批量/修正均作用于当前筛选结果，不是当前页
+          <Text type="secondary">
+            已选 {selectedCount} / {total} 条（默认全选当前筛选结果）
           </Text>
+          {excludedIds.size > 0 && (
+            <Button size="small" onClick={() => setExcludedIds(new Set())}>
+              恢复全选
+            </Button>
+          )}
         </Space>
         <Tabs
           activeKey={state.tab}
@@ -503,6 +480,28 @@ export default function MatchResultsPage() {
           loading={loading}
           columns={columns}
           dataSource={items}
+          rowSelection={{
+            selectedRowKeys: currentPageSelectedKeys,
+            preserveSelectedRowKeys: true,
+            onSelect: (record, selected) => {
+              setExcludedIds(prev => {
+                const next = new Set(prev)
+                if (selected) next.delete(record.id)
+                else next.add(record.id)
+                return next
+              })
+            },
+            onSelectAll: (selected, _selectedRows, changeRows) => {
+              setExcludedIds(prev => {
+                const next = new Set(prev)
+                for (const row of changeRows) {
+                  if (selected) next.delete(row.id)
+                  else next.add(row.id)
+                }
+                return next
+              })
+            },
+          }}
           scroll={{ x: 1280 }}
           pagination={{
             current: state.page,
@@ -527,7 +526,7 @@ export default function MatchResultsPage() {
           <Alert
             type="info"
             showIcon
-            message={`当前筛选共 ${total} 条（当前 Tab），将对这些结果整体生效。`}
+            message={`已选 ${selectedCount} / ${total} 条（当前筛选 + 当前 Tab），将对这些结果整体生效。`}
           />
           <Space>
             <Text>调整对象</Text>
@@ -558,75 +557,6 @@ export default function MatchResultsPage() {
             价格系数：调整后价格 = 原价格 × 系数；销量系数：调整后销量 = 原销量 × 系数。留空表示清除该系数。
           </Text>
         </Space>
-      </Modal>
-
-      <Modal
-        title="修正文件预览"
-        open={correctionOpen}
-        onCancel={() => { if (!correctionApplying) setCorrectionOpen(false) }}
-        footer={
-          <Space>
-            <Button onClick={() => setCorrectionOpen(false)} disabled={correctionApplying}>取消</Button>
-            <Button
-              type="primary"
-              loading={correctionApplying}
-              disabled={!correctionPreview || correctionPreview.changed_count === 0 || correctionPreview.published}
-              onClick={handleCorrectionConfirm}
-            >
-              确认覆盖
-            </Button>
-          </Space>
-        }
-        width={1000}
-      >
-        {correctionPreview && (
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
-            {correctionPreview.published && (
-              <Alert
-                type="error"
-                showIcon
-                message={`任务 ${correctionPreview.published_job_ids.join(', ')} 已发布，不能直接覆盖。请先处理发布数据。`}
-              />
-            )}
-            <Space wrap size={16}>
-              <Text>总行数：{correctionPreview.total_rows}</Text>
-              <Text>可修改：{correctionPreview.changed_count}</Text>
-              <Text type="danger">错误：{correctionPreview.errors.length}</Text>
-            </Space>
-            {correctionPreview.errors.length > 0 && (
-              <Alert
-                type="warning"
-                showIcon
-                message={`有 ${correctionPreview.errors.length} 行未处理`}
-                description={correctionPreview.errors.slice(0, 5).map(item => `第 ${item.row} 行：${item.reason}`).join('；')}
-              />
-            )}
-            <Table
-              rowKey="match_result_id"
-              size="small"
-              dataSource={correctionPreview.changes}
-              pagination={{ pageSize: 10 }}
-              scroll={{ x: 800 }}
-              columns={[
-                { title: '行号', dataIndex: 'row', width: 70 },
-                { title: '商品ID', dataIndex: 'item_id', width: 140 },
-                { title: '商品名称', dataIndex: 'item_name', ellipsis: true },
-                {
-                  title: '变更',
-                  render: (_: unknown, row) => (
-                    <Space direction="vertical" size={2}>
-                      {row.fields.map(field => (
-                        <Text key={field.field} style={{ fontSize: 12 }}>
-                          {field.field}: {String(field.old ?? '-')} → {String(field.new ?? '-')}
-                        </Text>
-                      ))}
-                    </Space>
-                  ),
-                },
-              ]}
-            />
-          </Space>
-        )}
       </Modal>
 
       <ReselectModal

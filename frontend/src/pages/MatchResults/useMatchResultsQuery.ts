@@ -13,6 +13,7 @@ export interface MatchResultsState {
   matchSource: string[]
   priceFlag?: PriceFlagFilter
   keyword: string
+  idKeyword: string
   platform?: string
   brandKeyword: string
   modelKeyword: string
@@ -22,7 +23,7 @@ export interface MatchResultsState {
 }
 
 const DEFAULT_STATE: MatchResultsState = {
-  page: 1, tab: 'all', matchSource: [], keyword: '', brandKeyword: '', modelKeyword: '',
+  page: 1, tab: 'all', matchSource: [], keyword: '', idKeyword: '', brandKeyword: '', modelKeyword: '',
 }
 
 const VALID_TABS: MatchResultsTab[] = ['all', 'pending_review', 'confirmed']
@@ -42,6 +43,7 @@ function readState(params: URLSearchParams): MatchResultsState {
     matchSource: params.getAll('match_source'),
     priceFlag: rawPrice && VALID_PRICE.includes(rawPrice) ? rawPrice : undefined,
     keyword: params.get('keyword') ?? '',
+    idKeyword: params.get('id_keyword') ?? '',
     platform: params.get('platform') || undefined,
     brandKeyword: params.get('brand_keyword') ?? '',
     modelKeyword: params.get('model_keyword') ?? '',
@@ -58,6 +60,7 @@ function writeState(state: MatchResultsState): URLSearchParams {
   state.matchSource.forEach(s => p.append('match_source', s))
   if (state.priceFlag) p.set('price_flag', state.priceFlag)
   if (state.keyword) p.set('keyword', state.keyword)
+  if (state.idKeyword) p.set('id_keyword', state.idKeyword)
   if (state.platform) p.set('platform', state.platform)
   if (state.brandKeyword) p.set('brand_keyword', state.brandKeyword)
   if (state.modelKeyword) p.set('model_keyword', state.modelKeyword)
@@ -91,6 +94,7 @@ export function useMatchResultsQuery() {
       match_source: state.matchSource.length > 0 ? state.matchSource : undefined,
       price_flag: state.priceFlag,
       keyword: state.keyword || undefined,
+      id_keyword: state.idKeyword || undefined,
       platform: state.platform,
       brand_keyword: state.brandKeyword || undefined,
       model_keyword: state.modelKeyword || undefined,
@@ -106,6 +110,7 @@ export function useMatchResultsQuery() {
         state.matchSource.join(','),
         state.priceFlag,
         state.keyword,
+        state.idKeyword,
         state.platform,
         state.brandKeyword,
         state.modelKeyword,

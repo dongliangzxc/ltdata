@@ -7,12 +7,7 @@ from collections import Counter
 from datetime import datetime
 from threading import Thread
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
-import pandas as pd
-from openpyxl import Workbook
-from io import BytesIO
-from urllib.parse import quote
-from fastapi.responses import Response
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from app.core.auth_deps import get_current_user
 from app.core.permissions import visible_category_codes
@@ -38,9 +33,7 @@ from app.services.exclusion_store import (
 )
 from app.services.matcher import run_match, run_match_for_result
 from app.services.price_auditor import audit_price
-from app.services.correction_engine import apply_correction_rules
 from app.utils.text_utils import title_key
-from app.utils.url_utils import extract_item_id
 from app.utils.time_utils import format_beijing_datetime
 
 router = APIRouter(prefix="/api/match", tags=["match"])
@@ -2308,6 +2301,7 @@ def list_reviewed_global(
     match_source: Optional[list[str]] = Query(None),
     price_flag: Optional[Literal["below", "above", "normal", "none"]] = None,
     keyword: Optional[str] = None,
+    id_keyword: Optional[str] = None,
     platform: Optional[str] = None,
     brand_keyword: Optional[str] = None,
     model_keyword: Optional[str] = None,
@@ -2336,6 +2330,12 @@ def list_reviewed_global(
                 q = q.filter(MatchResult.price_flag == price_flag_map[price_flag])
         if keyword:
             q = q.filter(RawDataRecord.item_name.like(f"%{keyword}%"))
+        if id_keyword:
+            pattern = f"%{id_keyword}%"
+            q = q.filter(or_(
+                RawDataRecord.item_id.ilike(pattern),
+                RawDataRecord.item_url.ilike(pattern),
+            ))
         needs_model_join = bool(brand_keyword or model_keyword or category_code or series)
         if needs_model_join and join_model:
             q = q.outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
@@ -2376,7 +2376,7 @@ def list_reviewed_global(
 
     # counts：先建 base，再按 tab 分别 count
     counts = {}
-    needs_raw_join = bool(keyword or platform or brand_keyword or model_keyword)
+    needs_raw_join = bool(keyword or id_keyword or platform or brand_keyword or model_keyword)
     for which in ("all", "pending_review", "confirmed"):
         q_count = apply_common_filters(db.query(MatchResult.id), join_raw=needs_raw_join, join_model=True)
         q_count = apply_tab(q_count, which)
@@ -2436,7 +2436,7 @@ def list_reviewed_global(
             adjusted_price=float(mr.adjusted_price) if mr.adjusted_price is not None else None,
             sales_coefficient=float(mr.sales_coefficient) if mr.sales_coefficient is not None else None,
             reviewed_at=mr.reviewed_at,
-            item_name=rd.item_name, item_url=rd.item_url, brand_raw=rd.brand_raw,
+            item_name=rd.item_name, item_id=rd.item_id, item_url=rd.item_url, brand_raw=rd.brand_raw,
             model_code=model.model_code if model else None,
             brand_code=model.brand_code if model else None,
             series=model.series if model else None,
@@ -2625,6 +2625,7 @@ def _apply_reviewed_filters(
     match_source=None,
     price_flag=None,
     keyword=None,
+    id_keyword=None,
     platform=None,
     brand_keyword=None,
     model_keyword=None,
@@ -2644,6 +2645,12 @@ def _apply_reviewed_filters(
             q = q.filter(MatchResult.price_flag == _BULK_PRICE_FLAG_MAP[price_flag])
     if keyword:
         q = q.filter(RawDataRecord.item_name.like(f"%{keyword}%"))
+    if id_keyword:
+        pattern = f"%{id_keyword}%"
+        q = q.filter(or_(
+            RawDataRecord.item_id.ilike(pattern),
+            RawDataRecord.item_url.ilike(pattern),
+        ))
     if platform:
         q = q.filter(RawDataRecord.platform == platform)
     if brand_keyword:
@@ -2693,6 +2700,7 @@ class _BulkCoefficientIn(_PydanticBase):
     match_source: Optional[list[str]] = None
     price_flag: Optional[Literal["below", "above", "normal", "none"]] = None
     keyword: Optional[str] = None
+    id_keyword: Optional[str] = None
     platform: Optional[str] = None
     brand_keyword: Optional[str] = None
     model_keyword: Optional[str] = None
@@ -2701,6 +2709,7 @@ class _BulkCoefficientIn(_PydanticBase):
     coefficient_filter: Optional[Literal["with", "without"]] = None
     target: Literal["price", "sales"]
     coefficient: Optional[float] = None
+    exclude_ids: list[int] = []
 
 
 @router.post("/reviewed/bulk-coefficient")
@@ -2720,6 +2729,7 @@ def bulk_update_reviewed_coefficient(
         match_source=payload.match_source,
         price_flag=payload.price_flag,
         keyword=payload.keyword,
+        id_keyword=payload.id_keyword,
         platform=payload.platform,
         brand_keyword=payload.brand_keyword,
         model_keyword=payload.model_keyword,
@@ -2727,6 +2737,8 @@ def bulk_update_reviewed_coefficient(
         series=payload.series,
         coefficient_filter=payload.coefficient_filter,
     )
+    if payload.exclude_ids:
+        q = q.filter(~MatchResult.id.in_(payload.exclude_ids))
     q = _apply_reviewed_tab_filter(q, payload.tab)
     rows = q.all()
     if not rows:
@@ -2755,387 +2767,3 @@ def bulk_update_reviewed_coefficient(
         touch_clean_job(db, job_id)
     db.commit()
     return {"updated_count": len(rows)}
-
-
-_CORRECTION_IDENTITY_HEADERS = [
-    "match_result_id", "item_id", "item_url", "platform", "month", "country_code",
-    "入库品牌", "匹配型号",
-]
-_CORRECTION_VALUE_HEADERS = [
-    "商品名称_原值", "价格_原值", "销量_原值", "销售额_原值", "参考价_原值",
-    "商品名称_修正", "价格_修正", "销量_修正", "销售额_修正", "参考价_修正", "商品链接_修正",
-]
-
-
-@router.get("/reviewed/correction-template")
-def export_reviewed_correction_template(
-    tab: Literal["all", "pending_review", "confirmed"] = "all",
-    clean_job_id: Optional[int] = None,
-    match_source: Optional[list[str]] = Query(None),
-    price_flag: Optional[Literal["below", "above", "normal", "none"]] = None,
-    keyword: Optional[str] = None,
-    platform: Optional[str] = None,
-    brand_keyword: Optional[str] = None,
-    model_keyword: Optional[str] = None,
-    category_code: Optional[str] = None,
-    series: Optional[str] = None,
-    coefficient_filter: Optional[Literal["with", "without"]] = None,
-    db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
-):
-    """按当前筛选条件导出匹配结果修正模板。"""
-    q = _reviewed_correction_base_query(db)
-    q = _apply_reviewed_filters(
-        q,
-        clean_job_id=clean_job_id,
-        match_source=match_source,
-        price_flag=price_flag,
-        keyword=keyword,
-        platform=platform,
-        brand_keyword=brand_keyword,
-        model_keyword=model_keyword,
-        category_code=category_code,
-        series=series,
-        coefficient_filter=coefficient_filter,
-    )
-    q = _apply_reviewed_tab_filter(q, tab)
-    rows = q.order_by(MatchResult.id.desc()).limit(10001).all()
-    if len(rows) > 10000:
-        raise HTTPException(status_code=400, detail="筛选结果超过 10000 条，请缩小筛选范围后再导出")
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "修正模板"
-    ws.append(_CORRECTION_IDENTITY_HEADERS + _CORRECTION_VALUE_HEADERS)
-    for mr, rd, model in rows:
-        ws.append([
-            mr.id,
-            rd.item_id,
-            rd.item_url,
-            rd.platform,
-            rd.month,
-            rd.country_code,
-            model.brand_code if model else None,
-            model.model_code if model else None,
-            rd.item_name,
-            float(rd.price) if rd.price is not None else None,
-            rd.sales_qty,
-            float(rd.sales_amount) if rd.sales_amount is not None else None,
-            float(rd.ref_price) if rd.ref_price is not None else None,
-            None, None, None, None, None, None,
-        ])
-
-    notes = wb.create_sheet("填写说明")
-    notes.append(["字段", "说明"])
-    notes.append(["商品名称_修正", "空=不修改；填写后覆盖原商品名称"])
-    notes.append(["价格_修正", "空=不修改；原币价格，必须是非负数字"])
-    notes.append(["销量_修正", "空=不修改；整数，必须是非负数字"])
-    notes.append(["销售额_修正", "空=不修改；原币销售额，必须是非负数字"])
-    notes.append(["参考价_修正", "空=不修改；原币参考价，必须是非负数字"])
-    notes.append(["商品链接_修正", "空=不修改；填写后覆盖原商品链接"])
-    notes.append(["注意", "不要修改 match_result_id；已发布任务不允许直接覆盖"])
-    notes.append(["清空", "文本字段可填 __CLEAR__ 表示清空；商品名称不允许清空"])
-
-    buffer = BytesIO()
-    wb.save(buffer)
-    buffer.seek(0)
-    filename = quote("匹配结果修正模板.xlsx")
-    return Response(
-        content=buffer.getvalue(),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
-    )
-
-
-def _correction_cell(row: dict, *names: str):
-    for name in names:
-        if name in row and row.get(name) is not None:
-            value = row.get(name)
-            try:
-                if pd.isna(value):
-                    continue
-            except (TypeError, ValueError):
-                pass
-            text = str(value).strip()
-            if text and text.lower() not in {"nan", "none", "null", ""}:
-                return text
-    return None
-
-
-def _parse_optional_number(value: str | None, *, integer: bool = False) -> Optional[float]:
-    if value is None:
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        raise ValueError("必须是数字")
-    if number < 0:
-        raise ValueError("不能为负数")
-    return int(round(number)) if integer else number
-
-
-def _load_correction_targets(db: Session, records: list[dict]):
-    id_values = []
-    id_positions = {}
-    for index, record in enumerate(records):
-        raw_id = _correction_cell(record, "match_result_id")
-        if raw_id is None:
-            continue
-        try:
-            match_id = int(float(raw_id))
-        except (TypeError, ValueError):
-            continue
-        id_values.append(match_id)
-        id_positions[index] = match_id
-
-    id_map = {}
-    if id_values:
-        rows = (
-            db.query(MatchResult, RawDataRecord)
-            .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
-            .filter(MatchResult.id.in_(id_values))
-            .all()
-        )
-        id_map = {mr.id: (mr, rd) for mr, rd in rows}
-
-    targets = []
-    errors = []
-    for index, record in enumerate(records):
-        row_number = index + 2
-        match_id = id_positions.get(index)
-        target = id_map.get(match_id) if match_id else None
-        if target is None:
-            platform = _correction_cell(record, "platform")
-            item_id = _correction_cell(record, "item_id")
-            item_url = _correction_cell(record, "item_url")
-            if not item_id and item_url:
-                parsed = extract_item_id(item_url)
-                if parsed:
-                    platform = platform or parsed[0]
-                    item_id = parsed[1]
-            if not item_id:
-                errors.append({"row": row_number, "reason": "找不到匹配记录：缺少 match_result_id 或 item_id/链接"})
-                continue
-            q = (
-                db.query(MatchResult, RawDataRecord)
-                .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
-                .filter(RawDataRecord.item_id == item_id)
-            )
-            if platform:
-                q = q.filter(RawDataRecord.platform == platform)
-            month = _correction_cell(record, "month")
-            if month:
-                try:
-                    q = q.filter(RawDataRecord.month == int(float(month)))
-                except (TypeError, ValueError):
-                    pass
-            country = _correction_cell(record, "country_code")
-            if country:
-                q = q.filter(RawDataRecord.country_code == country.upper())
-            found = q.limit(2).all()
-            if len(found) == 0:
-                errors.append({"row": row_number, "reason": "找不到匹配记录"})
-                continue
-            if len(found) > 1:
-                errors.append({"row": row_number, "reason": "匹配到多条记录，请在模板中保留 match_result_id"})
-                continue
-            target = found[0]
-        targets.append((row_number, record, target[0], target[1]))
-    return targets, errors
-
-
-def _build_correction_changes(records: list[dict], db: Session):
-    targets, errors = _load_correction_targets(db, records)
-    changes = []
-    for row_number, record, mr, rd in targets:
-        new_values = {}
-        for header, attr, kind in (
-            ("商品名称_修正", "item_name", "text"),
-            ("价格_修正", "price", "number"),
-            ("销量_修正", "sales_qty", "integer"),
-            ("销售额_修正", "sales_amount", "number"),
-            ("参考价_修正", "ref_price", "number"),
-            ("商品链接_修正", "item_url", "text"),
-        ):
-            raw = _correction_cell(record, header, attr)
-            if raw is None:
-                continue
-            if kind == "text":
-                if raw == "__CLEAR__":
-                    if attr == "item_name":
-                        errors.append({"row": row_number, "reason": "商品名称不允许清空"})
-                        continue
-                    value = None
-                else:
-                    value = raw
-            else:
-                try:
-                    value = _parse_optional_number(raw, integer=(kind == "integer"))
-                except ValueError as exc:
-                    errors.append({"row": row_number, "reason": f"{header} {exc}"})
-                    continue
-            old = getattr(rd, attr)
-            old_compare = float(old) if old is not None and kind != "text" else old
-            new_compare = float(value) if value is not None and kind != "text" else value
-            if old_compare == new_compare:
-                continue
-            new_values[attr] = value
-        if new_values:
-            changes.append({
-                "row": row_number,
-                "match_result_id": mr.id,
-                "item_id": rd.item_id,
-                "item_name": rd.item_name,
-                "fields": [
-                    {
-                        "field": attr,
-                        "old": float(getattr(rd, attr)) if isinstance(getattr(rd, attr), (int, float)) else getattr(rd, attr),
-                        "new": value,
-                    }
-                    for attr, value in new_values.items()
-                ],
-                "_raw": rd,
-                "_match": mr,
-                "_values": new_values,
-            })
-    return changes, errors
-
-
-def _correction_job_ids(changes) -> set[int]:
-    return {change["_match"].clean_job_id for change in changes}
-
-
-def _correction_published_job_ids(db: Session, job_ids: set[int]) -> list[int]:
-    if not job_ids:
-        return []
-    return [
-        job_id for job_id, in db.query(PublishJob.clean_job_id)
-        .filter(PublishJob.clean_job_id.in_(job_ids))
-        .distinct()
-        .all()
-    ]
-
-
-@router.post("/reviewed/correction/import")
-async def import_reviewed_correction(
-    file: UploadFile = File(...),
-    dry_run: bool = Query(True),
-    db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
-):
-    """预览或执行匹配结果修正文件。"""
-    content = await file.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="文件为空")
-    try:
-        if (file.filename or "").lower().endswith(".csv"):
-            df = pd.read_csv(BytesIO(content), dtype=str)
-        else:
-            df = pd.read_excel(BytesIO(content), dtype=str)
-    except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"文件解析失败：{exc}") from exc
-
-    df.columns = [str(column).strip() for column in df.columns]
-    records = df.where(pd.notna(df), None).to_dict("records")
-    if len(records) > 5000:
-        raise HTTPException(status_code=400, detail="单次修正最多 5000 行")
-
-    changes, errors = _build_correction_changes(records, db)
-    job_ids = _correction_job_ids(changes)
-    published_job_ids = _correction_published_job_ids(db, job_ids)
-    preview_changes = [
-        {key: value for key, value in change.items() if not key.startswith("_")}
-        for change in changes[:200]
-    ]
-    preview = {
-        "total_rows": len(records),
-        "matched_count": len(changes) + len(errors),
-        "changed_count": len(changes),
-        "errors": errors[:200],
-        "changes": preview_changes,
-        "published_job_ids": published_job_ids,
-        "published": bool(published_job_ids),
-    }
-    if dry_run:
-        return preview
-
-    if published_job_ids:
-        raise HTTPException(
-            status_code=400,
-            detail=f"任务已发布（{', '.join(map(str, published_job_ids))}），请先处理发布数据后再修正",
-        )
-    if not changes:
-        return {"updated_count": 0, "errors": errors}
-
-    cleaned_map = {}
-    raw_ids = [change["_raw"].id for change in changes]
-    if raw_ids:
-        cleaned_rows = (
-            db.query(CleanedDataRecord)
-            .filter(
-                CleanedDataRecord.clean_job_id.in_(job_ids),
-                CleanedDataRecord.raw_data_id.in_(raw_ids),
-            )
-            .all()
-        )
-        cleaned_map = {(row.clean_job_id, row.raw_data_id): row for row in cleaned_rows}
-
-    affected_match_ids = []
-    for change in changes:
-        rd = change["_raw"]
-        mr = change["_match"]
-        values = change["_values"]
-        old_price = rd.price
-        old_adjusted_price = mr.adjusted_price
-
-        if "item_name" in values:
-            rd.item_name = values["item_name"]
-            rd.item_name_norm = title_key(values["item_name"]) or None
-        if "item_url" in values:
-            rd.item_url = values["item_url"]
-        if "price" in values:
-            rd.price = values["price"]
-        if "sales_qty" in values:
-            rd.sales_qty = values["sales_qty"]
-        if "sales_amount" in values:
-            rd.sales_amount = values["sales_amount"]
-        if "ref_price" in values:
-            rd.ref_price = values["ref_price"]
-
-        if old_adjusted_price is not None and old_price not in (None, 0) and "price" in values:
-            coefficient = float(old_adjusted_price) / float(old_price)
-            mr.adjusted_price = round(float(rd.price) * coefficient, 2) if rd.price is not None else None
-        mr.updated_at = datetime.utcnow()
-
-        cleaned = cleaned_map.get((mr.clean_job_id, rd.id))
-        if cleaned:
-            if "item_name" in values:
-                cleaned.item_name = values["item_name"]
-            if "item_url" in values:
-                cleaned.item_url = values["item_url"]
-            if "price" in values:
-                cleaned.price = values["price"]
-            if "sales_qty" in values:
-                cleaned.sales_qty = values["sales_qty"]
-                cleaned.corrected_sales_qty = values["sales_qty"]
-            if "sales_amount" in values:
-                cleaned.sales_amount = values["sales_amount"]
-                cleaned.corrected_sales_amount = values["sales_amount"]
-            if "ref_price" in values:
-                cleaned.ref_price = values["ref_price"]
-            if cleaned.sales_qty and cleaned.sales_qty > 0 and cleaned.sales_amount is not None:
-                cleaned.calc_price = round(float(cleaned.sales_amount) / int(cleaned.sales_qty), 2)
-            else:
-                cleaned.calc_price = None
-        affected_match_ids.append(mr.id)
-
-    for job_id in job_ids:
-        touch_clean_job(db, job_id)
-    db.commit()
-
-    for job_id in job_ids:
-        apply_correction_rules(db, job_id)
-    if affected_match_ids:
-        audit_price(db, affected_match_ids, commit=True)
-
-    return {"updated_count": len(changes), "errors": errors}

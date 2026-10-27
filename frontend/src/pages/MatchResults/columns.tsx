@@ -72,6 +72,10 @@ export function buildMatchResultsColumns(
       render: (value: string | null) =>
         value ? <Tooltip title={value}><Text style={{ fontSize: 12 }}>{value}</Text></Tooltip> : '-',
     },
+    {
+      title: '商品ID', dataIndex: 'item_id', width: 140,
+      render: (value: string | null) => value ? <Text copyable style={{ fontSize: 12 }}>{value}</Text> : '-',
+    },
     { title: '入库品牌', dataIndex: 'brand_code', width: 110, render: (value: string | null) => value ?? '-' },
     {
       title: '匹配型号', width: 180,

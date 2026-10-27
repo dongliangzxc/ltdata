@@ -1,7 +1,4 @@
 """Bulk coefficient and correction import tests."""
-import io
-
-import openpyxl
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -105,47 +102,32 @@ def test_bulk_price_coefficient(client):
         assert float(db.query(MatchResult).filter_by(id=match_id).one().adjusted_price) == 90.0
 
 
-def _correction_workbook(match_id):
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.append([
-        "match_result_id", "item_id", "item_url", "platform", "month", "country_code",
-        "入库品牌", "匹配型号", "商品名称_原值", "价格_原值", "销量_原值", "销售额_原值", "参考价_原值",
-        "商品名称_修正", "价格_修正", "销量_修正", "销售额_修正", "参考价_修正", "商品链接_修正",
-    ])
-    ws.append([match_id, "item-1", "https://item.jd.com/1.html", "jd", 202609, "CN", "BOSE", "SB900", "Original name", 100, 10, 1000, None, "Corrected name", 120, 12, 1440, 110, None])
-    out = io.BytesIO()
-    wb.save(out)
-    out.seek(0)
-    return out
+def test_bulk_sales_coefficient_respects_excluded_ids(client):
+    job_id, first_match_id = _seed(client)
+    with client.Session() as db:
+        job = db.query(CleanJobRecord).filter_by(id=job_id).one()
+        upload = db.query(UploadFileRecord).first()
+        model = db.query(ModelRecord).filter_by(model_code="SB900").one()
+        raw = RawDataRecord(
+            file_id=upload.id, platform="jd", month=202609, item_id="item-2",
+            item_name="Second name", price=50, sales_qty=5, sales_amount=250,
+        )
+        db.add(raw)
+        db.flush()
+        second = MatchResult(
+            clean_job_id=job.id, raw_data_id=raw.id, model_id=model.id,
+            match_status="matched", matched_by="auto", match_source="s1",
+        )
+        db.add(second)
+        db.commit()
+        second_match_id = second.id
 
-
-def test_correction_preview_and_apply(client):
-    job_id, match_id = _seed(client)
-    content = _correction_workbook(match_id).getvalue()
-
-    res = client.post(
-        "/api/match/reviewed/correction/import?dry_run=true",
-        files={"file": ("corr.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
-    )
-    assert res.status_code == 200, res.text
-    preview = res.json()
-    assert preview["changed_count"] == 1
-    assert preview["published"] is False
-
-    res = client.post(
-        "/api/match/reviewed/correction/import?dry_run=false",
-        files={"file": ("corr.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
-    )
+    res = client.post("/api/match/reviewed/bulk-coefficient", json={
+        "clean_job_id": job_id, "tab": "all", "target": "sales",
+        "coefficient": 1.2, "exclude_ids": [first_match_id],
+    })
     assert res.status_code == 200, res.text
     assert res.json()["updated_count"] == 1
-
     with client.Session() as db:
-        raw = db.query(RawDataRecord).filter_by(item_id="item-1").one()
-        assert raw.item_name == "Corrected name"
-        assert float(raw.price) == 120.0
-        assert raw.sales_qty == 12
-        assert float(raw.sales_amount) == 1440.0
-        assert float(raw.ref_price) == 110.0
-        match = db.query(MatchResult).filter_by(id=match_id).one()
-        assert float(match.adjusted_price) == 132.0  # old coefficient 1.1, new price 120
+        assert db.query(MatchResult).filter_by(id=first_match_id).one().sales_coefficient is None
+        assert float(db.query(MatchResult).filter_by(id=second_match_id).one().sales_coefficient) == 1.2

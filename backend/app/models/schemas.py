@@ -1193,6 +1193,7 @@ class MatchResultOut(BaseModel):
     revertible: bool = False
     # 关联字段（join 查询后填充）
     item_name:     Optional[str] = None
+    item_id:       Optional[str] = None
     item_url:      Optional[str] = None
     brand_raw:     Optional[str] = None
     model_code:    Optional[str] = None

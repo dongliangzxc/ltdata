@@ -1645,6 +1645,7 @@ export interface MatchResultOut {
   reviewed_at?: string | null
   revertible?: boolean
   item_name?: string | null
+  item_id?: string | null
   item_url?: string | null
   brand_raw?: string | null
   brand_std?: string | null
@@ -2005,6 +2006,7 @@ export interface MatchResultsQuery {
   match_source?: string[]
   price_flag?: PriceFlagFilter
   keyword?: string
+  id_keyword?: string
   platform?: string
   brand_keyword?: string
   model_keyword?: string
@@ -2040,55 +2042,11 @@ export const listMatchResults = (params: MatchResultsQuery) =>
 export type BulkCoefficientPayload = Omit<MatchResultsQuery, 'page' | 'page_size'> & {
   target: 'price' | 'sales'
   coefficient: number | null
+  exclude_ids?: number[]
 }
 
 export const bulkUpdateReviewedCoefficient = (payload: BulkCoefficientPayload) =>
   api.post<{ updated_count: number }>('/match/reviewed/bulk-coefficient', payload)
-
-export interface MatchCorrectionFieldChange {
-  field: string
-  old: unknown
-  new: unknown
-}
-
-export interface MatchCorrectionChange {
-  row: number
-  match_result_id: number
-  item_id: string | null
-  item_name: string | null
-  fields: MatchCorrectionFieldChange[]
-}
-
-export interface MatchCorrectionPreview {
-  total_rows: number
-  matched_count: number
-  changed_count: number
-  errors: Array<{ row: number; reason: string }>
-  changes: MatchCorrectionChange[]
-  published_job_ids: number[]
-  published: boolean
-}
-
-export const exportReviewedCorrectionTemplate = (params: MatchResultsQuery) =>
-  api.get('/match/reviewed/correction-template', {
-    params,
-    responseType: 'blob',
-    paramsSerializer: { indexes: null },
-  })
-
-export const importReviewedCorrection = (file: File, dryRun: boolean) => {
-  const formData = new FormData()
-  formData.append('file', file)
-  return api.post<MatchCorrectionPreview | { updated_count: number; errors: Array<{ row: number; reason: string }> }>(
-    '/match/reviewed/correction/import',
-    formData,
-    {
-      params: { dry_run: dryRun },
-      headers: { 'Content-Type': 'multipart/form-data' },
-      timeout: 600000,
-    },
-  )
-}
 
 export const listMatchSeries = (params?: { category_code?: string }) =>
   api.get<string[]>('/match/series', { params })

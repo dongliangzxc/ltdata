@@ -1,0 +1,39 @@
+# RDS 迁移专用 compose：只运行 backend + frontend，MySQL 走阿里云 RDS
+#
+# 切换：
+#   docker compose -f docker-compose.rds.yml up -d
+# 回滚：
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# 依赖：服务器 .env 中提供 DATABASE_URL / ANALYTICS_DATABASE_URL
+# 复用现有镜像，无需重新 build
+
+services:
+  backend:
+    image: ltdata-backend:latest
+    restart: always
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      ANALYTICS_DATABASE_URL: ${ANALYTICS_DATABASE_URL:?ANALYTICS_DATABASE_URL is required}
+      UPLOAD_DIR: /app/uploads
+      EXPORT_DIR: /app/exports
+      TRANSLATION_ENABLED: ${TRANSLATION_ENABLED:-false}
+      TRANSLATION_PROVIDER: ${TRANSLATION_PROVIDER:-azure}
+      TRANSLATION_TARGET_LANG: ${TRANSLATION_TARGET_LANG:-zh-Hans}
+      TRANSLATION_TIMEOUT_SECONDS: ${TRANSLATION_TIMEOUT_SECONDS:-10}
+      AZURE_TRANSLATOR_KEY: ${AZURE_TRANSLATOR_KEY:-}
+      AZURE_TRANSLATOR_REGION: ${AZURE_TRANSLATOR_REGION:-}
+      AZURE_TRANSLATOR_ENDPOINT: ${AZURE_TRANSLATOR_ENDPOINT:-https://api.cognitive.microsofttranslator.com}
+    volumes:
+      - /data/luotu/uploads:/app/uploads
+      - /data/luotu/exports:/app/exports
+
+  frontend:
+    image: ltdata-frontend:latest
+    restart: always
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend

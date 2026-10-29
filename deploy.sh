@@ -6,6 +6,11 @@ cd "$(dirname "$0")"
 SERVER="root@39.107.251.184"
 SERVER_DIR="/root/luotu/ltdata"
 
+# 本地 GitHub 推送用的 key（可用环境变量覆盖）
+if [ -z "$GIT_SSH_COMMAND" ] && [ -f "$HOME/.ssh/id_rsa.linli" ]; then
+  export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/id_rsa.linli -o IdentitiesOnly=yes"
+fi
+
 echo ">>> 推送代码到远端..."
 CODE_PUSHED=0
 if git push origin main; then

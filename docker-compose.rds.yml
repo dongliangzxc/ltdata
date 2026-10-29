@@ -6,10 +6,15 @@
 #   docker compose -f docker-compose.prod.yml up -d
 #
 # 依赖：服务器 .env 中提供 DATABASE_URL / ANALYTICS_DATABASE_URL
-# 复用现有镜像，无需重新 build
+# 部署：bash deploy-server.sh（会构建前后端镜像并重启）
 
 services:
   backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+      args:
+        IMAGE_PREFIX: ${IMAGE_PREFIX:-}
     image: ltdata-backend:latest
     restart: always
     environment:
@@ -29,6 +34,11 @@ services:
       - /data/luotu/exports:/app/exports
 
   frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+      args:
+        IMAGE_PREFIX: ${IMAGE_PREFIX:-}
     image: ltdata-frontend:latest
     restart: always
     ports:

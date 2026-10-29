@@ -10,14 +10,14 @@ npm run build
 cd ..
 
 echo ">>> 重新构建前端镜像（--no-cache 避免 dist 层缓存）..."
-docker compose -f docker-compose.prod.yml build --no-cache frontend
+docker compose -f docker-compose.rds.yml build --no-cache frontend
 
 echo ">>> 启动所有服务（backend 容器启动时自动执行 alembic upgrade head 迁移）..."
-docker compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.rds.yml up -d --build
 
 echo ">>> 确认数据库迁移已到最新版本..."
 for i in $(seq 1 60); do
-  VERSION=$(docker compose -f docker-compose.prod.yml exec -T backend alembic current 2>/dev/null | grep -oE '[a-z0-9]+\s+\(head\)' || true)
+  VERSION=$(docker compose -f docker-compose.rds.yml exec -T backend alembic current 2>/dev/null | grep -oE '[a-z0-9]+\s+\(head\)' || true)
   if [ -n "$VERSION" ]; then
     echo ">>> 迁移版本: $VERSION"
     break
@@ -32,4 +32,4 @@ echo ">>> 清理旧镜像..."
 docker image prune -f
 
 echo ">>> 部署完成！当前容器状态："
-docker compose -f docker-compose.prod.yml ps
+docker compose -f docker-compose.rds.yml ps

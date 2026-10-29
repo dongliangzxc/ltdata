@@ -17,6 +17,11 @@ services:
         IMAGE_PREFIX: ${IMAGE_PREFIX:-}
     image: ltdata-backend:latest
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "7"
     environment:
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
       ANALYTICS_DATABASE_URL: ${ANALYTICS_DATABASE_URL:?ANALYTICS_DATABASE_URL is required}
@@ -41,6 +46,11 @@ services:
         IMAGE_PREFIX: ${IMAGE_PREFIX:-}
     image: ltdata-frontend:latest
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "7"
     ports:
       - "8080:80"
     volumes:

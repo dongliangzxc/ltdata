@@ -208,3 +208,20 @@ def test_bulk_update_template_download(client):
     res = client.get("/api/match/reviewed/bulk-update-template")
     assert res.status_code == 200
     assert res.content[:2] == b"PK"
+
+
+def test_bulk_update_by_url_falls_back_to_item_id(client):
+    job_id, match_id = _seed(client)
+    content = _xlsx_bytes([
+        ["商品链接", "销量"],
+        ["https://item.jd.com/item-1.html?spm=tracking", 12],
+    ])
+    res = client.post(
+        "/api/match/reviewed/bulk-update-by-url",
+        data={"clean_job_id": str(job_id)},
+        files={"file": ("bulk.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["updated_count"] == 1
+    with client.Session() as db:
+        assert float(db.query(MatchResult).filter_by(id=match_id).one().sales_coefficient) == 1.2

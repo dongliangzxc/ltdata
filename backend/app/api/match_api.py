@@ -3028,54 +3028,56 @@ def _find_upload_column(columns: list[str], candidates: list[str]) -> Optional[s
     return None
 
 
-def _resolve_upload_url_raw_ids(db: Session, urls: set[str]) -> dict[str, set[int]]:
-    """把上传的链接解析为 raw_data.id 集合：先按链接原文，再按平台+商品ID兜底。"""
+def _load_upload_match_targets(db: Session, urls: set[str], clean_job_id: Optional[int]):
+    """按上传链接加载可调整的匹配结果。
+
+    有任务筛选时先按 ``clean_job_id`` 走索引，避免对千万级 raw_data 做
+    item_url 全表扫描；链接解析出的 platform+item_id 仅作为兜底。
+    """
     from app.utils.url_utils import extract_item_id
 
-    url_to_raw_ids: dict[str, set[int]] = {}
-    remaining = list(urls)
-    for chunk in _chunked(remaining, 500):
-        rows = (
-            db.query(RawDataRecord.id, RawDataRecord.item_url)
-            .filter(RawDataRecord.item_url.in_(chunk))
-            .all()
-        )
-        for raw_id, item_url in rows:
-            if item_url:
-                url_to_raw_ids.setdefault(item_url.strip(), set()).add(raw_id)
-
-    missing = [url for url in remaining if url not in url_to_raw_ids]
-    if not missing:
-        return url_to_raw_ids
-
-    parsed_keys: dict[tuple[str, str], list[str]] = {}
-    for url in missing:
+    url_list = sorted(urls)
+    parsed_keys: set[tuple[str, str]] = set()
+    for url in url_list:
         info = extract_item_id(url)
         if info:
-            parsed_keys.setdefault(info, []).append(url)
-    if not parsed_keys:
-        return url_to_raw_ids
-
+            parsed_keys.add((info[0].lower(), info[1]))
     item_ids = sorted({item_id for _, item_id in parsed_keys})
-    index: dict[tuple[str, str], set[int]] = {}
-    for chunk in _chunked(item_ids, 500):
-        rows = (
-            db.query(RawDataRecord.id, RawDataRecord.item_id, RawDataRecord.platform)
-            .filter(RawDataRecord.item_id.in_(chunk))
-            .all()
-        )
-        for raw_id, item_id, platform in rows:
-            if not item_id:
-                continue
-            index.setdefault((str(platform or "").lower(), str(item_id)), set()).add(raw_id)
 
-    for (platform, item_id), matched_urls in parsed_keys.items():
-        raw_ids = index.get((platform.lower(), item_id))
-        if not raw_ids:
-            continue
-        for url in matched_urls:
-            url_to_raw_ids.setdefault(url, set()).update(raw_ids)
-    return url_to_raw_ids
+    base_q = (
+        db.query(MatchResult, RawDataRecord, CleanedDataRecord)
+        .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
+        .outerjoin(
+            CleanedDataRecord,
+            and_(
+                CleanedDataRecord.clean_job_id == MatchResult.clean_job_id,
+                CleanedDataRecord.raw_data_id == MatchResult.raw_data_id,
+            ),
+        )
+        .filter(MatchResult.match_status.in_(_BULK_REVIEWABLE_STATUSES))
+    )
+    if clean_job_id is not None:
+        base_q = base_q.filter(MatchResult.clean_job_id == clean_job_id)
+
+    matched: dict[int, tuple] = {}
+    for chunk in _chunked(url_list, 500):
+        for mr, rd, cleaned in base_q.filter(RawDataRecord.item_url.in_(chunk)).all():
+            matched[mr.id] = (mr, rd, cleaned)
+    for chunk in _chunked(item_ids, 500):
+        for mr, rd, cleaned in base_q.filter(RawDataRecord.item_id.in_(chunk)).all():
+            matched[mr.id] = (mr, rd, cleaned)
+
+    by_url: dict[str, list[tuple]] = {}
+    by_item_key: dict[tuple[str, str], list[tuple]] = {}
+    for target in matched.values():
+        mr, rd, _cleaned = target
+        if rd.item_url:
+            by_url.setdefault(rd.item_url.strip(), []).append(target)
+        if rd.item_id:
+            by_item_key.setdefault(
+                (str(rd.platform or "").lower(), str(rd.item_id)), []
+            ).append(target)
+    return by_url, by_item_key
 
 
 @router.post("/reviewed/bulk-update-by-url")
@@ -3152,31 +3154,9 @@ def bulk_update_reviewed_by_url(
             "skipped_rows": len(errors), "errors": errors[:50], "warnings": warnings[:50],
         }
 
-    url_to_raw_ids = _resolve_upload_url_raw_ids(db, {row["url"] for row in upload_rows})
-    all_raw_ids = sorted({raw_id for ids in url_to_raw_ids.values() for raw_id in ids})
-
-    matches_by_raw: dict[int, list[tuple]] = {}
-    if all_raw_ids:
-        for chunk in _chunked(all_raw_ids, 500):
-            match_q = (
-                db.query(MatchResult, RawDataRecord, CleanedDataRecord)
-                .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
-                .outerjoin(
-                    CleanedDataRecord,
-                    and_(
-                        CleanedDataRecord.clean_job_id == MatchResult.clean_job_id,
-                        CleanedDataRecord.raw_data_id == MatchResult.raw_data_id,
-                    ),
-                )
-                .filter(
-                    MatchResult.raw_data_id.in_(chunk),
-                    MatchResult.match_status.in_(_BULK_REVIEWABLE_STATUSES),
-                )
-            )
-            if clean_job_id is not None:
-                match_q = match_q.filter(MatchResult.clean_job_id == clean_job_id)
-            for mr, rd, cleaned in match_q.all():
-                matches_by_raw.setdefault(rd.id, []).append((mr, rd, cleaned))
+    by_url, by_item_key = _load_upload_match_targets(
+        db, {row["url"] for row in upload_rows}, clean_job_id
+    )
 
     updated_match_ids: set[int] = set()
     touched_job_ids: set[int] = set()
@@ -3184,14 +3164,14 @@ def bulk_update_reviewed_by_url(
     skipped_rows = len(errors)
 
     for item in upload_rows:
-        raw_ids = url_to_raw_ids.get(item["url"])
-        if not raw_ids:
-            errors.append(f"第 {item['row_no']} 行：未找到该链接对应的原始数据，已跳过")
-            skipped_rows += 1
-            continue
-        targets = [target for raw_id in raw_ids for target in matches_by_raw.get(raw_id, [])]
+        targets = by_url.get(item["url"])
         if not targets:
-            errors.append(f"第 {item['row_no']} 行：该链接没有可调整的匹配结果，已跳过")
+            from app.utils.url_utils import extract_item_id
+            info = extract_item_id(item["url"])
+            if info:
+                targets = by_item_key.get((info[0].lower(), info[1]))
+        if not targets:
+            errors.append(f"第 {item['row_no']} 行：未找到该链接对应的匹配结果，已跳过")
             skipped_rows += 1
             continue
         matched_urls += 1

@@ -2,7 +2,7 @@ import { useMemo, useState, useEffect, useRef } from 'react'
 import {
   Card, Select, Button, Table, Tag, Space, Typography, Input,
   message, Row, Col, Statistic, Tooltip, Progress, Alert, Popconfirm, InputNumber, Tabs,
-  List, Descriptions, Empty, Modal, Image, Checkbox, Switch, Popover, Badge,
+  List, Descriptions, Empty, Modal, Checkbox, Switch, Popover, Badge,
 } from 'antd'
 import { AimOutlined, StopOutlined, CloudUploadOutlined, LoadingOutlined, LinkOutlined, DownloadOutlined, PlusOutlined, UndoOutlined, SwapOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
@@ -24,6 +24,7 @@ import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 import ProgressModal from '../../components/ProgressModal'
 import AttributeInsightCard from './components/AttributeInsightCard'
 import SameTitleBatchActions from './components/SameTitleBatchActions'
+import HoverZoomImage from './components/HoverZoomImage'
 import InterventionRuleModal from './components/InterventionRuleModal'
 import CreateModelModal from '../../components/CreateModelModal'
 import { buildTransferFilterState, getDefaultTransferFilters, shouldClearTransferTarget } from './utils/transferFilters'
@@ -2159,16 +2160,7 @@ export default function MatchPage() {
                     <Space direction="vertical" size={12} style={{ width: '100%' }}>
                       {filteredDetail.item_image ? (
                         <div style={{ width: 300, margin: '0 auto', border: '1px solid #f0f0f0', borderRadius: 8, background: '#fafafa', padding: 8, textAlign: 'center' }}>
-                          <div className="match-product-image" style={{ display: 'inline-block', borderRadius: 6, background: '#fff' }}>
-                            <Image
-                              src={filteredDetail.item_image}
-                              alt="商品图片"
-                              width={280}
-                              height={280}
-                              style={{ objectFit: 'contain', borderRadius: 6, cursor: 'zoom-in' }}
-                              preview={{ mask: '点击放大查看' }}
-                            />
-                          </div>
+                          <HoverZoomImage src={filteredDetail.item_image} />
                         </div>
                       ) : null}
                       <Descriptions size="small" column={2} bordered>
@@ -2219,16 +2211,7 @@ export default function MatchPage() {
                   <Space direction="vertical" size={12} style={{ width: '100%' }}>
                     {reviewDetail.item_image ? (
                       <div style={{ width: 300, margin: '0 auto', border: '1px solid #f0f0f0', borderRadius: 8, background: '#fafafa', padding: 8, textAlign: 'center' }}>
-                        <div className="match-product-image" style={{ display: 'inline-block', borderRadius: 6, background: '#fff' }}>
-                          <Image
-                            src={reviewDetail.item_image}
-                            alt="商品图片"
-                            width={280}
-                            height={280}
-                            style={{ objectFit: 'contain', borderRadius: 6, cursor: 'zoom-in' }}
-                            preview={{ mask: '点击放大查看' }}
-                          />
-                        </div>
+                        <HoverZoomImage src={reviewDetail.item_image} />
                       </div>
                     ) : null}
                     <Descriptions size="small" column={2} bordered>

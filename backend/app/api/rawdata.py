@@ -9,6 +9,12 @@ from sqlalchemy import func, distinct, asc, desc
 from app.models.database import get_db
 from app.models.schemas import RawDataRecord, RawDataOut, PaginatedResponse
 from app.services.export_guards import MAX_SYNC_EXPORT_ROWS, ensure_export_row_limit
+from app.services.rawdata_cache import (
+    COUNT_TTL_SECONDS,
+    FILTERS_TTL_SECONDS,
+    STATS_TTL_SECONDS,
+    cached_value,
+)
 
 router = APIRouter(prefix="/api/rawdata", tags=["rawdata"])
 
@@ -18,6 +24,22 @@ SORTABLE_FIELDS = {
     "price": RawDataRecord.price,
     "month": RawDataRecord.month,
 }
+
+
+def _cache_value(value):
+    if isinstance(value, (list, tuple)):
+        return tuple(sorted(str(item) for item in value))
+    if isinstance(value, str):
+        return value.strip()
+    return value
+
+
+def _cache_key(**params):
+    return tuple(sorted(
+        (name, _cache_value(value))
+        for name, value in params.items()
+        if value is not None and value != "" and value != []
+    ))
 
 def build_query(
     db,
@@ -141,7 +163,19 @@ def list_raw_data(
     db: Session = Depends(get_db),
 ):
     q = build_query(db, file_id, platform, month, brand_std, brand_raw, item_name, price_min, price_max, months, country_code)
-    total = q.count()
+    count_key = _cache_key(
+        file_id=file_id,
+        platform=platform,
+        month=month,
+        months=months,
+        country_code=country_code,
+        brand_std=brand_std,
+        brand_raw=brand_raw,
+        item_name=item_name,
+        price_min=price_min,
+        price_max=price_max,
+    )
+    total = cached_value("rawdata_count", count_key, COUNT_TTL_SECONDS, q.count)
 
     # 排序
     if sort_by and sort_by in SORTABLE_FIELDS:
@@ -174,25 +208,44 @@ def get_stats(
     db: Session = Depends(get_db),
 ):
     q = build_query(db, file_id, platform, month, brand_std, brand_raw, item_name, price_min, price_max, months, country_code)
-    result = q.with_entities(
-        func.sum(RawDataRecord.sales_qty).label("total_qty"),
-        func.sum(RawDataRecord.sales_amount).label("total_amount"),
-        func.count(distinct(RawDataRecord.brand_std)).label("brand_count"),
-        func.count(distinct(RawDataRecord.model_std)).label("model_count"),
-    ).one()
-    return {
-        "total_qty": int(result.total_qty or 0),
-        "total_amount": float(result.total_amount or 0),
-        "brand_count": int(result.brand_count or 0),
-        "model_count": int(result.model_count or 0),
-    }
+    stats_key = _cache_key(
+        file_id=file_id,
+        platform=platform,
+        month=month,
+        months=months,
+        country_code=country_code,
+        brand_std=brand_std,
+        brand_raw=brand_raw,
+        item_name=item_name,
+        price_min=price_min,
+        price_max=price_max,
+    )
+
+    def load_stats():
+        result = q.with_entities(
+            func.sum(RawDataRecord.sales_qty).label("total_qty"),
+            func.sum(RawDataRecord.sales_amount).label("total_amount"),
+            func.count(distinct(RawDataRecord.brand_std)).label("brand_count"),
+            func.count(distinct(RawDataRecord.model_std)).label("model_count"),
+        ).one()
+        return {
+            "total_qty": int(result.total_qty or 0),
+            "total_amount": float(result.total_amount or 0),
+            "brand_count": int(result.brand_count or 0),
+            "model_count": int(result.model_count or 0),
+        }
+
+    return cached_value("rawdata_stats", stats_key, STATS_TTL_SECONDS, load_stats)
 
 
 @router.get("/filters")
 def get_filters(db: Session = Depends(get_db)):
     """返回可用的筛选枚举值"""
-    platforms = [r[0] for r in db.query(distinct(RawDataRecord.platform)).filter(RawDataRecord.platform.isnot(None)).all()]
-    months = sorted([r[0] for r in db.query(distinct(RawDataRecord.month)).filter(RawDataRecord.month.isnot(None)).all()])
-    brands = sorted([r[0] for r in db.query(distinct(RawDataRecord.brand_std)).filter(RawDataRecord.brand_std.isnot(None)).all()])
-    countries = sorted([r[0] for r in db.query(distinct(RawDataRecord.country_code)).filter(RawDataRecord.country_code.isnot(None)).all()])
-    return {"platforms": platforms, "months": months, "brands": brands, "countries": countries}
+    def load_filters():
+        platforms = [r[0] for r in db.query(distinct(RawDataRecord.platform)).filter(RawDataRecord.platform.isnot(None)).all()]
+        months = sorted([r[0] for r in db.query(distinct(RawDataRecord.month)).filter(RawDataRecord.month.isnot(None)).all()])
+        brands = sorted([r[0] for r in db.query(distinct(RawDataRecord.brand_std)).filter(RawDataRecord.brand_std.isnot(None)).all()])
+        countries = sorted([r[0] for r in db.query(distinct(RawDataRecord.country_code)).filter(RawDataRecord.country_code.isnot(None)).all()])
+        return {"platforms": platforms, "months": months, "brands": brands, "countries": countries}
+
+    return cached_value("rawdata_filters", ("all",), FILTERS_TTL_SECONDS, load_filters)

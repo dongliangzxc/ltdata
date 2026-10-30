@@ -201,3 +201,24 @@ def test_export_rejects_when_row_limit_exceeded(client_and_db, monkeypatch):
 
     assert response.status_code == 400
     assert "原始数据导出数据量过大" in response.json()["detail"]
+
+
+def test_rawdata_cache_hits_and_invalidates(monkeypatch):
+    from app.services import rawdata_cache
+
+    monkeypatch.setattr(rawdata_cache, "_enabled", True)
+    rawdata_cache.invalidate_rawdata_cache()
+    calls = []
+
+    def loader():
+        calls.append(1)
+        return {"value": 1}
+
+    first = rawdata_cache.cached_value("test", ("key",), 300, loader)
+    second = rawdata_cache.cached_value("test", ("key",), 300, loader)
+    assert first == second == {"value": 1}
+    assert len(calls) == 1
+
+    rawdata_cache.invalidate_rawdata_cache()
+    rawdata_cache.cached_value("test", ("key",), 300, loader)
+    assert len(calls) == 2

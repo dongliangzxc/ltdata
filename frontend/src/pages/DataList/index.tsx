@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from 'react'
 import {
-  Card, Table, Select, Input, Row, Col, Statistic, Space, Tag, Button, message, InputNumber
+  Card, Table, Select, Input, Row, Col, Statistic, Space, Tag, Button, message, InputNumber, Alert
 } from 'antd'
 import type { TableProps, TableColumnType } from 'antd'
 import {
@@ -103,19 +103,43 @@ export default function DataListPage() {
   const [sortOrder, setSortOrder] = useState<string>('desc')
   const [colWidths, setColWidths] = useState<Record<string, number>>({})
   const [exporting, setExporting] = useState(false)
+  const [filterOptions, setFilterOptions] = useState<{
+    platforms?: string[]
+    months?: number[]
+    brands?: string[]
+    countries?: string[]
+  } | null>(null)
+  const [filterOptionsLoading, setFilterOptionsLoading] = useState(false)
+  const [brandStdInput, setBrandStdInput] = useState('')
+  const [brandRawInput, setBrandRawInput] = useState('')
+  const [itemNameInput, setItemNameInput] = useState('')
 
-  const { data: filterOptions } = useRequest(() => getRawFilters().then(r => r.data))
+  const loadFilterOptions = useCallback(() => {
+    if (filterOptionsLoading) return
+    setFilterOptionsLoading(true)
+    getRawFilters()
+      .then(r => setFilterOptions(r.data))
+      .catch(() => undefined)
+      .finally(() => setFilterOptionsLoading(false))
+  }, [filterOptionsLoading])
+
+  const hasFilters = Object.keys(filters).some(key => {
+    const value = filters[key]
+    if (value == null || value === '') return false
+    if (Array.isArray(value)) return value.length > 0
+    return true
+  })
 
   const queryParams = { ...filters, page, page_size: pageSize, sort_by: sortBy, sort_order: sortOrder }
 
   const { data: tableData, loading } = useRequest(
     () => listRawData(queryParams).then(r => r.data),
-    { refreshDeps: [JSON.stringify(queryParams)] }
+    { ready: hasFilters, refreshDeps: [JSON.stringify(queryParams)] }
   )
 
   const { data: stats } = useRequest(
     () => getRawStats(filters).then(r => r.data),
-    { refreshDeps: [JSON.stringify(filters)] }
+    { ready: hasFilters, refreshDeps: [JSON.stringify(filters)] }
   )
 
   const updateFilter = (key: string, val: unknown) => {
@@ -181,7 +205,14 @@ export default function DataListPage() {
       <Card>
         <Row gutter={[8, 8]} style={{ marginBottom: 16 }} align="middle">
           <Col span={3}>
-            <Select placeholder="平台" allowClear style={{ width: '100%' }} onChange={v => updateFilter('platform', v)}>
+            <Select
+              placeholder="平台"
+              allowClear
+              loading={filterOptionsLoading}
+              style={{ width: '100%' }}
+              onOpenChange={open => { if (open) loadFilterOptions() }}
+              onChange={v => updateFilter('platform', v)}
+            >
               {(filterOptions?.platforms ?? []).map((p: string) => (
                 <Select.Option key={p} value={p}>{p}</Select.Option>
               ))}
@@ -192,8 +223,10 @@ export default function DataListPage() {
               mode="multiple"
               placeholder="月份"
               allowClear
+              loading={filterOptionsLoading}
               style={{ width: '100%' }}
               maxTagCount="responsive"
+              onOpenChange={open => { if (open) loadFilterOptions() }}
               onChange={updateMonthsFilter}
             >
               {(filterOptions?.months ?? []).map((m: number) => (
@@ -202,13 +235,40 @@ export default function DataListPage() {
             </Select>
           </Col>
           <Col span={4}>
-            <Input placeholder="搜索标准品牌" allowClear onChange={e => updateFilter('brand_std', e.target.value)} />
+            <Input.Search
+              placeholder="搜索标准品牌"
+              allowClear
+              value={brandStdInput}
+              onChange={e => {
+                setBrandStdInput(e.target.value)
+                if (!e.target.value) updateFilter('brand_std', undefined)
+              }}
+              onSearch={value => updateFilter('brand_std', value.trim() || undefined)}
+            />
           </Col>
           <Col span={4}>
-            <Input placeholder="搜索品牌原始值" allowClear onChange={e => updateFilter('brand_raw', e.target.value)} />
+            <Input.Search
+              placeholder="搜索品牌原始值"
+              allowClear
+              value={brandRawInput}
+              onChange={e => {
+                setBrandRawInput(e.target.value)
+                if (!e.target.value) updateFilter('brand_raw', undefined)
+              }}
+              onSearch={value => updateFilter('brand_raw', value.trim() || undefined)}
+            />
           </Col>
           <Col span={4}>
-            <Input placeholder="搜索商品名称" allowClear onChange={e => updateFilter('item_name', e.target.value)} />
+            <Input.Search
+              placeholder="搜索商品名称"
+              allowClear
+              value={itemNameInput}
+              onChange={e => {
+                setItemNameInput(e.target.value)
+                if (!e.target.value) updateFilter('item_name', undefined)
+              }}
+              onSearch={value => updateFilter('item_name', value.trim() || undefined)}
+            />
           </Col>
           <Col span={3}>
             <InputNumber
@@ -231,23 +291,32 @@ export default function DataListPage() {
             />
           </Col>
           <Col span={2} style={{ textAlign: 'right' }}>
-            <Button onClick={handleExport} loading={exporting}>导出 Excel</Button>
+            <Button onClick={handleExport} loading={exporting} disabled={!hasFilters}>导出 Excel</Button>
           </Col>
         </Row>
       </Card>
 
+      {!hasFilters && (
+        <Alert
+          type="info"
+          showIcon
+          message="请先选择月份、平台，或输入品牌/商品名称后查询"
+          description="为避免对原始数据全表扫描，页面打开时不会自动查询。"
+        />
+      )}
+
       <Row gutter={16}>
         <Col span={12}>
-          <Card><Statistic title="总销量" value={stats?.total_qty ?? 0} prefix={<ShoppingCartOutlined />} /></Card>
+          <Card><Statistic title="总销量" value={hasFilters ? (stats?.total_qty ?? 0) : 0} prefix={<ShoppingCartOutlined />} /></Card>
         </Col>
         <Col span={12}>
-          <Card><Statistic title="总销售额（¥）" value={stats?.total_amount ?? 0} prefix={<DollarOutlined />} precision={0} /></Card>
+          <Card><Statistic title="总销售额（¥）" value={hasFilters ? (stats?.total_amount ?? 0) : 0} prefix={<DollarOutlined />} precision={0} /></Card>
         </Col>
       </Row>
 
       <Card>
         <Table
-          dataSource={tableData?.items ?? []}
+          dataSource={hasFilters ? (tableData?.items ?? []) : []}
           columns={columns}
           components={{ header: { cell: ResizableTitle } }}
           rowKey="id"
@@ -258,7 +327,7 @@ export default function DataListPage() {
           pagination={{
             current: page,
             pageSize,
-            total: tableData?.total ?? 0,
+            total: hasFilters ? (tableData?.total ?? 0) : 0,
             showSizeChanger: true,
             showTotal: (t) => `共 ${t} 条`,
             onChange: (p, ps) => { setPage(p); setPageSize(ps) },

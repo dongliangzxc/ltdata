@@ -26,6 +26,7 @@ from app.models.schemas import (
 from app.services.excel_parser import parse_raw_excel, parse_with_mapping
 from app.core.config import settings
 from app.services.currency_service import get_country
+from app.services.rawdata_cache import invalidate_rawdata_cache
 from app.services.filename_metadata import parse_filename_metadata
 from app.services.import_helper import (
     col_fingerprint as _ih_col_fingerprint,
@@ -493,6 +494,7 @@ def delete_upload_batch(batch_key: str, db: Session = Depends(get_db)):
     db.execute(text(f"UPDATE dispatch_batches SET file_id = NULL WHERE file_id IN ({placeholders})"), params)
     db.query(UploadFileRecord).filter(UploadFileRecord.id.in_(file_ids)).delete(synchronize_session=False)
     db.commit()
+    invalidate_rawdata_cache()
     return {"message": "已删除", "deleted_files": len(file_ids)}
 
 
@@ -524,6 +526,7 @@ def delete_upload_file(file_id: int, db: Session = Depends(get_db)):
     # Delete file record
     db.delete(record)
     db.commit()
+    invalidate_rawdata_cache()
 
     return {"message": "已删除"}
 
@@ -840,6 +843,7 @@ def _run_upload_confirm_thread(
                         skipped_rows=skipped,
                     )
         db.commit()
+        invalidate_rawdata_cache()
         db.refresh(file_record)
         _update_upload_job_progress(
             db,

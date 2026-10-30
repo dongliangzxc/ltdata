@@ -1,20 +1,23 @@
 import { useState, useMemo, useEffect } from 'react'
 import {
   Card, Space, Select, Input, Button, Tabs, Table, Typography, Badge, Row, Col, message,
-  Modal, Alert, InputNumber,
+  Modal, Alert, InputNumber, Upload,
 } from 'antd'
-import { ReloadOutlined, ControlOutlined } from '@ant-design/icons'
+import {
+  ReloadOutlined, ControlOutlined, DownloadOutlined, UploadOutlined, InboxOutlined,
+} from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import {
   listCleanJobs, updateMatchCoefficient, updateMatchPrice, listModelExtraFields, listCategories, listMatchSeries,
-  bulkUpdateReviewedCoefficient,
+  bulkUpdateReviewedCoefficient, exportReviewedMatches, bulkUpdateReviewedByUrl, getReviewedBulkUpdateTemplate,
   type CleanJobItem, type ReviewedMatchResultOut,
-  type MatchResultsTab, type BulkCoefficientPayload } from '../../services/api'
+  type MatchResultsTab, type BulkCoefficientPayload, type BulkUrlUpdateResponse } from '../../services/api'
 import { buildMatchResultsColumns } from './columns'
 import { useMatchResultsQuery } from './useMatchResultsQuery'
 import ReselectModal from '../Match/components/ReselectModal'
 
 const { Title, Text } = Typography
+const { Dragger } = Upload
 
 const MATCH_SOURCE_OPTIONS = [
   { value: 's0',         label: 'URL映射命中' },
@@ -67,6 +70,10 @@ export default function MatchResultsPage() {
   const [bulkCoefficient, setBulkCoefficient] = useState<number | null>(null)
   const [bulkSaving, setBulkSaving] = useState(false)
   const [excludedIds, setExcludedIds] = useState<Set<number>>(new Set())
+  const [exporting, setExporting] = useState(false)
+  const [uploadOpen, setUploadOpen] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [uploadResult, setUploadResult] = useState<BulkUrlUpdateResponse | null>(null)
 
   useEffect(() => {
     setKeywordInput(state.keyword ?? '')
@@ -265,6 +272,71 @@ export default function MatchResultsPage() {
     }
   }
 
+  const downloadBlob = (blob: Blob, filename: string) => {
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    setTimeout(() => window.URL.revokeObjectURL(url), 100)
+  }
+
+  const handleExport = async () => {
+    setExporting(true)
+    try {
+      const res = await exportReviewedMatches(buildFilterPayload())
+      downloadBlob(
+        new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+        '匹配结果_清洗数据.xlsx',
+      )
+      message.success('导出成功')
+    } catch {
+      message.error('导出失败，请缩小筛选范围后重试')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const handleDownloadUploadTemplate = async () => {
+    try {
+      const res = await getReviewedBulkUpdateTemplate()
+      downloadBlob(
+        new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+        '批量改销量价格模板.xlsx',
+      )
+    } catch {
+      message.error('模板下载失败')
+    }
+  }
+
+  const handleUploadFile = async (file: File) => {
+    setUploading(true)
+    setUploadResult(null)
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      const res = await bulkUpdateReviewedByUrl(formData, state.cleanJobId)
+      setUploadResult(res.data)
+      if (res.data.updated_count > 0) {
+        message.success(`已更新 ${res.data.updated_count} 条匹配结果`)
+        setCoefficientDrafts({})
+        setPriceCoefficientDrafts({})
+        setEditedCoefficientIds(new Set())
+        setEditedPriceIds(new Set())
+        refresh()
+      } else {
+        message.warning('未更新任何匹配结果，请查看失败原因')
+      }
+    } catch {
+      message.error('上传失败，请检查文件格式后重试')
+    } finally {
+      setUploading(false)
+    }
+    return false
+  }
+
   const counts = data?.counts ?? { all: 0, pending_review: 0, confirmed: 0 }
   const items: ReviewedMatchResultOut[] = data?.items ?? []
   const total = data?.total ?? 0
@@ -454,6 +526,19 @@ export default function MatchResultsPage() {
       <Card>
         <Space style={{ marginBottom: 12 }} wrap>
           <Button
+            icon={<DownloadOutlined />}
+            loading={exporting}
+            onClick={handleExport}
+          >
+            下载
+          </Button>
+          <Button
+            icon={<UploadOutlined />}
+            onClick={() => { setUploadResult(null); setUploadOpen(true) }}
+          >
+            批量上传量价
+          </Button>
+          <Button
             icon={<ControlOutlined />}
             onClick={() => setBulkOpen(true)}
             disabled={selectedCount === 0}
@@ -556,6 +641,64 @@ export default function MatchResultsPage() {
           <Text type="secondary">
             价格系数：调整后价格 = 原价格 × 系数；销量系数：调整后销量 = 原销量 × 系数。留空表示清除该系数。
           </Text>
+        </Space>
+      </Modal>
+
+      <Modal
+        title="批量上传改销量/价格"
+        open={uploadOpen}
+        onCancel={() => setUploadOpen(false)}
+        footer={null}
+        destroyOnClose
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Alert
+            type="info"
+            showIcon
+            message="按商品链接匹配已有匹配结果，填写新的销量/价格后系统自动换算调整系数。"
+            description={state.cleanJobId != null
+              ? `仅更新当前任务 #${state.cleanJobId} 下的匹配结果。`
+              : '未选择任务：将更新全库中该链接对应的可调整匹配结果。'}
+          />
+          <Space>
+            <Text type="secondary">文件需包含「商品链接」，以及「销量」「价格」中至少一列。</Text>
+            <Button type="link" size="small" onClick={handleDownloadUploadTemplate}>
+              下载模板
+            </Button>
+          </Space>
+          <Dragger
+            accept=".xlsx,.csv"
+            multiple={false}
+            showUploadList={false}
+            disabled={uploading}
+            beforeUpload={handleUploadFile}
+          >
+            <p className="ant-upload-drag-icon">
+              <InboxOutlined />
+            </p>
+            <p className="ant-upload-text">点击或拖拽 Excel / CSV 到此处上传</p>
+            <p className="ant-upload-hint">支持 .xlsx / .csv，上传后立即更新</p>
+          </Dragger>
+          {uploading && <Text type="secondary">正在处理，请稍候…</Text>}
+          {uploadResult && (
+            <Alert
+              type={uploadResult.updated_count > 0 ? 'success' : 'warning'}
+              showIcon
+              message={`处理 ${uploadResult.rows} 行：更新 ${uploadResult.updated_count} 条匹配结果，跳过 ${uploadResult.skipped_rows} 行`}
+              description={(
+                <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                  <Text type="secondary">命中链接 {uploadResult.matched_urls} 个。</Text>
+                  {uploadResult.errors.length > 0 && (
+                    <div style={{ maxHeight: 160, overflow: 'auto' }}>
+                      {uploadResult.errors.map((error, index) => (
+                        <div key={`${error}-${index}`}><Text type="danger">{error}</Text></div>
+                      ))}
+                    </div>
+                  )}
+                </Space>
+              )}
+            />
+          )}
         </Space>
       </Modal>
 

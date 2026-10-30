@@ -2048,5 +2048,31 @@ export type BulkCoefficientPayload = Omit<MatchResultsQuery, 'page' | 'page_size
 export const bulkUpdateReviewedCoefficient = (payload: BulkCoefficientPayload) =>
   api.post<{ updated_count: number }>('/match/reviewed/bulk-coefficient', payload)
 
+export const exportReviewedMatches = (params: Omit<MatchResultsQuery, 'page' | 'page_size'>) =>
+  api.get('/match/reviewed/export', {
+    params,
+    responseType: 'blob',
+    paramsSerializer: { indexes: null },
+  })
+
+export const getReviewedBulkUpdateTemplate = () =>
+  api.get('/match/reviewed/bulk-update-template', { responseType: 'blob' })
+
+export interface BulkUrlUpdateResponse {
+  rows: number
+  matched_urls: number
+  updated_count: number
+  skipped_rows: number
+  errors: string[]
+  warnings: string[]
+}
+
+export const bulkUpdateReviewedByUrl = (formData: FormData, clean_job_id?: number) => {
+  if (clean_job_id != null) formData.append('clean_job_id', String(clean_job_id))
+  return api.post<BulkUrlUpdateResponse>('/match/reviewed/bulk-update-by-url', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+}
+
 export const listMatchSeries = (params?: { category_code?: string }) =>
   api.get<string[]>('/match/series', { params })

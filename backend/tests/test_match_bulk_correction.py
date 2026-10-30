@@ -66,6 +66,7 @@ def _seed(client, price=100):
         db.flush()
         raw = RawDataRecord(
             file_id=upload.id, platform="jd", month=202609, item_id="item-1",
+            item_url="https://item.jd.com/item-1.html",
             item_name="Original name", price=price, sales_qty=10, sales_amount=1000,
         )
         db.add(raw)
@@ -131,3 +132,79 @@ def test_bulk_sales_coefficient_respects_excluded_ids(client):
     with client.Session() as db:
         assert db.query(MatchResult).filter_by(id=first_match_id).one().sales_coefficient is None
         assert float(db.query(MatchResult).filter_by(id=second_match_id).one().sales_coefficient) == 1.2
+
+
+def _xlsx_bytes(rows):
+    import io
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    for row in rows:
+        sheet.append(row)
+    buf = io.BytesIO()
+    workbook.save(buf)
+    return buf.getvalue()
+
+
+def test_export_reviewed_matches_includes_category(client):
+    import io
+    from openpyxl import load_workbook
+
+    job_id, _match_id = _seed(client)
+    res = client.get("/api/match/reviewed/export", params={"clean_job_id": job_id})
+    assert res.status_code == 200, res.text
+    workbook = load_workbook(io.BytesIO(res.content))
+    sheet = workbook["匹配结果"]
+    headers = [cell.value for cell in next(sheet.iter_rows(min_row=1, max_row=1))]
+    assert "品类" in headers
+    assert "调整后价格" in headers
+    values = [cell.value for cell in next(sheet.iter_rows(min_row=2, max_row=2))]
+    row = dict(zip(headers, values))
+    assert row["品类"] == "耳机"
+    assert row["商品ID"] == "item-1"
+
+
+def test_bulk_update_by_url_recalculates_coefficients(client):
+    job_id, match_id = _seed(client)
+    content = _xlsx_bytes([
+        ["商品链接", "销量", "价格"],
+        ["https://item.jd.com/item-1.html", 25, 88.5],
+    ])
+    res = client.post(
+        "/api/match/reviewed/bulk-update-by-url",
+        data={"clean_job_id": str(job_id)},
+        files={"file": ("bulk.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["updated_count"] == 1
+    assert body["skipped_rows"] == 0
+    with client.Session() as db:
+        match = db.query(MatchResult).filter_by(id=match_id).one()
+        assert float(match.sales_coefficient) == 2.5
+        assert float(match.adjusted_price) == 88.5
+
+
+def test_bulk_update_by_url_reports_missing_url(client):
+    job_id, _match_id = _seed(client)
+    content = _xlsx_bytes([
+        ["商品链接", "销量"],
+        ["https://item.jd.com/not-found.html", 1],
+    ])
+    res = client.post(
+        "/api/match/reviewed/bulk-update-by-url",
+        data={"clean_job_id": str(job_id)},
+        files={"file": ("bulk.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["updated_count"] == 0
+    assert body["skipped_rows"] == 1
+    assert body["errors"]
+
+
+def test_bulk_update_template_download(client):
+    res = client.get("/api/match/reviewed/bulk-update-template")
+    assert res.status_code == 200
+    assert res.content[:2] == b"PK"

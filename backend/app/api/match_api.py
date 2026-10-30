@@ -1,13 +1,20 @@
 """
 型号匹配 API
 """
+import io
 import logging
 import time
 from collections import Counter
 from datetime import datetime
+from pathlib import Path
 from threading import Thread
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from urllib.parse import quote
+
+import pandas as pd
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import Response
+from openpyxl import Workbook
 from sqlalchemy.orm import Session
 from app.core.auth_deps import get_current_user
 from app.core.permissions import visible_category_codes
@@ -26,6 +33,7 @@ from app.models.schemas import (
 )
 from app.services.clean_task_snapshot import ACTIVE_TASK_STATUSES, touch_clean_job
 from app.services.data_cleaner import _load_brand_alias_map, manual_brand_std
+from app.services.export_guards import MAX_SYNC_EXPORT_ROWS, ensure_export_row_limit
 from app.services.currency_service import amount_to_cny, build_rate_map
 from app.services.exclusion_store import (
     remove_exclusion_for_raw,
@@ -2767,3 +2775,463 @@ def bulk_update_reviewed_coefficient(
         touch_clean_job(db, job_id)
     db.commit()
     return {"updated_count": len(rows)}
+
+
+# ─────────────────────────── 匹配结果导出 / 按 URL 批量改量价 ───────────────────────────
+
+_REVIEWED_PRICE_FLAG_LABELS = {"low": "偏低", "high": "偏高", "ok": "正常"}
+_REVIEWED_STATUS_LABELS = {
+    "matched": "已匹配",
+    "url_matched": "URL映射命中",
+    "confirmed": "已人工确认",
+}
+
+_REVIEWED_EXPORT_COLUMNS = [
+    ("task_name",             "任务"),
+    ("category_name",         "品类"),
+    ("platform",              "平台"),
+    ("month",                 "月份"),
+    ("item_id",               "商品ID"),
+    ("item_url",              "商品链接"),
+    ("item_name",             "商品名称"),
+    ("brand_raw",             "原品牌"),
+    ("brand_name",            "入库品牌"),
+    ("model_code",            "匹配型号"),
+    ("series",                "产品系列"),
+    ("price_flag_label",      "价格预警"),
+    ("price",                 "原价格"),
+    ("price_coefficient",     "价格调整系数"),
+    ("adjusted_price",        "调整后价格"),
+    ("sales_qty",             "原销量"),
+    ("corrected_sales_qty",   "修正后销量"),
+    ("sales_coefficient",     "销量调整系数"),
+    ("adjusted_sales_qty",    "调整后销量"),
+    ("adjusted_sales_amount", "调整后销售额"),
+    ("match_status_label",    "匹配状态"),
+]
+
+
+def _reviewed_export_base_query(db: Session):
+    return (
+        db.query(MatchResult, RawDataRecord, ModelRecord, CleanedDataRecord, CleanJobRecord)
+        .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
+        .outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
+        .outerjoin(
+            CleanedDataRecord,
+            and_(
+                CleanedDataRecord.clean_job_id == MatchResult.clean_job_id,
+                CleanedDataRecord.raw_data_id == MatchResult.raw_data_id,
+            ),
+        )
+        .outerjoin(CleanJobRecord, MatchResult.clean_job_id == CleanJobRecord.id)
+    )
+
+
+def _reviewed_export_row(mr, rd, model, cleaned, job, cat_map) -> dict:
+    cat_code = (
+        (model.category_code if model else None)
+        or (job.category_code if job else None)
+        or (job.dispatch_category_code if job else None)
+    )
+    price = _to_float(rd.price) if rd else None
+    adjusted_price = _to_float(mr.adjusted_price)
+    effective_price = adjusted_price if adjusted_price is not None else price
+    price_coefficient = (
+        round(effective_price / price, 4)
+        if price not in (None, 0) and effective_price is not None
+        else None
+    )
+
+    corrected_qty = (
+        cleaned.corrected_sales_qty
+        if cleaned and cleaned.corrected_sales_qty is not None
+        else (rd.sales_qty if rd else None)
+    )
+    sales_coefficient = _to_float(mr.sales_coefficient)
+    adjusted_sales_qty = (
+        round(corrected_qty * sales_coefficient)
+        if corrected_qty is not None and sales_coefficient is not None
+        else corrected_qty
+    )
+    base_amount = (
+        cleaned.corrected_sales_amount
+        if cleaned and cleaned.corrected_sales_amount is not None
+        else (rd.sales_amount if rd else None)
+    )
+    adjusted_sales_amount = (
+        round(float(base_amount) * sales_coefficient, 2)
+        if base_amount is not None and sales_coefficient is not None
+        else (float(base_amount) if base_amount is not None else None)
+    )
+
+    return {
+        "task_name": job.task_name if job else None,
+        "category_name": cat_map.get(cat_code, cat_code) if cat_code else None,
+        "platform": rd.platform if rd else None,
+        "month": rd.month if rd else None,
+        "item_id": rd.item_id if rd else None,
+        "item_url": rd.item_url if rd else None,
+        "item_name": rd.item_name if rd else None,
+        "brand_raw": rd.brand_raw if rd else None,
+        "brand_name": model.brand_name if model else None,
+        "model_code": model.model_code if model else None,
+        "series": model.series if model else None,
+        "price_flag_label": _REVIEWED_PRICE_FLAG_LABELS.get(mr.price_flag or "", "无预警"),
+        "price": price,
+        "price_coefficient": price_coefficient,
+        "adjusted_price": effective_price,
+        "sales_qty": rd.sales_qty if rd else None,
+        "corrected_sales_qty": corrected_qty,
+        "sales_coefficient": sales_coefficient,
+        "adjusted_sales_qty": adjusted_sales_qty,
+        "adjusted_sales_amount": adjusted_sales_amount,
+        "match_status_label": _REVIEWED_STATUS_LABELS.get(mr.match_status, mr.match_status),
+    }
+
+
+@router.get("/reviewed/export")
+def export_reviewed_matches(
+    tab: Literal["all", "pending_review", "confirmed"] = Query("all"),
+    clean_job_id: Optional[int] = Query(None),
+    match_source: Optional[list[str]] = Query(None),
+    price_flag: Optional[Literal["below", "above", "normal", "none"]] = Query(None),
+    keyword: Optional[str] = Query(None),
+    id_keyword: Optional[str] = Query(None),
+    platform: Optional[str] = Query(None),
+    brand_keyword: Optional[str] = Query(None),
+    model_keyword: Optional[str] = Query(None),
+    category_code: Optional[str] = Query(None),
+    series: Optional[str] = Query(None),
+    coefficient_filter: Optional[Literal["with", "without"]] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """按匹配结果页当前筛选条件导出清洗后的数据，包含品类列。"""
+    q = _reviewed_export_base_query(db)
+    q = _apply_reviewed_filters(
+        q,
+        clean_job_id=clean_job_id,
+        match_source=match_source,
+        price_flag=price_flag,
+        keyword=keyword,
+        id_keyword=id_keyword,
+        platform=platform,
+        brand_keyword=brand_keyword,
+        model_keyword=model_keyword,
+        category_code=category_code,
+        series=series,
+        coefficient_filter=coefficient_filter,
+    )
+    q = _apply_reviewed_tab_filter(q, tab)
+
+    total = q.count()
+    if total == 0:
+        raise HTTPException(status_code=400, detail="当前筛选条件无可导出数据")
+    ensure_export_row_limit(total, max_rows=MAX_SYNC_EXPORT_ROWS, label="匹配结果导出")
+
+    cat_map = {c.code: c.name for c in db.query(Category).all()}
+    workbook = Workbook(write_only=True)
+    worksheet = workbook.create_sheet("匹配结果")
+    worksheet.append([cn for _, cn in _REVIEWED_EXPORT_COLUMNS])
+
+    last_id = None
+    while True:
+        page_q = q.filter(MatchResult.id > last_id) if last_id is not None else q
+        rows = page_q.order_by(MatchResult.id).limit(500).all()
+        if not rows:
+            break
+        for mr, rd, model, cleaned, job in rows:
+            row = _reviewed_export_row(mr, rd, model, cleaned, job, cat_map)
+            worksheet.append([row.get(field) for field, _ in _REVIEWED_EXPORT_COLUMNS])
+        last_id = rows[-1][0].id
+        if len(rows) < 500:
+            break
+
+    output = io.BytesIO()
+    workbook.save(output)
+    filename = "匹配结果_清洗数据.xlsx"
+    return Response(
+        content=output.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+            "Access-Control-Expose-Headers": "Content-Disposition",
+        },
+    )
+
+
+@router.get("/reviewed/bulk-update-template")
+def download_reviewed_bulk_update_template():
+    """下载按 URL 批量改销量/价格的 Excel 模板。"""
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "批量改销量价格"
+    sheet.append(["商品链接", "销量", "价格"])
+    sheet.column_dimensions["A"].width = 62
+    sheet.column_dimensions["B"].width = 14
+    sheet.column_dimensions["C"].width = 14
+
+    info = workbook.create_sheet("填写说明")
+    info.append(["说明"])
+    info.append(["1. 「商品链接」必填，按链接匹配已有匹配结果。"])
+    info.append(["2. 「销量」「价格」至少填写一项；填写后系统按原值自动计算调整系数。"])
+    info.append(["3. 销量=调整后销量；价格=调整后价格，均填数字，可留空表示不调整该项。"])
+    info.append(["4. 未匹配到匹配结果的链接会跳过，并在导入结果中列出。"])
+    info.column_dimensions["A"].width = 80
+
+    output = io.BytesIO()
+    workbook.save(output)
+    filename = "批量改销量价格模板.xlsx"
+    return Response(
+        content=output.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+            "Access-Control-Expose-Headers": "Content-Disposition",
+        },
+    )
+
+
+def _chunked(items, size: int):
+    for index in range(0, len(items), size):
+        yield items[index:index + size]
+
+
+def _clean_upload_cell(value) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    return str(value).strip()
+
+
+def _parse_upload_number(value) -> Optional[float]:
+    text = _clean_upload_cell(value)
+    if not text:
+        return None
+    for symbol in (",", "，", "¥", "￥", "$", "€", "£", " "):
+        text = text.replace(symbol, "")
+    return float(text)
+
+
+def _find_upload_column(columns: list[str], candidates: list[str]) -> Optional[str]:
+    exact = {str(col).strip().lower(): col for col in columns}
+    for candidate in candidates:
+        if candidate.lower() in exact:
+            return exact[candidate.lower()]
+    for col in columns:
+        normalized = str(col).strip().lower()
+        if any(candidate.lower() in normalized for candidate in candidates):
+            return col
+    return None
+
+
+def _resolve_upload_url_raw_ids(db: Session, urls: set[str]) -> dict[str, set[int]]:
+    """把上传的链接解析为 raw_data.id 集合：先按链接原文，再按平台+商品ID兜底。"""
+    from app.utils.url_utils import extract_item_id
+
+    url_to_raw_ids: dict[str, set[int]] = {}
+    remaining = list(urls)
+    for chunk in _chunked(remaining, 500):
+        rows = (
+            db.query(RawDataRecord.id, RawDataRecord.item_url)
+            .filter(RawDataRecord.item_url.in_(chunk))
+            .all()
+        )
+        for raw_id, item_url in rows:
+            if item_url:
+                url_to_raw_ids.setdefault(item_url.strip(), set()).add(raw_id)
+
+    missing = [url for url in remaining if url not in url_to_raw_ids]
+    if not missing:
+        return url_to_raw_ids
+
+    parsed_keys: dict[tuple[str, str], list[str]] = {}
+    for url in missing:
+        info = extract_item_id(url)
+        if info:
+            parsed_keys.setdefault(info, []).append(url)
+    if not parsed_keys:
+        return url_to_raw_ids
+
+    item_ids = sorted({item_id for _, item_id in parsed_keys})
+    index: dict[tuple[str, str], set[int]] = {}
+    for chunk in _chunked(item_ids, 500):
+        rows = (
+            db.query(RawDataRecord.id, RawDataRecord.item_id, RawDataRecord.platform)
+            .filter(RawDataRecord.item_id.in_(chunk))
+            .all()
+        )
+        for raw_id, item_id, platform in rows:
+            if not item_id:
+                continue
+            index.setdefault((str(platform or "").lower(), str(item_id)), set()).add(raw_id)
+
+    for (platform, item_id), matched_urls in parsed_keys.items():
+        raw_ids = index.get((platform.lower(), item_id))
+        if not raw_ids:
+            continue
+        for url in matched_urls:
+            url_to_raw_ids.setdefault(url, set()).update(raw_ids)
+    return url_to_raw_ids
+
+
+@router.post("/reviewed/bulk-update-by-url")
+def bulk_update_reviewed_by_url(
+    file: UploadFile = File(...),
+    clean_job_id: Optional[int] = Form(None),
+    db: Session = Depends(get_db),
+):
+    """按商品链接批量改销量/价格，并自动换算对应调整系数。
+
+    Excel/CSV 列：商品链接（必填）、销量、价格（至少一项）。
+    销量系数 = 新销量 / 修正后销量（无修正值则用原销量）；
+    价格直接写入 adjusted_price，价格系数由前端按 adjusted_price / 原价格展示。
+    """
+    suffix = Path(file.filename or "").suffix.lower()
+    contents = file.file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="文件为空")
+
+    try:
+        if suffix == ".csv":
+            try:
+                df = pd.read_csv(io.BytesIO(contents), dtype=str, encoding="utf-8-sig")
+            except Exception:
+                df = pd.read_csv(io.BytesIO(contents), dtype=str, encoding="gbk")
+        else:
+            df = pd.read_excel(io.BytesIO(contents), sheet_name=0, dtype=str)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"文件解析失败：{exc}") from exc
+
+    df.columns = [str(col).strip() for col in df.columns]
+    columns = list(df.columns)
+    url_col = _find_upload_column(columns, ["商品链接", "链接", "url", "item_url", "网址"])
+    sales_col = _find_upload_column(columns, ["销量", "sales_qty", "sales"])
+    price_col = _find_upload_column(columns, ["价格", "price", "现价格"])
+    if not url_col:
+        raise HTTPException(status_code=400, detail="缺少必需列：商品链接")
+    if not sales_col and not price_col:
+        raise HTTPException(status_code=400, detail="缺少必需列：销量或价格（至少一列）")
+
+    upload_rows: list[dict] = []
+    errors: list[str] = []
+    warnings: list[str] = []
+    for row_no, row in enumerate(df.to_dict("records"), start=2):
+        url = _clean_upload_cell(row.get(url_col))
+        if not url:
+            errors.append(f"第 {row_no} 行：商品链接为空，已跳过")
+            continue
+        try:
+            new_sales = _parse_upload_number(row.get(sales_col)) if sales_col else None
+            new_price = _parse_upload_number(row.get(price_col)) if price_col else None
+        except (TypeError, ValueError):
+            errors.append(f"第 {row_no} 行：销量或价格不是有效数字，已跳过")
+            continue
+        if new_sales is None and new_price is None:
+            errors.append(f"第 {row_no} 行：销量和价格均为空，已跳过")
+            continue
+        if new_sales is not None and new_sales < 0:
+            errors.append(f"第 {row_no} 行：销量不能为负数，已跳过")
+            continue
+        if new_price is not None and new_price < 0:
+            errors.append(f"第 {row_no} 行：价格不能为负数，已跳过")
+            continue
+        upload_rows.append({
+            "row_no": row_no,
+            "url": url,
+            "sales": new_sales,
+            "price": new_price,
+        })
+
+    if not upload_rows:
+        return {
+            "rows": 0, "matched_urls": 0, "updated_count": 0,
+            "skipped_rows": len(errors), "errors": errors[:50], "warnings": warnings[:50],
+        }
+
+    url_to_raw_ids = _resolve_upload_url_raw_ids(db, {row["url"] for row in upload_rows})
+    all_raw_ids = sorted({raw_id for ids in url_to_raw_ids.values() for raw_id in ids})
+
+    matches_by_raw: dict[int, list[tuple]] = {}
+    if all_raw_ids:
+        for chunk in _chunked(all_raw_ids, 500):
+            match_q = (
+                db.query(MatchResult, RawDataRecord, CleanedDataRecord)
+                .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
+                .outerjoin(
+                    CleanedDataRecord,
+                    and_(
+                        CleanedDataRecord.clean_job_id == MatchResult.clean_job_id,
+                        CleanedDataRecord.raw_data_id == MatchResult.raw_data_id,
+                    ),
+                )
+                .filter(
+                    MatchResult.raw_data_id.in_(chunk),
+                    MatchResult.match_status.in_(_BULK_REVIEWABLE_STATUSES),
+                )
+            )
+            if clean_job_id is not None:
+                match_q = match_q.filter(MatchResult.clean_job_id == clean_job_id)
+            for mr, rd, cleaned in match_q.all():
+                matches_by_raw.setdefault(rd.id, []).append((mr, rd, cleaned))
+
+    updated_match_ids: set[int] = set()
+    touched_job_ids: set[int] = set()
+    matched_urls = 0
+    skipped_rows = len(errors)
+
+    for item in upload_rows:
+        raw_ids = url_to_raw_ids.get(item["url"])
+        if not raw_ids:
+            errors.append(f"第 {item['row_no']} 行：未找到该链接对应的原始数据，已跳过")
+            skipped_rows += 1
+            continue
+        targets = [target for raw_id in raw_ids for target in matches_by_raw.get(raw_id, [])]
+        if not targets:
+            errors.append(f"第 {item['row_no']} 行：该链接没有可调整的匹配结果，已跳过")
+            skipped_rows += 1
+            continue
+        matched_urls += 1
+        row_applied = False
+        for mr, rd, cleaned in targets:
+            if item["sales"] is not None:
+                base_qty = (
+                    cleaned.corrected_sales_qty
+                    if cleaned and cleaned.corrected_sales_qty is not None
+                    else rd.sales_qty
+                )
+                if base_qty in (None, 0):
+                    errors.append(f"第 {item['row_no']} 行：原销量为空或为 0，无法计算销量系数")
+                    continue
+                coefficient = round(float(item["sales"]) / float(base_qty), 4)
+                if coefficient < 0 or coefficient > 999.9999:
+                    errors.append(f"第 {item['row_no']} 行：计算出的销量系数超出范围（0~999.9999）")
+                    continue
+                mr.sales_coefficient = coefficient
+            if item["price"] is not None:
+                if item["price"] > 99_999_999.99:
+                    errors.append(f"第 {item['row_no']} 行：价格超出可保存范围")
+                    continue
+                mr.adjusted_price = round(float(item["price"]), 2)
+            mr.updated_at = datetime.utcnow()
+            updated_match_ids.add(mr.id)
+            touched_job_ids.add(mr.clean_job_id)
+            row_applied = True
+        if not row_applied:
+            skipped_rows += 1
+
+    for job_id in touched_job_ids:
+        touch_clean_job(db, job_id)
+    db.commit()
+
+    return {
+        "rows": len(upload_rows),
+        "matched_urls": matched_urls,
+        "updated_count": len(updated_match_ids),
+        "skipped_rows": skipped_rows,
+        "errors": errors[:50],
+        "warnings": warnings[:50],
+    }

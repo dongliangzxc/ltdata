@@ -59,6 +59,9 @@ const getAdjustedPrice = (row: ReviewedMatchResultOut, options: BuildMatchResult
 
 const renderNumber = (value?: number | null) => value != null ? value.toLocaleString() : '-'
 
+const formatCoefficient = (value?: number | null) =>
+  value != null ? String(Number(value.toFixed(4))) : '-'
+
 export function buildMatchResultsColumns(
   optionsOrReselect: BuildMatchResultsColumnsOptions | ((row: ReviewedMatchResultOut) => void),
 ): ColumnsType<ReviewedMatchResultOut> {
@@ -109,7 +112,7 @@ export function buildMatchResultsColumns(
       render: (_: unknown, row: ReviewedMatchResultOut) => {
         const value = getPriceCoefficient(row, options)
         if (!options.onPriceCoefficientChange || !options.onSavePrice) {
-          return value != null ? value.toFixed(2) : <Text type="secondary">不调整</Text>
+          return value != null ? formatCoefficient(value) : <Text type="secondary">不调整</Text>
         }
         const edited = options.editedPriceIds?.has(row.id) ?? false
         const saving = options.savingPriceIds?.has(row.id) ?? false
@@ -118,8 +121,8 @@ export function buildMatchResultsColumns(
             <InputNumber
               size="small"
               min={0}
-              step={0.01}
-              precision={2}
+              step={0.0001}
+              precision={4}
               placeholder="不调整"
               value={value}
               onChange={(next) => options.onPriceCoefficientChange?.(row.id, next == null ? null : Number(next))}
@@ -153,7 +156,7 @@ export function buildMatchResultsColumns(
       render: (_: unknown, row: ReviewedMatchResultOut) => {
         const value = options.coefficientDrafts?.[row.id] ?? row.sales_coefficient ?? null
         if (!options.onCoefficientChange || !options.onSaveCoefficient) {
-          return value != null ? value : <Text type="secondary">不调整</Text>
+          return value != null ? formatCoefficient(value) : <Text type="secondary">不调整</Text>
         }
         const edited = options.editedCoefficientIds?.has(row.id) ?? false
         const saving = options.savingCoefficientIds?.has(row.id) ?? false
@@ -162,8 +165,8 @@ export function buildMatchResultsColumns(
             <InputNumber
               size="small"
               min={0}
-              step={0.01}
-              precision={2}
+              step={0.0001}
+              precision={4}
               placeholder="不调整"
               value={value}
               onChange={(next) => options.onCoefficientChange?.(row.id, next == null ? null : Number(next))}

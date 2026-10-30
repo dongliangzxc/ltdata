@@ -112,7 +112,7 @@ export default function MatchResultsPage() {
       for (const item of data?.items ?? []) {
         if (!(item.id in next)) {
           next[item.id] = item.price != null && item.price !== 0 && item.adjusted_price != null
-            ? Number((item.adjusted_price / item.price).toFixed(2))
+            ? Number((item.adjusted_price / item.price).toFixed(4))
             : null
         }
       }
@@ -158,7 +158,7 @@ export default function MatchResultsPage() {
         const next = { ...prev }
         const currentPrice = res.data.price ?? price
         next[matchId] = currentPrice != null && currentPrice !== 0 && res.data.adjusted_price != null
-          ? Number((res.data.adjusted_price / currentPrice).toFixed(2))
+          ? Number((res.data.adjusted_price / currentPrice).toFixed(4))
           : null
         return next
       })

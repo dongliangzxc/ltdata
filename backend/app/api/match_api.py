@@ -2005,42 +2005,45 @@ def _round_amount(value: float) -> float:
     return round(float(value), 2)
 
 
-def _build_match_results_summary(rows) -> dict:
-    original_price = 0.0
-    adjusted_price = 0.0
-    original_sales_qty = 0
-    adjusted_sales_qty = 0
-    original_consumption_amount = 0.0
-    adjusted_consumption_amount = 0.0
+def _summarize_match_results_query(db: Session, query) -> dict:
+    """在数据库内完成匹配结果汇总，避免把几十万行明细拉回应用层。"""
+    grouped = query.group_by(
+        MatchResult.id,
+        RawDataRecord.sales_qty,
+        RawDataRecord.price,
+        MatchResult.sales_coefficient,
+        MatchResult.adjusted_price,
+    ).subquery()
 
-    for row in rows:
-        raw_qty = int(row.raw_sales_qty or 0)
-        corrected_qty = int(row.corrected_sales_qty if row.corrected_sales_qty is not None else raw_qty)
-        coefficient = _to_float(row.sales_coefficient)
-        row_adjusted_qty = round(corrected_qty * coefficient) if coefficient is not None else corrected_qty
+    corrected_qty = func.coalesce(grouped.c.corrected_sales_qty, grouped.c.raw_sales_qty, 0)
+    row_adjusted_qty = case(
+        (grouped.c.sales_coefficient.is_(None), corrected_qty),
+        else_=func.round(corrected_qty * grouped.c.sales_coefficient),
+    )
+    effective_adjusted_price = func.coalesce(grouped.c.adjusted_price, grouped.c.price)
 
-        raw_price = _to_float(row.price)
-        row_adjusted_price = _to_float(row.adjusted_price)
-        effective_adjusted_price = row_adjusted_price if row_adjusted_price is not None else raw_price
+    result = db.query(
+        func.coalesce(func.sum(grouped.c.price), 0).label("original_price"),
+        func.coalesce(func.sum(effective_adjusted_price), 0).label("adjusted_price"),
+        func.coalesce(func.sum(grouped.c.raw_sales_qty), 0).label("original_sales_qty"),
+        func.coalesce(func.sum(row_adjusted_qty), 0).label("adjusted_sales_qty"),
+        func.coalesce(
+            func.sum(grouped.c.price * func.coalesce(grouped.c.raw_sales_qty, 0)),
+            0,
+        ).label("original_consumption_amount"),
+        func.coalesce(
+            func.sum(effective_adjusted_price * row_adjusted_qty),
+            0,
+        ).label("adjusted_consumption_amount"),
+    ).select_from(grouped).one()
 
-        original_sales_qty += raw_qty
-        adjusted_sales_qty += row_adjusted_qty
-        if raw_price is not None:
-            original_price += raw_price
-            original_consumption_amount += raw_price * raw_qty
-        if effective_adjusted_price is not None:
-            adjusted_price += effective_adjusted_price
-            adjusted_consumption_amount += effective_adjusted_price * row_adjusted_qty
-
-    original_amount = _round_amount(original_consumption_amount)
-    adjusted_amount = _round_amount(adjusted_consumption_amount)
     return {
-        "original_price": _round_amount(original_price),
-        "adjusted_price": _round_amount(adjusted_price),
-        "original_sales_qty": original_sales_qty,
-        "adjusted_sales_qty": adjusted_sales_qty,
-        "original_consumption_amount": original_amount,
-        "adjusted_consumption_amount": adjusted_amount,
+        "original_price": _round_amount(_to_float(result.original_price) or 0),
+        "adjusted_price": _round_amount(_to_float(result.adjusted_price) or 0),
+        "original_sales_qty": int(result.original_sales_qty or 0),
+        "adjusted_sales_qty": int(result.adjusted_sales_qty or 0),
+        "original_consumption_amount": _round_amount(_to_float(result.original_consumption_amount) or 0),
+        "adjusted_consumption_amount": _round_amount(_to_float(result.adjusted_consumption_amount) or 0),
     }
 
 
@@ -2392,6 +2395,7 @@ def list_reviewed_global(
 
     summary_q = (
         db.query(
+            MatchResult.id.label("match_id"),
             RawDataRecord.sales_qty.label("raw_sales_qty"),
             func.max(CleanedDataRecord.corrected_sales_qty).label("corrected_sales_qty"),
             MatchResult.sales_coefficient.label("sales_coefficient"),
@@ -2408,15 +2412,7 @@ def list_reviewed_global(
     )
     summary_q = apply_common_filters(summary_q, join_raw=False, join_model=False)
     summary_q = apply_tab(summary_q, tab)
-    summary_q = summary_q.group_by(
-        MatchResult.id,
-        RawDataRecord.sales_qty,
-        RawDataRecord.price,
-        MatchResult.sales_coefficient,
-        MatchResult.adjusted_price,
-    )
-    summary_rows = summary_q.all()
-    summary = _build_match_results_summary(summary_rows)
+    summary = _summarize_match_results_query(db, summary_q)
 
     # items：查询绑定当前 tab
     q = (

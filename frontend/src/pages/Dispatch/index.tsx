@@ -5,7 +5,7 @@ import {
   Alert, Drawer, Progress, Popconfirm
 } from 'antd'
 import {
-  PlayCircleOutlined, PlusOutlined, EditOutlined, DeleteOutlined, DownloadOutlined
+  PlayCircleOutlined, PlusOutlined, EditOutlined, DeleteOutlined, DownloadOutlined, ReloadOutlined
 } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import dayjs from 'dayjs'
@@ -15,8 +15,9 @@ import {
   createDispatchRule, updateDispatchRule, deleteDispatchRule,
   createDispatchExportJob, listDispatchExportJobs, deleteDispatchExportJob, downloadDispatchExport,
   createDispatchRedispatchJob, listDispatchRedispatchJobs, getDispatchRedispatchJob,
+  getDispatchRuleCoverage, getRawFilters,
   type DispatchBatchStatsResponse, type DispatchCategoryStat, type DispatchRuleStat,
-  type DispatchExportJob, type DispatchUnmatchedRow,
+  type DispatchExportJob, type DispatchUnmatchedRow, type DispatchRuleCoverageRow,
   type DispatchRedispatchJob, type DispatchRedispatchItem
 } from '../../services/api'
 import { useCategoryOptions, type CategoryOption } from '../../hooks/useCategoryOptions'
@@ -65,7 +66,7 @@ const PLATFORM_OPTIONS = [
   { value: 'shopee', label: '虾皮' },
 ]
 
-const formatRuleDescription = (rule: DispatchRuleStat) => {
+const formatRuleDescription = (rule: Pick<DispatchRuleStat, 'field' | 'match_type' | 'value'>) => {
   if (!rule.field || !rule.match_type || !rule.value) return '规则已删除或不可用'
   const fieldLabel = FIELD_OPTIONS.find(o => o.value === rule.field)?.label ?? rule.field
   const matchTypeLabel = MATCH_TYPE_OPTIONS.find(o => o.value === rule.match_type)?.label ?? rule.match_type
@@ -1316,6 +1317,156 @@ function DispatchRulesTab({ refreshVersion, visibleCategories }: { refreshVersio
   )
 }
 
+// ─── Tab 5: 规则命中核对 ──────────────────────────────────────
+function DispatchRuleCoverageTab({ visibleCategories }: { visibleCategories: CategoryOption[] }) {
+  const [months, setMonths] = useState<number[]>([])
+  const [categoryCodes, setCategoryCodes] = useState<string[]>([])
+  const [platforms, setPlatforms] = useState<string[]>([])
+  const [onlyEmpty, setOnlyEmpty] = useState(false)
+
+  const { data: rawFilters } = useRequest(
+    () => getRawFilters().then(r => r.data as { months?: number[]; platforms?: string[] }),
+  )
+  const monthOptions = useMemo(
+    () => Array.from(new Set((rawFilters?.months ?? []).filter((month): month is number => typeof month === 'number')))
+      .sort((a, b) => b - a)
+      .map(month => ({ value: month, label: formatMonth(month) })),
+    [rawFilters],
+  )
+  const platformOptions = useMemo(
+    () => Array.from(new Set((rawFilters?.platforms ?? []).filter(Boolean).map(platform => String(platform).toLowerCase())))
+      .sort()
+      .map(platform => ({ value: platform, label: formatDataPlatform(platform) })),
+    [rawFilters],
+  )
+
+  useEffect(() => {
+    if (months.length === 0 && monthOptions.length > 0) {
+      setMonths([monthOptions[0].value])
+    }
+  }, [monthOptions, months.length])
+
+  const { data, loading, refresh } = useRequest(
+    () => months.length > 0
+      ? getDispatchRuleCoverage({
+          months,
+          category_codes: categoryCodes.length > 0 ? categoryCodes : undefined,
+          platforms: platforms.length > 0 ? platforms : undefined,
+        }).then(r => r.data)
+      : Promise.resolve(null),
+    { refreshDeps: [months.join(','), categoryCodes.join(','), platforms.join(',')] },
+  )
+
+  const rows = useMemo(
+    () => onlyEmpty ? (data?.rows ?? []).filter(row => row.is_empty) : (data?.rows ?? []),
+    [data, onlyEmpty],
+  )
+
+  const columns = [
+    {
+      title: '月度', dataIndex: 'month', width: 100,
+      render: (value: number) => formatMonth(value),
+      sorter: (a: DispatchRuleCoverageRow, b: DispatchRuleCoverageRow) => a.month - b.month,
+    },
+    {
+      title: '品类', dataIndex: 'category_name', width: 140,
+      render: (value: string | null, row: DispatchRuleCoverageRow) => value || row.category_code,
+    },
+    {
+      title: '平台', dataIndex: 'platform', width: 90,
+      render: (value: string | null) => formatDataPlatform(value),
+    },
+    {
+      title: '分发规则',
+      render: (_: unknown, row: DispatchRuleCoverageRow) => formatRuleDescription(row),
+    },
+    {
+      title: 'AND 条件', dataIndex: 'item_name_keyword', width: 220,
+      render: (value: string | null) => formatItemNameKeyword(value),
+    },
+    { title: '优先级', dataIndex: 'priority', width: 80 },
+    {
+      title: '分发结果', dataIndex: 'assigned_count', width: 110,
+      sorter: (a: DispatchRuleCoverageRow, b: DispatchRuleCoverageRow) => a.assigned_count - b.assigned_count,
+      render: (value: number) => value > 0 ? value : <Text type="danger">0</Text>,
+    },
+    {
+      title: '状态', dataIndex: 'is_empty', width: 100,
+      render: (value: boolean) => value
+        ? <Tag color="red">零命中</Tag>
+        : <Tag color="green">有数据</Tag>,
+    },
+  ]
+
+  return (
+    <>
+      <Space wrap style={{ marginBottom: 12 }}>
+        <Select
+          mode="multiple" allowClear showSearch optionFilterProp="label" maxTagCount="responsive"
+          placeholder="月度" style={{ width: 200 }}
+          value={months} options={monthOptions}
+          onChange={setMonths}
+        />
+        <Select
+          mode="multiple" allowClear showSearch optionFilterProp="label" maxTagCount="responsive"
+          placeholder="品类" style={{ width: 220 }}
+          value={categoryCodes} options={visibleCategories}
+          onChange={setCategoryCodes}
+        />
+        <Select
+          mode="multiple" allowClear showSearch optionFilterProp="label" maxTagCount="responsive"
+          placeholder="平台" style={{ width: 180 }}
+          value={platforms} options={platformOptions}
+          onChange={setPlatforms}
+        />
+        <Space>
+          <Switch checked={onlyEmpty} onChange={setOnlyEmpty} />
+          <Text>只看零命中</Text>
+        </Space>
+        <Button icon={<ReloadOutlined />} loading={loading} onClick={refresh}>刷新</Button>
+      </Space>
+
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 12 }}
+        message="统计口径：按每个文件/上传批次的最新一次已完成分发结果统计；同一类目只计入优先级最高规则的命中，其他规则会显示 0。"
+      />
+
+      {months.length === 0 ? (
+        <Alert type="warning" showIcon message="请先选择月份" />
+      ) : (
+        <>
+          {data && data.total === 0 && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="当前月份/品类/平台下没有分发结果，无法核对规则命中"
+            />
+          )}
+          {data && data.total > 0 && (
+            <Space style={{ marginBottom: 8 }} wrap>
+              <Text>规则组合 {data.total} 条</Text>
+              <Text type="danger">零命中 {data.empty_count} 条</Text>
+              <Text type="secondary">涉及 {data.empty_rule_count} 个规则</Text>
+            </Space>
+          )}
+          <Table<DispatchRuleCoverageRow>
+            rowKey={row => `${row.month}-${row.category_code}-${row.platform ?? 'unknown'}-${row.rule_id}`}
+            size="small"
+            loading={loading}
+            dataSource={rows}
+            columns={columns}
+            pagination={{ pageSize: 20, showSizeChanger: true, showTotal: total => `共 ${total} 条` }}
+            scroll={{ x: 1200 }}
+          />
+        </>
+      )}
+    </>
+  )
+}
+
 // ─── 主页面 ───────────────────────────────────────────────────
 export default function DispatchPage() {
   const [rulesRefreshVersion, setRulesRefreshVersion] = useState(0)
@@ -1344,6 +1495,7 @@ export default function DispatchPage() {
         { key: 'export', label: '分发结果下载', children: <DispatchExportTab visibleCategories={visibleCategories} /> },
         { key: 'redispatch', label: '批量补分发', children: <DispatchRedispatchTab visibleCategories={visibleCategories} /> },
         { key: 'rules', label: '分发规则', children: <DispatchRulesTab refreshVersion={rulesRefreshVersion} visibleCategories={visibleCategories} /> },
+        { key: 'coverage', label: '规则命中核对', children: <DispatchRuleCoverageTab visibleCategories={visibleCategories} /> },
       ]}
     />
   )

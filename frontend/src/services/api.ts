@@ -784,6 +784,40 @@ export const downloadDispatchExport = (token: string) =>
 export const deleteDispatchExportJob = (jobId: number) =>
   api.delete(`/dispatch/export/jobs/${jobId}`)
 
+export interface DispatchRuleCoverageRow {
+  month: number
+  category_code: string
+  category_name: string | null
+  platform: string | null
+  rule_id: number
+  field: string
+  match_type: string
+  value: string
+  item_name_keyword: string | null
+  priority: number
+  is_active: number
+  assigned_count: number
+  is_empty: boolean
+}
+
+export interface DispatchRuleCoverageResponse {
+  rows: DispatchRuleCoverageRow[]
+  total: number
+  empty_count: number
+  empty_rule_count: number
+  months: number[]
+  platforms: string[]
+}
+
+export const getDispatchRuleCoverage = (params: {
+  months: number[]
+  category_codes?: string[]
+  platforms?: string[]
+}) => api.get<DispatchRuleCoverageResponse>('/dispatch/rule-coverage', {
+  params,
+  paramsSerializer: { indexes: null },
+})
+
 export const listDispatchRules = (params?: Record<string, unknown>) =>
   api.get('/dispatch/rules', { params })
 

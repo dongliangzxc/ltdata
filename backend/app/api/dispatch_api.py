@@ -1409,6 +1409,132 @@ def download_dispatch_export(token: str, db: Session = Depends(get_db), current_
     )
 
 
+def _latest_done_batch_subquery(db: Session):
+    batch_identity = func.coalesce(
+        DispatchBatch.batch_key,
+        cast(DispatchBatch.file_id, String),
+    )
+    return (
+        db.query(
+            batch_identity.label("batch_identity"),
+            func.max(DispatchBatch.id).label("batch_id"),
+        )
+        .filter(
+            DispatchBatch.status == "done",
+            or_(DispatchBatch.file_id.isnot(None), DispatchBatch.batch_key.isnot(None)),
+        )
+        .group_by(batch_identity)
+        .subquery()
+    )
+
+
+@router.get("/rule-coverage")
+def get_rule_coverage(
+    months: list[int] = Query(..., min_length=1),
+    category_codes: Optional[list[str]] = Query(None),
+    platforms: Optional[list[str]] = Query(None),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """按月度/品类/平台核对当前生效规则在最新分发批次中的命中数，零命中也展示。"""
+    month_values = sorted({int(month) for month in months})
+    if any(not _is_valid_export_month(month) for month in month_values):
+        raise HTTPException(status_code=400, detail="月份格式应为 YYYYMM")
+
+    scoped_codes = _category_scope_codes(db, current_user)
+    category_values = sorted({code.strip() for code in category_codes or [] if code.strip()})
+    platform_values = sorted({platform.strip().lower() for platform in platforms or [] if platform.strip()})
+    platform_expr = func.lower(RawDataRecord.platform)
+
+    latest_batches = _latest_done_batch_subquery(db)
+    data_q = (
+        db.query(
+            RawDataRecord.month.label("month"),
+            platform_expr.label("platform"),
+            DispatchItem.matched_rule_id.label("rule_id"),
+            func.count(DispatchItem.id).label("count"),
+        )
+        .join(latest_batches, DispatchItem.batch_id == latest_batches.c.batch_id)
+        .join(RawDataRecord, DispatchItem.raw_data_id == RawDataRecord.id)
+        .filter(
+            DispatchItem.raw_data_id.isnot(None),
+            RawDataRecord.month.in_(month_values),
+        )
+    )
+    if platform_values:
+        data_q = data_q.filter(platform_expr.in_(platform_values))
+    data_q = _apply_category_scope(data_q, DispatchItem.category_code, scoped_codes)
+    data_rows = data_q.group_by(
+        RawDataRecord.month,
+        platform_expr,
+        DispatchItem.matched_rule_id,
+    ).all()
+
+    combos = sorted({(row.month, row.platform) for row in data_rows}, key=lambda item: (-item[0], item[1] or ""))
+    counts: dict[tuple[int, Optional[str], int], int] = {}
+    for row in data_rows:
+        if row.rule_id is not None:
+            counts[(row.month, row.platform, row.rule_id)] = int(row.count or 0)
+
+    rules_q = (
+        db.query(DispatchRule, Category.name.label("category_name"))
+        .outerjoin(Category, DispatchRule.category_code == Category.code)
+        .filter(DispatchRule.is_active == 1)
+    )
+    if category_values:
+        rules_q = rules_q.filter(DispatchRule.category_code.in_(category_values))
+    elif scoped_codes is not None:
+        rules_q = rules_q.filter(DispatchRule.category_code.in_(scoped_codes))
+    if platform_values:
+        rules_q = rules_q.filter(or_(DispatchRule.platform.is_(None), func.lower(DispatchRule.platform).in_(platform_values)))
+    rules = rules_q.order_by(DispatchRule.category_code, DispatchRule.priority, DispatchRule.id).all()
+
+    rows = []
+    empty_rule_ids: set[int] = set()
+    for month, platform in combos:
+        platform_key = (platform or "").lower()
+        for rule, category_name in rules:
+            if rule.platform and rule.platform.strip().lower() != platform_key:
+                continue
+            count = counts.get((month, platform, rule.id), 0)
+            is_empty = count == 0
+            if is_empty:
+                empty_rule_ids.add(rule.id)
+            rows.append({
+                "month": month,
+                "category_code": rule.category_code,
+                "category_name": category_name or rule.category_code,
+                "platform": platform,
+                "rule_id": rule.id,
+                "field": rule.field,
+                "match_type": rule.match_type,
+                "value": rule.value,
+                "item_name_keyword": rule.item_name_keyword,
+                "priority": rule.priority,
+                "is_active": rule.is_active,
+                "assigned_count": count,
+                "is_empty": is_empty,
+            })
+
+    rows.sort(key=lambda item: (
+        -item["month"],
+        item["category_code"],
+        item["platform"] or "",
+        0 if item["is_empty"] else 1,
+        item["priority"],
+        item["rule_id"],
+    ))
+
+    return {
+        "rows": rows,
+        "total": len(rows),
+        "empty_count": sum(1 for row in rows if row["is_empty"]),
+        "empty_rule_count": len(empty_rule_ids),
+        "months": month_values,
+        "platforms": sorted({row["platform"] for row in rows if row["platform"]}),
+    }
+
+
 @router.get("/rules", response_model=list[DispatchRuleOut])
 def list_rules(
     platform: Optional[str] = Query(None),

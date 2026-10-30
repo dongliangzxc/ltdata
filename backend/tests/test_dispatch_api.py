@@ -1813,3 +1813,78 @@ def test_run_dispatch_matches_filename_source_category(client_and_db):
     assert len(items) == 1
     assert items[0].category_code == "action_cameras"
     assert items[0].matched_rule_id is not None
+
+
+def test_rule_coverage_lists_zero_match_rules(client_and_db):
+    client, db = client_and_db
+    file_record = UploadFileRecord(filename="coverage.xlsx", platform="JD", row_count=2, status="done")
+    db.add(file_record)
+    db.flush()
+    db.add_all([
+        Category(code="headphone", name="耳机"),
+        Category(code="speaker", name="音箱"),
+    ])
+    matched_rule = DispatchRule(
+        category_code="headphone", platform="jd", field="category_lv1",
+        match_type="contains", value="耳机", priority=1, is_active=1,
+    )
+    empty_rule = DispatchRule(
+        category_code="headphone", platform=None, field="item_name",
+        match_type="contains", value="不存在的关键词", priority=2, is_active=1,
+    )
+    speaker_rule = DispatchRule(
+        category_code="speaker", platform=None, field="item_name",
+        match_type="contains", value="音箱", priority=1, is_active=1,
+    )
+    inactive_rule = DispatchRule(
+        category_code="speaker", platform=None, field="item_name",
+        match_type="contains", value="停用规则", priority=9, is_active=0,
+    )
+    db.add_all([matched_rule, empty_rule, speaker_rule, inactive_rule])
+    db.flush()
+    raw_headphone = RawDataRecord(
+        file_id=file_record.id, platform="JD", month=202509,
+        item_id="item-hp", item_name="蓝牙耳机", category_lv1="耳机",
+    )
+    raw_speaker = RawDataRecord(
+        file_id=file_record.id, platform="JD", month=202509,
+        item_id="item-sp", item_name="无线音箱", category_lv1="智能硬件",
+    )
+    db.add_all([raw_headphone, raw_speaker])
+    db.flush()
+    batch = DispatchBatch(
+        file_id=file_record.id, status="done",
+        total_rows=2, dispatched_rows=2, unmatched_rows=0,
+    )
+    db.add(batch)
+    db.flush()
+    db.add_all([
+        DispatchItem(batch_id=batch.id, raw_data_id=raw_headphone.id, category_code="headphone", matched_rule_id=matched_rule.id),
+        DispatchItem(batch_id=batch.id, raw_data_id=raw_speaker.id, category_code="speaker", matched_rule_id=speaker_rule.id),
+    ])
+    db.commit()
+
+    response = client.get("/api/dispatch/rule-coverage", params={"months": [202509]})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] == 3
+    assert body["empty_count"] == 1
+    assert body["empty_rule_count"] == 1
+    assert body["platforms"] == ["jd"]
+    rows_by_rule = {row["rule_id"]: row for row in body["rows"]}
+    assert rows_by_rule[matched_rule.id]["assigned_count"] == 1
+    assert rows_by_rule[matched_rule.id]["is_empty"] is False
+    assert rows_by_rule[speaker_rule.id]["assigned_count"] == 1
+    assert rows_by_rule[empty_rule.id]["assigned_count"] == 0
+    assert rows_by_rule[empty_rule.id]["is_empty"] is True
+    assert rows_by_rule[empty_rule.id]["category_name"] == "耳机"
+    assert inactive_rule.id not in rows_by_rule
+
+    filtered = client.get(
+        "/api/dispatch/rule-coverage",
+        params={"months": [202509], "category_codes": ["headphone"]},
+    )
+    assert filtered.status_code == 200, filtered.text
+    filtered_body = filtered.json()
+    assert filtered_body["total"] == 2
+    assert {row["rule_id"] for row in filtered_body["rows"]} == {matched_rule.id, empty_rule.id}

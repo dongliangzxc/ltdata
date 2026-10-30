@@ -649,6 +649,7 @@ export default function MatchResultsPage() {
         open={uploadOpen}
         onCancel={() => setUploadOpen(false)}
         footer={null}
+        width={1000}
         destroyOnClose
       >
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
@@ -698,6 +699,53 @@ export default function MatchResultsPage() {
                 </Space>
               )}
             />
+          )}
+          {uploadResult && uploadResult.updated_items.length > 0 && (
+            <Space direction="vertical" size={6} style={{ width: '100%' }}>
+              <Text strong>
+                更新明细（共 {uploadResult.updated_items_total} 条
+                {uploadResult.updated_items_truncated ? '，仅展示前 500 条' : ''}）
+              </Text>
+              <Table
+                rowKey="match_result_id"
+                size="small"
+                dataSource={uploadResult.updated_items}
+                pagination={{ pageSize: 5, showSizeChanger: false, showTotal: t => `共 ${t} 条` }}
+                scroll={{ x: 900, y: 260 }}
+                columns={[
+                  {
+                    title: '商品ID', dataIndex: 'item_id', width: 140,
+                    render: (value: string | null) => value ? <Text copyable style={{ fontSize: 12 }}>{value}</Text> : '-',
+                  },
+                  {
+                    title: '商品名称', dataIndex: 'item_name', width: 200, ellipsis: true,
+                    render: (value: string | null) => value ?? '-',
+                  },
+                  {
+                    title: '商品链接', dataIndex: 'item_url', width: 220, ellipsis: true,
+                    render: (value: string | null) => value
+                      ? <a href={value} target="_blank" rel="noreferrer">{value}</a>
+                      : '-',
+                  },
+                  {
+                    title: '原价格', dataIndex: 'price', width: 90,
+                    render: (value: number | null) => value != null ? value.toFixed(2) : '-',
+                  },
+                  {
+                    title: '调整后价格', dataIndex: 'adjusted_price', width: 100,
+                    render: (value: number | null) => value != null ? value.toFixed(2) : '-',
+                  },
+                  {
+                    title: '销量系数', dataIndex: 'sales_coefficient', width: 100,
+                    render: (value: number | null) => value != null ? String(Number(value.toFixed(4))) : '-',
+                  },
+                  {
+                    title: '调整后销量', dataIndex: 'adjusted_sales_qty', width: 100,
+                    render: (value: number | null) => value != null ? value.toLocaleString() : '-',
+                  },
+                ]}
+              />
+            </Space>
           )}
         </Space>
       </Modal>

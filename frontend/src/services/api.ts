@@ -2058,6 +2058,21 @@ export const exportReviewedMatches = (params: Omit<MatchResultsQuery, 'page' | '
 export const getReviewedBulkUpdateTemplate = () =>
   api.get('/match/reviewed/bulk-update-template', { responseType: 'blob' })
 
+export interface BulkUrlUpdateItem {
+  match_result_id: number
+  clean_job_id: number
+  item_id: string | null
+  item_url: string | null
+  item_name: string | null
+  price: number | null
+  adjusted_price: number | null
+  original_sales_qty: number | null
+  base_sales_qty: number | null
+  sales_coefficient: number | null
+  adjusted_sales_qty: number | null
+  upload_row_no: number
+}
+
 export interface BulkUrlUpdateResponse {
   rows: number
   matched_urls: number
@@ -2065,6 +2080,9 @@ export interface BulkUrlUpdateResponse {
   skipped_rows: number
   errors: string[]
   warnings: string[]
+  updated_items: BulkUrlUpdateItem[]
+  updated_items_total: number
+  updated_items_truncated: boolean
 }
 
 export const bulkUpdateReviewedByUrl = (formData: FormData, clean_job_id?: number) => {

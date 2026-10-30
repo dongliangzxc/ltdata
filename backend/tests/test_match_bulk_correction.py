@@ -180,6 +180,13 @@ def test_bulk_update_by_url_recalculates_coefficients(client):
     body = res.json()
     assert body["updated_count"] == 1
     assert body["skipped_rows"] == 0
+    assert body["updated_items_total"] == 1
+    detail = body["updated_items"][0]
+    assert detail["item_id"] == "item-1"
+    assert detail["item_url"] == "https://item.jd.com/item-1.html"
+    assert detail["sales_coefficient"] == 2.5
+    assert detail["adjusted_price"] == 88.5
+    assert detail["adjusted_sales_qty"] == 25
     with client.Session() as db:
         match = db.query(MatchResult).filter_by(id=match_id).one()
         assert float(match.sales_coefficient) == 2.5
@@ -202,6 +209,8 @@ def test_bulk_update_by_url_reports_missing_url(client):
     assert body["updated_count"] == 0
     assert body["skipped_rows"] == 1
     assert body["errors"]
+    assert body["updated_items"] == []
+    assert body["updated_items_total"] == 0
 
 
 def test_bulk_update_template_download(client):
@@ -225,3 +234,37 @@ def test_bulk_update_by_url_falls_back_to_item_id(client):
     assert res.json()["updated_count"] == 1
     with client.Session() as db:
         assert float(db.query(MatchResult).filter_by(id=match_id).one().sales_coefficient) == 1.2
+
+
+def test_bulk_update_by_url_updates_all_matching_results(client):
+    job_id, first_match_id = _seed(client)
+    with client.Session() as db:
+        raw = db.query(RawDataRecord).filter_by(item_id="item-1").one()
+        second_job = CleanJobRecord(file_ids=[raw.file_id], status="reviewing", category_code="headphone")
+        db.add(second_job)
+        db.flush()
+        second_match = MatchResult(
+            clean_job_id=second_job.id, raw_data_id=raw.id,
+            model_id=db.query(ModelRecord).filter_by(model_code="SB900").one().id,
+            match_status="matched", matched_by="auto", match_source="s1",
+        )
+        db.add(second_match)
+        db.commit()
+        second_match_id = second_match.id
+
+    content = _xlsx_bytes([
+        ["商品链接", "销量"],
+        ["https://item.jd.com/item-1.html", 20],
+    ])
+    res = client.post(
+        "/api/match/reviewed/bulk-update-by-url",
+        files={"file": ("bulk.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["updated_count"] == 2
+    assert body["updated_items_total"] == 2
+    assert {item["match_result_id"] for item in body["updated_items"]} == {first_match_id, second_match_id}
+    with client.Session() as db:
+        for match_id in (first_match_id, second_match_id):
+            assert float(db.query(MatchResult).filter_by(id=match_id).one().sales_coefficient) == 2.0

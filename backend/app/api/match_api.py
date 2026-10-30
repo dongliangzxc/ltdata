@@ -3152,16 +3152,17 @@ def bulk_update_reviewed_by_url(
         return {
             "rows": 0, "matched_urls": 0, "updated_count": 0,
             "skipped_rows": len(errors), "errors": errors[:50], "warnings": warnings[:50],
+            "updated_items": [], "updated_items_total": 0, "updated_items_truncated": False,
         }
 
     by_url, by_item_key = _load_upload_match_targets(
         db, {row["url"] for row in upload_rows}, clean_job_id
     )
 
-    updated_match_ids: set[int] = set()
     touched_job_ids: set[int] = set()
     matched_urls = 0
     skipped_rows = len(errors)
+    updated_details: dict[int, dict] = {}
 
     for item in upload_rows:
         targets = by_url.get(item["url"])
@@ -3177,29 +3178,74 @@ def bulk_update_reviewed_by_url(
         matched_urls += 1
         row_applied = False
         for mr, rd, cleaned in targets:
+            base_qty = (
+                cleaned.corrected_sales_qty
+                if cleaned and cleaned.corrected_sales_qty is not None
+                else rd.sales_qty
+            )
+            old_price = _to_float(rd.price)
+            old_adjusted_price = _to_float(mr.adjusted_price)
+            old_coefficient = _to_float(mr.sales_coefficient)
+            applied_sales = False
+            applied_price = False
+
             if item["sales"] is not None:
-                base_qty = (
-                    cleaned.corrected_sales_qty
-                    if cleaned and cleaned.corrected_sales_qty is not None
-                    else rd.sales_qty
-                )
                 if base_qty in (None, 0):
                     errors.append(f"第 {item['row_no']} 行：原销量为空或为 0，无法计算销量系数")
-                    continue
-                coefficient = round(float(item["sales"]) / float(base_qty), 4)
-                if coefficient < 0 or coefficient > 999.9999:
-                    errors.append(f"第 {item['row_no']} 行：计算出的销量系数超出范围（0~999.9999）")
-                    continue
-                mr.sales_coefficient = coefficient
+                else:
+                    coefficient = round(float(item["sales"]) / float(base_qty), 4)
+                    if coefficient < 0 or coefficient > 999.9999:
+                        errors.append(f"第 {item['row_no']} 行：计算出的销量系数超出范围（0~999.9999）")
+                    else:
+                        mr.sales_coefficient = coefficient
+                        applied_sales = True
+
             if item["price"] is not None:
                 if item["price"] > 99_999_999.99:
                     errors.append(f"第 {item['row_no']} 行：价格超出可保存范围")
-                    continue
-                mr.adjusted_price = round(float(item["price"]), 2)
+                else:
+                    mr.adjusted_price = round(float(item["price"]), 2)
+                    applied_price = True
+
+            if not applied_sales and not applied_price:
+                continue
+
             mr.updated_at = datetime.utcnow()
-            updated_match_ids.add(mr.id)
             touched_job_ids.add(mr.clean_job_id)
             row_applied = True
+
+            detail = updated_details.get(mr.id)
+            if detail is None:
+                detail = {
+                    "match_result_id": mr.id,
+                    "clean_job_id": mr.clean_job_id,
+                    "item_id": rd.item_id,
+                    "item_url": rd.item_url,
+                    "item_name": rd.item_name,
+                    "price": old_price,
+                    "adjusted_price": (
+                        old_adjusted_price if old_adjusted_price is not None else old_price
+                    ),
+                    "original_sales_qty": rd.sales_qty,
+                    "base_sales_qty": base_qty,
+                    "sales_coefficient": old_coefficient,
+                    "adjusted_sales_qty": (
+                        round(float(base_qty) * old_coefficient)
+                        if base_qty is not None and old_coefficient is not None
+                        else base_qty
+                    ),
+                    "upload_row_no": item["row_no"],
+                }
+                updated_details[mr.id] = detail
+            if applied_price:
+                detail["adjusted_price"] = mr.adjusted_price
+            if applied_sales:
+                detail["sales_coefficient"] = mr.sales_coefficient
+                detail["adjusted_sales_qty"] = (
+                    round(float(base_qty) * float(mr.sales_coefficient))
+                    if base_qty is not None
+                    else None
+                )
         if not row_applied:
             skipped_rows += 1
 
@@ -3207,11 +3253,19 @@ def bulk_update_reviewed_by_url(
         touch_clean_job(db, job_id)
     db.commit()
 
+    errors = list(dict.fromkeys(errors))
+    updated_items = sorted(updated_details.values(), key=lambda row: row["match_result_id"])
+    updated_items_total = len(updated_items)
+    updated_items = updated_items[:500]
+
     return {
         "rows": len(upload_rows),
         "matched_urls": matched_urls,
-        "updated_count": len(updated_match_ids),
+        "updated_count": updated_items_total,
         "skipped_rows": skipped_rows,
         "errors": errors[:50],
         "warnings": warnings[:50],
+        "updated_items": updated_items,
+        "updated_items_total": updated_items_total,
+        "updated_items_truncated": updated_items_total > len(updated_items),
     }

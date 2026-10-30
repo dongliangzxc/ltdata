@@ -33,6 +33,16 @@ export default function HoverZoomImage({ src, width = 280, height = 280, zoomSiz
   useEffect(() => {
     setNatural(null)
     setZoom(null)
+    const image = new window.Image()
+    image.onload = () => {
+      if (image.naturalWidth && image.naturalHeight) {
+        setNatural({ width: image.naturalWidth, height: image.naturalHeight })
+      }
+    }
+    image.src = src
+    return () => {
+      image.onload = null
+    }
   }, [src])
 
   useEffect(() => {
@@ -113,12 +123,6 @@ export default function HoverZoomImage({ src, width = 280, height = 280, zoomSiz
         height={height}
         style={{ objectFit: 'contain', borderRadius: 6, cursor: 'zoom-in' }}
         preview={{ mask: false }}
-        onLoad={event => {
-          const image = event.currentTarget
-          if (image.naturalWidth && image.naturalHeight) {
-            setNatural({ width: image.naturalWidth, height: image.naturalHeight })
-          }
-        }}
       />
       {zoom && (
         <div

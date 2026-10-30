@@ -44,6 +44,7 @@ from app.services.export_guards import (
 router = APIRouter(prefix="/api/dispatch", tags=["dispatch"])
 
 DISPATCH_PAGE_SIZE = 2000
+DISPATCH_EXPORT_PAGE_SIZE = 5000
 DISPATCH_EXPORT_DIR = Path(settings.EXPORT_DIR)
 _dispatch_export_progress: dict[int, int] = {}
 
@@ -250,27 +251,63 @@ def _build_dispatch_export_response(rows, filename: str):
     )
 
 
-def _collect_dispatch_export_columns(query, total: int, page_size: int) -> dict[tuple[int | None, str], dict]:
+def _columns_for_export_row(template: ColumnTemplate | None, extra_data) -> list[str]:
+    """仅根据模板和 extra_data 推导导出行会出现的列，不读取任何宽字段。"""
+    extra = extra_data if isinstance(extra_data, dict) else {}
+    columns: list[str] = []
+    included_extra_columns: set[str] = set()
+
+    if template:
+        for original_column, target_field in _template_columns(template):
+            columns.append(original_column)
+            if target_field == "__ext__":
+                included_extra_columns.add(original_column)
+    else:
+        columns.extend(label for _, label in FALLBACK_EXPORT_COLUMNS)
+
+    for key in extra.keys():
+        if key not in included_extra_columns and key not in columns:
+            columns.append(key)
+
+    columns.extend(TRACE_COLUMNS)
+    return columns
+
+
+def _dispatch_export_column_query(query):
+    """把完整导出行查询收窄为列名发现所需的最小字段，避免读取 raw_data 宽字段。"""
+    return query.with_entities(
+        DispatchItem.id,
+        RawDataRecord.extra_data,
+        ColumnTemplate,
+    )
+
+
+def _collect_dispatch_export_columns(query, page_size: int) -> dict[tuple[int | None, str], dict]:
+    """用 keyset 分页遍历窄查询，收集每个模板 Sheet 的完整列集合。"""
     grouped_columns: dict[tuple[int | None, str], dict] = {}
-    for offset in range(0, total, page_size):
-        rows = query.limit(page_size).offset(offset).all()
-        for _, raw, file_record, template in rows:
+    last_id = 0
+    while True:
+        rows = (
+            query.filter(DispatchItem.id > last_id)
+            .order_by(DispatchItem.id)
+            .limit(page_size)
+            .all()
+        )
+        if not rows:
+            break
+        for dispatch_item_id, extra_data, template in rows:
             template_id = template.id if template else None
             template_name = template.name if template else "无模板"
             key = (template_id, template_name)
             if key not in grouped_columns:
                 grouped_columns[key] = {"template": template, "columns": []}
-            row = _build_export_row(raw, file_record, template) if template else _build_fallback_row(raw, file_record)
             columns = grouped_columns[key]["columns"]
-            for column in row.keys():
+            for column in _columns_for_export_row(template, extra_data):
                 if column not in columns:
                     columns.append(column)
-    for group in grouped_columns.values():
-        columns = group["columns"]
-        for trace_column in TRACE_COLUMNS:
-            if trace_column in columns:
-                columns.remove(trace_column)
-                columns.append(trace_column)
+        last_id = rows[-1][0]
+        if len(rows) < page_size:
+            break
     return grouped_columns
 
 
@@ -278,7 +315,7 @@ def _write_dispatch_export_query(query, total: int, output, progress_callback=No
     if total == 0:
         raise ValueError("没有可导出的分发数据")
 
-    grouped_columns = _collect_dispatch_export_columns(query, total, page_size)
+    grouped_columns = _collect_dispatch_export_columns(_dispatch_export_column_query(query), page_size)
     used_sheet_names: set[str] = set()
     workbook = Workbook(write_only=True)
     for (template_id, template_name), group in grouped_columns.items():
@@ -290,8 +327,16 @@ def _write_dispatch_export_query(query, total: int, output, progress_callback=No
         group["worksheet"] = worksheet
 
     processed = 0
-    for offset in range(0, total, page_size):
-        rows = query.limit(page_size).offset(offset).all()
+    last_id = 0
+    while True:
+        rows = (
+            query.filter(DispatchItem.id > last_id)
+            .order_by(DispatchItem.id)
+            .limit(page_size)
+            .all()
+        )
+        if not rows:
+            break
         for _, raw, file_record, template in rows:
             template_id = template.id if template else None
             template_name = template.name if template else "无模板"
@@ -300,8 +345,11 @@ def _write_dispatch_export_query(query, total: int, output, progress_callback=No
             group = grouped_columns[key]
             group["worksheet"].append([row.get(column) for column in group["columns"]])
             processed += 1
+        last_id = rows[-1][0].id
         if progress_callback:
             progress_callback(processed, total)
+        if len(rows) < page_size:
+            break
 
     workbook.save(output)
 
@@ -1199,11 +1247,7 @@ def _run_dispatch_export_thread(job_id: int, params: dict):
         category_code = params.get("category_code")
         platform = params.get("platform")
         months = _normalize_export_months(params.get("month"), params.get("months") or [])
-        query = _latest_dispatch_export_query(db, category_code, platform, months).order_by(
-            UploadFileRecord.template_id,
-            RawDataRecord.month,
-            RawDataRecord.id,
-        )
+        query = _latest_dispatch_export_query(db, category_code, platform, months)
         total = query.count()
         if total == 0:
             job.status = "error"
@@ -1226,7 +1270,7 @@ def _run_dispatch_export_thread(job_id: int, params: dict):
             job.progress = progress
             db.commit()
 
-        _write_dispatch_export_query(query, total, str(filepath), progress_callback=update_progress, page_size=DISPATCH_PAGE_SIZE)
+        _write_dispatch_export_query(query, total, str(filepath), progress_callback=update_progress, page_size=DISPATCH_EXPORT_PAGE_SIZE)
 
         job.status = "done"
         job.progress = 100

@@ -74,6 +74,7 @@ function writeState(state: MatchResultsState): URLSearchParams {
 export function useMatchResultsQuery() {
   const [searchParams, setSearchParams] = useSearchParams()
   const state = useMemo(() => readState(searchParams), [searchParams])
+  const canQuery = !!state.categoryCode || state.cleanJobId != null
 
   const setState = (patch: Partial<MatchResultsState>) => {
     const merged: MatchResultsState = { ...state, ...patch }
@@ -103,6 +104,7 @@ export function useMatchResultsQuery() {
       coefficient_filter: state.coefficientFilter,
     }).then(r => r.data as MatchResultsResponse),
     {
+      ready: canQuery,
       refreshDeps: [
         state.page,
         state.tab,
@@ -121,5 +123,5 @@ export function useMatchResultsQuery() {
     }
   )
 
-  return { state, setState, reset, data, loading, refresh }
+  return { state, setState, reset, data, loading, refresh, canQuery }
 }

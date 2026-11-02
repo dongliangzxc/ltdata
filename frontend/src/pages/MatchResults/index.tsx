@@ -52,7 +52,7 @@ const formatSummaryQuantity = (value?: number | null) =>
   value == null ? '-' : value.toLocaleString(undefined, { maximumFractionDigits: 0 })
 
 export default function MatchResultsPage() {
-  const { state, setState, reset, data, loading, refresh } = useMatchResultsQuery()
+  const { state, setState, reset, data, loading, refresh, canQuery } = useMatchResultsQuery()
   const [reselectOpen, setReselectOpen] = useState(false)
   const [reselectMatchId, setReselectMatchId] = useState<number | null>(null)
   const [keywordInput, setKeywordInput] = useState<string>(state.keyword ?? '')
@@ -173,7 +173,10 @@ export default function MatchResultsPage() {
     }
   }
 
-  const { data: jobsData } = useRequest(() => listCleanJobs().then(r => r.data))
+  const { data: jobsData } = useRequest(
+    () => listCleanJobs(state.categoryCode ? { category_code: state.categoryCode } : undefined).then(r => r.data),
+    { refreshDeps: [state.categoryCode] },
+  )
   const jobOptions = useMemo(
     () => (jobsData ?? []).map((j: CleanJobItem) => ({
       value: j.id,
@@ -284,6 +287,10 @@ export default function MatchResultsPage() {
   }
 
   const handleExport = async () => {
+    if (!canQuery) {
+      message.warning('请先选择品类或清洗任务')
+      return
+    }
     setExporting(true)
     try {
       const res = await exportReviewedMatches(buildFilterPayload())
@@ -413,7 +420,7 @@ export default function MatchResultsPage() {
               value={state.categoryCode}
               options={categoryOptions}
               optionFilterProp="label"
-              onChange={categoryCode => setState({ categoryCode, series: undefined })}
+              onChange={categoryCode => setState({ categoryCode, cleanJobId: undefined, series: undefined })}
             />
           </Col>
           {showSeriesFilter && (
@@ -490,13 +497,18 @@ export default function MatchResultsPage() {
             </Space>
           </Col>
         </Row>
-        {!state.cleanJobId && (
-          <Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
-            未选任务时展示全库最新结果（按 ID 倒序，最多 20 条/页）
-          </Text>
+        {!canQuery && (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginTop: 8 }}
+            message="请先选择品类或清洗任务，再查看匹配结果"
+          />
         )}
       </Card>
 
+      {canQuery && (
+        <>
       <Card size="small" styles={{ body: { padding: 12 } }}>
         <Row gutter={[16, 8]}>
           <Col xs={24} md={8}>
@@ -597,6 +609,8 @@ export default function MatchResultsPage() {
           }}
         />
       </Card>
+        </>
+      )}
 
       <Modal
         title="批量调整系数"

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { Key } from 'react'
 import {
-  Card, Button, Table, Tag, Modal, Row, Col,
+  Card, Button, Table, Tag, Modal, Row, Col, Alert,
   Space, Statistic, Select, message, Tabs, Popconfirm, Input, InputNumber, Typography
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
@@ -437,6 +437,7 @@ export default function CleanPage() {
     return categoryOptions.filter(c => allowed.has(c.value))
   }, [categoryOptions, currentUser])
   const [filters, setFilters] = useState<FilterState>({})
+  const hasCategory = !!filters.category_code
   const [jobView, setJobView] = useState<CleanJobListView>('active')
   const [jobSortBy, setJobSortBy] = useState<'created_at' | 'updated_at'>('created_at')
   const [previewJobId, setPreviewJobId] = useState<number | null>(null)
@@ -464,11 +465,18 @@ export default function CleanPage() {
     data: monthlyPoolData,
     loading: monthlyPoolLoading,
     refresh: refreshMonthlyPool,
-  } = useRequest(() => getCleanMonthlyPool(monthlyPoolRequestParams).then(r => r.data), { refreshDeps: [monthlyPoolRequestParams] })
+  } = useRequest(
+    () => hasCategory
+      ? getCleanMonthlyPool(monthlyPoolRequestParams).then(r => r.data)
+      : Promise.resolve([] as CleanMonthlyPoolItem[]),
+    { refreshDeps: [monthlyPoolRequestParams, hasCategory] },
+  )
 
   const { data: jobsData, loading: jobsLoading, refresh: refreshJobs } = useRequest(
-    () => listCleanJobs(jobRequestParams).then(r => r.data as CleanJobItem[]),
-    { refreshDeps: [jobRequestParams] }
+    () => hasCategory
+      ? listCleanJobs(jobRequestParams).then(r => r.data as CleanJobItem[])
+      : Promise.resolve([] as CleanJobItem[]),
+    { refreshDeps: [jobRequestParams, hasCategory] },
   )
 
   const jobs = jobsData ?? []
@@ -680,61 +688,71 @@ export default function CleanPage() {
             </Button>
           </Col>
         </Row>
-        <Table
-          dataSource={monthlyPool}
-          columns={monthlyQueueColumns(handleUpsertMonthlyTask, upsertingRowKey, batchUpserting)}
-          rowKey={getMonthlyQueueRowKey}
-          rowSelection={monthlyRowSelection}
-          size="small"
-          loading={monthlyPoolLoading}
-          scroll={{ x: 900 }}
-          pagination={{ pageSize: 10 }}
-        />
+        {!hasCategory ? (
+          <Alert type="info" showIcon message="请先选择品类，再查看待入清洗队列" />
+        ) : (
+          <Table
+            dataSource={monthlyPool}
+            columns={monthlyQueueColumns(handleUpsertMonthlyTask, upsertingRowKey, batchUpserting)}
+            rowKey={getMonthlyQueueRowKey}
+            rowSelection={monthlyRowSelection}
+            size="small"
+            loading={monthlyPoolLoading}
+            scroll={{ x: 900 }}
+            pagination={{ pageSize: 10 }}
+          />
+        )}
       </Card>
 
       <Card title="清洗任务">
-        <Row gutter={16} style={{ marginBottom: 16 }}>
-          <Col span={6}><Statistic title="待处理任务" value={summary.pendingTasks} valueStyle={{ color: '#d48806' }} /></Col>
-          <Col span={6}><Statistic title="后台处理中" value={summary.processingTasks} valueStyle={{ color: '#1677ff' }} /></Col>
-          <Col span={6}><Statistic title="可发布记录" value={summary.publishableRecords} valueStyle={{ color: '#3f8600' }} /></Col>
-          <Col span={6}><Statistic title="任务总数" value={summary.totalTasks} /></Col>
-        </Row>
-        <Tabs
-          activeKey={jobView}
-          onChange={key => setJobView(key as CleanJobListView)}
-          tabBarExtraContent={
-            <Select
-              style={{ width: 180 }}
-              value={jobSortBy}
-              onChange={value => setJobSortBy(value)}
-              options={[
-                { value: 'created_at', label: '按创建时间排序' },
-                { value: 'updated_at', label: '按最近处理排序' },
+        {!hasCategory ? (
+          <Alert type="info" showIcon message="请先选择品类，再查看清洗任务" />
+        ) : (
+          <>
+            <Row gutter={16} style={{ marginBottom: 16 }}>
+              <Col span={6}><Statistic title="待处理任务" value={summary.pendingTasks} valueStyle={{ color: '#d48806' }} /></Col>
+              <Col span={6}><Statistic title="后台处理中" value={summary.processingTasks} valueStyle={{ color: '#1677ff' }} /></Col>
+              <Col span={6}><Statistic title="可发布记录" value={summary.publishableRecords} valueStyle={{ color: '#3f8600' }} /></Col>
+              <Col span={6}><Statistic title="任务总数" value={summary.totalTasks} /></Col>
+            </Row>
+            <Tabs
+              activeKey={jobView}
+              onChange={key => setJobView(key as CleanJobListView)}
+              tabBarExtraContent={
+                <Select
+                  style={{ width: 180 }}
+                  value={jobSortBy}
+                  onChange={value => setJobSortBy(value)}
+                  options={[
+                    { value: 'created_at', label: '按创建时间排序' },
+                    { value: 'updated_at', label: '按最近处理排序' },
+                  ]}
+                />
+              }
+              items={[
+                { key: 'active', label: '清洗任务' },
+                { key: 'archived', label: '已删除' },
               ]}
             />
-          }
-          items={[
-            { key: 'active', label: '清洗任务' },
-            { key: 'archived', label: '已删除' },
-          ]}
-        />
-        <Table
-          dataSource={jobs}
-          columns={jobColumns(
-            id => { setPreviewJobId(id); setPreviewPage(1) },
-            id => navigate(`/match?job_id=${id}`),
-            id => navigate(`/data-adjustment?clean_job_id=${id}`),
-            id => navigate(`/brand-clean?clean_job_id=${id}`),
-            handleDeleteJob,
-            jobView,
-            id => { setMatchedJobId(id); setMatchedGroup('mapping'); setMatchedPage(1); setMatchedKeyword(''); setMatchedKeywordInput('') },
-          )}
-          rowKey="id"
-          size="small"
-          loading={jobsLoading}
-          scroll={{ x: 1280 }}
-          pagination={{ pageSize: 10 }}
-        />
+            <Table
+              dataSource={jobs}
+              columns={jobColumns(
+                id => { setPreviewJobId(id); setPreviewPage(1) },
+                id => navigate(`/match?job_id=${id}`),
+                id => navigate(`/data-adjustment?clean_job_id=${id}`),
+                id => navigate(`/brand-clean?clean_job_id=${id}`),
+                handleDeleteJob,
+                jobView,
+                id => { setMatchedJobId(id); setMatchedGroup('mapping'); setMatchedPage(1); setMatchedKeyword(''); setMatchedKeywordInput('') },
+              )}
+              rowKey="id"
+              size="small"
+              loading={jobsLoading}
+              scroll={{ x: 1280 }}
+              pagination={{ pageSize: 10 }}
+            />
+          </>
+        )}
       </Card>
 
       <Modal

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo } from 'react'
 import {
   Card, Row, Col, Select, Input, Button, Table,
   Typography, Tooltip, Form, Statistic, Space,
-  Popover, Spin, List, Checkbox, Modal
+  Popover, Spin, List, Checkbox, Modal, Alert, message
 } from 'antd'
 import { SearchOutlined, DownloadOutlined, ClearOutlined, LinkOutlined, InfoCircleOutlined } from '@ant-design/icons'
 import { useSearchParams } from 'react-router-dom'
@@ -118,7 +118,7 @@ export default function WorkbenchPage({ mode = 'default' }: WorkbenchPageProps) 
   const [total, setTotal] = useState(0)
   const [dataSource, setDataSource] = useState<DataRow[]>([])
   const [loading, setLoading] = useState(false)
-  const [searched, setSearched] = useState(mode === 'data-adjustment')
+  const [searched, setSearched] = useState(false)
   const [exportModalOpen, setExportModalOpen] = useState(false)
   const [exportStatuses, setExportStatuses] = useState<string[]>(['matched', 'confirmed', 'url_matched'])
   const [exportYear, setExportYear] = useState<number | undefined>(undefined)
@@ -195,6 +195,10 @@ export default function WorkbenchPage({ mode = 'default' }: WorkbenchPageProps) 
 
   const handleSearch = () => {
     const vals = form.getFieldsValue()
+    if (mode === 'data-adjustment' && !cleanJobId && !vals.category_name) {
+      message.warning('请先选择品类后再查询')
+      return
+    }
     setQueryParams(
       Object.fromEntries(Object.entries(vals).filter(([, v]) => v !== undefined && v !== '' && v !== null))
     )
@@ -236,6 +240,12 @@ export default function WorkbenchPage({ mode = 'default' }: WorkbenchPageProps) 
     setExportProgressVisible(true)
     try {
       const vals = form.getFieldsValue()
+      if (mode === 'data-adjustment' && !cleanJobId && !vals.category_name) {
+        message.warning('请先选择品类后再导出')
+        setExporting(false)
+        setExportProgressVisible(false)
+        return
+      }
       const res = await exportWorkbench({
         ...modeParams,
         year: vals.year ?? exportYear,
@@ -468,6 +478,19 @@ export default function WorkbenchPage({ mode = 'default' }: WorkbenchPageProps) 
       </Card>
 
       {/* 结果表格 */}
+      {!searched && (
+        <Card>
+          <Alert
+            type="info"
+            showIcon
+            message={
+              mode === 'data-adjustment'
+                ? (cleanJobId ? '请点击查询加载当前清洗任务的数据' : '请先选择品类后点击查询')
+                : '请选择筛选条件后点击查询'
+            }
+          />
+        </Card>
+      )}
       {searched && (
         <Card
           extra={

@@ -132,15 +132,21 @@ export default function UrlMappingsPage() {
   const visibleModelOptions = modelOptions.filter(m => !m.category_code || visibleCategoryCodes.has(m.category_code))
 
   const { data, loading, refresh } = useRequest(
-    () => listUrlMappings({
-      keyword: keyword || undefined,
-      platform: platform || undefined,
-      category_code: categoryCode || undefined,
-      year: filterYear,
-      month: filterMonth,
-      page,
-      page_size: 20,
-    }).then(r => r.data),
+    () => {
+      if (!categoryCode) {
+        return Promise.resolve({ items: [] as UrlMapping[], total: 0, page: 1, page_size: 20 })
+      }
+      return listUrlMappings({
+        keyword: keyword || undefined,
+        platform: platform || undefined,
+        category_code: categoryCode,
+        require_category: true,
+        year: filterYear,
+        month: filterMonth,
+        page,
+        page_size: 20,
+      }).then(r => r.data)
+    },
     { refreshDeps: [keyword, platform, categoryCode, filterYear, filterMonth, page] }
   )
 
@@ -370,6 +376,7 @@ export default function UrlMappingsPage() {
             placeholder="品类筛选"
             allowClear
             style={{ width: 140 }}
+            value={categoryCode}
             options={visibleCategoryOptions}
             onChange={v => { setCategoryCode(v); setPage(1) }}
           />
@@ -402,21 +409,30 @@ export default function UrlMappingsPage() {
       </Card>
 
       <Card>
-        <Table
-          dataSource={data?.items ?? []}
-          columns={columns}
-          rowKey="id"
-          size="small"
-          loading={loading}
-          scroll={{ x: showSeriesColumn ? 1390 : 1250 }}
-          pagination={{
-            current: page,
-            pageSize: 20,
-            total: data?.total ?? 0,
-            onChange: setPage,
-            showTotal: t => `共 ${t} 条`,
-          }}
-        />
+        {!categoryCode ? (
+          <Alert
+            type="info"
+            showIcon
+            message="请先选择品类，再查看映射数据"
+            description="映射数据量较大，选择品类后才会加载列表。"
+          />
+        ) : (
+          <Table
+            dataSource={data?.items ?? []}
+            columns={columns}
+            rowKey="id"
+            size="small"
+            loading={loading}
+            scroll={{ x: showSeriesColumn ? 1390 : 1250 }}
+            pagination={{
+              current: page,
+              pageSize: 20,
+              total: data?.total ?? 0,
+              onChange: setPage,
+              showTotal: t => `共 ${t} 条`,
+            }}
+          />
+        )}
       </Card>
 
       <ImportMappingModal

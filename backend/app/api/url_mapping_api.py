@@ -638,11 +638,15 @@ def list_url_mappings(
     category_code: Optional[str] = Query(None),
     year: Optional[int] = Query(None),
     month: Optional[int] = Query(None),
+    require_category: bool = Query(False),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    if require_category and not category_code:
+        raise HTTPException(status_code=400, detail="请先选择品类")
+
     visible_codes = _visible_url_mapping_category_codes(db, current_user)
     q = db.query(ItemUrlMapping).outerjoin(ModelRecord, ItemUrlMapping.model_id == ModelRecord.id).filter(
         or_(ItemUrlMapping.brand_code.isnot(None), ItemUrlMapping.model_id.isnot(None))

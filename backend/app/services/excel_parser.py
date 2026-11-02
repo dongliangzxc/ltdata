@@ -143,11 +143,14 @@ def _dedupe_columns(columns: list[str]) -> list[str]:
 
 def _detect_csv_encoding(file_path: Path) -> str:
     head = file_path.open("rb").read(65536)
-    try:
-        head.decode("utf-8-sig")
-        return "utf-8-sig"
-    except UnicodeDecodeError:
-        return "gbk"
+    # 65536 字节可能截断一个 UTF-8 多字节字符，最多回退 3 字节再判断
+    for trim in range(4):
+        try:
+            head[:len(head) - trim].decode("utf-8-sig")
+            return "utf-8-sig"
+        except UnicodeDecodeError:
+            continue
+    return "gbk"
 
 
 # ─── 分块读取 ─────────────────────────────────────────────────

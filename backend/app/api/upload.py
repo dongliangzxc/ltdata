@@ -8,7 +8,7 @@ from urllib.parse import quote
 from typing import Optional
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, Response
-from sqlalchemy import func, or_, select, tuple_, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 from app.models.database import get_db
 from app.models.schemas import (
@@ -23,7 +23,11 @@ from app.models.schemas import (
     RawDataOut,
     ColumnTemplate,
 )
-from app.services.excel_parser import parse_raw_excel, parse_with_mapping
+from app.services.excel_parser import (
+    iter_raw_chunks,
+    iter_mapped_chunks,
+    count_data_rows,
+)
 from app.core.config import settings
 from app.services.currency_service import get_country
 from app.services.rawdata_cache import invalidate_rawdata_cache
@@ -202,9 +206,126 @@ def _run_upload_download_job(job_id: int) -> None:
         db.close()
 
 
+def _month_range(months) -> str:
+    values = sorted(int(m) for m in months)
+    if len(values) > 1:
+        return f"{values[0]}-{values[-1]}"
+    if values:
+        return str(values[0])
+    return ""
+
+
+def _existing_upload_keys(
+    db: Session,
+    records: list[dict],
+    country_code: Optional[str],
+    filter_country: bool = True,
+) -> set:
+    """按 (month, platform) 分批查已存在的 item_id，避免超大 IN 查询。"""
+    keys_by_scope: dict[tuple, list[str]] = {}
+    for record in records:
+        item_id = record.get("item_id")
+        if item_id is None:
+            continue
+        scope = (record.get("month"), record.get("platform"))
+        keys_by_scope.setdefault(scope, []).append(str(item_id))
+
+    existing: set = set()
+    for (month, platform), item_ids in keys_by_scope.items():
+        for start in range(0, len(item_ids), 10000):
+            chunk = item_ids[start:start + 10000]
+            query = db.query(
+                RawDataRecord.country_code,
+                RawDataRecord.item_id,
+                RawDataRecord.month,
+                RawDataRecord.platform,
+            ).filter(RawDataRecord.item_id.in_(chunk))
+            if filter_country:
+                if country_code is None:
+                    query = query.filter(RawDataRecord.country_code.is_(None))
+                else:
+                    query = query.filter(RawDataRecord.country_code == country_code)
+            if month is None:
+                query = query.filter(RawDataRecord.month.is_(None))
+            else:
+                query = query.filter(RawDataRecord.month == month)
+            if platform is None:
+                query = query.filter(RawDataRecord.platform.is_(None))
+            else:
+                query = query.filter(RawDataRecord.platform == platform)
+            for row in query.all():
+                if filter_country:
+                    existing.add((row.country_code, row.item_id, row.month, row.platform))
+                else:
+                    existing.add((row.item_id, row.month, row.platform))
+    return existing
+
+
+def _raw_data_record(file_id: int, record: dict) -> RawDataRecord:
+    return RawDataRecord(
+        file_id=file_id,
+        platform=record.get("platform"),
+        month=record.get("month"),
+        category_lv0=record.get("category_lv0"),
+        category_lv1=record.get("category_lv1"),
+        category_lv2=record.get("category_lv2"),
+        category_lv3=record.get("category_lv3"),
+        category_lv4=record.get("category_lv4"),
+        category_lv5=record.get("category_lv5"),
+        item_id=str(record.get("item_id")) if record.get("item_id") else None,
+        item_name=record.get("item_name"),
+        # bulk_save_objects bypasses SQLAlchemy validators, so populate
+        # the indexed same-title key explicitly for upload batches.
+        item_name_norm=title_key(record.get("item_name")) or None,
+        item_image=record.get("item_image"),
+        item_url=record.get("item_url"),
+        ref_price=record.get("ref_price"),
+        brand_raw=record.get("brand_raw"),
+        shop_name=record.get("shop_name"),
+        sales_qty=record.get("sales_qty"),
+        sales_amount=record.get("sales_amount"),
+        price=record.get("price"),
+        brand_std=record.get("brand_std"),
+        model_std=record.get("model_std"),
+    )
+
+
+def _raw_insert_row(file_id: int, country_code: Optional[str], record: dict) -> dict:
+    return {
+        "file_id": file_id,
+        "country_code": country_code,
+        "source_category_code": record.get("source_category_code"),
+        "source_category_name": record.get("source_category_name"),
+        "platform": record.get("platform"),
+        "month": record.get("month"),
+        "category_lv0": record.get("category_lv0"),
+        "category_lv1": record.get("category_lv1"),
+        "category_lv2": record.get("category_lv2"),
+        "category_lv3": record.get("category_lv3"),
+        "category_lv4": record.get("category_lv4"),
+        "category_lv5": record.get("category_lv5"),
+        "item_id": str(record.get("item_id")) if record.get("item_id") else None,
+        "item_name": record.get("item_name"),
+        "item_image": record.get("item_image"),
+        "item_url": record.get("item_url"),
+        "ref_price": record.get("ref_price"),
+        "brand_raw": record.get("brand_raw"),
+        "shop_name": record.get("shop_name"),
+        "sales_qty": record.get("sales_qty"),
+        "sales_amount": record.get("sales_amount"),
+        "price": record.get("price"),
+        "brand_std": record.get("brand_std"),
+        "model_std": record.get("model_std"),
+        "extra_data": record.get("extra_data"),
+    }
+
+
 @router.post("", response_model=dict)
-async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    """上传原始数据 Excel 文件，解析后写入数据库（相同 item_id+month+platform 自动去重）"""
+def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """上传原始数据 Excel 文件，解析后写入数据库（相同 item_id+month+platform 自动去重）。
+
+    使用逐块解析 + 逐块入库，避免大文件一次性读入内存。
+    """
     if not file.filename.endswith((".xlsx", ".xls", ".csv")):
         raise HTTPException(status_code=400, detail="只支持 .xlsx / .xls / .csv 格式文件")
 
@@ -214,88 +335,83 @@ async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db
     with open(save_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
-    try:
-        records, platform, month_range = parse_raw_excel(save_path)
-    except Exception as e:
-        os.remove(save_path)
-        raise HTTPException(status_code=422, detail=f"文件解析失败: {str(e)}")
-
-    # 去重：查出已存在的 (item_id, month, platform) 组合
-    keys = {
-        (str(r.get("item_id")), r.get("month"), r.get("platform"))
-        for r in records
-        if r.get("item_id") is not None
-    }
-    if keys:
-        existing_rows = db.query(
-            RawDataRecord.item_id, RawDataRecord.month, RawDataRecord.platform
-        ).filter(
-            tuple_(RawDataRecord.item_id, RawDataRecord.month, RawDataRecord.platform).in_(keys)
-        ).all()
-        existing_set = {(e.item_id, e.month, e.platform) for e in existing_rows}
-        to_insert = [
-            r for r in records
-            if (str(r.get("item_id")), r.get("month"), r.get("platform")) not in existing_set
-        ]
-    else:
-        to_insert = records
-
-    skipped = len(records) - len(to_insert)
-
-    # 写入 upload_files 表
     file_record = UploadFileRecord(
         filename=file.filename,
-        platform=platform,
-        month_range=month_range,
-        row_count=len(to_insert),
-        status="done",
+        platform=None,
+        month_range=None,
+        row_count=0,
+        status="processing",
     )
     db.add(file_record)
-    db.flush()  # 获取 id
+    db.flush()
 
-    # 批量写入 raw_data
-    batch = []
-    for r in to_insert:
-        batch.append(RawDataRecord(
-            file_id=file_record.id,
-            platform=r.get("platform"),
-            month=r.get("month"),
-            category_lv0=r.get("category_lv0"),
-            category_lv1=r.get("category_lv1"),
-            category_lv2=r.get("category_lv2"),
-            category_lv3=r.get("category_lv3"),
-            category_lv4=r.get("category_lv4"),
-            category_lv5=r.get("category_lv5"),
-            item_id=str(r.get("item_id")) if r.get("item_id") else None,
-            item_name=r.get("item_name"),
-            # bulk_save_objects bypasses SQLAlchemy validators, so populate
-            # the indexed same-title key explicitly for upload batches.
-            item_name_norm=title_key(r.get("item_name")) or None,
-            item_image=r.get("item_image"),
-            item_url=r.get("item_url"),
-            ref_price=r.get("ref_price"),
-            brand_raw=r.get("brand_raw"),
-            shop_name=r.get("shop_name"),
-            sales_qty=r.get("sales_qty"),
-            sales_amount=r.get("sales_amount"),
-            price=r.get("price"),
-            brand_std=r.get("brand_std"),
-            model_std=r.get("model_std"),
-        ))
-    db.bulk_save_objects(batch)
-    db.commit()
-    db.refresh(file_record)
+    preview: list[dict] = []
+    seen_upload_keys: set = set()
+    platform = None
+    months: set[int] = set()
+    total_rows = 0
+    inserted_total = 0
 
-    # 返回预览（前50行，取原始解析数据）
-    preview = records[:50]
+    try:
+        for chunk_records, chunk_platform, chunk_months in iter_raw_chunks(save_path):
+            if chunk_platform:
+                platform = chunk_platform
+            months.update(chunk_months)
+
+            candidate_records = []
+            for record in chunk_records:
+                item_id = record.get("item_id")
+                if item_id is None:
+                    candidate_records.append(record)
+                    continue
+                key = (str(item_id), record.get("month"), record.get("platform"))
+                if key in seen_upload_keys:
+                    continue
+                seen_upload_keys.add(key)
+                candidate_records.append(record)
+
+            existing_set = _existing_upload_keys(
+                db, candidate_records, country_code=None, filter_country=False
+            )
+            to_insert = [
+                record for record in candidate_records
+                if (str(record.get("item_id")), record.get("month"), record.get("platform"))
+                not in existing_set
+            ]
+
+            for start in range(0, len(to_insert), 5000):
+                batch = to_insert[start:start + 5000]
+                db.bulk_save_objects([
+                    _raw_data_record(file_record.id, record) for record in batch
+                ])
+
+            total_rows += len(chunk_records)
+            inserted_total += len(to_insert)
+            if len(preview) < 50:
+                preview.extend(chunk_records[:50 - len(preview)])
+
+        file_record.platform = platform or "UNKNOWN"
+        file_record.month_range = _month_range(months)
+        file_record.row_count = inserted_total
+        file_record.status = "done"
+        db.commit()
+        db.refresh(file_record)
+    except Exception as e:
+        db.rollback()
+        try:
+            os.remove(save_path)
+        except OSError:
+            pass
+        raise HTTPException(status_code=422, detail=f"文件解析失败: {str(e)}")
+
     return {
         "file_id": file_record.id,
         "filename": file.filename,
-        "platform": platform,
-        "month_range": month_range,
-        "row_count": len(records),
-        "inserted": len(to_insert),
-        "skipped": skipped,
+        "platform": file_record.platform,
+        "month_range": file_record.month_range,
+        "row_count": total_rows,
+        "inserted": inserted_total,
+        "skipped": total_rows - inserted_total,
         "preview": preview,
     }
 
@@ -558,7 +674,7 @@ def _run_upload_confirm_thread(
     data_year: int | None = None,
     data_month: int | None = None,
 ):
-    """后台线程：解析 Excel、去重、写库，更新 job 状态。"""
+    """后台线程：分块解析 Excel、去重、写库，更新 job 状态。"""
     db = SessionLocal()
     job = None
     try:
@@ -577,51 +693,11 @@ def _run_upload_confirm_thread(
         if _is_upload_job_cancelled(job_id):
             return
 
-        # 1. 解析 Excel（5→40%）
-        try:
-            records, platform, month_range = parse_with_mapping(
-                tmp_path, mapping, ignore_columns
-            )
-        except Exception as e:
-            state = _get_upload_job_progress_state(job_id)
-            _update_upload_job_progress(
-                db,
-                job,
-                status="error",
-                stage="error",
-                stage_label="文件解析失败",
-                progress=state.get("progress") or 0,
-                error_msg=f"文件解析失败: {e}",
-                finished_at=datetime.utcnow(),
-            )
-            return
-
-        if filename_month is not None:
-            for record in records:
-                record["month"] = filename_month
-        if filename_platform:
-            for record in records:
-                record["platform"] = filename_platform
-            platform = filename_platform.upper()
-        for record in records:
-            record["source_category_code"] = filename_category_code
-            record["source_category_name"] = filename_category_name
-        if filename_month is not None:
-            month_range = str(filename_month)
-        _update_upload_job_progress(
-            db,
-            job,
-            stage="reading",
-            stage_label="文件读取完成",
-            progress=40,
-            total_rows=len(records),
-            processed_rows=len(records),
-        )
-
-        # 2. 可选保存模板（40→50%）
+        # 1. 可选保存模板（只依赖 mapping，不依赖数据行）
         saved_template_id = template_id_use
         if save_template_name:
             from sqlalchemy.exc import IntegrityError
+
             fp = _col_fingerprint(list(mapping.keys()))
             existing = db.query(ColumnTemplate).filter(
                 ColumnTemplate.col_fingerprint == fp,
@@ -656,117 +732,16 @@ def _run_upload_confirm_thread(
                 except IntegrityError:
                     nested.rollback()
                     db.expunge(tmpl)
-        # 3. 去重（50→60%）
-        if _is_upload_job_cancelled(job_id):
-            return
-        _update_upload_job_progress(
-            db,
-            job,
-            stage="deduping",
-            stage_label="正在去重检查",
-            progress=45,
-            processed_rows=0,
-        )
-        # Deduplicate inside the uploaded file before querying MySQL.  Apart
-        # from shrinking the IN lists, this prevents two identical rows in one
-        # upload from colliding with the raw_data unique key.
-        candidate_records = []
-        seen_upload_keys = set()
-        for record in records:
-            item_id = record.get("item_id")
-            if item_id is None:
-                candidate_records.append(record)
-                continue
-            key = (country_code, str(item_id), record.get("month"), record.get("platform"))
-            if key in seen_upload_keys:
-                continue
-            seen_upload_keys.add(key)
-            candidate_records.append(record)
 
-        # Group keys by the two low-cardinality dimensions.  MySQL handles an
-        # indexed ``item_id IN (...)`` plus equality predicates much better than
-        # a large row-constructor IN expression; on the production 10M-row
-        # table this is the difference between ~15s and <1s per 5,000-key
-        # probe.
-        keys_by_scope = {}
-        for record in candidate_records:
-            item_id = record.get("item_id")
-            if item_id is None:
-                continue
-            scope = (country_code, record.get("month"), record.get("platform"))
-            keys_by_scope.setdefault(scope, []).append(str(item_id))
+        total_planned = count_data_rows(tmp_path)
 
-        total_keys = sum(len(item_ids) for item_ids in keys_by_scope.values())
-        existing_set: set = set()
-        if total_keys:
-            DEDUP_BATCH = 10000
-            processed = 0
-            batch_no = 0
-            for (scope_country, month, platform), item_ids in keys_by_scope.items():
-                for i in range(0, len(item_ids), DEDUP_BATCH):
-                    batch_no += 1
-                    chunk = item_ids[i: i + DEDUP_BATCH]
-                    is_last_batch = processed + len(chunk) >= total_keys
-                    if batch_no % PROGRESS_BATCH_INTERVAL == 1 or is_last_batch:
-                        if _is_upload_job_cancelled(job_id):
-                            return
-
-                    query = db.query(
-                        RawDataRecord.country_code,
-                        RawDataRecord.item_id,
-                        RawDataRecord.month,
-                        RawDataRecord.platform,
-                    ).filter(RawDataRecord.item_id.in_(chunk))
-                    if scope_country is None:
-                        query = query.filter(RawDataRecord.country_code.is_(None))
-                    else:
-                        query = query.filter(RawDataRecord.country_code == scope_country)
-                    if month is None:
-                        query = query.filter(RawDataRecord.month.is_(None))
-                    else:
-                        query = query.filter(RawDataRecord.month == month)
-                    if platform is None:
-                        query = query.filter(RawDataRecord.platform.is_(None))
-                    else:
-                        query = query.filter(RawDataRecord.platform == platform)
-                    rows = query.all()
-                    existing_set.update((e.country_code, e.item_id, e.month, e.platform) for e in rows)
-                    processed += len(chunk)
-                    if batch_no % PROGRESS_BATCH_INTERVAL == 1 or is_last_batch:
-                        _update_upload_job_progress(
-                            db,
-                            job,
-                            stage="deduping",
-                            stage_label="正在去重检查",
-                            progress=45 + int(15 * processed / max(total_keys, 1)),
-                            processed_rows=processed,
-                        )
-        to_insert = [
-            r for r in candidate_records
-            if (country_code, str(r.get("item_id")), r.get("month"), r.get("platform")) not in existing_set
-        ]
-        skipped = len(records) - len(to_insert)
-        _update_upload_job_progress(
-            db,
-            job,
-            stage="deduping",
-            stage_label="去重完成",
-            progress=60,
-            processed_rows=len(records),
-            inserted_rows=0,
-            skipped_rows=skipped,
-        )
-
-        if _is_upload_job_cancelled(job_id):
-            return
-
-        # 4. 写 upload_files 记录（60→65%）
+        # 2. 创建 upload_files 记录（同一事务，失败会回滚）
         file_record = UploadFileRecord(
             filename=original_filename,
-            platform=platform,
-            month_range=month_range,
-            row_count=len(records),
-            status="done",
+            platform=None,
+            month_range=None,
+            row_count=0,
+            status="processing",
             template_id=saved_template_id,
             data_region=data_region,
             country_code=country_code,
@@ -779,84 +754,114 @@ def _run_upload_confirm_thread(
         _update_upload_job_progress(
             db,
             job,
-            stage="inserting",
-            stage_label="正在写入数据",
-            progress=65,
+            stage="reading",
+            stage_label="正在解析并写入数据",
+            progress=10,
+            total_rows=total_planned,
             processed_rows=0,
             inserted_rows=0,
+            skipped_rows=0,
         )
 
-        # 5. 批量写入 raw_data（65→90%）
-        if to_insert:
-            batch_size = 5000
-            for i in range(0, len(to_insert), batch_size):
-                batch_no = i // batch_size
-                is_last_batch = i + batch_size >= len(to_insert)
-                if batch_no % PROGRESS_BATCH_INTERVAL == 0 or is_last_batch:
-                    if _is_upload_job_cancelled(job_id):
-                        db.rollback()
-                        return
-                chunk = to_insert[i: i + batch_size]
+        seen_upload_keys: set = set()
+        preview: list[dict] = []
+        total_rows = 0
+        inserted_total = 0
+        skipped_total = 0
+        platform = None
+        months: set[int] = set()
+
+        for chunk_records, chunk_platform, chunk_months in iter_mapped_chunks(
+            tmp_path, mapping, ignore_columns
+        ):
+            if _is_upload_job_cancelled(job_id):
+                db.rollback()
+                return
+
+            for record in chunk_records:
+                if filename_month is not None:
+                    record["month"] = filename_month
+                if filename_platform:
+                    record["platform"] = filename_platform
+                record["source_category_code"] = filename_category_code
+                record["source_category_name"] = filename_category_name
+
+            if not platform and chunk_platform and chunk_platform != "UNKNOWN":
+                platform = chunk_platform
+            months.update(chunk_months)
+
+            # 文件内去重（跨 chunk 共享 seen 集合）
+            candidate_records = []
+            for record in chunk_records:
+                item_id = record.get("item_id")
+                if item_id is None:
+                    candidate_records.append(record)
+                    continue
+                key = (country_code, str(item_id), record.get("month"), record.get("platform"))
+                if key in seen_upload_keys:
+                    continue
+                seen_upload_keys.add(key)
+                candidate_records.append(record)
+
+            # 与数据库去重（按当前 chunk 分批查询）
+            existing_set = _existing_upload_keys(
+                db, candidate_records, country_code, filter_country=True
+            )
+            to_insert = [
+                record for record in candidate_records
+                if (country_code, str(record.get("item_id")), record.get("month"), record.get("platform"))
+                not in existing_set
+            ]
+
+            for start in range(0, len(to_insert), 5000):
+                if _is_upload_job_cancelled(job_id):
+                    db.rollback()
+                    return
+                batch = to_insert[start:start + 5000]
                 db.execute(
                     RawDataRecord.__table__.insert(),
-                    [
-                        {
-                            "file_id":      file_record.id,
-                            "country_code": country_code,
-                            "source_category_code": r.get("source_category_code"),
-                            "source_category_name": r.get("source_category_name"),
-                            "platform":     r.get("platform"),
-                            "month":        r.get("month"),
-                            "category_lv0": r.get("category_lv0"),
-                            "category_lv1": r.get("category_lv1"),
-                            "category_lv2": r.get("category_lv2"),
-                            "category_lv3": r.get("category_lv3"),
-                            "category_lv4": r.get("category_lv4"),
-                            "category_lv5": r.get("category_lv5"),
-                            "item_id":      str(r.get("item_id")) if r.get("item_id") else None,
-                            "item_name":    r.get("item_name"),
-                            "item_image":   r.get("item_image"),
-                            "item_url":     r.get("item_url"),
-                            "ref_price":    r.get("ref_price"),
-                            "brand_raw":    r.get("brand_raw"),
-                            "shop_name":    r.get("shop_name"),
-                            "sales_qty":    r.get("sales_qty"),
-                            "sales_amount": r.get("sales_amount"),
-                            "price":        r.get("price"),
-                            "brand_std":    r.get("brand_std"),
-                            "model_std":    r.get("model_std"),
-                            "extra_data":   r.get("extra_data"),
-                        }
-                        for r in chunk
-                    ],
+                    [_raw_insert_row(file_record.id, country_code, record) for record in batch],
                 )
-                inserted = min(i + batch_size, len(to_insert))
-                if batch_no % PROGRESS_BATCH_INTERVAL == 0 or is_last_batch:
-                    _update_upload_job_progress(
-                        db,
-                        job,
-                        stage="inserting",
-                        stage_label="正在写入数据",
-                        progress=65 + int(25 * inserted / max(len(to_insert), 1)),
-                        processed_rows=inserted,
-                        inserted_rows=inserted,
-                        skipped_rows=skipped,
-                    )
+
+            total_rows += len(chunk_records)
+            inserted_total += len(to_insert)
+            skipped_total += len(chunk_records) - len(to_insert)
+            if len(preview) < 50:
+                preview.extend(chunk_records[:50 - len(preview)])
+
+            if total_planned:
+                progress = 10 + int(80 * total_rows / max(total_planned, 1))
+            else:
+                progress = 10
+            _update_upload_job_progress(
+                db,
+                job,
+                stage="inserting",
+                stage_label="正在解析并写入数据",
+                progress=min(progress, 90),
+                total_rows=total_planned or total_rows,
+                processed_rows=total_rows,
+                inserted_rows=inserted_total,
+                skipped_rows=skipped_total,
+            )
+
+        # 3. 提交数据
         db.commit()
         invalidate_rawdata_cache()
-        db.refresh(file_record)
-        _update_upload_job_progress(
-            db,
-            job,
-            stage="finalizing",
-            stage_label="正在收尾",
-            progress=90,
-            processed_rows=len(records),
-            inserted_rows=len(to_insert),
-            skipped_rows=skipped,
-        )
 
-        # 6. 移动临时文件（90→95%）
+        # 4. 更新 upload_files 记录
+        file_record.row_count = total_rows
+        file_record.platform = (
+            filename_platform.upper() if filename_platform else (platform or "UNKNOWN")
+        )
+        file_record.month_range = (
+            str(filename_month) if filename_month is not None else _month_range(months)
+        )
+        file_record.status = "done"
+        db.commit()
+        db.refresh(file_record)
+
+        # 5. 移动临时文件
         final_path = Path(settings.UPLOAD_DIR) / original_filename
         shutil.move(str(tmp_path), str(final_path))
         _update_upload_job_progress(
@@ -865,31 +870,34 @@ def _run_upload_confirm_thread(
             stage="finalizing",
             stage_label="正在生成结果",
             progress=95,
+            processed_rows=total_rows,
+            inserted_rows=inserted_total,
+            skipped_rows=skipped_total,
         )
 
-        # 7. 写 done（95→100%）
+        # 6. 写 done
         result = {
-            "file_id":     file_record.id,
-            "filename":    original_filename,
-            "platform":    platform,
-            "month_range": month_range,
-            "row_count":   len(records),
-            "total_rows":  len(records),
-            "inserted":    len(to_insert),
-            "skipped":     skipped,
+            "file_id": file_record.id,
+            "filename": original_filename,
+            "platform": file_record.platform,
+            "month_range": file_record.month_range,
+            "row_count": total_rows,
+            "total_rows": total_rows,
+            "inserted": inserted_total,
+            "skipped": skipped_total,
             "country_code": country_code,
             "batch_key": batch_key,
-            "preview":     records[:50],
+            "preview": preview,
         }
         job.file_id = file_record.id
         job.status = "done"
         job.stage = "done"
         job.stage_label = "处理完成"
         job.progress = 100
-        job.total_rows = len(records)
-        job.processed_rows = len(records)
-        job.inserted_rows = len(to_insert)
-        job.skipped_rows = skipped
+        job.total_rows = total_rows
+        job.processed_rows = total_rows
+        job.inserted_rows = inserted_total
+        job.skipped_rows = skipped_total
         job.result_data = result
         job.finished_at = datetime.utcnow()
         db.commit()
@@ -917,7 +925,6 @@ def _run_upload_confirm_thread(
     finally:
         _upload_progress.pop(job_id, None)
         db.close()
-
 
 def _col_fingerprint(columns: list) -> str:
     return _ih_col_fingerprint(columns)
@@ -1013,7 +1020,7 @@ def download_upload_sample():
 
 
 @router.post("/headers")
-async def upload_headers(
+def upload_headers(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
@@ -1062,7 +1069,7 @@ async def upload_headers(
 
 
 @router.post("/confirm", status_code=202)
-async def upload_confirm(payload: dict, db: Session = Depends(get_db)):
+def upload_confirm(payload: dict, db: Session = Depends(get_db)):
     """Phase 2: 异步处理——立即返回 job_id，后台线程解析+写库。"""
     temp_file_id: str = payload.get("temp_file_id", "")
     mapping: dict = payload.get("mapping", {})

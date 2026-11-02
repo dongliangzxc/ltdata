@@ -17,6 +17,8 @@ services:
         IMAGE_PREFIX: ${IMAGE_PREFIX:-}
     image: ltdata-backend:latest
     restart: always
+    mem_limit: 4g
+    memswap_limit: 4g
     logging:
       driver: json-file
       options:

@@ -31,6 +31,8 @@ services:
       args:
         IMAGE_PREFIX: ${IMAGE_PREFIX:-}
     restart: always
+    mem_limit: 4g
+    memswap_limit: 4g
     environment:
       DATABASE_URL: mysql+pymysql://luotu:${MYSQL_PASSWORD:-luotu123}@mysql:3306/luotu
       ANALYTICS_DATABASE_URL: mysql+pymysql://luotu:${MYSQL_PASSWORD:-luotu123}@mysql:3306/luotu_analytics

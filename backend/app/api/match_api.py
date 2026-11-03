@@ -2,8 +2,10 @@
 型号匹配 API
 """
 import io
+import json
 import logging
 import time
+import uuid
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -18,6 +20,7 @@ from openpyxl import Workbook
 from sqlalchemy.orm import Session
 from app.core.auth_deps import get_current_user
 from app.core.permissions import visible_category_codes
+from app.core.config import settings
 from app.models.database import get_db, SessionLocal
 from sqlalchemy import and_, case, exists, func, or_
 from app.models.schemas import (
@@ -2309,6 +2312,7 @@ def list_reviewed_global(
     page_size: int = Query(20, ge=1, le=100),
     tab: Literal["all", "pending_review", "confirmed"] = "all",
     clean_job_id: Optional[int] = None,
+    month: Optional[int] = None,
     match_source: Optional[list[str]] = Query(None),
     price_flag: Optional[Literal["below", "above", "normal", "none"]] = None,
     keyword: Optional[str] = None,
@@ -2332,6 +2336,8 @@ def list_reviewed_global(
         q = q.filter(MatchResult.match_status.in_(reviewable_statuses))
         if clean_job_id is not None:
             q = q.filter(MatchResult.clean_job_id == clean_job_id)
+        if month is not None:
+            q = q.filter(RawDataRecord.month == month)
         if match_source:
             q = q.filter(MatchResult.match_source.in_(match_source))
         if price_flag is not None:
@@ -2387,7 +2393,7 @@ def list_reviewed_global(
 
     # counts：先建 base，再按 tab 分别 count
     counts = {}
-    needs_raw_join = bool(keyword or id_keyword or platform or brand_keyword or model_keyword)
+    needs_raw_join = bool(keyword or id_keyword or platform or brand_keyword or model_keyword or month is not None)
     for which in ("all", "pending_review", "confirmed"):
         q_count = apply_common_filters(db.query(MatchResult.id), join_raw=needs_raw_join, join_model=True)
         q_count = apply_tab(q_count, which)
@@ -2626,6 +2632,7 @@ def _apply_reviewed_filters(
     q,
     *,
     clean_job_id=None,
+    month=None,
     match_source=None,
     price_flag=None,
     keyword=None,
@@ -2640,6 +2647,8 @@ def _apply_reviewed_filters(
     q = q.filter(MatchResult.match_status.in_(_BULK_REVIEWABLE_STATUSES))
     if clean_job_id is not None:
         q = q.filter(MatchResult.clean_job_id == clean_job_id)
+    if month is not None:
+        q = q.filter(RawDataRecord.month == month)
     if match_source:
         q = q.filter(MatchResult.match_source.in_(match_source))
     if price_flag is not None:
@@ -2700,6 +2709,7 @@ def _reviewed_correction_base_query(db: Session):
 
 class _BulkCoefficientIn(_PydanticBase):
     clean_job_id: Optional[int] = None
+    month: Optional[int] = None
     tab: Literal["all", "pending_review", "confirmed"] = "all"
     match_source: Optional[list[str]] = None
     price_flag: Optional[Literal["below", "above", "normal", "none"]] = None
@@ -2730,6 +2740,7 @@ def bulk_update_reviewed_coefficient(
     q = _apply_reviewed_filters(
         q,
         clean_job_id=payload.clean_job_id,
+        month=payload.month,
         match_source=payload.match_source,
         price_flag=payload.price_flag,
         keyword=payload.keyword,
@@ -2889,6 +2900,7 @@ def _reviewed_export_row(mr, rd, model, cleaned, job, cat_map) -> dict:
 def export_reviewed_matches(
     tab: Literal["all", "pending_review", "confirmed"] = Query("all"),
     clean_job_id: Optional[int] = Query(None),
+    month: Optional[int] = Query(None),
     match_source: Optional[list[str]] = Query(None),
     price_flag: Optional[Literal["below", "above", "normal", "none"]] = Query(None),
     keyword: Optional[str] = Query(None),
@@ -2906,6 +2918,7 @@ def export_reviewed_matches(
     q = _apply_reviewed_filters(
         q,
         clean_job_id=clean_job_id,
+        month=month,
         match_source=match_source,
         price_flag=price_flag,
         keyword=keyword,
@@ -3024,7 +3037,7 @@ def _find_upload_column(columns: list[str], candidates: list[str]) -> Optional[s
     return None
 
 
-def _load_upload_match_targets(db: Session, urls: set[str], clean_job_id: Optional[int]):
+def _load_upload_match_targets(db: Session, urls: set[str], clean_job_id: Optional[int], month: Optional[int] = None):
     """按上传链接加载可调整的匹配结果。
 
     有任务筛选时先按 ``clean_job_id`` 走索引，避免对千万级 raw_data 做
@@ -3054,6 +3067,8 @@ def _load_upload_match_targets(db: Session, urls: set[str], clean_job_id: Option
     )
     if clean_job_id is not None:
         base_q = base_q.filter(MatchResult.clean_job_id == clean_job_id)
+    if month is not None:
+        base_q = base_q.filter(RawDataRecord.month == month)
 
     matched: dict[int, tuple] = {}
     for chunk in _chunked(url_list, 500):
@@ -3076,23 +3091,74 @@ def _load_upload_match_targets(db: Session, urls: set[str], clean_job_id: Option
     return by_url, by_item_key
 
 
-@router.post("/reviewed/bulk-update-by-url")
-def bulk_update_reviewed_by_url(
-    file: UploadFile = File(...),
-    clean_job_id: Optional[int] = Form(None),
-    db: Session = Depends(get_db),
-):
-    """按商品链接批量改销量/价格，并自动换算对应调整系数。
+_BULK_PREVIEW_TTL_SECONDS = 3600
 
-    Excel/CSV 列：商品链接（必填）、销量、价格（至少一项）。
-    销量系数 = 新销量 / 修正后销量（无修正值则用原销量）；
-    价格直接写入 adjusted_price，价格系数由前端按 adjusted_price / 原价格展示。
-    """
-    suffix = Path(file.filename or "").suffix.lower()
-    contents = file.file.read()
-    if not contents:
-        raise HTTPException(status_code=400, detail="文件为空")
 
+def _bulk_preview_dir() -> Path:
+    path = Path(settings.UPLOAD_DIR) / "bulk_update_previews"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _cleanup_bulk_previews() -> None:
+    cutoff = time.time() - _BULK_PREVIEW_TTL_SECONDS
+    for path in _bulk_preview_dir().glob("*.json"):
+        try:
+            if path.stat().st_mtime < cutoff:
+                path.unlink()
+        except OSError:
+            pass
+
+
+def _save_bulk_url_preview(payload: dict) -> str:
+    _cleanup_bulk_previews()
+    preview_id = uuid.uuid4().hex
+    path = _bulk_preview_dir() / f"{preview_id}.json"
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return preview_id
+
+
+def _load_bulk_url_preview(preview_id: str, user_id: int) -> dict:
+    if (
+        not preview_id
+        or len(preview_id) != 32
+        or any(ch not in "0123456789abcdef" for ch in preview_id.lower())
+    ):
+        raise HTTPException(status_code=400, detail="预览 ID 无效")
+    path = _bulk_preview_dir() / f"{preview_id}.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="预览已过期，请重新上传")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="预览数据损坏，请重新上传") from exc
+    if data.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="无权使用该预览")
+    return data
+
+
+def _delete_bulk_url_preview(preview_id: str) -> None:
+    try:
+        (_bulk_preview_dir() / f"{preview_id}.json").unlink()
+    except OSError:
+        pass
+
+
+def _empty_bulk_url_result(errors: list[str], warnings: list[str]) -> dict:
+    return {
+        "rows": 0,
+        "matched_urls": 0,
+        "updated_count": 0,
+        "skipped_rows": len(errors),
+        "errors": errors[:50],
+        "warnings": warnings[:50],
+        "updated_items": [],
+        "updated_items_total": 0,
+        "updated_items_truncated": False,
+    }
+
+
+def _parse_bulk_url_file(contents: bytes, suffix: str) -> tuple[list[dict], list[str], list[str]]:
     try:
         if suffix == ".csv":
             try:
@@ -3144,15 +3210,24 @@ def bulk_update_reviewed_by_url(
             "price": new_price,
         })
 
+    return upload_rows, errors, warnings
+
+
+def _apply_bulk_url_rows(
+    db: Session,
+    upload_rows: list[dict],
+    errors: list[str],
+    warnings: list[str],
+    clean_job_id: Optional[int],
+    month: Optional[int],
+    *,
+    dry_run: bool,
+) -> dict:
     if not upload_rows:
-        return {
-            "rows": 0, "matched_urls": 0, "updated_count": 0,
-            "skipped_rows": len(errors), "errors": errors[:50], "warnings": warnings[:50],
-            "updated_items": [], "updated_items_total": 0, "updated_items_truncated": False,
-        }
+        return _empty_bulk_url_result(errors, warnings)
 
     by_url, by_item_key = _load_upload_match_targets(
-        db, {row["url"] for row in upload_rows}, clean_job_id
+        db, {row["url"] for row in upload_rows}, clean_job_id, month
     )
 
     touched_job_ids: set[int] = set()
@@ -3164,6 +3239,7 @@ def bulk_update_reviewed_by_url(
         targets = by_url.get(item["url"])
         if not targets:
             from app.utils.url_utils import extract_item_id
+
             info = extract_item_id(item["url"])
             if info:
                 targets = by_item_key.get((info[0].lower(), info[1]))
@@ -3245,9 +3321,12 @@ def bulk_update_reviewed_by_url(
         if not row_applied:
             skipped_rows += 1
 
-    for job_id in touched_job_ids:
-        touch_clean_job(db, job_id)
-    db.commit()
+    if dry_run:
+        db.rollback()
+    else:
+        for job_id in touched_job_ids:
+            touch_clean_job(db, job_id)
+        db.commit()
 
     errors = list(dict.fromkeys(errors))
     updated_items = sorted(updated_details.values(), key=lambda row: row["match_result_id"])
@@ -3265,3 +3344,84 @@ def bulk_update_reviewed_by_url(
         "updated_items_total": updated_items_total,
         "updated_items_truncated": updated_items_total > len(updated_items),
     }
+
+
+@router.post("/reviewed/bulk-update-by-url/preview")
+def preview_bulk_update_reviewed_by_url(
+    file: UploadFile = File(...),
+    clean_job_id: Optional[int] = Form(None),
+    month: Optional[int] = Form(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """解析并预览按商品链接批量改销量/价格，不写库；返回 preview_id 供确认导入。"""
+    suffix = Path(file.filename or "").suffix.lower()
+    contents = file.file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="文件为空")
+
+    upload_rows, errors, warnings = _parse_bulk_url_file(contents, suffix)
+    result = _apply_bulk_url_rows(
+        db, upload_rows, errors, warnings, clean_job_id, month, dry_run=True
+    )
+
+    preview_id = None
+    if upload_rows:
+        preview_id = _save_bulk_url_preview({
+            "user_id": current_user.id,
+            "clean_job_id": clean_job_id,
+            "month": month,
+            "rows": upload_rows,
+            "errors": errors,
+            "warnings": warnings,
+            "created_at": time.time(),
+        })
+
+    return {**result, "preview_id": preview_id}
+
+
+class _BulkUrlConfirmIn(_PydanticBase):
+    preview_id: str
+
+
+@router.post("/reviewed/bulk-update-by-url/confirm")
+def confirm_bulk_update_reviewed_by_url(
+    payload: _BulkUrlConfirmIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """确认导入：按 preview_id 取回预览数据并正式写库。"""
+    data = _load_bulk_url_preview(payload.preview_id, current_user.id)
+    result = _apply_bulk_url_rows(
+        db,
+        data.get("rows", []),
+        list(data.get("errors", [])),
+        list(data.get("warnings", [])),
+        data.get("clean_job_id"),
+        data.get("month"),
+        dry_run=False,
+    )
+    _delete_bulk_url_preview(payload.preview_id)
+    return result
+
+
+@router.post("/reviewed/bulk-update-by-url")
+def bulk_update_reviewed_by_url(
+    file: UploadFile = File(...),
+    clean_job_id: Optional[int] = Form(None),
+    month: Optional[int] = Form(None),
+    db: Session = Depends(get_db),
+):
+    """兼容旧接口：按商品链接批量改销量/价格，解析后立即写库。
+
+    新前端使用 preview + confirm 两步流程；此接口保留给直接 API 调用。
+    """
+    suffix = Path(file.filename or "").suffix.lower()
+    contents = file.file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="文件为空")
+
+    upload_rows, errors, warnings = _parse_bulk_url_file(contents, suffix)
+    return _apply_bulk_url_rows(
+        db, upload_rows, errors, warnings, clean_job_id, month, dry_run=False
+    )

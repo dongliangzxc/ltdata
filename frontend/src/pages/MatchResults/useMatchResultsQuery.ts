@@ -10,6 +10,7 @@ export interface MatchResultsState {
   page: number
   tab: MatchResultsTab
   cleanJobId?: number
+  month?: number
   matchSource: string[]
   priceFlag?: PriceFlagFilter
   keyword: string
@@ -35,11 +36,13 @@ function readState(params: URLSearchParams): MatchResultsState {
   const rawPrice = params.get('price_flag') as PriceFlagFilter | null
   const rawCoefficientFilter = params.get('coefficient_filter') as CoefficientFilter | null
   const rawJob = params.get('job_id')
+  const rawMonth = params.get('month')
   const rawPage = params.get('page')
   return {
     page: rawPage ? Math.max(1, parseInt(rawPage, 10) || 1) : 1,
     tab: rawTab && VALID_TABS.includes(rawTab) ? rawTab : 'all',
     cleanJobId: rawJob ? Number(rawJob) || undefined : undefined,
+    month: rawMonth ? Number(rawMonth) || undefined : undefined,
     matchSource: params.getAll('match_source'),
     priceFlag: rawPrice && VALID_PRICE.includes(rawPrice) ? rawPrice : undefined,
     keyword: params.get('keyword') ?? '',
@@ -57,6 +60,7 @@ function writeState(state: MatchResultsState): URLSearchParams {
   const p = new URLSearchParams()
   if (state.tab !== 'all') p.set('tab', state.tab)
   if (state.cleanJobId != null) p.set('job_id', String(state.cleanJobId))
+  if (state.month != null) p.set('month', String(state.month))
   state.matchSource.forEach(s => p.append('match_source', s))
   if (state.priceFlag) p.set('price_flag', state.priceFlag)
   if (state.keyword) p.set('keyword', state.keyword)
@@ -74,7 +78,7 @@ function writeState(state: MatchResultsState): URLSearchParams {
 export function useMatchResultsQuery() {
   const [searchParams, setSearchParams] = useSearchParams()
   const state = useMemo(() => readState(searchParams), [searchParams])
-  const canQuery = !!state.categoryCode || state.cleanJobId != null
+  const canQuery = !!state.categoryCode || state.cleanJobId != null || state.month != null
 
   const setState = (patch: Partial<MatchResultsState>) => {
     const merged: MatchResultsState = { ...state, ...patch }
@@ -92,6 +96,7 @@ export function useMatchResultsQuery() {
       page_size: 20,
       tab: state.tab,
       clean_job_id: state.cleanJobId,
+      month: state.month,
       match_source: state.matchSource.length > 0 ? state.matchSource : undefined,
       price_flag: state.priceFlag,
       keyword: state.keyword || undefined,
@@ -109,6 +114,7 @@ export function useMatchResultsQuery() {
         state.page,
         state.tab,
         state.cleanJobId,
+        state.month,
         state.matchSource.join(','),
         state.priceFlag,
         state.keyword,

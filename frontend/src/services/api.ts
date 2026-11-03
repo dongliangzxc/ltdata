@@ -2037,6 +2037,7 @@ export interface MatchResultsQuery {
   page_size?: number
   tab?: MatchResultsTab
   clean_job_id?: number
+  month?: number
   match_source?: string[]
   price_flag?: PriceFlagFilter
   keyword?: string
@@ -2125,6 +2126,21 @@ export const bulkUpdateReviewedByUrl = (formData: FormData, clean_job_id?: numbe
     headers: { 'Content-Type': 'multipart/form-data' },
   })
 }
+
+export interface BulkUrlUpdatePreviewResponse extends BulkUrlUpdateResponse {
+  preview_id: string | null
+}
+
+export const previewBulkUpdateReviewedByUrl = (formData: FormData, clean_job_id?: number, month?: number) => {
+  if (clean_job_id != null) formData.append('clean_job_id', String(clean_job_id))
+  if (month != null) formData.append('month', String(month))
+  return api.post<BulkUrlUpdatePreviewResponse>('/match/reviewed/bulk-update-by-url/preview', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+}
+
+export const confirmBulkUpdateReviewedByUrl = (preview_id: string) =>
+  api.post<BulkUrlUpdateResponse>('/match/reviewed/bulk-update-by-url/confirm', { preview_id })
 
 export const listMatchSeries = (params?: { category_code?: string }) =>
   api.get<string[]>('/match/series', { params })

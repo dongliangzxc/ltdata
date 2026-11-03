@@ -9,9 +9,9 @@ import {
 import { useRequest } from 'ahooks'
 import {
   listCleanJobs, updateMatchCoefficient, updateMatchPrice, listModelExtraFields, listCategories, listMatchSeries,
-  bulkUpdateReviewedCoefficient, exportReviewedMatches, bulkUpdateReviewedByUrl, getReviewedBulkUpdateTemplate,
+  bulkUpdateReviewedCoefficient, exportReviewedMatches, previewBulkUpdateReviewedByUrl, confirmBulkUpdateReviewedByUrl, getReviewedBulkUpdateTemplate,
   type CleanJobItem, type ReviewedMatchResultOut,
-  type MatchResultsTab, type BulkCoefficientPayload, type BulkUrlUpdateResponse } from '../../services/api'
+  type MatchResultsTab, type BulkCoefficientPayload, type BulkUrlUpdateResponse, type BulkUrlUpdatePreviewResponse } from '../../services/api'
 import { buildMatchResultsColumns } from './columns'
 import { useMatchResultsQuery } from './useMatchResultsQuery'
 import ReselectModal from '../Match/components/ReselectModal'
@@ -51,6 +51,8 @@ const formatSummaryMoney = (value?: number | null) =>
 const formatSummaryQuantity = (value?: number | null) =>
   value == null ? '-' : value.toLocaleString(undefined, { maximumFractionDigits: 0 })
 
+const formatMonth = (value: number) => `${Math.floor(value / 100)}-${String(value % 100).padStart(2, '0')}`
+
 export default function MatchResultsPage() {
   const { state, setState, reset, data, loading, refresh, canQuery } = useMatchResultsQuery()
   const [reselectOpen, setReselectOpen] = useState(false)
@@ -73,7 +75,9 @@ export default function MatchResultsPage() {
   const [exporting, setExporting] = useState(false)
   const [uploadOpen, setUploadOpen] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [uploadPreview, setUploadPreview] = useState<BulkUrlUpdatePreviewResponse | null>(null)
   const [uploadResult, setUploadResult] = useState<BulkUrlUpdateResponse | null>(null)
+  const [confirmingUpload, setConfirmingUpload] = useState(false)
 
   useEffect(() => {
     setKeywordInput(state.keyword ?? '')
@@ -86,7 +90,7 @@ export default function MatchResultsPage() {
   useEffect(() => {
     setExcludedIds(new Set())
   }, [
-    state.cleanJobId, state.tab, state.matchSource.join(','), state.priceFlag,
+    state.cleanJobId, state.tab, state.month, state.matchSource.join(','), state.priceFlag,
     state.keyword, state.idKeyword, state.platform, state.brandKeyword,
     state.modelKeyword, state.categoryCode, state.series, state.coefficientFilter,
   ])
@@ -178,10 +182,22 @@ export default function MatchResultsPage() {
     { refreshDeps: [state.categoryCode] },
   )
   const jobOptions = useMemo(
-    () => (jobsData ?? []).map((j: CleanJobItem) => ({
-      value: j.id,
-      label: `#${j.id} · ${j.task_name || '未命名任务'}`,
-    })),
+    () => (jobsData ?? [])
+      .filter((j: CleanJobItem) => state.month == null || j.month === state.month)
+      .map((j: CleanJobItem) => ({
+        value: j.id,
+        label: `#${j.id} · ${j.task_name || '未命名任务'}`,
+      })),
+    [jobsData, state.month],
+  )
+  const monthOptions = useMemo(
+    () => Array.from(new Set(
+      (jobsData ?? [])
+        .map((j: CleanJobItem) => j.month)
+        .filter((m): m is number => m != null)
+    ))
+      .sort((a, b) => b - a)
+      .map(m => ({ value: m, label: `${Math.floor(m / 100)}-${String(m % 100).padStart(2, '0')}` })),
     [jobsData],
   )
   const platformOptions = useMemo(() => Array.from(new Set(
@@ -246,6 +262,7 @@ export default function MatchResultsPage() {
   const buildFilterPayload = (): Omit<BulkCoefficientPayload, 'target' | 'coefficient'> => ({
     tab: state.tab,
     clean_job_id: state.cleanJobId,
+    month: state.month,
     match_source: state.matchSource.length > 0 ? state.matchSource : undefined,
     price_flag: state.priceFlag,
     keyword: state.keyword || undefined,
@@ -320,12 +337,31 @@ export default function MatchResultsPage() {
 
   const handleUploadFile = async (file: File) => {
     setUploading(true)
+    setUploadPreview(null)
     setUploadResult(null)
     try {
       const formData = new FormData()
       formData.append('file', file)
-      const res = await bulkUpdateReviewedByUrl(formData, state.cleanJobId)
+      const res = await previewBulkUpdateReviewedByUrl(formData, state.cleanJobId, state.month)
+      setUploadPreview(res.data)
+      if (!res.data.preview_id) {
+        message.warning('没有可导入的数据，请查看错误信息')
+      }
+    } catch {
+      message.error('上传失败，请检查文件格式后重试')
+    } finally {
+      setUploading(false)
+    }
+    return false
+  }
+
+  const handleConfirmUpload = async () => {
+    if (!uploadPreview?.preview_id) return
+    setConfirmingUpload(true)
+    try {
+      const res = await confirmBulkUpdateReviewedByUrl(uploadPreview.preview_id)
       setUploadResult(res.data)
+      setUploadPreview(null)
       if (res.data.updated_count > 0) {
         message.success(`已更新 ${res.data.updated_count} 条匹配结果`)
         setCoefficientDrafts({})
@@ -337,11 +373,10 @@ export default function MatchResultsPage() {
         message.warning('未更新任何匹配结果，请查看失败原因')
       }
     } catch {
-      message.error('上传失败，请检查文件格式后重试')
+      message.error('确认导入失败，请重试')
     } finally {
-      setUploading(false)
+      setConfirmingUpload(false)
     }
-    return false
   }
 
   const counts = data?.counts ?? { all: 0, pending_review: 0, confirmed: 0 }
@@ -350,6 +385,8 @@ export default function MatchResultsPage() {
   const selectedCount = Math.max(0, total - excludedIds.size)
   const currentPageSelectedKeys = items.filter(item => !excludedIds.has(item.id)).map(item => item.id)
   const summary = data?.summary
+  const uploadSummary = uploadResult ?? uploadPreview
+  const isPreview = !uploadResult && !!uploadPreview
 
   const tabItems = [
     { key: 'all',            label: <span>全部 <Badge count={counts.all} showZero style={{ backgroundColor: '#8c8c8c' }} /></span> },
@@ -367,11 +404,24 @@ export default function MatchResultsPage() {
               <Text type="secondary">任务：</Text>
               <Select
                 allowClear showSearch style={{ width: 260 }}
-                placeholder="全部任务（未选时展示全库）"
+                placeholder="按任务筛选（可选）"
                 value={state.cleanJobId}
                 options={jobOptions}
                 optionFilterProp="label"
                 onChange={v => setState({ cleanJobId: v ?? undefined, series: undefined })}
+              />
+            </Space>
+          </Col>
+          <Col>
+            <Space>
+              <Text type="secondary">月份：</Text>
+              <Select
+                allowClear showSearch style={{ width: 150 }}
+                placeholder="全部月份"
+                value={state.month}
+                options={monthOptions}
+                optionFilterProp="label"
+                onChange={month => setState({ month: month ?? undefined, cleanJobId: undefined })}
               />
             </Space>
           </Col>
@@ -502,7 +552,7 @@ export default function MatchResultsPage() {
             type="info"
             showIcon
             style={{ marginTop: 8 }}
-            message="请先选择品类或清洗任务，再查看匹配结果"
+            message="请先选择品类、清洗任务或月份，再查看匹配结果"
           />
         )}
       </Card>
@@ -546,7 +596,7 @@ export default function MatchResultsPage() {
           </Button>
           <Button
             icon={<UploadOutlined />}
-            onClick={() => { setUploadResult(null); setUploadOpen(true) }}
+            onClick={() => { setUploadPreview(null); setUploadResult(null); setUploadOpen(true) }}
           >
             批量上传量价
           </Button>
@@ -661,8 +711,19 @@ export default function MatchResultsPage() {
       <Modal
         title="批量上传改销量/价格"
         open={uploadOpen}
-        onCancel={() => setUploadOpen(false)}
-        footer={null}
+        onCancel={() => { setUploadOpen(false); setUploadPreview(null); setUploadResult(null) }}
+        footer={
+          uploadPreview?.preview_id ? (
+            <Space>
+              <Button onClick={() => { setUploadPreview(null); setUploadOpen(false) }}>取消</Button>
+              <Button type="primary" loading={confirmingUpload} onClick={handleConfirmUpload}>
+                确认导入
+              </Button>
+            </Space>
+          ) : (
+            <Button onClick={() => setUploadOpen(false)}>关闭</Button>
+          )
+        }
         width={1000}
         destroyOnClose
       >
@@ -671,9 +732,13 @@ export default function MatchResultsPage() {
             type="info"
             showIcon
             message="按商品链接匹配已有匹配结果，填写新的销量/价格后系统自动换算调整系数。"
-            description={state.cleanJobId != null
-              ? `仅更新当前任务 #${state.cleanJobId} 下的匹配结果。`
-              : '未选择任务：将更新全库中该链接对应的可调整匹配结果。'}
+            description={
+              state.cleanJobId != null
+                ? `仅更新当前任务 #${state.cleanJobId} 下的匹配结果。`
+                : state.month != null
+                  ? `仅更新 ${formatMonth(state.month)} 的匹配结果。`
+                  : '未选择任务/月份：将更新全库中该链接对应的可调整匹配结果。'
+            }
           />
           <Space>
             <Text type="secondary">文件需包含「商品链接」，以及「销量」「价格」中至少一列。</Text>
@@ -685,27 +750,37 @@ export default function MatchResultsPage() {
             accept=".xlsx,.csv"
             multiple={false}
             showUploadList={false}
-            disabled={uploading}
+            disabled={uploading || confirmingUpload}
             beforeUpload={handleUploadFile}
           >
             <p className="ant-upload-drag-icon">
               <InboxOutlined />
             </p>
             <p className="ant-upload-text">点击或拖拽 Excel / CSV 到此处上传</p>
-            <p className="ant-upload-hint">支持 .xlsx / .csv，上传后立即更新</p>
+            <p className="ant-upload-hint">支持 .xlsx / .csv，上传后先预览，确认后再导入</p>
           </Dragger>
-          {uploading && <Text type="secondary">正在处理，请稍候…</Text>}
-          {uploadResult && (
+          {uploading && <Text type="secondary">正在解析并生成预览，请稍候…</Text>}
+          {confirmingUpload && <Text type="secondary">正在导入，请稍候…</Text>}
+          {uploadSummary && (
             <Alert
-              type={uploadResult.updated_count > 0 ? 'success' : 'warning'}
+              type={uploadResult ? (uploadSummary.updated_count > 0 ? 'success' : 'warning') : 'info'}
               showIcon
-              message={`处理 ${uploadResult.rows} 行：更新 ${uploadResult.updated_count} 条匹配结果，跳过 ${uploadResult.skipped_rows} 行`}
+              message={
+                uploadResult
+                  ? `已导入：处理 ${uploadSummary.rows} 行，更新 ${uploadSummary.updated_count} 条匹配结果，跳过 ${uploadSummary.skipped_rows} 行`
+                  : `预览：处理 ${uploadSummary.rows} 行，将更新 ${uploadSummary.updated_count} 条匹配结果，跳过 ${uploadSummary.skipped_rows} 行`
+              }
               description={(
                 <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                  <Text type="secondary">命中链接 {uploadResult.matched_urls} 个。</Text>
-                  {uploadResult.errors.length > 0 && (
+                  <Text type="secondary">命中链接 {uploadSummary.matched_urls} 个。</Text>
+                  {isPreview && (
+                    <Text type="warning">
+                      以下为预览结果，尚未写入数据库；确认无误后点「确认导入」，有问题可直接取消。
+                    </Text>
+                  )}
+                  {uploadSummary.errors.length > 0 && (
                     <div style={{ maxHeight: 160, overflow: 'auto' }}>
-                      {uploadResult.errors.map((error, index) => (
+                      {uploadSummary.errors.map((error, index) => (
                         <div key={`${error}-${index}`}><Text type="danger">{error}</Text></div>
                       ))}
                     </div>
@@ -714,16 +789,16 @@ export default function MatchResultsPage() {
               )}
             />
           )}
-          {uploadResult && uploadResult.updated_items.length > 0 && (
+          {uploadSummary && uploadSummary.updated_items.length > 0 && (
             <Space direction="vertical" size={6} style={{ width: '100%' }}>
               <Text strong>
-                更新明细（共 {uploadResult.updated_items_total} 条
-                {uploadResult.updated_items_truncated ? '，仅展示前 500 条' : ''}）
+                {isPreview ? '预览明细' : '更新明细'}（共 {uploadSummary.updated_items_total} 条
+                {uploadSummary.updated_items_truncated ? '，仅展示前 500 条' : ''}）
               </Text>
               <Table
                 rowKey="match_result_id"
                 size="small"
-                dataSource={uploadResult.updated_items}
+                dataSource={uploadSummary.updated_items}
                 pagination={{ pageSize: 5, showSizeChanger: false, showTotal: t => `共 ${t} 条` }}
                 scroll={{ x: 900, y: 260 }}
                 columns={[

@@ -129,10 +129,11 @@ export default function ModelsPage() {
     return code ? extraFieldsByCategory[code] ?? [] : []
   }, [watchedCategoryCode, editingItem, extraFieldsByCategory])
 
+  const canQuery = !!search.category_code
   const queryParams = { ...search, page, page_size: pageSize, exclude_placeholder: false }
   const { data, loading, refresh } = useRequest(
     () => listModels(queryParams).then(r => r.data),
-    { refreshDeps: [JSON.stringify(queryParams)] }
+    { ready: canQuery, refreshDeps: [JSON.stringify(queryParams)] }
   )
 
   const openCreate = () => {
@@ -342,7 +343,11 @@ export default function ModelsPage() {
             allowClear
             style={{ width: 150 }}
             options={visibleCategoryOptions}
-            onChange={v => { setSearch(p => ({ ...p, category_code: v || undefined })); setPage(1) }}
+            onChange={v => {
+              setSearch(p => ({ ...p, category_code: v || undefined }))
+              setPage(1)
+              setSelectedRowKeys([])
+            }}
           />
           <Input
             placeholder="搜索品牌"
@@ -390,44 +395,53 @@ export default function ModelsPage() {
         </Space>
       </Flex>
 
-      <Table
-        dataSource={data?.items ?? []}
-        columns={columns}
-        rowKey="id"
-        size="small"
-        loading={loading}
-        scroll={{ x: 'max-content' }}
-        rowSelection={{
-          selectedRowKeys,
-          onChange: keys => setSelectedRowKeys(keys as number[]),
-        }}
-        expandable={{
-          onExpand: handleExpand,
-          expandedRowRender: (record: ModelItem) => {
-            const specs = expandedSpecs[record.id]
-            if (!specs) return <Text type="secondary">加载中...</Text>
-            if (specs.length === 0) return <Text type="secondary">暂无规格参数</Text>
-            return (
-              <Table
-                dataSource={specs}
-                columns={specColumns}
-                rowKey={(_, i) => String(i)}
-                size="small"
-                pagination={false}
-                style={{ margin: '8px 0' }}
-              />
-            )
-          },
-        }}
-        pagination={{
-          current: page,
-          pageSize,
-          total: data?.total ?? 0,
-          showSizeChanger: true,
-          showTotal: t => `共 ${t} 条`,
-          onChange: (p, ps) => { setPage(p); setPageSize(ps) },
-        }}
-      />
+      {!canQuery ? (
+        <Alert
+          type="info"
+          showIcon
+          message="请先选择品类，再查看型号列表"
+          description="为避免直接加载全部型号，产品属性管理需要先选择品类。"
+        />
+      ) : (
+        <Table
+          dataSource={data?.items ?? []}
+          columns={columns}
+          rowKey="id"
+          size="small"
+          loading={loading}
+          scroll={{ x: 'max-content' }}
+          rowSelection={{
+            selectedRowKeys,
+            onChange: keys => setSelectedRowKeys(keys as number[]),
+          }}
+          expandable={{
+            onExpand: handleExpand,
+            expandedRowRender: (record: ModelItem) => {
+              const specs = expandedSpecs[record.id]
+              if (!specs) return <Text type="secondary">加载中...</Text>
+              if (specs.length === 0) return <Text type="secondary">暂无规格参数</Text>
+              return (
+                <Table
+                  dataSource={specs}
+                  columns={specColumns}
+                  rowKey={(_, i) => String(i)}
+                  size="small"
+                  pagination={false}
+                  style={{ margin: '8px 0' }}
+                />
+              )
+            },
+          }}
+          pagination={{
+            current: page,
+            pageSize,
+            total: data?.total ?? 0,
+            showSizeChanger: true,
+            showTotal: t => `共 ${t} 条`,
+            onChange: (p, ps) => { setPage(p); setPageSize(ps) },
+          }}
+        />
+      )}
 
       <ImportMappingModal
         open={importOpen}

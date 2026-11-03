@@ -167,3 +167,25 @@ def test_list_models_brand_filter_matches_brand_name(client, db_session):
     by_name = client.get("/api/models", params={"brand_code": "大疆1"}).json()
     assert by_name["total"] == 1
     assert by_name["items"][0]["brand_code"] == "DJI1"
+
+
+def test_update_model_can_clear_model_code(client):
+    created = client.post("/api/models", json={
+        "brand_code": "SONY", "model_code": "XM5", "category_code": "soundbar",
+    }).json()
+
+    response = client.put(f"/api/models/{created['id']}", json={
+        "brand_code": "SONY",
+        "model_code": "",
+        "category_code": "soundbar",
+        "model_name": "待补型号",
+    })
+    assert response.status_code == 200, response.text
+    assert response.json()["model_code"] is None
+
+    rows = client.get("/api/models", params={
+        "category_code": "soundbar", "exclude_placeholder": "false",
+    }).json()["items"]
+    row = next(item for item in rows if item["id"] == created["id"])
+    assert row["model_code"] is None
+    assert row["model_name"] == "待补型号"

@@ -36,7 +36,7 @@ from app.models.schemas import (
 )
 from app.services.clean_task_snapshot import ACTIVE_TASK_STATUSES, touch_clean_job
 from app.services.data_cleaner import _load_brand_alias_map, manual_brand_std
-from app.services.export_guards import MAX_SYNC_EXPORT_ROWS, ensure_export_row_limit
+from app.services.export_guards import ensure_export_row_limit
 from app.services.currency_service import amount_to_cny, build_rate_map
 from app.services.exclusion_store import (
     remove_exclusion_for_raw,
@@ -2793,6 +2793,8 @@ _REVIEWED_STATUS_LABELS = {
     "confirmed": "已人工确认",
 }
 
+MAX_MATCH_EXPORT_ROWS = 200_000
+
 _REVIEWED_EXPORT_COLUMNS = [
     ("task_name",             "任务"),
     ("category_name",         "品类"),
@@ -2935,7 +2937,7 @@ def export_reviewed_matches(
     total = q.count()
     if total == 0:
         raise HTTPException(status_code=400, detail="当前筛选条件无可导出数据")
-    ensure_export_row_limit(total, max_rows=MAX_SYNC_EXPORT_ROWS, label="匹配结果导出")
+    ensure_export_row_limit(total, max_rows=MAX_MATCH_EXPORT_ROWS, label="匹配结果导出")
 
     cat_map = {c.code: c.name for c in db.query(Category).all()}
     workbook = Workbook(write_only=True)

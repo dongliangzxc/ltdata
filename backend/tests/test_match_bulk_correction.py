@@ -268,3 +268,33 @@ def test_bulk_update_by_url_updates_all_matching_results(client):
     with client.Session() as db:
         for match_id in (first_match_id, second_match_id):
             assert float(db.query(MatchResult).filter_by(id=match_id).one().sales_coefficient) == 2.0
+
+
+def test_export_reviewed_matches_filters_by_month(client):
+    import io
+    from openpyxl import load_workbook
+
+    job_id, _match_id = _seed(client)
+    with client.Session() as db:
+        upload = db.query(UploadFileRecord).first()
+        model = db.query(ModelRecord).filter_by(model_code="SB900").one()
+        raw = RawDataRecord(
+            file_id=upload.id, platform="jd", month=202610, item_id="item-2",
+            item_url="https://item.jd.com/item-2.html",
+            item_name="Second name", price=50, sales_qty=5, sales_amount=250,
+        )
+        db.add(raw)
+        db.flush()
+        db.add(MatchResult(
+            clean_job_id=job_id, raw_data_id=raw.id, model_id=model.id,
+            match_status="matched", matched_by="auto", match_source="s1",
+        ))
+        db.commit()
+
+    res = client.get("/api/match/reviewed/export", params={"month": 202610})
+    assert res.status_code == 200, res.text
+    workbook = load_workbook(io.BytesIO(res.content))
+    rows = list(workbook["匹配结果"].iter_rows(values_only=True))
+    headers = list(rows[0])
+    ids = [row[headers.index("商品ID")] for row in rows[1:]]
+    assert ids == ["item-2"]

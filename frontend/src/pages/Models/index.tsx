@@ -558,8 +558,8 @@ export default function ModelsPage() {
               </Form.Item>
             </Col>
             <Col span={8}>
-              <Form.Item label="型号码" name="model_code" rules={[{ required: true, message: '请填写型号码' }]}>
-                <Input placeholder="如 HT-A7000" />
+              <Form.Item label="型号码" name="model_code">
+                <Input placeholder="可留空（存空值）" />
               </Form.Item>
             </Col>
           </Row>

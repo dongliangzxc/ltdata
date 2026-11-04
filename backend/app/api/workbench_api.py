@@ -24,6 +24,11 @@ from app.models.database import get_db, SessionLocal
 from app.models.schemas import Category, MatchResult, ModelAlias, ModelRecord, RawDataRecord, User, WorkbenchExportJob
 from app.utils.time_utils import format_beijing_datetime
 from app.services.export_guards import reserve_async_export_capacity
+from app.services.custom_fields import (
+    load_all_export_fields,
+    load_fields_by_category,
+    resolve_effective_values,
+)
 
 router = APIRouter(prefix="/api/workbench", tags=["workbench"])
 
@@ -283,6 +288,19 @@ def _run_wb_export_thread(job_id: int, params: dict):
             "月份", "平台", "宝贝名称", "品牌代码", "品牌名称", "型号代码", "产品系列", "型号名称", "店铺",
             "参考价格", "销量", "计算价格", "修正销量", "修正销售额", "一级类目", "二级类目", "三级类目", "宝贝链接",
         ]
+        custom_export_fields = load_all_export_fields(db)
+        custom_fields_by_category = load_fields_by_category(db, export_only=True)
+        cat_code_by_name: dict[str, str] = {}
+        for cat in db.query(Category).order_by(Category.sort_order, Category.id).all():
+            cat_code_by_name.setdefault(cat.name, cat.code)
+        custom_columns = [field.field_label for field in custom_export_fields]
+        custom_insert_at = base_columns.index("型号名称") + 1
+        if custom_columns:
+            base_columns = (
+                base_columns[:custom_insert_at]
+                + custom_columns
+                + base_columns[custom_insert_at:]
+            )
         _wb_progress[job_id] = 35
 
         # 2. 分页写 Excel（35→95%）
@@ -299,6 +317,19 @@ def _run_wb_export_thread(job_id: int, params: dict):
         for page_rows in _iter_published_items(q, page_size):
             item_ids = [r.id for r in page_rows]
             series_index = _series_by_match_result(db, [r.match_result_id for r in page_rows if r.match_result_id])
+            page_custom_values = resolve_effective_values(
+                db,
+                [
+                    {
+                        "match_result_id": r.match_result_id,
+                        "category_code": cat_code_by_name.get(r.category_name or "", ""),
+                        "item_name": r.item_name,
+                    }
+                    for r in page_rows
+                    if r.match_result_id
+                ],
+                custom_fields_by_category,
+            )
             spec_index: dict[int, dict[str, str]] = {}
             for i in range(0, len(item_ids), spec_batch_size):
                 batch = item_ids[i: i + spec_batch_size]
@@ -333,6 +364,17 @@ def _run_wb_export_thread(job_id: int, params: dict):
                     r.category_lv3,
                     r.item_url,
                 ]
+                if custom_columns:
+                    values = page_custom_values.get(r.match_result_id, {}) if r.match_result_id else {}
+                    custom_values = [
+                        values.get(field.field_key, {}).get("value") or ""
+                        for field in custom_export_fields
+                    ]
+                    base_values = (
+                        base_values[:custom_insert_at]
+                        + custom_values
+                        + base_values[custom_insert_at:]
+                    )
                 attrs = spec_index.get(r.id, {})
                 worksheet.append(base_values + [attrs.get(name, "") for name in sorted(all_attr_names)])
 

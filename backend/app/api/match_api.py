@@ -43,6 +43,14 @@ from app.services.exclusion_store import (
     upsert_exclusion_for_raw,
 )
 from app.services.matcher import run_match, run_match_for_result
+from app.services.custom_fields import (
+    get_match_category_code,
+    get_review_fields,
+    load_all_export_fields,
+    load_fields_by_category,
+    resolve_effective_values,
+    set_manual_value,
+)
 from app.services.price_auditor import audit_price
 from app.utils.text_utils import title_key
 from app.utils.time_utils import format_beijing_datetime
@@ -1034,6 +1042,8 @@ def get_match_review_detail(match_id: int, db: Session = Depends(get_db)):
     if not cat and category_code:
         cat = db.query(Category).filter(Category.code == category_code).first()
 
+    custom_fields = get_review_fields(db, mr, category_code, rd.item_name)
+
     rates = build_rate_map(db)
     rate_info = rates.get(rd.country_code or "")
     rate = rate_info["rate_to_cny"] if rate_info else None
@@ -1052,6 +1062,7 @@ def get_match_review_detail(match_id: int, db: Session = Depends(get_db)):
         "metadata_specs": metadata_specs,
         "model_specs": model_specs,
         "match_attrs": match_attrs,
+        "custom_fields": custom_fields,
         "match_status": mr.match_status,
         "matched_by": mr.matched_by,
         "match_source": mr.match_source,
@@ -1101,6 +1112,40 @@ def get_match_review_detail(match_id: int, db: Session = Depends(get_db)):
             }
             for cand, candidate_model in candidate_rows
         ],
+    }
+
+
+@router.patch("/items/{match_id}/custom-fields/{field_key}")
+def update_match_custom_field(
+    match_id: int,
+    field_key: str,
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """设置/清除单条匹配结果的人工扩展字段值（如「智能」= 是/否）。"""
+    mr = db.query(MatchResult).filter(MatchResult.id == match_id).first()
+    if not mr:
+        raise HTTPException(status_code=404, detail="匹配记录不存在")
+    _get_visible_match_clean_job_or_404(db, current_user, mr.clean_job_id)
+    raw = db.query(RawDataRecord).filter(RawDataRecord.id == mr.raw_data_id).first()
+    category_code = get_match_category_code(db, mr)
+    try:
+        set_manual_value(
+            db,
+            mr,
+            category_code,
+            field_key,
+            payload.get("value"),
+            commit=True,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {
+        "id": mr.id,
+        "custom_fields": get_review_fields(
+            db, mr, category_code, raw.item_name if raw else None
+        ),
     }
 
 
@@ -2836,12 +2881,16 @@ def _reviewed_export_base_query(db: Session):
     )
 
 
-def _reviewed_export_row(mr, rd, model, cleaned, job, cat_map) -> dict:
-    cat_code = (
+def _reviewed_category_code(model, job) -> Optional[str]:
+    return (
         (model.category_code if model else None)
         or (job.category_code if job else None)
         or (job.dispatch_category_code if job else None)
     )
+
+
+def _reviewed_export_row(mr, rd, model, cleaned, job, cat_map) -> dict:
+    cat_code = _reviewed_category_code(model, job)
     price = _to_float(rd.price) if rd else None
     adjusted_price = _to_float(mr.adjusted_price)
     effective_price = adjusted_price if adjusted_price is not None else price
@@ -2940,9 +2989,15 @@ def export_reviewed_matches(
     ensure_export_row_limit(total, max_rows=MAX_MATCH_EXPORT_ROWS, label="匹配结果导出")
 
     cat_map = {c.code: c.name for c in db.query(Category).all()}
+    custom_export_fields = load_all_export_fields(db)
+    custom_fields_by_category = load_fields_by_category(db, export_only=True)
+    export_columns = list(_REVIEWED_EXPORT_COLUMNS) + [
+        (f"custom_{field.field_key}", field.field_label)
+        for field in custom_export_fields
+    ]
     workbook = Workbook(write_only=True)
     worksheet = workbook.create_sheet("匹配结果")
-    worksheet.append([cn for _, cn in _REVIEWED_EXPORT_COLUMNS])
+    worksheet.append([cn for _, cn in export_columns])
 
     last_id = None
     while True:
@@ -2950,9 +3005,24 @@ def export_reviewed_matches(
         rows = page_q.order_by(MatchResult.id).limit(500).all()
         if not rows:
             break
+        page_custom_values = resolve_effective_values(
+            db,
+            [
+                {
+                    "match_result_id": mr.id,
+                    "category_code": _reviewed_category_code(model, job) or "",
+                    "item_name": rd.item_name if rd else None,
+                }
+                for mr, rd, model, _cleaned, job in rows
+            ],
+            custom_fields_by_category,
+        )
         for mr, rd, model, cleaned, job in rows:
             row = _reviewed_export_row(mr, rd, model, cleaned, job, cat_map)
-            worksheet.append([row.get(field) for field, _ in _REVIEWED_EXPORT_COLUMNS])
+            values = page_custom_values.get(mr.id, {})
+            for field in custom_export_fields:
+                row[f"custom_{field.field_key}"] = values.get(field.field_key, {}).get("value")
+            worksheet.append([row.get(field) for field, _ in export_columns])
         last_id = rows[-1][0].id
         if len(rows) < 500:
             break

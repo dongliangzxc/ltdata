@@ -18,8 +18,9 @@ import {
   batchConfirmMatch, previewBatchConfirmMatch, reassignInvalidModel, batchIgnoreMatches, batchRestoreMatches,
   searchCleanTasks, transferMatchItem, getTransferNotice, fetchAllCategories,
   listExchangeRateOptions, getTranslationStatus, translateTexts,
+  updateMatchCustomField,
 } from '../../services/api'
-import type { CleanJobItem, MatchCandidateOut, MatchReviewDetail, FilteredItemOut, ModelItem, BatchConfirmFilter, BatchConfirmResult, BatchIgnoreFilter, BatchRestoreFilter, CleanTaskSearchItem, UserProfile, ExchangeRateOption } from '../../services/api'
+import type { CleanJobItem, MatchCandidateOut, MatchReviewDetail, FilteredItemOut, ModelItem, BatchConfirmFilter, BatchConfirmResult, BatchIgnoreFilter, BatchRestoreFilter, CleanTaskSearchItem, UserProfile, ExchangeRateOption, MatchCustomField } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 import ProgressModal from '../../components/ProgressModal'
 import AttributeInsightCard from './components/AttributeInsightCard'
@@ -261,6 +262,7 @@ export default function MatchPage() {
   const [reviewDetail, setReviewDetail] = useState<MatchReviewDetail | null>(null)
   const [filteredDetail, setFilteredDetail] = useState<FilteredItemOut | null>(null)
   const [reviewDetailLoading, setReviewDetailLoading] = useState(false)
+  const [savingCustomField, setSavingCustomField] = useState<string | null>(null)
   const [reviewReason, setReviewReason] = useState('')
   const [interventionModalOpen, setInterventionModalOpen] = useState(false)
   const [rerunningRules, setRerunningRules] = useState(false)
@@ -650,6 +652,69 @@ export default function MatchPage() {
     const res = await getMatchReviewDetail(selectedReviewId)
     setReviewDetail(res.data)
     setReviewReason(res.data.dispute_reason || res.data.review_note || '')
+  }
+
+  const handleUpdateCustomField = async (field: MatchCustomField, value: string | null) => {
+    if (!reviewDetail) return
+    if (value === (field.value ?? null)) return
+    setSavingCustomField(field.field_key)
+    try {
+      const res = await updateMatchCustomField(reviewDetail.id, field.field_key, value)
+      setReviewDetail(prev => prev ? { ...prev, custom_fields: res.data.custom_fields } : prev)
+    } finally {
+      setSavingCustomField(null)
+    }
+  }
+
+  const renderCustomFieldValue = (field: MatchCustomField) => {
+    const saving = savingCustomField === field.field_key
+    const sourceTag = field.source === 'manual'
+      ? <Tag color="blue">人工</Tag>
+      : field.source === 'auto'
+        ? <Tag color="green">自动</Tag>
+        : field.source === 'default'
+          ? <Tag>默认</Tag>
+          : null
+    if (field.field_type === 'enum' || field.field_type === 'bool') {
+      const options = field.options.length
+        ? field.options
+        : ['是', '否']
+      return (
+        <Space size={4}>
+          <Select
+            size="small"
+            allowClear
+            style={{ minWidth: 100 }}
+            loading={saving}
+            disabled={saving}
+            value={field.value ?? undefined}
+            options={options.map(option => ({ value: option, label: option }))}
+            onChange={value => void handleUpdateCustomField(field, value ?? null)}
+          />
+          {sourceTag}
+        </Space>
+      )
+    }
+    return (
+      <Space size={4}>
+        <Input
+          key={`${field.field_key}-${field.value ?? ''}`}
+          size="small"
+          style={{ width: 140 }}
+          defaultValue={field.value ?? ''}
+          disabled={saving}
+          onBlur={event => {
+            const next = event.target.value.trim()
+            void handleUpdateCustomField(field, next || null)
+          }}
+          onPressEnter={event => {
+            const next = event.currentTarget.value.trim()
+            void handleUpdateCustomField(field, next || null)
+          }}
+        />
+        {sourceTag}
+      </Space>
+    )
   }
 
   // 跨页全选模式下翻新页：新页可选项默认全部勾中（§3.3 "翻页保留"）
@@ -2278,6 +2343,11 @@ export default function MatchPage() {
                       <Descriptions.Item label="国家">{reviewDetail.country_code || '-'}</Descriptions.Item>
                       <Descriptions.Item label="价格">{formatConverted(reviewDetail.price, reviewDetail.price_cny, reviewDetail.country_code)}</Descriptions.Item>
                       <Descriptions.Item label="销量">{formatNumber(reviewDetail.sales_qty)}</Descriptions.Item>
+                      {(reviewDetail.custom_fields ?? []).map(field => (
+                        <Descriptions.Item key={field.field_key} label={field.field_label}>
+                          {renderCustomFieldValue(field)}
+                        </Descriptions.Item>
+                      ))}
                     </Descriptions>
 
                     <Card size="small" title="候选型号" bodyStyle={{ padding: 8 }}>

@@ -55,7 +55,7 @@ import logging
 from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
-from app.models.schemas import CleanedDataRecord, ModelRecord, ModelAlias, MatchResult, MatchResultAttr, MatchResultCandidate, ItemUrlMapping, MatchRule, HistoricalMapping, CleanJobRecord, RawDataRecord
+from app.models.schemas import CleanedDataRecord, ModelRecord, ModelAlias, MatchResult, MatchResultAttr, MatchResultCandidate, MatchResultExtraValue, ItemUrlMapping, MatchRule, HistoricalMapping, CleanJobRecord, RawDataRecord
 from app.utils.url_utils import extract_item_id
 from app.utils.text_utils import title_key
 from app.services.attribute_matcher import run_attribute_matching
@@ -424,12 +424,38 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
         .filter(MatchResult.clean_job_id == clean_job_id)
         .all()
     ]
+    # 重跑匹配会删除旧 match_results，人工填写的扩展字段值按 raw_data_id 暂存后恢复，
+    # 避免分析师重新清洗后又要重填「智能」等人工标记。
+    extra_value_snapshot: dict[int, dict[str, str]] = {}
+    if old_mr_ids:
+        old_raw_by_mr = {
+            mr_id: raw_id
+            for mr_id, raw_id in db.query(MatchResult.id, MatchResult.raw_data_id)
+            .filter(MatchResult.id.in_(old_mr_ids))
+            .all()
+        }
+        for row in (
+            db.query(MatchResultExtraValue)
+            .filter(
+                MatchResultExtraValue.match_result_id.in_(old_mr_ids),
+                MatchResultExtraValue.source == "manual",
+            )
+            .all()
+        ):
+            raw_id = old_raw_by_mr.get(row.match_result_id)
+            if raw_id is None or row.field_value is None:
+                continue
+            extra_value_snapshot.setdefault(raw_id, {})[row.field_key] = row.field_value
+
     if old_mr_ids:
         db.query(MatchResultAttr).filter(
             MatchResultAttr.match_result_id.in_(old_mr_ids)
         ).delete(synchronize_session=False)
         db.query(MatchResultCandidate).filter(
             MatchResultCandidate.match_result_id.in_(old_mr_ids)
+        ).delete(synchronize_session=False)
+        db.query(MatchResultExtraValue).filter(
+            MatchResultExtraValue.match_result_id.in_(old_mr_ids)
         ).delete(synchronize_session=False)
     db.query(MatchResult).filter(MatchResult.clean_job_id == clean_job_id).delete(
         synchronize_session=False
@@ -696,6 +722,37 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
                 ))
         if candidate_records:
             db.bulk_save_objects(candidate_records)
+            if commit:
+                db.commit()
+            else:
+                db.flush()
+
+    # ── 恢复重跑前暂存的人工扩展字段值 ─────────────────────────────
+    if extra_value_snapshot:
+        if commit:
+            db.commit()
+        else:
+            db.flush()
+        new_mr_by_raw = {
+            raw_id: mr_id
+            for raw_id, mr_id in db.query(MatchResult.raw_data_id, MatchResult.id)
+            .filter(MatchResult.clean_job_id == clean_job_id)
+            .all()
+        }
+        restored = []
+        for raw_id, values in extra_value_snapshot.items():
+            mr_id = new_mr_by_raw.get(raw_id)
+            if mr_id is None:
+                continue
+            for field_key, field_value in values.items():
+                restored.append(MatchResultExtraValue(
+                    match_result_id=mr_id,
+                    field_key=field_key,
+                    field_value=field_value,
+                    source="manual",
+                ))
+        if restored:
+            db.bulk_save_objects(restored)
             if commit:
                 db.commit()
             else:

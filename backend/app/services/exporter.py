@@ -23,6 +23,10 @@ from app.models.schemas import (
     CleanedDataRecord, BrandRecord,
 )
 from app.core.config import settings
+from app.services.custom_fields import (
+    load_fields_by_category,
+    resolve_effective_values,
+)
 
 # 基础列：字段名 → 中文表头
 BASE_COLS = [
@@ -352,6 +356,7 @@ def _export_match_jobs(
         c.code: c.name
         for c in db.query(Category).all()
     }
+    custom_fields_by_category = load_fields_by_category(db, export_only=True)
 
     all_spec_defs = db.query(MetadataSpec).order_by(MetadataSpec.id).all()
     category_spec_names: dict[str, list[str]] = {}
@@ -463,17 +468,24 @@ def _export_match_jobs(
                 sn for sn in category_spec_names.get(cat_code, [])
                 if sn not in MATCHED_EXTRA_CN_NAMES
             ]
+            custom_fields = custom_fields_by_category.get(cat_code, [])
             worksheet = workbook.create_sheet(title=_sheet_name(f"{cat}-已处理", used_sheet_names))
-            worksheet.append(_matched_base_cn_names() + MATCHED_ADJUSTMENT_CN_NAMES + spec_names)
-            category_sheets[cat] = (worksheet, spec_names)
+            worksheet.append(
+                _matched_base_cn_names()
+                + [field.field_label for field in custom_fields]
+                + MATCHED_ADJUSTMENT_CN_NAMES
+                + spec_names
+            )
+            category_sheets[cat] = (worksheet, spec_names, custom_fields)
         return category_sheets[cat]
 
-    def get_text_only_sheet(cat: str):
+    def get_text_only_sheet(cat: str, cat_code: str):
         if cat not in text_only_sheets:
+            custom_fields = custom_fields_by_category.get(cat_code, [])
             worksheet = workbook.create_sheet(title=_sheet_name(f"{cat}-URL映射待确认", used_sheet_names))
-            worksheet.append(BASE_CN_NAMES)
-            text_only_sheets[cat] = (worksheet,)
-        return text_only_sheets[cat][0]
+            worksheet.append(BASE_CN_NAMES + [field.field_label for field in custom_fields])
+            text_only_sheets[cat] = (worksheet, custom_fields)
+        return text_only_sheets[cat]
 
     cleaned_brand_names, manual_brands, brand_names = _cleaned_brand_info(db, clean_job_ids)
 
@@ -485,6 +497,18 @@ def _export_match_jobs(
 
     for matched_rows in _iter_keyset(matched_query, MatchResult.id):
         spec_map = _spec_map_for_models(db, list({mr.model_id for mr, _, _, _ in matched_rows}))
+        page_custom_values = resolve_effective_values(
+            db,
+            [
+                {
+                    "match_result_id": mr.id,
+                    "category_code": model.category_code or "",
+                    "item_name": rd.item_name,
+                }
+                for mr, rd, model, _cleaned in matched_rows
+            ],
+            custom_fields_by_category,
+        )
         for mr, rd, model, cleaned in matched_rows:
             row = _base_row(
                 rd, model,
@@ -494,10 +518,15 @@ def _export_match_jobs(
             )
             cat_code = model.category_code or ""
             cat = cat_map.get(cat_code, cat_code) or "未知品类"
-            worksheet, spec_names = get_category_sheet(cat, cat_code)
+            worksheet, spec_names, custom_fields = get_category_sheet(cat, cat_code)
             model_specs = spec_map.get(mr.model_id, {})
+            custom_values = page_custom_values.get(mr.id, {})
             worksheet.append(
                 [row.get(field) for field in _matched_base_field_names()]
+                + [
+                    custom_values.get(field.field_key, {}).get("value") or ""
+                    for field in custom_fields
+                ]
                 + [row.get(field) for field in MATCHED_ADJUSTMENT_FIELD_NAMES]
                 + [model_specs.get(sn, "") for sn in spec_names]
             )
@@ -516,6 +545,18 @@ def _export_match_jobs(
             pending_sheet.append([row.get(field) for field in BASE_FIELD_NAMES])
 
     for text_only_rows in _iter_keyset(text_only_query, MatchResult.id):
+        page_custom_values = resolve_effective_values(
+            db,
+            [
+                {
+                    "match_result_id": mr.id,
+                    "category_code": model.category_code or "",
+                    "item_name": rd.item_name,
+                }
+                for mr, rd, model in text_only_rows
+            ],
+            custom_fields_by_category,
+        )
         for mr, rd, model in text_only_rows:
             row = _base_row(
                 rd, model,
@@ -524,8 +565,15 @@ def _export_match_jobs(
             )
             cat_code = model.category_code or ""
             cat = cat_map.get(cat_code, cat_code) or "未知品类"
-            worksheet = get_text_only_sheet(cat)
-            worksheet.append([row.get(field) for field in BASE_FIELD_NAMES])
+            worksheet, custom_fields = get_text_only_sheet(cat, cat_code)
+            custom_values = page_custom_values.get(mr.id, {})
+            worksheet.append(
+                [row.get(field) for field in BASE_FIELD_NAMES]
+                + [
+                    custom_values.get(field.field_key, {}).get("value") or ""
+                    for field in custom_fields
+                ]
+            )
 
     def _write_simple_match_sheet(title: str, total: int, query):
         """争议复核 / 已排除等单表 Sheet：基础列 + 可选品牌/型号（model_id 可能为空）。"""

@@ -710,6 +710,113 @@ class CategoryExtraFieldOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# ─────────────────────────── 品类清洗扩展字段 ───────────────────────────
+
+class CategoryCustomField(Base):
+    """品类清洗扩展字段配置（条目级）。
+
+    用于给某个品类的每条清洗结果增加自定义列（如智能投影的「智能」），
+    取值保存在 ``match_result_extra_values``，不写入型号属性。
+    """
+    __tablename__ = "category_custom_fields"
+    __table_args__ = (
+        UniqueConstraint("category_code", "field_key", name="uq_category_custom_field"),
+    )
+
+    id            = Column(Integer, primary_key=True, index=True)
+    category_code = Column(String(50), nullable=False, index=True, comment='品类码')
+    field_key     = Column(String(100), nullable=False, comment='字段键（英文，如 is_smart）')
+    field_label   = Column(String(200), nullable=False, comment='字段展示名（如 智能）')
+    field_type    = Column(String(20), nullable=False, default='enum', comment='enum/text/bool/number')
+    options       = Column(Text, nullable=True, comment='枚举可选值，逗号分隔（如 是,否）')
+    default_value = Column(String(200), nullable=True, comment='未命中自动规则时的默认值')
+    auto_keywords = Column(Text, nullable=True, comment='自动判定关键词，逗号/换行分隔')
+    auto_value    = Column(String(200), nullable=True, comment='命中自动关键词时的取值')
+    required      = Column(Integer, nullable=False, default=0, comment='是否必填 0/1')
+    export        = Column(Integer, nullable=False, default=1, comment='是否参与导出 0/1')
+    sort_order    = Column(Integer, nullable=False, default=0, comment='排序值，越小越靠前')
+    is_active     = Column(Integer, nullable=False, default=1, comment='是否启用 0/1')
+    created_at    = Column(DateTime, default=datetime.utcnow)
+    updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class CategoryCustomFieldOut(BaseModel):
+    id:            int
+    category_code: str
+    field_key:     str
+    field_label:   str
+    field_type:    str
+    options:       Optional[str] = None
+    default_value: Optional[str] = None
+    auto_keywords: Optional[str] = None
+    auto_value:    Optional[str] = None
+    required:      bool = False
+    export:        bool = True
+    sort_order:    int = 0
+    is_active:     bool = True
+    created_at:    datetime
+    updated_at:    datetime
+
+    @field_serializer("created_at", "updated_at")
+    def serialize_datetime(self, value: datetime | None):
+        return format_beijing_datetime(value)
+
+    model_config = {"from_attributes": True}
+
+
+class CategoryCustomFieldIn(BaseModel):
+    category_code: str
+    field_key:     str
+    field_label:   str
+    field_type:    str = "enum"
+    options:       Optional[str] = None
+    default_value: Optional[str] = None
+    auto_keywords: Optional[str] = None
+    auto_value:    Optional[str] = None
+    required:      bool = False
+    export:        bool = True
+    sort_order:    int = 0
+    is_active:     bool = True
+
+    @field_validator("field_key")
+    @classmethod
+    def validate_field_key(cls, value: str) -> str:
+        import re
+        text = (value or "").strip()
+        if not re.fullmatch(r"[a-z][a-z0-9_]*", text):
+            raise ValueError("字段键只能包含小写字母、数字、下划线，且以字母开头")
+        return text
+
+    @field_validator("field_type")
+    @classmethod
+    def validate_field_type(cls, value: str) -> str:
+        text = (value or "").strip()
+        if text not in {"enum", "text", "bool", "number"}:
+            raise ValueError("字段类型仅支持 enum/text/bool/number")
+        return text
+
+    @field_validator("field_label")
+    @classmethod
+    def validate_field_label(cls, value: str) -> str:
+        text = (value or "").strip()
+        if not text:
+            raise ValueError("字段展示名不能为空")
+        return text
+
+
+class CategoryCustomFieldPatch(BaseModel):
+    field_label:   Optional[str] = None
+    field_type:    Optional[str] = None
+    options:       Optional[str] = None
+    default_value: Optional[str] = None
+    auto_keywords: Optional[str] = None
+    auto_value:    Optional[str] = None
+    required:      Optional[bool] = None
+    export:        Optional[bool] = None
+    sort_order:    Optional[int] = None
+    is_active:     Optional[bool] = None
+
+
 # ─────────────────────────── 型号主信息 ───────────────────────────
 
 class BrandRecord(Base):
@@ -1114,6 +1221,22 @@ class MatchResult(Base):
     prev_reviewed_at = Column(DateTime, nullable=True)
     created_at     = Column(DateTime, default=datetime.utcnow)
     updated_at   = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class MatchResultExtraValue(Base):
+    """条目级品类扩展字段值（人工值持久化；自动值/默认值实时计算）。"""
+    __tablename__ = "match_result_extra_values"
+    __table_args__ = (
+        UniqueConstraint("match_result_id", "field_key", name="uq_match_result_extra_field"),
+        Index("idx_mrextra_field_value", "field_key", "field_value"),
+    )
+
+    id              = Column(Integer, primary_key=True, index=True)
+    match_result_id = Column(Integer, ForeignKey("match_results.id", ondelete="CASCADE"), nullable=False, index=True)
+    field_key       = Column(String(100), nullable=False)
+    field_value     = Column(String(200), nullable=True)
+    source          = Column(String(20), nullable=False, default="manual", comment='manual/auto')
+    updated_at      = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class MatchResultCandidate(Base):

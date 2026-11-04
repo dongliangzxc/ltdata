@@ -1192,6 +1192,12 @@ export const transferMatchItem = (match_id: number, target_clean_job_id: number)
 export const getMatchReviewDetail = (match_id: number) =>
   api.get<MatchReviewDetail>(`/match/items/${match_id}/review-detail`)
 
+export const updateMatchCustomField = (matchId: number, fieldKey: string, value: string | null) =>
+  api.patch<{ id: number; custom_fields: MatchCustomField[] }>(
+    `/match/items/${matchId}/custom-fields/${encodeURIComponent(fieldKey)}`,
+    { value },
+  )
+
 export const previewSameTitleMatches = (matchId: number) =>
   api.get<SameTitlePreview>(`/match/items/${matchId}/same-title-preview`)
 
@@ -1631,6 +1637,16 @@ export type MatchAutoAttr = {
   rule_id: number | null
 }
 
+export type MatchCustomField = {
+  field_key: string
+  field_label: string
+  field_type: 'enum' | 'text' | 'bool' | 'number'
+  options: string[]
+  required: boolean
+  value: string | null
+  source: 'manual' | 'auto' | 'default' | 'none'
+}
+
 export type SameTitlePreviewItem = {
   id: number
   raw_data_id: number
@@ -1707,6 +1723,7 @@ export interface MatchReviewDetail extends MatchResultOut {
   metadata_specs?: MatchMetadataSpec[]
   model_specs?: MatchModelSpec[]
   match_attrs?: MatchAutoAttr[]
+  custom_fields?: MatchCustomField[]
   item_image?: string | null
   platform?: string | null
   item_id?: string | null
@@ -1842,6 +1859,51 @@ export const updateCategory = (id: number, data: { name?: string; parent_code?: 
 
 export const deleteCategory = (id: number) =>
   api.delete(`/categories/${id}`)
+
+export type CategoryCustomField = {
+  id: number
+  category_code: string
+  field_key: string
+  field_label: string
+  field_type: 'enum' | 'text' | 'bool' | 'number'
+  options: string | null
+  default_value: string | null
+  auto_keywords: string | null
+  auto_value: string | null
+  required: boolean
+  export: boolean
+  sort_order: number
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export type CategoryCustomFieldPayload = {
+  category_code?: string
+  field_key?: string
+  field_label: string
+  field_type: CategoryCustomField['field_type']
+  options?: string | null
+  default_value?: string | null
+  auto_keywords?: string | null
+  auto_value?: string | null
+  required: boolean
+  export: boolean
+  sort_order: number
+  is_active: boolean
+}
+
+export const listCategoryCustomFields = (category_code?: string) =>
+  api.get<CategoryCustomField[]>('/categories/custom-fields', { params: { category_code } })
+
+export const createCategoryCustomField = (data: CategoryCustomFieldPayload & { category_code: string; field_key: string }) =>
+  api.post<CategoryCustomField>('/categories/custom-fields', data)
+
+export const updateCategoryCustomField = (id: number, data: Partial<CategoryCustomFieldPayload>) =>
+  api.patch<CategoryCustomField>(`/categories/custom-fields/${id}`, data)
+
+export const deleteCategoryCustomField = (id: number) =>
+  api.delete(`/categories/custom-fields/${id}`)
 
 // ─── Upload Templates ──────────────────────────────────────
 export interface UploadFilenameHints {

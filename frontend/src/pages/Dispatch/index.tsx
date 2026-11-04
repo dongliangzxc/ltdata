@@ -439,6 +439,7 @@ function DispatchManagementTab({ onRulesChanged, visibleCategories }: { onRulesC
                     dataSource={visibleStatsRules.filter(rule => rule.category_code === category.category_code)}
                     pagination={false}
                     columns={[
+                      { title: 'ID', width: 70, dataIndex: 'rule_id', render: (v: number | null) => v ?? '-' },
                       { title: '规则', render: (_: unknown, row) => formatRuleDescription(row) },
                       {
                         title: 'AND 条件', width: 160, dataIndex: 'item_name_keyword',
@@ -1245,6 +1246,10 @@ function DispatchRulesTab({ refreshVersion, visibleCategories }: { refreshVersio
 
   const columns = [
     {
+      title: 'ID', dataIndex: 'id', width: 70,
+      sorter: (a: DispatchRule, b: DispatchRule) => a.id - b.id,
+    },
+    {
       title: '品类', dataIndex: 'category_code', width: 100,
       sorter: (a: DispatchRule, b: DispatchRule) => a.category_code.localeCompare(b.category_code),
       defaultSortOrder: 'ascend' as const,
@@ -1363,6 +1368,7 @@ function DispatchRuleCoverageTab({ visibleCategories }: { visibleCategories: Cat
   )
 
   const columns = [
+    { title: 'ID', dataIndex: 'rule_id', width: 70 },
     {
       title: '月度', dataIndex: 'month', width: 100,
       render: (value: number) => formatMonth(value),

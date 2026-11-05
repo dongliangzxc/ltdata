@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 小时
     UPLOAD_DIR: str = "./uploads"
     EXPORT_DIR: str = "./exports"
-    MAX_UPLOAD_SIZE_MB: int = 50
+    MAX_UPLOAD_SIZE_MB: int = 2048
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:3000"]
     TRANSLATION_ENABLED: bool = False
     TRANSLATION_PROVIDER: str = "azure"

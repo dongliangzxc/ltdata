@@ -1,21 +1,28 @@
-import { useMemo, useState, useEffect } from 'react'
+import { useMemo, useState, useEffect, useRef } from 'react'
 import {
   Tabs, Table, Button, Upload, Space, Select, Tag, Popconfirm, message, Input, Card, Statistic, Alert, Form
 } from 'antd'
 import { InboxOutlined, DeleteOutlined, DownloadOutlined } from '@ant-design/icons'
 import type { UploadProps } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
+import ProgressModal from '../../components/ProgressModal'
 import {
   parseHistoricalImport,
   previewHistoricalImport,
-  confirmHistoricalImport,
+  startHistoricalImportJob,
+  getHistoricalImportJob,
+  mergeHistoricalBatches,
   listHistoricalBatches,
   listHistoricalMappings,
   deleteHistoricalMapping,
   deleteHistoricalBatch,
-  exportHistoricalMappings,
+  startHistoricalExportJob,
+  getHistoricalExportJob,
   downloadHistoricalTemplate,
   type HistoricalBatchItem,
+  type HistoricalExportJob,
+  type HistoricalImportJob,
+  type HistoricalImportJobFile,
   type HistoricalImportPreview,
   type HistoricalImportResult,
   type HistoricalMappingItem,
@@ -47,12 +54,21 @@ function ImportTab() {
   const [confirming, setConfirming] = useState(false)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [preview, setPreview] = useState<HistoricalImportPreview | null>(null)
+  const [multiPreviews, setMultiPreviews] = useState<HistoricalImportPreview[]>([])
   const [mapping, setMapping] = useState<Record<string, string>>({})
   const [sheetName, setSheetName] = useState<string>()
   const [categoryCode, setCategoryCode] = useState<string | undefined>()
   const [result, setResult] = useState<HistoricalImportResult | null>(null)
   const [batches, setBatches] = useState<HistoricalBatchItem[]>([])
   const [downloadingBatch, setDownloadingBatch] = useState<string>()
+  const [selectedBatches, setSelectedBatches] = useState<string[]>([])
+  const [merging, setMerging] = useState(false)
+  const [job, setJob] = useState<HistoricalImportJob | null>(null)
+  const [jobVisible, setJobVisible] = useState(false)
+  const [exportJob, setExportJob] = useState<HistoricalExportJob | null>(null)
+  const [exportJobVisible, setExportJobVisible] = useState(false)
+  const pendingUploadFilesRef = useRef<File[]>([])
+  const uploadTimerRef = useRef<number | undefined>(undefined)
   const currentUser = readStoredUser()
   const { options: categoryOptions, loading: categoryLoading } = useCategoryOptions()
   const visibleCategoryOptions = useMemo(() => {
@@ -72,24 +88,39 @@ function ImportTab() {
 
   const applyPreview = (nextPreview: HistoricalImportPreview) => {
     setPreview(nextPreview)
+    setMultiPreviews([])
     setMapping(nextPreview.mapping)
     setSheetName(nextPreview.sheet_name)
     setCategoryCode(nextPreview.category_code || undefined)
   }
 
-  const handleUpload = async (file: File) => {
-    const formData = new FormData()
-    formData.append('file', file)
+  const handleUpload = async (files: File[]) => {
+    if (!files.length) return
     setUploading(true)
     try {
-      const res = await parseHistoricalImport(formData)
-      applyPreview(res.data)
-      setResult(null)
-      message.success('解析完成，请确认 sheet、字段映射和预览后再导入')
+      if (files.length === 1) {
+        const formData = new FormData()
+        formData.append('file', files[0])
+        const res = await parseHistoricalImport(formData)
+        applyPreview(res.data)
+        setResult(null)
+        message.success('解析完成，请确认 sheet、字段映射和预览后再导入')
+      } else {
+        const parsed: HistoricalImportPreview[] = []
+        for (const file of files) {
+          const formData = new FormData()
+          formData.append('file', file)
+          const res = await parseHistoricalImport(formData)
+          parsed.push(res.data)
+        }
+        setPreview(null)
+        setMultiPreviews(parsed)
+        setResult(null)
+        message.success(`已解析 ${parsed.length} 个文件，确认后将合并为同一批次导入`)
+      }
     } finally {
       setUploading(false)
     }
-    return false
   }
 
   const handleDownloadTemplate = async () => {
@@ -131,22 +162,67 @@ function ImportTab() {
     setMapping(nextMapping)
   }
 
-  const handleConfirm = async () => {
-    if (!preview || !sheetName) return
+  const runImportJob = async (files: HistoricalImportJobFile[]) => {
+    if (!files.length) return
     setConfirming(true)
+    setJob(null)
+    setJobVisible(true)
     try {
-      const res = await confirmHistoricalImport({
-        temp_file_id: preview.temp_file_id,
-        sheet_name: sheetName,
-        mapping,
-        category_code: categoryCode,
-      })
-      setResult(res.data)
-      setPreview(null)
-      message.success(`导入完成：成功 ${res.data.success} 条，新增 ${res.data.created} 条，更新 ${res.data.updated} 条`)
-      loadBatches()
+      const res = await startHistoricalImportJob({ files })
+      let current = res.data
+      setJob(current)
+      while (current.status === 'pending' || current.status === 'running') {
+        await new Promise(resolve => setTimeout(resolve, 2000))
+        const next = await getHistoricalImportJob(current.job_id)
+        current = next.data
+        setJob(current)
+      }
+      if (current.status === 'done' && current.result) {
+        setResult(current.result)
+        setPreview(null)
+        setMultiPreviews([])
+        message.success(`导入完成：成功 ${current.result.success} 条，新增 ${current.result.created} 条，更新 ${current.result.updated} 条`)
+        loadBatches()
+      } else if (current.status === 'error') {
+        message.error(current.error_msg || '导入失败')
+      }
+    } catch {
+      setJobVisible(false)
     } finally {
       setConfirming(false)
+    }
+  }
+
+  const handleConfirm = async () => {
+    if (!preview || !sheetName) return
+    await runImportJob([{
+      temp_file_id: preview.temp_file_id,
+      sheet_name: sheetName,
+      mapping,
+      category_code: categoryCode,
+    }])
+  }
+
+  const handleConfirmMulti = async () => {
+    if (!multiPreviews.length) return
+    await runImportJob(multiPreviews.map(item => ({
+      temp_file_id: item.temp_file_id,
+      sheet_name: item.sheet_name,
+      mapping: item.mapping,
+      category_code: item.category_code,
+    })))
+  }
+
+  const handleMergeBatches = async () => {
+    if (selectedBatches.length < 2) return
+    setMerging(true)
+    try {
+      const res = await mergeHistoricalBatches({ batches: selectedBatches })
+      message.success(`已合并 ${selectedBatches.length} 个批次，共 ${res.data.updated} 条`)
+      setSelectedBatches([])
+      loadBatches()
+    } finally {
+      setMerging(false)
     }
   }
 
@@ -159,17 +235,31 @@ function ImportTab() {
 
   const handleDownloadBatch = async (batch: string) => {
     setDownloadingBatch(batch)
+    setExportJob(null)
+    setExportJobVisible(true)
     try {
-      const res = await exportHistoricalMappings({ import_batch: batch })
-      const url = window.URL.createObjectURL(new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
-      const a = document.createElement('a')
-      document.body.appendChild(a)
-      a.href = url
-      a.download = `historical_export_${batch}.xlsx`
-      a.click()
-      document.body.removeChild(a)
-      setTimeout(() => window.URL.revokeObjectURL(url), 100)
+      const res = await startHistoricalExportJob({ import_batch: batch })
+      let current = res.data
+      setExportJob(current)
+      while (current.status === 'pending' || current.status === 'running') {
+        await new Promise(resolve => setTimeout(resolve, 1500))
+        const next = await getHistoricalExportJob(current.job_id)
+        current = next.data
+        setExportJob(current)
+      }
+      if (current.status === 'done' && current.download_url) {
+        const a = document.createElement('a')
+        document.body.appendChild(a)
+        a.href = current.download_url
+        a.download = current.filename || `historical_export_${batch}.xlsx`
+        a.click()
+        document.body.removeChild(a)
+        message.success('导出完成，文件开始下载')
+      } else {
+        message.error(current.error_msg || '导出失败，请重试')
+      }
     } catch {
+      setExportJobVisible(false)
       message.error('下载失败，请重试')
     } finally {
       setDownloadingBatch(undefined)
@@ -177,14 +267,31 @@ function ImportTab() {
   }
 
   const uploadProps: UploadProps = {
-    multiple: false,
+    multiple: true,
     accept: '.xlsx,.xls',
-    beforeUpload: (file) => { handleUpload(file); return false },
     showUploadList: false,
     disabled: uploading || confirming,
+    customRequest: ({ file, onSuccess }) => {
+      pendingUploadFilesRef.current.push(file as File)
+      if (uploadTimerRef.current) window.clearTimeout(uploadTimerRef.current)
+      uploadTimerRef.current = window.setTimeout(() => {
+        const files = [...pendingUploadFilesRef.current]
+        pendingUploadFilesRef.current = []
+        uploadTimerRef.current = undefined
+        handleUpload(files)
+      }, 100)
+      onSuccess?.({})
+    },
   }
 
   const currentIssues = preview?.issues ?? []
+  const categoryLabel = (code: string | null | undefined) => {
+    if (!code) return '未识别'
+    return categoryOptions.find(option => option.value === code)?.label || code
+  }
+  const multiIssues = multiPreviews.flatMap(item =>
+    item.issues.map(issue => `${item.filename}：${issue}`)
+  )
 
   const previewColumns = preview?.preview[0]
     ? Object.keys(preview.preview[0]).map(key => ({
@@ -203,9 +310,10 @@ function ImportTab() {
       </Space>
       <Dragger {...uploadProps}>
         <p className="ant-upload-drag-icon"><InboxOutlined /></p>
-        <p>{uploading ? '正在导入历史库数据，请不要刷新页面' : '点击或拖拽 Excel 文件到此处导入历史库数据'}</p>
+        <p>{uploading ? '正在上传并解析文件，请不要刷新页面' : '点击或拖拽 Excel 文件到此处导入历史库数据（支持多选合并）'}</p>
         <p style={{ color: '#888', fontSize: 12 }}>
           必填列：商场或渠道 / 标题 / 年 / 月；推荐列：周 / 报告类型 / 品类 / 品牌 / 型号 / 机型或系列 / 品类码 / 品牌码 / 型号码 / 销额 / 销量 / 单价 / 网址。型号可为空，后续可补充。
+          数据库过大时，可按年份/月份拆成多个文件一次多选上传，系统会合并为同一批次导入。
         </p>
       </Dragger>
 
@@ -226,6 +334,14 @@ function ImportTab() {
               <Card size="small"><Statistic title="未建型号" value={preview.stats.missing_model_rows} suffix="行" /></Card>
               <Card size="small"><Statistic title="将自动建型号" value={preview.stats.auto_create_model_count} suffix="个" /></Card>
             </Space>
+            {preview.stats.sampled && (
+              <Alert
+                type="info"
+                showIcon
+                message="大文件预览为抽样统计"
+                description={`为避免解析超时，预览统计基于前 ${preview.stats.sample_rows ?? 0} 行；确认导入时会处理全部 ${preview.total_rows} 行。`}
+              />
+            )}
             {currentIssues.length > 0 && (
               <Alert type="warning" showIcon message="需要确认" description={currentIssues.join('；')} />
             )}
@@ -304,6 +420,56 @@ function ImportTab() {
         </Card>
       )}
 
+      {multiPreviews.length > 0 && (
+        <Card title={`多文件合并导入确认（${multiPreviews.length} 个文件）`}>
+          <Space direction="vertical" style={{ width: '100%' }} size="middle">
+            <Alert
+              type="info"
+              showIcon
+              message="多个文件将合并为同一批次导入"
+              description="每个文件使用系统识别出的 sheet、字段映射和品类；如需逐文件调整映射，请取消后单独上传。"
+            />
+            <Table
+              size="small"
+              dataSource={multiPreviews}
+              rowKey={record => record.temp_file_id}
+              pagination={false}
+              columns={[
+                { title: '文件名', dataIndex: 'filename', key: 'filename' },
+                { title: 'Sheet', dataIndex: 'sheet_name', key: 'sheet_name', width: 140 },
+                {
+                  title: '品类', key: 'category', width: 140,
+                  render: (_: unknown, record: HistoricalImportPreview) => categoryLabel(record.category_code),
+                },
+                { title: '总行数', dataIndex: 'total_rows', key: 'total_rows', width: 100 },
+                {
+                  title: '字段映射', key: 'mapping', width: 100,
+                  render: (_: unknown, record: HistoricalImportPreview) => `${Object.keys(record.mapping).length} 个`,
+                },
+                {
+                  title: '提示', key: 'issues',
+                  render: (_: unknown, record: HistoricalImportPreview) => record.issues.length ? record.issues.join('；') : '-',
+                },
+              ]}
+            />
+            {multiIssues.length > 0 && (
+              <Alert type="warning" showIcon message="需要确认" description={multiIssues.join('；')} />
+            )}
+            <Space>
+              <Button
+                type="primary"
+                onClick={handleConfirmMulti}
+                loading={confirming}
+                disabled={multiIssues.length > 0}
+              >
+                确认合并导入
+              </Button>
+              <Button onClick={() => setMultiPreviews([])} disabled={confirming}>取消</Button>
+            </Space>
+          </Space>
+        </Card>
+      )}
+
       {result && (
         <Space direction="vertical" style={{ width: '100%' }}>
           <Space wrap>
@@ -317,22 +483,43 @@ function ImportTab() {
             <Table
               size="small"
               dataSource={result.errors}
-              rowKey="row"
+              rowKey={(_, index) => String(index)}
               pagination={false}
               columns={[
+                { title: '文件', dataIndex: 'file', key: 'file', width: 220 },
                 { title: '行号', dataIndex: 'row', key: 'row', width: 80 },
                 { title: '失败原因', dataIndex: 'reason', key: 'reason' },
               ]}
-              title={() => `失败明细（${result.errors.length} 条）`}
+              title={() => `失败明细（${result.errors.length}${result.errors_truncated ? '，仅展示前 5000 条' : ''} 条）`}
             />
           )}
         </Space>
       )}
 
+      <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+        <span style={{ color: '#888' }}>已选择 {selectedBatches.length} 个批次</span>
+        <Popconfirm
+          title="确认将所选批次合并为一个批次？"
+          description="仅合并批次归属，不会删除或重复写入历史数据。"
+          onConfirm={handleMergeBatches}
+          disabled={selectedBatches.length < 2}
+        >
+          <Button
+            disabled={selectedBatches.length < 2}
+            loading={merging}
+          >
+            合并所选批次
+          </Button>
+        </Popconfirm>
+      </Space>
       <Table<HistoricalBatchItem>
         title={() => '历史导入批次'}
         dataSource={batches}
         rowKey={(r) => r.batch}
+        rowSelection={{
+          selectedRowKeys: selectedBatches,
+          onChange: keys => setSelectedBatches(keys.map(String)),
+        }}
         pagination={false}
         columns={[
           { title: '批次名称', dataIndex: 'batch', key: 'batch' },
@@ -361,6 +548,35 @@ function ImportTab() {
             ),
           },
         ]}
+      />
+      <ProgressModal
+        visible={jobVisible}
+        title={job ? `历史库导入：${job.filename || ''}${job.total_files > 1 ? ` 等 ${job.total_files} 个文件` : ''}` : '历史库导入'}
+        progress={job?.progress ?? 0}
+        errorMsg={job?.status === 'error' ? (job?.error_msg ?? '导入失败') : undefined}
+        stageLabel={job?.stage_label}
+        totalRows={job?.total_rows}
+        processedRows={job?.processed_rows}
+        insertedRows={job?.success_rows}
+        onClose={
+          job && ['done', 'error', 'cancelled'].includes(job.status)
+            ? () => setJobVisible(false)
+            : undefined
+        }
+      />
+      <ProgressModal
+        visible={exportJobVisible}
+        title={exportJob ? `历史库导出：${exportJob.import_batch || '全部批次'}` : '历史库导出'}
+        progress={exportJob?.progress ?? 0}
+        errorMsg={exportJob?.status === 'error' ? (exportJob?.error_msg ?? '导出失败') : undefined}
+        stageLabel={exportJob ? (exportJob.status === 'done' ? '导出完成' : '正在生成 Excel') : undefined}
+        totalRows={exportJob?.total_rows}
+        processedRows={exportJob?.processed_rows}
+        onClose={
+          exportJob && ['done', 'error'].includes(exportJob.status)
+            ? () => setExportJobVisible(false)
+            : undefined
+        }
       />
     </Space>
   )

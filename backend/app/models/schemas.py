@@ -1533,6 +1533,49 @@ class WorkbenchExportJob(Base):
     finished_at      = Column(DateTime, nullable=True)
 
 
+class HistoricalImportJob(Base):
+    __tablename__ = "historical_import_jobs"
+
+    id             = Column(Integer, primary_key=True, index=True)
+    status         = Column(String(20), nullable=False, default="pending")   # pending/running/done/error/cancelled
+    progress       = Column(SmallInteger, nullable=False, default=0)
+    stage          = Column(String(30), nullable=False, default="pending")
+    stage_label    = Column(String(100), nullable=False, default="等待处理")
+    import_batch   = Column(String(200), nullable=True)
+    filename       = Column(String(500), nullable=True)
+    total_files    = Column(Integer, nullable=False, default=0)
+    processed_files = Column(Integer, nullable=False, default=0)
+    total_rows     = Column(Integer, nullable=True)
+    processed_rows = Column(Integer, nullable=False, default=0)
+    success_rows   = Column(Integer, nullable=False, default=0)
+    created_rows   = Column(Integer, nullable=False, default=0)
+    updated_rows   = Column(Integer, nullable=False, default=0)
+    error_rows     = Column(Integer, nullable=False, default=0)
+    files_data     = Column(JSON, nullable=True)
+    result_data    = Column(JSON, nullable=True)
+    error_msg      = Column(Text, nullable=True)
+    created_at     = Column(DateTime, default=datetime.utcnow)
+    finished_at    = Column(DateTime, nullable=True)
+
+
+class HistoricalExportJob(Base):
+    __tablename__ = "historical_export_jobs"
+
+    id             = Column(Integer, primary_key=True, index=True)
+    user_id        = Column(Integer, nullable=True)
+    status         = Column(String(20), nullable=False, default="pending")   # pending/running/done/error
+    progress       = Column(SmallInteger, nullable=False, default=0)
+    import_batch   = Column(String(200), nullable=True)
+    category_codes = Column(JSON, nullable=True)
+    total_rows     = Column(Integer, nullable=True)
+    processed_rows = Column(Integer, nullable=False, default=0)
+    filename       = Column(String(500), nullable=True)
+    file_token     = Column(String(64), nullable=True, index=True)
+    error_msg      = Column(Text, nullable=True)
+    created_at     = Column(DateTime, default=datetime.utcnow)
+    finished_at    = Column(DateTime, nullable=True)
+
+
 class UploadConfirmJob(Base):
     __tablename__ = "upload_confirm_jobs"
 

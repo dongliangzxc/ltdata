@@ -1259,6 +1259,7 @@ def test_list_mappings_filters_by_month_model_and_item_keywords(db):
         "brand_raw",
         "brand_code_raw",
         "model_text",
+        "model_type",
         "model_id",
         "model_code",
         "standard_model_name",
@@ -1968,3 +1969,233 @@ def test_import_tablet_same_storage_different_series_matches_correct_model(db):
     assert resp.status_code == 200
     assert resp.json()["success"] == 1
     assert db.query(HistoricalMapping).one().model_id == m2.id
+
+
+def test_headers_large_file_preview_uses_sampling(db, tmp_path, monkeypatch):
+    monkeypatch.setattr("app.api.historical_api.settings.UPLOAD_DIR", str(tmp_path))
+    monkeypatch.setattr("app.api.historical_api.PREVIEW_SAMPLE_ROWS", 2)
+    client = _client(db)
+    content = _history_excel([
+        {"年": 2026, "月": 5, "商场": "JD", "标题": f"商品{i}", "网址": f"https://item.jd.com/{i}.html"}
+        for i in range(5)
+    ])
+
+    resp = client.post(
+        "/api/historical/headers",
+        files={"file": ("history.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_rows"] == 5
+    assert data["stats"]["total_rows"] == 5
+    assert data["stats"]["sample_rows"] == 2
+    assert data["stats"]["sampled"] is True
+    assert len(data["preview"]) == 2
+
+
+def test_create_historical_import_job_merges_multiple_files_into_one_batch(db, tmp_path, monkeypatch):
+    from app.models.schemas import HistoricalImportJob
+
+    monkeypatch.setattr("app.api.historical_api.settings.UPLOAD_DIR", str(tmp_path))
+    db.add(Category(code="router", name="路由器"))
+    db.commit()
+    client = _client(db)
+    files = []
+    for index in (1, 2):
+        content = _history_excel([{
+            "年度": 2025,
+            "月度": 1,
+            "平台": "京东",
+            "商品名称": f"路由器 {index}",
+            "商品网址": f"https://item.jd.com/9000{index}.html",
+            "产品系列": f"D{index}",
+        }])
+        preview = client.post(
+            "/api/historical/headers",
+            files={"file": (f"路由器-{index}.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        ).json()
+        files.append({
+            "temp_file_id": preview["temp_file_id"],
+            "sheet_name": preview["sheet_name"],
+            "mapping": preview["mapping"],
+            "category_code": preview["category_code"],
+        })
+
+    class FakeThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr("app.api.historical_api.threading.Thread", FakeThread)
+
+    resp = client.post("/api/historical/jobs", json={"files": files})
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "pending"
+    assert payload["total_files"] == 2
+    assert payload["import_batch"] == "路由器（合并2个文件）"
+    job = db.query(HistoricalImportJob).one()
+    assert len(job.files_data) == 2
+
+
+def test_merge_historical_batches_relabels_rows(db):
+    for index, batch in enumerate(("批次A", "批次B"), start=1):
+        db.add(HistoricalMapping(
+            import_batch=batch,
+            platform="jd",
+            item_id=str(index),
+            item_name=f"商品{index}",
+            item_name_norm=f"商品{index}",
+            year=2026,
+            month_num=1,
+            month="2026-01",
+            match_key_type="item_id",
+            raw_payload={"标题": f"商品{index}"},
+        ))
+    db.commit()
+    client = _client(db)
+
+    resp = client.post(
+        "/api/historical/mappings/batch/merge",
+        json={"batches": ["批次A", "批次B"], "target_batch": "合并批次"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"import_batch": "合并批次", "updated": 2}
+    assert {row.import_batch for row in db.query(HistoricalMapping).all()} == {"合并批次"}
+
+
+def test_historical_import_thread_writes_rows_and_finishes_job(db, tmp_path, monkeypatch):
+    from sqlalchemy.orm import sessionmaker
+    from app.api import historical_api
+    from app.models.schemas import HistoricalImportJob
+
+    monkeypatch.setattr("app.api.historical_api.settings.UPLOAD_DIR", str(tmp_path))
+    db.add(Category(code="router", name="路由器"))
+    db.commit()
+    client = _client(db)
+    content = _history_excel([{
+        "年度": 2025,
+        "月度": 1,
+        "平台": "京东",
+        "商品名称": "后台导入路由器",
+        "商品网址": "https://item.jd.com/91001.html",
+        "产品系列": "D90",
+        "销量": 3,
+    }])
+    preview = client.post(
+        "/api/historical/headers",
+        files={"file": ("路由器-后台.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    ).json()
+
+    class FakeThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr("app.api.historical_api.threading.Thread", FakeThread)
+    job_resp = client.post("/api/historical/jobs", json={"files": [{
+        "temp_file_id": preview["temp_file_id"],
+        "sheet_name": preview["sheet_name"],
+        "mapping": preview["mapping"],
+        "category_code": preview["category_code"],
+    }]})
+    job_id = job_resp.json()["job_id"]
+
+    TestSession = sessionmaker(bind=db.bind)
+    monkeypatch.setattr("app.api.historical_api.SessionLocal", TestSession)
+    historical_api._run_historical_import_thread(job_id)
+
+    db.expire_all()
+    job = db.query(HistoricalImportJob).filter_by(id=job_id).one()
+    assert job.status == "done"
+    assert job.progress == 100
+    assert job.success_rows == 1
+    row = db.query(HistoricalMapping).one()
+    assert row.item_name == "后台导入路由器"
+    assert row.import_batch == job.import_batch
+
+
+def test_historical_export_thread_writes_large_batch_to_file(db, tmp_path, monkeypatch):
+    from sqlalchemy.orm import sessionmaker
+    from openpyxl import load_workbook
+    from app.api import historical_api
+    from app.models.schemas import HistoricalExportJob
+
+    monkeypatch.setattr("app.api.historical_api.settings.EXPORT_DIR", str(tmp_path))
+    model = _seed_model(db)
+    for index in range(1, 4):
+        db.add(HistoricalMapping(
+            import_batch="批次A",
+            platform="jd",
+            item_id=f"item-{index}",
+            item_name=f"商品{index}",
+            item_name_norm=f"商品{index}",
+            year=2026,
+            month_num=1,
+            month="2026-01",
+            model_id=model.id,
+            model_code=model.model_code,
+            match_key_type="item_id",
+            raw_payload={"标题": f"商品{index}"},
+        ))
+    db.commit()
+    job = HistoricalExportJob(status="pending", import_batch="批次A")
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    TestSession = sessionmaker(bind=db.bind)
+    monkeypatch.setattr("app.api.historical_api.SessionLocal", TestSession)
+    historical_api._run_historical_export_thread(job.id)
+
+    db.expire_all()
+    job = db.query(HistoricalExportJob).filter_by(id=job.id).one()
+    assert job.status == "done"
+    assert job.progress == 100
+    assert job.total_rows == 3
+    assert job.processed_rows == 3
+    assert job.file_token
+    file_path = tmp_path / f"historical_{job.file_token}.xlsx"
+    assert file_path.exists()
+
+    workbook = load_workbook(file_path)
+    rows = list(workbook["历史库"].iter_rows(values_only=True))
+    assert list(rows[0]) == historical_api.HISTORICAL_EXPORT_HEADERS
+    assert [row[1] for row in rows[1:]] == ["item-1", "item-2", "item-3"]
+
+    download = _client(db).get(f"/api/historical/export/download/{job.file_token}")
+    assert download.status_code == 200
+    assert download.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+
+def test_create_historical_export_job_enqueues_background_thread(db, monkeypatch):
+    from app.models.schemas import HistoricalExportJob
+
+    class FakeThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr("app.api.historical_api.threading.Thread", FakeThread)
+    client = _client(db)
+
+    resp = client.post("/api/historical/export/jobs", json={"import_batch": "批次A"})
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "pending"
+    assert payload["import_batch"] == "批次A"
+    job = db.query(HistoricalExportJob).one()
+    assert job.status == "pending"
+    assert job.category_codes is None

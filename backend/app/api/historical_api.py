@@ -1,32 +1,50 @@
 """历史库管理 API
-- POST   /api/historical/import           Excel 导入历史确认结果（upsert）
+- POST   /api/historical/import           Excel 导入历史确认结果（同步，兼容旧调用）
+- POST   /api/historical/jobs             创建后台导入任务（支持多文件合并）
+- GET    /api/historical/jobs/{job_id}    查询后台导入任务进度
+- POST   /api/historical/export/jobs      创建后台导出任务（大批次）
+- GET    /api/historical/export/jobs/{id} 查询后台导出任务进度
+- GET    /api/historical/export/download/{token}  下载后台导出的 Excel
 - GET    /api/historical/batches          查询所有批次名称列表
 - GET    /api/historical/mappings         分页查询映射（platform / import_batch 筛选）
-- GET    /api/historical/export           按批次导出历史数据 Excel
+- GET    /api/historical/export           按批次同步导出历史数据 Excel（兼容旧调用）
+- POST   /api/historical/mappings/batch/merge  合并多个导入批次
 - DELETE /api/historical/mappings/batch   按批次批量删除（静态路由，必须在 /{id} 之前）
 - DELETE /api/historical/mappings/{id}    删除单条映射
 """
 import io
+import pickle
+import re
+import threading
+import uuid
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 from urllib.parse import quote
 from uuid import UUID
 
 import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from openpyxl import Workbook, load_workbook
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, tuple_
 from sqlalchemy.orm import Session
 
 from app.core.auth_deps import get_current_user
 from app.core.config import settings
 from app.core.permissions import visible_category_codes
-from app.models.database import get_db
-from app.models.schemas import Category, CategoryExtraField, HistoricalMapping, ModelRecord, User
+from app.models.database import SessionLocal, get_db
+from app.models.schemas import (
+    Category,
+    CategoryExtraField,
+    HistoricalExportJob,
+    HistoricalImportJob,
+    HistoricalMapping,
+    ModelRecord,
+    User,
+)
 from app.services.export_guards import MAX_SYNC_EXPORT_ROWS, ensure_export_row_limit
 from app.services.import_helper import save_tmp_file
 from app.utils.time_utils import format_beijing_datetime
@@ -34,9 +52,32 @@ from app.utils.url_utils import extract_item_id
 
 router = APIRouter(prefix="/api/historical", tags=["historical"])
 
+PREVIEW_SAMPLE_ROWS = 5000
+
 
 class BatchDeleteIn(BaseModel):
     import_batch: str
+
+
+class BatchMergeIn(BaseModel):
+    batches: list[str] = Field(min_length=1)
+    target_batch: Optional[str] = None
+
+
+class HistoricalImportJobFile(BaseModel):
+    temp_file_id: str
+    sheet_name: str
+    mapping: dict[str, str]
+    category_code: Optional[str] = None
+
+
+class HistoricalImportJobIn(BaseModel):
+    files: list[HistoricalImportJobFile] = Field(min_length=1)
+    import_batch: Optional[str] = None
+
+
+class HistoricalExportJobIn(BaseModel):
+    import_batch: Optional[str] = None
 
 
 class HistoricalConfirmIn(BaseModel):
@@ -593,6 +634,8 @@ def _calculate_preview_stats_for_rows(
         brand_code_raw = _clean_value(_get(row, "品牌码"))
         effective_brand_code = _effective_brand_code(brand_code_raw, brand_raw)
         if not (model_code_raw or model_text):
+            if model_type_raw:
+                missing_model_rows += 1
             continue
         model, reason = _resolve_model(
             model_code_raw=model_code_raw,
@@ -1027,32 +1070,28 @@ def _historical_preview_response(
         full_df = _standardize_historical_df(_read_sheet_preview(xls, sheet_name, usecols=usecols), normalized_mapping, category_code)
         stats = _preview_stats(db, full_df)
         total_rows = stats["total_rows"]
+        stats["sample_rows"] = total_rows
+        stats["sampled"] = False
         preview_rows = _preview_rows(standardized_preview)
     else:
         preview_rows = []
-        model_code_values = set()
-        model_text_values = set()
+        sampled_rows: list[dict] = []
         for raw_row in _iter_sheet_rows_streaming(path, sheet_name, columns=columns, usecols=usecols):
             standardized = _standardize_historical_row(raw_row, normalized_mapping, category_code)
-            model_code_values.add(_clean_value(_get(standardized, "型号码")))
-            model_text_values.add(_clean_value(_get(standardized, "型号")))
+            if len(sampled_rows) < PREVIEW_SAMPLE_ROWS:
+                sampled_rows.append(standardized)
             if len(preview_rows) < 20:
                 preview_rows.append(_json_safe_row(standardized))
+            if len(sampled_rows) >= PREVIEW_SAMPLE_ROWS:
+                break
+        model_code_values = {_clean_value(_get(row, "型号码")) for row in sampled_rows}
+        model_text_values = {_clean_value(_get(row, "型号")) for row in sampled_rows}
         models_by_code, models_by_code_unbranded, models_by_name = _load_preview_models(db, model_code_values, model_text_values)
-        ambiguous_model_codes = _ambiguous_model_codes_from_rows(
-            (
-                _standardize_historical_row(raw_row, normalized_mapping, category_code)
-                for raw_row in _iter_sheet_rows_streaming(path, sheet_name, columns=columns, usecols=usecols)
-            ),
-            models_by_code_unbranded,
-        )
+        ambiguous_model_codes = _ambiguous_model_codes_from_rows(sampled_rows, models_by_code_unbranded)
         series_codes = _series_category_codes(db)
         models_by_series = _load_series_models(db, series_codes)
         stats = _calculate_preview_stats_for_rows(
-            (
-                _standardize_historical_row(raw_row, normalized_mapping, category_code)
-                for raw_row in _iter_sheet_rows_streaming(path, sheet_name, columns=columns, usecols=usecols)
-            ),
+            sampled_rows,
             models_by_code=models_by_code,
             models_by_code_unbranded=models_by_code_unbranded,
             models_by_name=models_by_name,
@@ -1060,7 +1099,10 @@ def _historical_preview_response(
             series_codes=series_codes,
             models_by_series=models_by_series,
         )
-        total_rows = stats["total_rows"]
+        total_rows = _sheet_total_rows_streaming(path, sheet_name)
+        stats["sample_rows"] = len(sampled_rows)
+        stats["sampled"] = total_rows > len(sampled_rows)
+        stats["total_rows"] = total_rows
     return {
         "temp_file_id": temp_file_id,
         "filename": filename,
@@ -1238,6 +1280,7 @@ def _import_historical_rows(
     ambiguous_model_codes: set[str],
     series_codes: Optional[set[str]] = None,
     models_by_series: Optional[dict[tuple[str, str, str, str], ModelRecord]] = None,
+    progress_cb: Optional[Callable[[int], None]] = None,
 ) -> dict:
     series_codes = series_codes or set()
     models_by_series = models_by_series or {}
@@ -1267,8 +1310,11 @@ def _import_historical_rows(
         merged_rows = {}
         merged_row_nums = {}
 
+    idx = -1
     for idx, row in enumerate(rows):
         row_num = idx + 2
+        if progress_cb is not None and idx and idx % 1000 == 0:
+            progress_cb(idx)
         platform = _normalize_platform(_get(row, "商场")) or _normalize_platform(_get(row, "渠道"))
         item_name = _clean_value(_get(row, "标题"))
         model_text = _clean_value(_get(row, "型号"))
@@ -1386,7 +1432,38 @@ def _import_historical_rows(
             flush_batch()
 
     flush_batch()
+    if progress_cb is not None:
+        progress_cb(idx + 1)
     return {"success": success, "created": created, "updated": updated, "errors": errors, "import_batch": import_batch}
+
+
+def _import_historical_standard_stream(
+    db: Session,
+    standard_rows_factory,
+    import_batch: str,
+    *,
+    progress_cb: Optional[Callable[[int], None]] = None,
+) -> dict:
+    model_code_values, model_text_values = _model_lookup_values_from_rows(standard_rows_factory())
+    models_by_code, models_by_code_unbranded, models_by_name = _load_preview_models(db, model_code_values, model_text_values)
+    ambiguous_model_codes = _ambiguous_model_codes_from_rows(
+        standard_rows_factory(),
+        models_by_code_unbranded,
+    )
+    series_codes = _series_category_codes(db)
+    models_by_series = _load_series_models(db, series_codes)
+    return _import_historical_rows(
+        db,
+        standard_rows_factory(),
+        import_batch,
+        models_by_code=models_by_code,
+        models_by_code_unbranded=models_by_code_unbranded,
+        models_by_name=models_by_name,
+        ambiguous_model_codes=ambiguous_model_codes,
+        series_codes=series_codes,
+        models_by_series=models_by_series,
+        progress_cb=progress_cb,
+    )
 
 
 def _import_historical_stream(
@@ -1396,27 +1473,413 @@ def _import_historical_stream(
     category_code: Optional[str],
     import_batch: str,
 ) -> dict:
-    model_code_values, model_text_values = _model_lookup_values_from_rows(
-        _standardize_historical_row(row, mapping, category_code) for row in raw_rows_factory()
-    )
-    models_by_code, models_by_code_unbranded, models_by_name = _load_preview_models(db, model_code_values, model_text_values)
-    ambiguous_model_codes = _ambiguous_model_codes_from_rows(
-        (_standardize_historical_row(row, mapping, category_code) for row in raw_rows_factory()),
-        models_by_code_unbranded,
-    )
-    series_codes = _series_category_codes(db)
-    models_by_series = _load_series_models(db, series_codes)
-    return _import_historical_rows(
+    return _import_historical_standard_stream(
         db,
-        (_standardize_historical_row(row, mapping, category_code) for row in raw_rows_factory()),
+        lambda: (
+            _standardize_historical_row(row, mapping, category_code)
+            for row in raw_rows_factory()
+        ),
         import_batch,
-        models_by_code=models_by_code,
-        models_by_code_unbranded=models_by_code_unbranded,
-        models_by_name=models_by_name,
-        ambiguous_model_codes=ambiguous_model_codes,
-        series_codes=series_codes,
-        models_by_series=models_by_series,
     )
+
+
+_HISTORICAL_ACTIVE_JOBS: set[int] = set()
+
+
+def _update_historical_job(job_id: int, **fields) -> None:
+    progress_db = SessionLocal()
+    try:
+        job = progress_db.query(HistoricalImportJob).filter_by(id=job_id).first()
+        if not job:
+            return
+        for key, value in fields.items():
+            setattr(job, key, value)
+        progress_db.commit()
+    finally:
+        progress_db.close()
+
+
+def _mark_interrupted_historical_jobs(db: Session) -> None:
+    jobs = db.query(HistoricalImportJob).filter(
+        HistoricalImportJob.status == "running",
+        HistoricalImportJob.id.notin_(list(_HISTORICAL_ACTIVE_JOBS) or [-1]),
+    ).all()
+    if not jobs:
+        return
+    for job in jobs:
+        job.status = "error"
+        job.stage = "interrupted"
+        job.stage_label = "任务已中断"
+        job.error_msg = "后端服务重启，后台导入线程已中断，请重新上传"
+        job.finished_at = datetime.utcnow()
+    db.commit()
+
+
+PART_SUFFIX_RE = re.compile(r"[-_—–\s]*(?:part\s*\d+|第?\d+部分|\d+)$", re.IGNORECASE)
+
+
+def _derive_import_batch(filenames: list[str], explicit: Optional[str]) -> str:
+    if explicit and explicit.strip():
+        return explicit.strip()[:200]
+    if len(filenames) == 1:
+        return Path(filenames[0]).name[:200]
+    stems = [Path(name).stem for name in filenames]
+    base = PART_SUFFIX_RE.sub("", stems[0]).strip(" -_—–()（）[]【】") or stems[0]
+    return f"{base}（合并{len(filenames)}个文件）"[:200]
+
+
+def _cache_standardized_rows(
+    *,
+    path: Path,
+    xls: pd.ExcelFile,
+    sheet_name: str,
+    columns: list[str],
+    mapping: dict[str, str],
+    category_code: Optional[str],
+    cache_path: Path,
+) -> int:
+    usecols = _mapped_columns(mapping, columns)
+    if path.suffix.lower() == ".xls":
+        df = _read_sheet_preview(xls, sheet_name, usecols=usecols)
+        iterator = (
+            _standardize_historical_row(raw_row.to_dict(), mapping, category_code)
+            for _, raw_row in df.iterrows()
+        )
+    else:
+        iterator = (
+            _standardize_historical_row(raw_row, mapping, category_code)
+            for raw_row in _iter_sheet_rows_streaming(
+                path, sheet_name, columns=columns, usecols=usecols
+            )
+        )
+    count = 0
+    with open(cache_path, "wb") as cache_file:
+        for row in iterator:
+            pickle.dump(row, cache_file, protocol=pickle.HIGHEST_PROTOCOL)
+            count += 1
+    return count
+
+
+def _cached_rows_factory(cache_path: Path):
+    def rows():
+        with open(cache_path, "rb") as cache_file:
+            while True:
+                try:
+                    yield pickle.load(cache_file)
+                except EOFError:
+                    break
+
+    return rows
+
+
+def _run_historical_import_thread(job_id: int) -> None:
+    db = SessionLocal()
+    cache_paths: list[Path] = []
+    try:
+        job = db.query(HistoricalImportJob).filter_by(id=job_id).first()
+        if not job:
+            return
+        files = list(job.files_data or [])
+        _HISTORICAL_ACTIVE_JOBS.add(job_id)
+        _update_historical_job(
+            job_id,
+            status="running",
+            stage="preparing",
+            stage_label="正在准备导入",
+            progress=1,
+        )
+
+        total_rows = 0
+        file_totals: list[int] = []
+        for item in files:
+            path = _find_tmp_file(item["temp_file_id"])
+            if path.suffix.lower() == ".xls":
+                xls = pd.ExcelFile(path)
+                try:
+                    file_totals.append(len(_read_sheet_preview(xls, item["sheet_name"])))
+                finally:
+                    xls.close()
+            else:
+                file_totals.append(_sheet_total_rows_streaming(path, item["sheet_name"]))
+            total_rows += file_totals[-1]
+        _update_historical_job(job_id, total_rows=total_rows, progress=2)
+
+        processed_rows = 0
+        success_rows = 0
+        created_rows = 0
+        updated_rows = 0
+        all_errors: list[dict] = []
+        errors_truncated = False
+
+        for index, item in enumerate(files):
+            current_file = item.get("filename") or Path(item["temp_file_id"]).name
+            _update_historical_job(
+                job_id,
+                stage="parsing",
+                stage_label=f"正在解析第 {index + 1}/{len(files)} 个文件：{current_file}",
+                progress=min(10, 2 + index * 5),
+            )
+            path = _find_tmp_file(item["temp_file_id"])
+            xls = pd.ExcelFile(path)
+            cache_path = Path(settings.UPLOAD_DIR) / "tmp" / f"hist_import_{job_id}_{index}.pkl"
+            cache_paths.append(cache_path)
+            try:
+                if item["sheet_name"] not in xls.sheet_names:
+                    raise HTTPException(400, "选择的 sheet 不存在")
+                df_header = _read_sheet_preview(xls, item["sheet_name"], nrows=0)
+                columns = [str(col).strip() for col in df_header.columns]
+                mapping = _normalize_mapping_for_columns(item["mapping"], columns)
+                file_count = _cache_standardized_rows(
+                    path=path,
+                    xls=xls,
+                    sheet_name=item["sheet_name"],
+                    columns=columns,
+                    mapping=mapping,
+                    category_code=item.get("category_code"),
+                    cache_path=cache_path,
+                )
+            finally:
+                xls.close()
+
+            if file_count != file_totals[index]:
+                total_rows += file_count - file_totals[index]
+                file_totals[index] = file_count
+                _update_historical_job(job_id, total_rows=total_rows)
+
+            base_processed = processed_rows
+
+            def progress_cb(done: int, base: int = base_processed) -> None:
+                done_rows = base + done
+                percent = 10 + int(done_rows / max(total_rows, 1) * 88)
+                _update_historical_job(
+                    job_id,
+                    stage="importing",
+                    stage_label=f"正在写入第 {index + 1}/{len(files)} 个文件：{current_file}",
+                    processed_rows=done_rows,
+                    progress=min(99, percent),
+                )
+
+            _update_historical_job(
+                job_id,
+                stage="importing",
+                stage_label=f"正在写入第 {index + 1}/{len(files)} 个文件：{current_file}",
+                processed_rows=processed_rows,
+                progress=min(99, 10 + int(processed_rows / max(total_rows, 1) * 88)),
+            )
+            result = _import_historical_standard_stream(
+                db,
+                _cached_rows_factory(cache_path),
+                job.import_batch,
+                progress_cb=progress_cb,
+            )
+            processed_rows += file_count
+            success_rows += result.get("success", 0)
+            created_rows += result.get("created", 0)
+            updated_rows += result.get("updated", 0)
+            for error in result.get("errors", []):
+                if len(all_errors) >= 5000:
+                    errors_truncated = True
+                    break
+                all_errors.append({**error, "file": current_file})
+            cache_path.unlink(missing_ok=True)
+            _update_historical_job(
+                job_id,
+                processed_files=index + 1,
+                processed_rows=min(processed_rows, total_rows) if total_rows else processed_rows,
+                success_rows=success_rows,
+                created_rows=created_rows,
+                updated_rows=updated_rows,
+                error_rows=len(all_errors),
+                progress=min(99, 10 + int((index + 1) / len(files) * 88)),
+            )
+
+        result_data = {
+            "success": success_rows,
+            "created": created_rows,
+            "updated": updated_rows,
+            "errors": all_errors,
+            "errors_truncated": errors_truncated,
+            "import_batch": job.import_batch,
+            "files": [item.get("filename") for item in files],
+        }
+        progress_db = SessionLocal()
+        try:
+            done_job = progress_db.query(HistoricalImportJob).filter_by(id=job_id).first()
+            if done_job:
+                done_job.status = "done"
+                done_job.stage = "done"
+                done_job.stage_label = "导入完成"
+                done_job.progress = 100
+                done_job.processed_files = len(files)
+                done_job.processed_rows = total_rows
+                done_job.total_rows = total_rows
+                done_job.success_rows = success_rows
+                done_job.created_rows = created_rows
+                done_job.updated_rows = updated_rows
+                done_job.error_rows = len(all_errors)
+                done_job.result_data = result_data
+                done_job.finished_at = datetime.utcnow()
+                progress_db.commit()
+        finally:
+            progress_db.close()
+        for item in files:
+            try:
+                _find_tmp_file(item["temp_file_id"]).unlink(missing_ok=True)
+            except HTTPException:
+                pass
+    except Exception as exc:  # noqa: BLE001
+        _update_historical_job(
+            job_id,
+            status="error",
+            stage="error",
+            stage_label="导入失败",
+            error_msg=str(getattr(exc, "detail", exc)),
+            finished_at=datetime.utcnow(),
+        )
+    finally:
+        _HISTORICAL_ACTIVE_JOBS.discard(job_id)
+        for cache_path in cache_paths:
+            cache_path.unlink(missing_ok=True)
+        db.close()
+
+
+def _historical_job_response(job: HistoricalImportJob) -> dict:
+    resp = {
+        "job_id": job.id,
+        "status": job.status,
+        "progress": job.progress,
+        "stage": job.stage,
+        "stage_label": job.stage_label,
+        "import_batch": job.import_batch,
+        "filename": job.filename,
+        "total_files": job.total_files,
+        "processed_files": job.processed_files,
+        "total_rows": job.total_rows,
+        "processed_rows": job.processed_rows,
+        "success_rows": job.success_rows,
+        "created_rows": job.created_rows,
+        "updated_rows": job.updated_rows,
+        "error_rows": job.error_rows,
+        "error_msg": job.error_msg,
+        "created_at": format_beijing_datetime(job.created_at),
+        "finished_at": format_beijing_datetime(job.finished_at),
+    }
+    if job.status == "done" and job.result_data:
+        resp["result"] = job.result_data
+    return resp
+
+
+@router.post("/jobs")
+def create_historical_import_job(
+    payload: HistoricalImportJobIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if len(payload.files) > 50:
+        raise HTTPException(400, "单次最多合并导入 50 个文件")
+    file_metas = []
+    for item in payload.files:
+        _ensure_historical_category_visible(db, current_user, item.category_code)
+        path = _find_tmp_file(item.temp_file_id)
+        xls = pd.ExcelFile(path)
+        try:
+            if item.sheet_name not in xls.sheet_names:
+                raise HTTPException(400, "选择的 sheet 不存在")
+            df_header = _read_sheet_preview(xls, item.sheet_name, nrows=0)
+            columns = [str(col).strip() for col in df_header.columns]
+            issues = _mapping_issues(item.mapping, item.category_code, columns)
+            if issues:
+                raise HTTPException(422, "；".join(issues))
+            mapping = _normalize_mapping_for_columns(item.mapping, columns)
+            issues = _mapping_issues(mapping, item.category_code, columns)
+            if issues:
+                raise HTTPException(422, "；".join(issues))
+        finally:
+            xls.close()
+        file_metas.append({
+            "temp_file_id": item.temp_file_id,
+            "filename": _original_filename_from_tmp(path, item.temp_file_id),
+            "sheet_name": item.sheet_name,
+            "mapping": mapping,
+            "category_code": item.category_code,
+        })
+
+    filenames = [item["filename"] for item in file_metas]
+    import_batch = _derive_import_batch(filenames, payload.import_batch)
+    job = HistoricalImportJob(
+        status="pending",
+        stage="pending",
+        stage_label="等待处理",
+        progress=0,
+        import_batch=import_batch,
+        filename=filenames[0],
+        total_files=len(file_metas),
+        files_data=file_metas,
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    threading.Thread(
+        target=_run_historical_import_thread,
+        args=(job.id,),
+        daemon=True,
+    ).start()
+    return _historical_job_response(job)
+
+
+@router.get("/jobs")
+def list_historical_import_jobs(
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _mark_interrupted_historical_jobs(db)
+    jobs = (
+        db.query(HistoricalImportJob)
+        .order_by(HistoricalImportJob.created_at.desc(), HistoricalImportJob.id.desc())
+        .limit(limit)
+        .all()
+    )
+    return [_historical_job_response(job) for job in jobs]
+
+
+@router.get("/jobs/{job_id}")
+def get_historical_import_job(
+    job_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _mark_interrupted_historical_jobs(db)
+    job = db.query(HistoricalImportJob).filter_by(id=job_id).first()
+    if not job:
+        raise HTTPException(404, "导入任务不存在")
+    return _historical_job_response(job)
+
+
+@router.post("/mappings/batch/merge")
+def merge_batches(
+    body: BatchMergeIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    batches = list(dict.fromkeys(batch for batch in body.batches if batch))
+    if len(batches) < 2:
+        raise HTTPException(400, "请至少选择两个批次进行合并")
+    target_batch = (body.target_batch or "").strip() or _derive_import_batch(
+        [f"{batch}.xlsx" for batch in batches],
+        None,
+    )
+    q = db.query(HistoricalMapping).filter(HistoricalMapping.import_batch.in_(batches))
+    q = _filter_historical_visible_categories(q, db, current_user)
+    updated = q.update(
+        {HistoricalMapping.import_batch: target_batch},
+        synchronize_session=False,
+    )
+    if updated == 0:
+        raise HTTPException(404, "所选批次不存在或已删除")
+    db.commit()
+    return {"import_batch": target_batch, "updated": updated}
 
 
 @router.get("/template")
@@ -1592,6 +2055,234 @@ def list_batches(
     return [{"batch": r.import_batch, "count": r.count, "updated_at": format_beijing_datetime(r.updated_at)} for r in rows]
 
 
+HISTORICAL_EXPORT_ROWS_PER_SHEET = 1_000_000
+
+HISTORICAL_EXPORT_HEADERS = [
+    "商场/平台",
+    "商品ID",
+    "标题",
+    "品牌",
+    "品牌码",
+    "型号",
+    "机型/系列",
+    "标准型号",
+    "型号码",
+    "品类",
+    "品类码",
+    "年",
+    "月",
+    "年月",
+    "周",
+    "报告类型",
+    "渠道",
+    "销量",
+    "单价",
+    "销额",
+    "网址",
+    "导入批次",
+    "匹配键",
+]
+
+
+def _historical_export_values(hm: HistoricalMapping, m: Optional[ModelRecord]) -> list:
+    return [
+        hm.platform,
+        hm.item_id,
+        hm.item_name,
+        hm.brand_raw,
+        hm.brand_code_raw,
+        hm.model_text,
+        hm.model_type,
+        m.model_name if m else None,
+        hm.model_code,
+        hm.category_name_raw,
+        hm.category_code or hm.category_code_raw,
+        hm.year,
+        hm.month_num,
+        hm.month,
+        hm.week,
+        hm.report_type,
+        hm.channel,
+        hm.sales_qty,
+        float(hm.price) if hm.price is not None else None,
+        float(hm.sales_amount) if hm.sales_amount is not None else None,
+        hm.item_url,
+        hm.import_batch,
+        hm.match_key_type,
+    ]
+
+
+def _historical_export_query(db: Session, *, category_codes: Optional[list[str]], import_batch: Optional[str]):
+    q = (
+        db.query(HistoricalMapping, ModelRecord)
+        .outerjoin(ModelRecord, HistoricalMapping.model_id == ModelRecord.id)
+    )
+    if category_codes is not None:
+        q = q.filter(HistoricalMapping.category_code.in_(category_codes))
+    if import_batch:
+        q = q.filter(HistoricalMapping.import_batch == import_batch)
+    return q
+
+
+def _historical_export_job_response(job: HistoricalExportJob) -> dict:
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "progress": job.progress,
+        "import_batch": job.import_batch,
+        "total_rows": job.total_rows,
+        "processed_rows": job.processed_rows,
+        "filename": job.filename,
+        "error_msg": job.error_msg,
+        "download_url": (
+            f"/api/historical/export/download/{job.file_token}"
+            if job.status == "done" and job.file_token
+            else None
+        ),
+        "created_at": format_beijing_datetime(job.created_at),
+        "finished_at": format_beijing_datetime(job.finished_at),
+    }
+
+
+def _run_historical_export_thread(job_id: int) -> None:
+    db = SessionLocal()
+    file_path = None
+    try:
+        job = db.query(HistoricalExportJob).filter_by(id=job_id).first()
+        if not job:
+            return
+        job.status = "running"
+        job.progress = 1
+        db.commit()
+
+        q = _historical_export_query(
+            db,
+            category_codes=job.category_codes,
+            import_batch=job.import_batch,
+        )
+        total = q.count()
+        if total == 0:
+            job.status = "error"
+            job.error_msg = "没有符合条件的数据"
+            job.finished_at = datetime.utcnow()
+            db.commit()
+            return
+        job.total_rows = total
+        job.progress = 5
+        db.commit()
+
+        export_dir = Path(settings.EXPORT_DIR)
+        export_dir.mkdir(parents=True, exist_ok=True)
+        token = uuid.uuid4().hex
+        file_path = export_dir / f"historical_{token}.xlsx"
+        job.filename = f"historical_export_{job.import_batch or 'all'}.xlsx"
+
+        workbook = Workbook(write_only=True)
+        worksheet = workbook.create_sheet("历史库")
+        worksheet.append(HISTORICAL_EXPORT_HEADERS)
+        sheet_rows = 0
+        sheet_index = 1
+
+        last_id: Optional[int] = None
+        processed = 0
+        page_size = 5000
+        while True:
+            page_q = q
+            if last_id is not None:
+                page_q = page_q.filter(HistoricalMapping.id > last_id)
+            page_rows = page_q.order_by(HistoricalMapping.id).limit(page_size).all()
+            if not page_rows:
+                break
+            for hm, m in page_rows:
+                if sheet_rows >= HISTORICAL_EXPORT_ROWS_PER_SHEET:
+                    sheet_index += 1
+                    worksheet = workbook.create_sheet(f"历史库{sheet_index}")
+                    worksheet.append(HISTORICAL_EXPORT_HEADERS)
+                    sheet_rows = 0
+                worksheet.append(_historical_export_values(hm, m))
+                sheet_rows += 1
+            last_id = page_rows[-1][0].id
+            processed += len(page_rows)
+            job.processed_rows = processed
+            job.progress = min(99, 5 + int(90 * processed / max(total, 1)))
+            db.commit()
+        workbook.save(str(file_path))
+
+        job.status = "done"
+        job.progress = 100
+        job.processed_rows = processed
+        job.file_token = token
+        job.finished_at = datetime.utcnow()
+        db.commit()
+    except Exception as exc:  # noqa: BLE001
+        if file_path is not None:
+            file_path.unlink(missing_ok=True)
+        try:
+            job = db.query(HistoricalExportJob).filter_by(id=job_id).first()
+            if job:
+                job.status = "error"
+                job.error_msg = str(getattr(exc, "detail", exc))
+                job.finished_at = datetime.utcnow()
+                db.commit()
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
+@router.post("/export/jobs")
+def create_historical_export_job(
+    payload: HistoricalExportJobIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    visible_codes = _visible_historical_category_codes(db, current_user)
+    job = HistoricalExportJob(
+        user_id=getattr(current_user, "id", None),
+        status="pending",
+        import_batch=(payload.import_batch or "").strip() or None,
+        category_codes=sorted(visible_codes) if visible_codes is not None else None,
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    threading.Thread(
+        target=_run_historical_export_thread,
+        args=(job.id,),
+        daemon=True,
+    ).start()
+    return _historical_export_job_response(job)
+
+
+@router.get("/export/jobs/{job_id}")
+def get_historical_export_job(
+    job_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    job = db.query(HistoricalExportJob).filter_by(id=job_id).first()
+    if not job:
+        raise HTTPException(404, "导出任务不存在")
+    if getattr(current_user, "is_admin", 0) != 1 and job.user_id not in (None, getattr(current_user, "id", None)):
+        raise HTTPException(403, "无权查看该导出任务")
+    return _historical_export_job_response(job)
+
+
+@router.get("/export/download/{token}")
+def download_historical_export(token: str, db: Session = Depends(get_db)):
+    job = db.query(HistoricalExportJob).filter_by(file_token=token).first()
+    if not job or not job.filename:
+        raise HTTPException(404, "文件不存在或已过期")
+    file_path = Path(settings.EXPORT_DIR) / f"historical_{token}.xlsx"
+    if not file_path.exists():
+        raise HTTPException(404, "文件已被清理，请重新导出")
+    return FileResponse(
+        path=str(file_path),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(job.filename)}"},
+    )
+
+
 @router.get("/export")
 def export_mappings(
     import_batch: Optional[str] = Query(None),
@@ -1610,35 +2301,8 @@ def export_mappings(
     ensure_export_row_limit(total, max_rows=MAX_SYNC_EXPORT_ROWS, label="历史库导出")
     rows = q.order_by(HistoricalMapping.id).all()
 
-    data = [
-        {
-            "商场/平台": hm.platform,
-            "商品ID": hm.item_id,
-            "标题": hm.item_name,
-            "品牌": hm.brand_raw,
-            "品牌码": hm.brand_code_raw,
-            "型号": hm.model_text,
-            "机型/系列": hm.model_type,
-            "标准型号": m.model_name if m else None,
-            "型号码": hm.model_code,
-            "品类": hm.category_name_raw,
-            "品类码": hm.category_code or hm.category_code_raw,
-            "年": hm.year,
-            "月": hm.month_num,
-            "年月": hm.month,
-            "周": hm.week,
-            "报告类型": hm.report_type,
-            "渠道": hm.channel,
-            "销量": hm.sales_qty,
-            "单价": float(hm.price) if hm.price is not None else None,
-            "销额": float(hm.sales_amount) if hm.sales_amount is not None else None,
-            "网址": hm.item_url,
-            "导入批次": hm.import_batch,
-            "匹配键": hm.match_key_type,
-        }
-        for hm, m in rows
-    ]
-    df = pd.DataFrame(data)
+    data = [_historical_export_values(hm, m) for hm, m in rows]
+    df = pd.DataFrame(data, columns=HISTORICAL_EXPORT_HEADERS)
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="历史库")

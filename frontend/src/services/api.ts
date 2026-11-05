@@ -1458,6 +1458,7 @@ export const listMissingAttrs = (clean_job_id: number, params?: Record<string, u
 export interface HistoricalImportError {
   row: number
   reason: string
+  file?: string
 }
 
 export interface HistoricalImportResult {
@@ -1466,6 +1467,8 @@ export interface HistoricalImportResult {
   updated: number
   errors: HistoricalImportError[]
   import_batch: string
+  errors_truncated?: boolean
+  files?: string[]
 }
 
 export interface HistoricalImportStats {
@@ -1474,6 +1477,57 @@ export interface HistoricalImportStats {
   missing_required_rows: number
   missing_model_rows: number
   auto_create_model_count: number
+  sample_rows?: number
+  sampled?: boolean
+}
+
+export interface HistoricalImportJobFile {
+  temp_file_id: string
+  sheet_name: string
+  mapping: Record<string, string>
+  category_code?: string | null
+  filename?: string
+}
+
+export interface HistoricalImportJobPayload {
+  files: HistoricalImportJobFile[]
+  import_batch?: string | null
+}
+
+export interface HistoricalImportJob {
+  job_id: number
+  status: 'pending' | 'running' | 'done' | 'error' | 'cancelled'
+  progress: number
+  stage: string
+  stage_label: string
+  import_batch: string | null
+  filename: string | null
+  total_files: number
+  processed_files: number
+  total_rows: number | null
+  processed_rows: number
+  success_rows: number
+  created_rows: number
+  updated_rows: number
+  error_rows: number
+  error_msg: string | null
+  created_at: string | null
+  finished_at: string | null
+  result?: HistoricalImportResult
+}
+
+export interface HistoricalExportJob {
+  job_id: number
+  status: 'pending' | 'running' | 'done' | 'error'
+  progress: number
+  import_batch: string | null
+  total_rows: number | null
+  processed_rows: number
+  filename: string | null
+  error_msg: string | null
+  download_url: string | null
+  created_at: string | null
+  finished_at: string | null
 }
 
 export interface HistoricalImportPreview {
@@ -1546,13 +1600,31 @@ export const importHistoricalMappings = (formData: FormData) =>
   api.post<HistoricalImportResult>('/historical/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
 
 export const parseHistoricalImport = (formData: FormData) =>
-  api.post<HistoricalImportPreview>('/historical/headers', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+  api.post<HistoricalImportPreview>('/historical/headers', formData, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 1800000 })
 
 export const previewHistoricalImport = (payload: HistoricalConfirmPayload) =>
   api.post<HistoricalImportPreview>('/historical/preview', payload)
 
 export const confirmHistoricalImport = (payload: HistoricalConfirmPayload) =>
   api.post<HistoricalImportResult>('/historical/confirm', payload)
+
+export const startHistoricalImportJob = (payload: HistoricalImportJobPayload) =>
+  api.post<HistoricalImportJob>('/historical/jobs', payload)
+
+export const getHistoricalImportJob = (jobId: number) =>
+  api.get<HistoricalImportJob>(`/historical/jobs/${jobId}`)
+
+export const listHistoricalImportJobs = (limit = 20) =>
+  api.get<HistoricalImportJob[]>('/historical/jobs', { params: { limit } })
+
+export const mergeHistoricalBatches = (payload: { batches: string[]; target_batch?: string | null }) =>
+  api.post<{ import_batch: string; updated: number }>('/historical/mappings/batch/merge', payload)
+
+export const startHistoricalExportJob = (payload: { import_batch?: string | null }) =>
+  api.post<HistoricalExportJob>('/historical/export/jobs', payload)
+
+export const getHistoricalExportJob = (jobId: number) =>
+  api.get<HistoricalExportJob>(`/historical/export/jobs/${jobId}`)
 
 export const listHistoricalBatches = () =>
   api.get<HistoricalBatchItem[]>('/historical/batches')

@@ -273,6 +273,7 @@ const monthlyQueueColumns = (
         <Button
           type="primary"
           size="small"
+          title={action.action === 'recleaned' ? '按最新分发结果重新清洗，会移出旧批次命中数据' : undefined}
           disabled={action.disabled || operationDisabled || (!!upsertingRowKey && !isCurrentRowUpserting)}
           loading={isCurrentRowUpserting}
           onClick={() => onUpsert(row)}
@@ -526,7 +527,15 @@ export default function CleanPage() {
           force_reclean: action === 'recleaned',
           force_rebuild: action === 'rebuild',
         })
-        message.success(action === 'appended' || response.data.action === 'appended' ? '已追加到清洗任务' : '已创建清洗任务')
+        const successText =
+          action === 'recleaned'
+            ? '已按最新分发结果重新清洗'
+            : action === 'rebuild'
+              ? '已强制重建清洗任务'
+              : action === 'appended' || response.data.action === 'appended'
+                ? '已追加到清洗任务'
+                : '已创建清洗任务'
+        message.success(successText)
         refreshMonthlyPool()
         refreshJobs()
       } finally {

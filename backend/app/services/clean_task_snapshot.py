@@ -1,12 +1,13 @@
 from datetime import datetime
 
-from sqlalchemy import and_, case, func, or_
+from sqlalchemy import String, and_, case, cast, func, or_
 from sqlalchemy.orm import Session
 
 from app.models.schemas import (
     Category,
     CleanJobItemRecord,
     CleanJobRecord,
+    DispatchBatch,
     DispatchItem,
     MatchResult,
     MatchResultAttr,
@@ -59,6 +60,28 @@ def _platform_label_expr():
     )
 
 
+def _latest_done_batch_ids(db: Session):
+    """每个文件/上传批次的最新已完成分发批次。
+
+    与分发结果下载、规则命中核对保持同一口径：上传批次用 `batch_key` 标识，
+    单文件分发用 `file_id` 标识；重新分发/补分发会生成更新的批次，旧批次
+    不再是取数依据。
+    """
+    batch_identity = func.coalesce(
+        func.nullif(DispatchBatch.batch_key, ""),
+        cast(DispatchBatch.file_id, String),
+    )
+    return (
+        db.query(func.max(DispatchBatch.id).label("batch_id"))
+        .filter(
+            DispatchBatch.status == "done",
+            or_(DispatchBatch.file_id.isnot(None), DispatchBatch.batch_key.isnot(None)),
+        )
+        .group_by(batch_identity)
+        .subquery()
+    )
+
+
 def _deduped_dispatch_item_ids(
     db: Session,
     category_code: str | None = None,
@@ -70,7 +93,16 @@ def _deduped_dispatch_item_ids(
     if category_code:
         dispatch_item_ids = dispatch_item_ids.filter(DispatchItem.category_code == category_code)
     if dispatch_batch_id is not None:
+        # 显式指定批次时按该批次取数（按批次建任务/清洗）。
         dispatch_item_ids = dispatch_item_ids.filter(DispatchItem.batch_id == dispatch_batch_id)
+    else:
+        # 月度队列/任务默认只看每个文件的最新已完成批次，避免重新分发后旧批次
+        # 命中项继续累计。
+        latest_batches = _latest_done_batch_ids(db)
+        dispatch_item_ids = dispatch_item_ids.join(
+            latest_batches,
+            DispatchItem.batch_id == latest_batches.c.batch_id,
+        )
     return dispatch_item_ids.group_by(
         DispatchItem.raw_data_id,
         DispatchItem.category_code,
@@ -172,9 +204,8 @@ def _monthly_pending_rows(
     category_code: str | None = None,
     platform: str | None = None,
     month: int | None = None,
-    include_queued: bool = False,
 ):
-    q = _dispatch_query(db, category_code=category_code, platform=platform) if include_queued else _pending_dispatch_query(db, category_code=category_code, platform=platform)
+    q = _pending_dispatch_query(db, category_code=category_code, platform=platform)
     if month is not None:
         q = q.filter(RawDataRecord.month == month)
     return q
@@ -273,19 +304,21 @@ def get_monthly_clean_pool(
 ) -> list[dict]:
     """待入清洗队列（按月/品类/平台聚合）。
 
-    无品类筛选且带 limit 时按 `Category.code` 逐个品类查询并**提前终止**：通常
-    首个（或前几个）品类即可凑满 limit 个 scope，避免一次聚合千万级
-    `dispatch_items`（单条全量聚合会让 MySQL 扫描全部派发明细，实测 >3 分钟）。
-    只取两个 distinct 计数，`pending` 由 `dispatched - queued` 推导
-    （`clean_job_items` 的 `(raw_data_id, category_code)` 唯一键保证等价）；
-    归档任务候选按 (品类, 平台) 缓存、`_has_reviewed_or_published_state` 按任务
-    id 缓存，消除逐行 N+1 查询。
+    只统计每个文件/上传批次的**最新已完成分发批次**，与分发结果下载一致；
+    重新分发后旧批次命中项不再累计。无品类筛选且带 limit 时按 `Category.code`
+    逐个品类查询并**提前终止**：通常首个（或前几个）品类即可凑满 limit 个
+    scope，避免一次聚合千万级 `dispatch_items`（单条全量聚合会让 MySQL 扫描
+    全部派发明细，实测 >3 分钟）。只取两个 distinct 计数，`pending` 由
+    `dispatched - queued` 推导（`clean_job_items` 的
+    `(raw_data_id, category_code)` 唯一键保证等价）；活跃任务的有下游状态
+    批量查询、归档任务候选按 (品类, 平台) 缓存，避免逐行 N+1。
     """
     platform_label = _platform_label_expr()
     normalized_filter_platform = normalize_platform(platform)
 
     dispatched_count = func.count(func.distinct(DispatchItem.raw_data_id)).label("dispatched_count")
     queued_count = func.count(func.distinct(CleanJobItemRecord.raw_data_id)).label("queued_count")
+    latest_batches = _latest_done_batch_ids(db)
 
     def build_grouped_query(scoped_category_code: str | None = None):
         q = (
@@ -297,6 +330,7 @@ def get_monthly_clean_pool(
                 dispatched_count,
                 queued_count,
             )
+            .join(latest_batches, DispatchItem.batch_id == latest_batches.c.batch_id)
             .join(RawDataRecord, RawDataRecord.id == DispatchItem.raw_data_id)
             .join(Category, Category.code == DispatchItem.category_code)
             .outerjoin(
@@ -349,6 +383,9 @@ def get_monthly_clean_pool(
 
     archived_candidates: dict[tuple[str, str | None], list[CleanJobRecord]] = {}
     downstream_state: dict[int, bool] = {}
+    active_downstream_ids = _jobs_with_reviewed_or_published_state(
+        db, {job.id for job in jobs_by_scope.values()}
+    )
 
     def _archived_job_with_downstream(
         scope_category_code: str,
@@ -386,26 +423,29 @@ def get_monthly_clean_pool(
         row_month = int(row.month)
         pending_count = row.dispatched_count - row.queued_count
         job = jobs_by_scope.get((row.category_code, normalized_platform, row_month))
-        if job:
+        if job is not None and job.id in active_downstream_ids:
+            # 已有人工/发布结果的活跃任务仍按原逻辑不在待入队列表展示；
+            # 无下游结果的任务展示出来，便于追加或「重新清洗」同步最新分发。
             continue
-        archived_job = _archived_job_with_downstream(row.category_code, row.platform, row_month)
-        if archived_job:
-            archived_job_obj, has_downstream = archived_job
-            if has_downstream:
-                result.append({
-                    "category_code": row.category_code,
-                    "category_name": row.category_name,
-                    "platform": normalized_platform,
-                    "month": row_month,
-                    "dispatched_count": row.dispatched_count,
-                    "pending_count": pending_count,
-                    "queued_count": row.queued_count,
-                    "existing_job_id": archived_job_obj.id,
-                    "existing_job_name": archived_job_obj.task_name,
-                    "existing_job_status": "archived",
-                    "has_reviewed_or_published": True,
-                })
-                continue
+        if job is None:
+            archived_job = _archived_job_with_downstream(row.category_code, row.platform, row_month)
+            if archived_job:
+                archived_job_obj, has_downstream = archived_job
+                if has_downstream:
+                    result.append({
+                        "category_code": row.category_code,
+                        "category_name": row.category_name,
+                        "platform": normalized_platform,
+                        "month": row_month,
+                        "dispatched_count": row.dispatched_count,
+                        "pending_count": pending_count,
+                        "queued_count": row.queued_count,
+                        "existing_job_id": archived_job_obj.id,
+                        "existing_job_name": archived_job_obj.task_name,
+                        "existing_job_status": "archived",
+                        "has_reviewed_or_published": True,
+                    })
+                    continue
         result.append({
             "category_code": row.category_code,
             "category_name": row.category_name,
@@ -414,9 +454,9 @@ def get_monthly_clean_pool(
             "dispatched_count": row.dispatched_count,
             "pending_count": pending_count,
             "queued_count": row.queued_count,
-            "existing_job_id": None,
-            "existing_job_name": None,
-            "existing_job_status": None,
+            "existing_job_id": job.id if job else None,
+            "existing_job_name": job.task_name if job else None,
+            "existing_job_status": job.status if job else None,
             "has_reviewed_or_published": False,
         })
     return result
@@ -530,9 +570,14 @@ def _merge_scope(scope: dict | None, *, months: list[int], platforms: list[str],
     }
 
 
-def _has_reviewed_or_published_state(db: Session, clean_job_id: int) -> bool:
-    reviewed_exists = db.query(MatchResult.id).filter(
-        MatchResult.clean_job_id == clean_job_id,
+def _jobs_with_reviewed_or_published_state(db: Session, clean_job_ids) -> set[int]:
+    job_ids = {int(job_id) for job_id in clean_job_ids if job_id is not None}
+    if not job_ids:
+        return set()
+
+    result: set[int] = set()
+    reviewed_rows = db.query(MatchResult.clean_job_id).filter(
+        MatchResult.clean_job_id.in_(job_ids),
         or_(
             MatchResult.match_status.in_(REVIEWED_MATCH_STATUSES),
             MatchResult.is_disabled == 1,
@@ -541,20 +586,27 @@ def _has_reviewed_or_published_state(db: Session, clean_job_id: int) -> bool:
             MatchResult.review_note.isnot(None),
             MatchResult.reviewed_at.isnot(None),
         ),
-    ).first()
-    if reviewed_exists:
-        return True
+    ).distinct().all()
+    result.update(row[0] for row in reviewed_rows)
 
-    attr_exists = (
-        db.query(MatchResultAttr.id)
-        .join(MatchResult, MatchResult.id == MatchResultAttr.match_result_id)
-        .filter(MatchResult.clean_job_id == clean_job_id)
-        .first()
+    attr_rows = (
+        db.query(MatchResult.clean_job_id)
+        .join(MatchResultAttr, MatchResultAttr.match_result_id == MatchResult.id)
+        .filter(MatchResult.clean_job_id.in_(job_ids))
+        .distinct()
+        .all()
     )
-    if attr_exists:
-        return True
+    result.update(row[0] for row in attr_rows)
 
-    return db.query(PublishJob.id).filter(PublishJob.clean_job_id == clean_job_id).first() is not None
+    publish_rows = db.query(PublishJob.clean_job_id).filter(
+        PublishJob.clean_job_id.in_(job_ids)
+    ).distinct().all()
+    result.update(row[0] for row in publish_rows)
+    return result
+
+
+def _has_reviewed_or_published_state(db: Session, clean_job_id: int) -> bool:
+    return bool(_jobs_with_reviewed_or_published_state(db, [clean_job_id]))
 
 
 def touch_clean_job(db: Session, clean_job_id: int) -> None:
@@ -574,6 +626,12 @@ def upsert_monthly_task_snapshot(
     force_reclean: bool = False,
     force_rebuild: bool = False,
 ):
+    """创建/追加/重建月度任务快照。
+
+    取数口径为每个文件最新已完成分发批次。`force_reclean` 在任务没有人工确认/
+    发布记录时按最新分发范围重建快照，可移出重新分发后不再命中的旧行；
+    `force_rebuild` 允许清除已有下游结果后重建。
+    """
     normalized_platform = normalize_platform(platform)
     job = _find_monthly_job(
         db,
@@ -582,14 +640,28 @@ def upsert_monthly_task_snapshot(
         month=month,
     )
     action = "appended" if job else "created"
-    if job and (force_rebuild or job.status == "archived"):
-        db.query(CleanJobItemRecord).filter(CleanJobItemRecord.clean_job_id == job.id).delete(synchronize_session=False)
-        job.status = "reviewing"
-    if job and not force_rebuild:
-        if job.status not in APPENDABLE_TASK_STATUSES:
+    has_downstream = _has_reviewed_or_published_state(db, job.id) if job else False
+
+    # 已有任务「重新清洗」时，若无人工/发布记录，按最新分发范围重建快照，
+    # 把已被新批次取代的旧命中行移出；有下游结果时仍要求走强制重建。
+    if job and force_reclean and not force_rebuild and has_downstream:
+        raise ValueError("任务已有人工处理或发布记录，不能直接重新清洗")
+
+    reset_snapshot = bool(job) and (
+        force_rebuild or force_reclean or job.status == "archived"
+    )
+
+    if job and not force_rebuild and not force_reclean:
+        if job.status not in APPENDABLE_TASK_STATUSES and job.status != "archived":
             raise ValueError(f"任务状态为 {job.status}，不能追加数据")
-        if _has_reviewed_or_published_state(db, job.id):
+        if has_downstream:
             raise ValueError("任务已有人工处理或发布记录，不能直接追加数据")
+
+    if reset_snapshot:
+        db.query(CleanJobItemRecord).filter(
+            CleanJobItemRecord.clean_job_id == job.id
+        ).delete(synchronize_session=False)
+        job.status = "reviewing"
 
     rows = (
         _monthly_pending_rows(
@@ -597,7 +669,6 @@ def upsert_monthly_task_snapshot(
             category_code=category_code,
             platform=normalized_platform,
             month=month,
-            include_queued=force_reclean,
         )
         .order_by(DispatchItem.id)
         .all()

@@ -840,3 +840,71 @@ def test_interference_link_strictly_scoped_by_category(db):
     assert db.query(FilteredItem).count() == 2
     assert db.query(CleanedDataRecord).count() == 1
     assert db.query(CleanedDataRecord).one().raw_data_id == raw3.id
+
+
+def test_intervention_category_name_keyword_filters_matching_lv(db):
+    f = _make_file(db)
+    raw = _make_raw(db, f.id, "某手机配件商品")
+    raw.category_lv2 = "手机通讯 > 手机配件"
+    batch, job = _make_dispatch_job(db, f.id, raw)
+    db.add(InterventionRule(
+        name="手机配件类目过滤",
+        category_code="projector",
+        action="filter",
+        priority=10,
+        conditions={"category_name_contains_any": ["手机配件"]},
+    ))
+    db.commit()
+
+    run_clean(db, job.id, [f.id], {"dedup": True}, batch.id, "projector")
+
+    assert db.query(CleanedDataRecord).count() == 0
+    filtered = db.query(FilteredItem).one()
+    assert filtered.matched_reason == "命中规则「手机配件类目过滤」：类目名称包含 [手机配件]"
+
+
+def test_intervention_category_name_allow_keeps_matching_lv(db):
+    f = _make_file(db)
+    raw = _make_raw(db, f.id, "女装连衣裙")
+    raw.category_lv1 = "女装"
+    batch, job = _make_dispatch_job(db, f.id, raw)
+    db.add(InterventionRule(
+        name="女装类目保留",
+        category_code="projector",
+        action="allow",
+        priority=1,
+        conditions={"category_name_contains_any": ["女装"]},
+    ))
+    db.add(InterventionRule(
+        name="连衣裙过滤",
+        category_code="projector",
+        action="filter",
+        priority=2,
+        conditions={"item_name_contains_any": ["连衣裙"]},
+    ))
+    db.commit()
+
+    run_clean(db, job.id, [f.id], {"dedup": True}, batch.id, "projector")
+
+    assert db.query(CleanedDataRecord).count() == 1
+    assert db.query(FilteredItem).count() == 0
+
+
+def test_intervention_category_name_not_matching_keeps_row(db):
+    f = _make_file(db)
+    raw = _make_raw(db, f.id, "普通商品")
+    raw.category_lv2 = "家电 > 电视"
+    batch, job = _make_dispatch_job(db, f.id, raw)
+    db.add(InterventionRule(
+        name="手机配件类目过滤",
+        category_code="projector",
+        action="filter",
+        priority=10,
+        conditions={"category_name_contains_any": ["手机配件"]},
+    ))
+    db.commit()
+
+    run_clean(db, job.id, [f.id], {"dedup": True}, batch.id, "projector")
+
+    assert db.query(CleanedDataRecord).count() == 1
+    assert db.query(FilteredItem).count() == 0

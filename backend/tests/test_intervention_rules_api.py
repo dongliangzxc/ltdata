@@ -42,6 +42,7 @@ def test_create_and_list_intervention_rule(db):
         "conditions": {
             "brand_in": ["海信"],
             "item_name_not_contains_any": ["激光电视"],
+            "category_name_contains_any": ["配件"],
             "reference_price": {"op": "lt", "value": 500},
         },
     })
@@ -55,10 +56,11 @@ def test_create_and_list_intervention_rule(db):
     assert created["priority"] == 10
     assert created["is_active"] == 1
     assert created["conditions"]["brand_in"] == ["海信"]
+    assert created["conditions"]["category_name_contains_any"] == ["配件"]
 
     listed = client.get("/api/rules/intervention-rules", params={"category_code": "projector"}).json()
     assert [row["id"] for row in listed] == [created["id"]]
-    assert listed[0]["summary"] == "入库品牌 in [海信] 且 商品名称不包含 [激光电视] 且 参考价格 < 500"
+    assert listed[0]["summary"] == "入库品牌 in [海信] 且 商品名称不包含 [激光电视] 且 类目名称包含 [配件] 且 参考价格 < 500"
 
 
 def test_intervention_rule_requires_category_and_valid_action(db):

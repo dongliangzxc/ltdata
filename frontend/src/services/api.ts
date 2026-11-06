@@ -577,6 +577,7 @@ export interface InterventionRuleConditions extends Record<string, unknown> {
   brand_in?: string[]
   item_name_contains_any?: string[]
   item_name_not_contains_any?: string[]
+  category_name_contains_any?: string[]
   reference_price?:
     | { op: 'gt' | 'gte' | 'lt' | 'lte'; value: number }
     | { op: 'between'; min: number; max: number }

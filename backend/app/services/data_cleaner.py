@@ -126,6 +126,8 @@ def _intervention_condition_summary(conditions: dict) -> str:
         parts.append(f"商品名称包含 [{', '.join(_stringify_list(conditions['item_name_contains_any']))}]")
     if conditions.get("item_name_not_contains_any"):
         parts.append(f"商品名称不包含 [{', '.join(_stringify_list(conditions['item_name_not_contains_any']))}]")
+    if conditions.get("category_name_contains_any"):
+        parts.append(f"类目名称包含 [{', '.join(_stringify_list(conditions['category_name_contains_any']))}]")
 
     price = conditions.get("reference_price")
     if price:
@@ -212,6 +214,24 @@ def _matches_intervention_rule(
     if not_contains_values:
         has_recognized_condition = True
         if any(str(value).casefold() in item_name for value in not_contains_values):
+            return False
+
+    category_contains_values = conditions.get("category_name_contains_any")
+    if category_contains_values:
+        has_recognized_condition = True
+        category_text = "\n".join(
+            str(value).casefold()
+            for value in (
+                record.category_lv0,
+                record.category_lv1,
+                record.category_lv2,
+                record.category_lv3,
+                record.category_lv4,
+                record.category_lv5,
+            )
+            if value
+        )
+        if not any(str(value).casefold() in category_text for value in category_contains_values):
             return False
 
     price_condition = conditions.get("reference_price")

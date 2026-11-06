@@ -76,6 +76,7 @@ ALLOWED_CONDITION_KEYS = {
     "shop_name_in",
     "item_name_contains_any",
     "item_name_not_contains_any",
+    "category_name_contains_any",
     "reference_price",
 }
 
@@ -107,7 +108,13 @@ def _validate_intervention_conditions(conditions: dict) -> dict:
         raise HTTPException(400, f"不支持的干预条件: {unknown_keys[0]}")
 
     cleaned: dict = {}
-    for key in ("brand_in", "shop_name_in", "item_name_contains_any", "item_name_not_contains_any"):
+    for key in (
+        "brand_in",
+        "shop_name_in",
+        "item_name_contains_any",
+        "item_name_not_contains_any",
+        "category_name_contains_any",
+    ):
         values = _clean_string_list(conditions.get(key))
         if values:
             cleaned[key] = values
@@ -168,6 +175,8 @@ def _intervention_condition_summary(conditions: dict) -> str:
         parts.append(f"商品名称包含 [{', '.join(conditions['item_name_contains_any'])}]")
     if conditions.get("item_name_not_contains_any"):
         parts.append(f"商品名称不包含 [{', '.join(conditions['item_name_not_contains_any'])}]")
+    if conditions.get("category_name_contains_any"):
+        parts.append(f"类目名称包含 [{', '.join(conditions['category_name_contains_any'])}]")
     price = conditions.get("reference_price")
     if price:
         op_label = {"gt": ">", "gte": ">=", "lt": "<", "lte": "<=", "between": "区间"}[price["op"]]

@@ -28,6 +28,7 @@ type FormValues = {
   item_name_contains_any?: string
   brand_in?: string
   item_name_not_contains_any?: string
+  category_name_contains_any?: string
   enable_reference_price?: boolean
   reference_price_op?: 'gt' | 'gte' | 'lt' | 'lte'
   reference_price_value?: number
@@ -50,9 +51,11 @@ const buildConditions = (values: FormValues) => {
   const nameContains = splitValues(values.item_name_contains_any)
   const brandIn = splitValues(values.brand_in)
   const nameNotContains = splitValues(values.item_name_not_contains_any)
+  const categoryNameContains = splitValues(values.category_name_contains_any)
   if (nameContains.length) conditions.item_name_contains_any = nameContains
   if (brandIn.length) conditions.brand_in = brandIn
   if (nameNotContains.length) conditions.item_name_not_contains_any = nameNotContains
+  if (categoryNameContains.length) conditions.category_name_contains_any = categoryNameContains
   if (values.enable_reference_price && values.reference_price_op && values.reference_price_value !== undefined) {
     conditions.reference_price = {
       op: values.reference_price_op,
@@ -105,6 +108,7 @@ export default function InterventionRuleModal({ open, categoryCode, detail, onCl
       item_name_contains_any: firstToken,
       brand_in: detail?.brand_raw || undefined,
       item_name_not_contains_any: undefined,
+      category_name_contains_any: undefined,
       enable_reference_price: false,
       reference_price_op: 'lte',
       reference_price_value: undefined,
@@ -125,6 +129,7 @@ export default function InterventionRuleModal({ open, categoryCode, detail, onCl
       item_name_contains_any: undefined,
       brand_in: undefined,
       item_name_not_contains_any: undefined,
+      category_name_contains_any: undefined,
       enable_reference_price: false,
       reference_price_op: 'lte',
       reference_price_value: undefined,
@@ -141,6 +146,7 @@ export default function InterventionRuleModal({ open, categoryCode, detail, onCl
       item_name_contains_any: joinValues(rule.conditions.item_name_contains_any),
       brand_in: joinValues(rule.conditions.brand_in),
       item_name_not_contains_any: joinValues(rule.conditions.item_name_not_contains_any),
+      category_name_contains_any: joinValues(rule.conditions.category_name_contains_any),
       ...referencePriceValues,
     })
     setActiveTab('create')
@@ -284,6 +290,13 @@ export default function InterventionRuleModal({ open, categoryCode, detail, onCl
                   </Form.Item>
                   <Form.Item label="商品名称不包含任一" name="item_name_not_contains_any">
                     <Input.TextArea placeholder="每行或用逗号分隔多个排除关键词" style={textAreaStyle} />
+                  </Form.Item>
+                  <Form.Item
+                    label="类目名称包含任一"
+                    name="category_name_contains_any"
+                    extra="按原始数据 Lv0-Lv5 类目名称匹配；动作为「过滤」时排除命中类目，动作为「放行」时保留命中类目。"
+                  >
+                    <Input.TextArea placeholder="每行或用逗号分隔多个类目关键词" style={textAreaStyle} />
                   </Form.Item>
                   <Form.Item label="启用参考价格条件" name="enable_reference_price" valuePropName="checked">
                     <Switch />

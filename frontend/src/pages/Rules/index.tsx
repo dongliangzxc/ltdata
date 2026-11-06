@@ -61,6 +61,7 @@ function conditionsToFormValues(conditions: Record<string, any>) {
     shop_name_in_text: (conditions.shop_name_in ?? []).join('\n'),
     item_name_contains_text: (conditions.item_name_contains_any ?? []).join('\n'),
     item_name_not_contains_text: (conditions.item_name_not_contains_any ?? []).join('\n'),
+    category_name_contains_text: (conditions.category_name_contains_any ?? []).join('\n'),
     price_enabled: Boolean(conditions.reference_price),
     price_op: price.op ?? 'gt',
     price_value: price.value,
@@ -75,10 +76,12 @@ function buildConditions(values: Record<string, any>) {
   const shopNames = splitLines(values.shop_name_in_text)
   const nameContains = splitLines(values.item_name_contains_text)
   const nameNotContains = splitLines(values.item_name_not_contains_text)
+  const categoryNameContains = splitLines(values.category_name_contains_text)
   if (brandIn.length) conditions.brand_in = brandIn
   if (shopNames.length) conditions.shop_name_in = shopNames
   if (nameContains.length) conditions.item_name_contains_any = nameContains
   if (nameNotContains.length) conditions.item_name_not_contains_any = nameNotContains
+  if (categoryNameContains.length) conditions.category_name_contains_any = categoryNameContains
   if (values.price_enabled) {
     if (values.price_op === 'between') {
       conditions.reference_price = { op: 'between', min: values.price_min, max: values.price_max }
@@ -247,6 +250,13 @@ function InterventionRuleTab() {
           </Form.Item>
           <Form.Item label="商品名称不包含任一关键词" name="item_name_not_contains_text">
             <Input.TextArea rows={2} placeholder="配件&#10;幕布" />
+          </Form.Item>
+          <Form.Item
+            label="类目名称包含任一关键词"
+            name="category_name_contains_text"
+            extra="按原始数据 Lv0-Lv5 类目名称匹配；动作为「过滤」时排除命中类目，动作为「放行」时保留命中类目。"
+          >
+            <Input.TextArea rows={2} placeholder="女装&#10;手机配件" />
           </Form.Item>
           <Form.Item label="启用参考价格条件" name="price_enabled" valuePropName="checked">
             <Switch />

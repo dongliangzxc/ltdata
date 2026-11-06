@@ -6,7 +6,7 @@ import threading
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import case, func, literal_column
+from sqlalchemy import String, and_, case, cast, func, literal_column, or_
 from sqlalchemy.orm import Session
 
 from app.core.auth_deps import require_admin
@@ -14,7 +14,10 @@ from app.models.database import SessionLocal, get_db
 from app.models.schemas import (
     BrandRecord,
     Category,
+    CleanJobItemRecord,
     CleanJobRecord,
+    DispatchBatch,
+    DispatchItem,
     HistoricalMapping,
     ItemExclusion,
     ItemUrlMapping,
@@ -26,6 +29,7 @@ from app.models.schemas import (
     UploadFileRecord,
     User,
 )
+from app.services.rawdata_cache import cached_value
 from app.utils.time_utils import format_beijing_datetime
 
 
@@ -40,6 +44,8 @@ REVIEW_STATUSES = ("done", "reviewing")
 PROCESSING_STATUSES = ("created", "cleaning", "matching", "processing")
 FAILED_STATUSES = ("failed", "error")
 ARCHIVED_STATUS = "archived"
+# 已清理 = 人工/系统已给出结论的状态；disputed 仍算待处理
+RESOLVED_STATUSES = ("url_matched", "matched", "confirmed", "excluded", "ignored")
 
 
 def _int(value) -> int:
@@ -207,6 +213,145 @@ def _match_stats(db: Session) -> dict:
     }
 
 
+def _latest_done_batch_subquery(db: Session):
+    """每个文件/上传批次最新一次已完成分发批次（与分发页、导出页同口径）。"""
+    batch_identity = func.coalesce(DispatchBatch.batch_key, cast(DispatchBatch.file_id, String))
+    return (
+        db.query(
+            batch_identity.label("batch_identity"),
+            func.max(DispatchBatch.id).label("batch_id"),
+        )
+        .filter(
+            DispatchBatch.status == "done",
+            or_(DispatchBatch.file_id.isnot(None), DispatchBatch.batch_key.isnot(None)),
+        )
+        .group_by(batch_identity)
+        .subquery()
+    )
+
+
+def _normalize_platform(value: str | None) -> str:
+    return (value or "").strip().lower()
+
+
+def _progress_join(query, latest_batches):
+    """把最新分发条目、清洗快照与匹配结果串起来。"""
+    return (
+        query
+        .select_from(DispatchItem)
+        .join(latest_batches, DispatchItem.batch_id == latest_batches.c.batch_id)
+        .join(RawDataRecord, RawDataRecord.id == DispatchItem.raw_data_id)
+        .outerjoin(
+            CleanJobItemRecord,
+            and_(
+                CleanJobItemRecord.raw_data_id == DispatchItem.raw_data_id,
+                CleanJobItemRecord.category_code == DispatchItem.category_code,
+            ),
+        )
+        .outerjoin(
+            CleanJobRecord,
+            and_(
+                CleanJobRecord.id == CleanJobItemRecord.clean_job_id,
+                CleanJobRecord.status != ARCHIVED_STATUS,
+            ),
+        )
+        .outerjoin(
+            MatchResult,
+            and_(
+                MatchResult.clean_job_id == CleanJobRecord.id,
+                MatchResult.raw_data_id == DispatchItem.raw_data_id,
+                MatchResult.is_disabled == 0,
+            ),
+        )
+        .filter(DispatchItem.raw_data_id.isnot(None))
+    )
+
+
+def _progress_stats(db: Session) -> dict:
+    """处理进度：上传总量 → 值得分发 → 已清理（按品类 / 平台）。"""
+    latest_batches = _latest_done_batch_subquery(db)
+    status = MatchResult.match_status
+
+    totals = _progress_join(
+        db.query(
+            func.count(func.distinct(DispatchItem.raw_data_id)),
+            func.count(func.distinct(case((status.in_(RESOLVED_STATUSES), DispatchItem.raw_data_id)))),
+            func.count(func.distinct(case((status.in_(PUBLISHABLE_STATUSES), DispatchItem.raw_data_id)))),
+            func.count(func.distinct(case((status.in_(ACTIONABLE_STATUSES), DispatchItem.raw_data_id)))),
+        ),
+        latest_batches,
+    ).one()
+
+    detail_rows = (
+        _progress_join(
+            db.query(
+                DispatchItem.category_code.label("category_code"),
+                func.lower(RawDataRecord.platform).label("platform"),
+                func.count(func.distinct(DispatchItem.raw_data_id)).label("dispatched"),
+                func.count(func.distinct(case((status.in_(RESOLVED_STATUSES), DispatchItem.raw_data_id)))).label("processed"),
+                func.count(func.distinct(case((status.in_(PUBLISHABLE_STATUSES), DispatchItem.raw_data_id)))).label("matched"),
+                func.count(func.distinct(case((status.in_(ACTIONABLE_STATUSES), DispatchItem.raw_data_id)))).label("pending"),
+            ),
+            latest_batches,
+        )
+        .group_by(DispatchItem.category_code, func.lower(RawDataRecord.platform))
+        .all()
+    )
+
+    category_code = func.coalesce(CleanJobRecord.category_code, CleanJobRecord.dispatch_category_code)
+    published_rows = (
+        db.query(
+            category_code.label("category_code"),
+            func.lower(CleanJobRecord.platform).label("platform"),
+            func.sum(PublishJob.published_count).label("published"),
+        )
+        .select_from(PublishJob)
+        .join(CleanJobRecord, CleanJobRecord.id == PublishJob.clean_job_id)
+        .filter(PublishJob.status == "done", CleanJobRecord.status != ARCHIVED_STATUS)
+        .group_by(category_code, func.lower(CleanJobRecord.platform))
+        .all()
+    )
+
+    names = dict(db.query(Category.code, Category.name).all())
+    rows: dict[tuple[str, str], dict] = {}
+
+    def bucket(code: str | None, platform: str | None) -> dict:
+        key = (code or "", _normalize_platform(platform))
+        return rows.setdefault(key, {
+            "category_code": code,
+            "category_name": names.get(code) or code or "未分类",
+            "platform": key[1] or None,
+            "dispatched": 0,
+            "processed": 0,
+            "matched": 0,
+            "pending": 0,
+            "published": 0,
+        })
+
+    for code, platform, dispatched, processed, matched, pending in detail_rows:
+        item = bucket(code, platform)
+        item["dispatched"] = _int(dispatched)
+        item["processed"] = _int(processed)
+        item["matched"] = _int(matched)
+        item["pending"] = _int(pending)
+    for code, platform, published in published_rows:
+        bucket(code, platform)["published"] = _int(published)
+
+    categories = sorted(
+        rows.values(),
+        key=lambda item: (item["dispatched"], item["processed"]),
+        reverse=True,
+    )
+    return {
+        "dispatchable": _int(totals[0]),
+        "processed": _int(totals[1]),
+        "matched": _int(totals[2]),
+        "pending": _int(totals[3]),
+        "published": sum(item["published"] for item in categories),
+        "categories": categories,
+    }
+
+
 def _source_stats(db: Session) -> list[dict]:
     rows = (
         _active_match_query(db, MatchResult.match_source, MatchResult.match_status, func.count(MatchResult.id))
@@ -340,12 +485,15 @@ def get_stats_overview(
     _: User = Depends(require_admin),
 ):
     slow_counts, slow_counts_at = _slow_counts()
+    progress = dict(cached_value("platform_stats", "progress", 120.0, lambda: _progress_stats(db)))
+    progress["uploaded_rows"] = slow_counts.get("raw_rows")
     return {
         "code": 0,
         "data": {
             "upload": _upload_stats(db, slow_counts),
             "clean": _clean_stats(db),
             "match": _match_stats(db),
+            "progress": progress,
             "sources": _source_stats(db),
             "categories": _category_stats(db),
             "monthly": _monthly_stats(db),

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Alert, Button, Card, Col, Progress, Row, Select, Space, Statistic, Table, Tag, Typography } from 'antd'
+import { Alert, Button, Card, Col, Collapse, Progress, Row, Select, Space, Statistic, Table, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { ReloadOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
@@ -10,6 +10,7 @@ const { Text } = Typography
 type CategoryRow = PlatformStatsOverview['categories'][number]
 type MonthlyRow = PlatformStatsOverview['monthly'][number]
 type SourceRow = PlatformStatsOverview['sources'][number]
+type ProgressRow = PlatformStatsOverview['progress']['categories'][number]
 
 const platformLabelMap: Record<string, string> = {
   jd: '京东',
@@ -54,11 +55,61 @@ const mappingSourceLabelMap: Record<string, string> = {
 }
 
 const percent = (part: number, total: number) => (total > 0 ? Math.round((part / total) * 1000) / 10 : 0)
+const progressPercent = (part: number, total: number) => Math.min(100, percent(part, total))
+const unprocessed = (row: ProgressRow) => Math.max(row.dispatched - row.processed, 0)
 
 const renderStatus = (status: string) => {
   const info = statusLabelMap[status] ?? { label: status, color: 'default' }
   return <Tag color={info.color}>{info.label}</Tag>
 }
+
+const progressColumns: ColumnsType<ProgressRow> = [
+  {
+    title: '品类', dataIndex: 'category_name', width: 160, fixed: 'left',
+    render: (_: string, row) => row.category_name || row.category_code || '未分类',
+  },
+  {
+    title: '平台', dataIndex: 'platform', width: 100,
+    render: (v: string | null) => (v ? platformLabelMap[v] ?? v : '未区分'),
+  },
+  {
+    title: '分发数据', dataIndex: 'dispatched', width: 120,
+    sorter: (a, b) => a.dispatched - b.dispatched, defaultSortOrder: 'descend',
+    render: (v: number) => v.toLocaleString(),
+  },
+  {
+    title: '已清理', dataIndex: 'processed', width: 120,
+    sorter: (a, b) => a.processed - b.processed,
+    render: (v: number) => <Text type="success">{v.toLocaleString()}</Text>,
+  },
+  {
+    title: '待处理', dataIndex: 'pending', width: 110,
+    sorter: (a, b) => a.pending - b.pending,
+    render: (v: number) => <Text type={v > 0 ? 'warning' : undefined}>{v.toLocaleString()}</Text>,
+  },
+  {
+    title: '未清理', key: 'unprocessed', width: 110,
+    sorter: (a, b) => unprocessed(a) - unprocessed(b),
+    render: (_: unknown, row) => unprocessed(row).toLocaleString(),
+  },
+  {
+    title: '已匹配成功', dataIndex: 'matched', width: 120,
+    sorter: (a, b) => a.matched - b.matched,
+    render: (v: number) => v.toLocaleString(),
+  },
+  {
+    title: '已发布', dataIndex: 'published', width: 110,
+    sorter: (a, b) => a.published - b.published,
+    render: (v: number) => v.toLocaleString(),
+  },
+  {
+    title: '清理占比', key: 'rate', width: 170,
+    sorter: (a, b) => progressPercent(a.processed, a.dispatched) - progressPercent(b.processed, b.dispatched),
+    render: (_: unknown, row) => (row.dispatched > 0
+      ? <Progress percent={progressPercent(row.processed, row.dispatched)} size="small" />
+      : <Text type="secondary">无分发数据</Text>),
+  },
+]
 
 const categoryColumns: ColumnsType<CategoryRow> = [
   { title: '月份', dataIndex: 'month', width: 100, render: (v: string | null) => v || '-' },
@@ -119,6 +170,8 @@ export default function PlatformStatsPage() {
   const [categoryFilter, setCategoryFilter] = useState<string>()
   const [platformFilter, setPlatformFilter] = useState<string>()
   const [monthFilter, setMonthFilter] = useState<string>()
+  const [progressCategoryFilter, setProgressCategoryFilter] = useState<string>()
+  const [progressPlatformFilter, setProgressPlatformFilter] = useState<string>()
 
   const categoryOptions = useMemo(() => {
     const options = new Map<string, string>()
@@ -144,6 +197,24 @@ export default function PlatformStatsPage() {
       .sort((a, b) => b.value.localeCompare(a.value))
   }, [data?.categories])
 
+  const progressCategoryOptions = useMemo(() => {
+    const options = new Map<string, string>()
+    for (const row of data?.progress.categories ?? []) {
+      const value = row.category_code ?? ''
+      if (!options.has(value)) options.set(value, row.category_name || row.category_code || '未分类')
+    }
+    return Array.from(options, ([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'))
+  }, [data?.progress.categories])
+
+  const progressPlatformOptions = useMemo(() => {
+    const values = new Set((data?.progress.categories ?? []).map(row => row.platform ?? ''))
+    return Array.from(values, value => ({
+      value,
+      label: value ? platformLabelMap[value] ?? value : '未区分',
+    }))
+  }, [data?.progress.categories])
+
   const filteredCategories = useMemo(
     () => (data?.categories ?? []).filter(row => (
       (categoryFilter === undefined || (row.category_code ?? '') === categoryFilter)
@@ -153,14 +224,24 @@ export default function PlatformStatsPage() {
     [data?.categories, categoryFilter, platformFilter, monthFilter],
   )
 
+  const filteredProgress = useMemo(
+    () => (data?.progress.categories ?? []).filter(row => (
+      (progressCategoryFilter === undefined || (row.category_code ?? '') === progressCategoryFilter)
+      && (progressPlatformFilter === undefined || (row.platform ?? '') === progressPlatformFilter)
+    )),
+    [data?.progress.categories, progressCategoryFilter, progressPlatformFilter],
+  )
+
   if (!data) {
     return <Card loading={loading} />
   }
 
-  const { upload, clean, match, assets } = data
+  const { upload, clean, match, assets, progress } = data
   const automatedRate = percent(match.auto_matched, match.total)
   const publishableRate = percent(match.publishable, match.total)
   const finishedRate = percent(clean.clean_finished, clean.task_total)
+  const completionRate = progressPercent(progress.processed, progress.dispatchable)
+  const remaining = Math.max(progress.dispatchable - progress.processed, 0)
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -168,7 +249,7 @@ export default function PlatformStatsPage() {
         type="info"
         showIcon
         message="口径说明"
-        description="清洗任务与匹配数据均不含已删除任务和干扰过滤行；匹配条数按任务计（同一商品分发到多个任务会重复计数），去重数单独列出。已匹配 = 精准匹配 + 自动匹配 + 人工确认。时间按北京时间统计。"
+        description="总览按「上传 → 值得分发 → 已清理」统计，三者均按商品去重：值得分发取每个文件/上传批次最新一次已完成分发的商品；已清理为其中已有处理结论（精准匹配、自动匹配、人工确认、已排除、已忽略）的商品数。下方明细按「品类 × 平台」统计条目数，同一商品分发到多个品类会分别计数。清洗任务与匹配数据均不含已删除任务和干扰过滤行；时间按北京时间统计；处理进度为近 2 分钟内的聚合结果。"
         action={
           <Space direction="vertical" align="end">
             <Button icon={<ReloadOutlined />} loading={loading} onClick={refresh}>刷新</Button>
@@ -178,64 +259,41 @@ export default function PlatformStatsPage() {
         }
       />
 
-      <Card title="数据上传">
+      <Card title="处理进度总览">
         <Row gutter={16}>
-          <Col span={6}><Statistic title="上传文件数" value={upload.file_count} /></Col>
-          <Col span={6}><Statistic title="上传数据行数" value={upload.file_rows} /></Col>
-          <Col span={6}><Statistic title="实际入库行数" value={upload.raw_rows ?? '统计中…'} valueStyle={{ color: '#3f8600' }} /></Col>
-          <Col span={6}><Statistic title="去重拦截行数" value={upload.dedup_skipped_rows} /></Col>
-        </Row>
-        <Text type="secondary">
-          首次上传：{upload.first_uploaded_at ?? '-'}　最近上传：{upload.last_uploaded_at ?? '-'}
-        </Text>
-      </Card>
-
-      <Card title="清洗任务">
-        <Row gutter={16}>
-          <Col span={4}><Statistic title="有效任务" value={clean.task_total} /></Col>
-          <Col span={4}>
-            <Statistic title="清洗完成" value={clean.clean_finished} valueStyle={{ color: '#3f8600' }} suffix={<Text type="secondary" style={{ fontSize: 14 }}>{finishedRate}%</Text>} />
-          </Col>
-          <Col span={4}><Statistic title="仍有待处理" value={clean.has_pending} valueStyle={{ color: '#d48806' }} /></Col>
-          <Col span={4}><Statistic title="处理中 / 失败" value={`${clean.processing} / ${clean.failed}`} /></Col>
-          <Col span={4}><Statistic title="已发布任务" value={clean.published_tasks} /></Col>
-          <Col span={4}><Statistic title="发布到分析库行数" value={clean.published_rows} /></Col>
-        </Row>
-        <Row gutter={16} style={{ marginTop: 16 }}>
-          <Col span={6}><Statistic title="进入清洗行数" value={clean.row_in} /></Col>
-          <Col span={6}><Statistic title="清洗后行数" value={clean.row_out} /></Col>
-          <Col span={6}><Statistic title="过滤行数" value={clean.row_filtered} /></Col>
-          <Col span={6}><Statistic title="已删除任务" value={clean.archived} valueStyle={{ color: '#8c8c8c' }} /></Col>
-        </Row>
-      </Card>
-
-      <Card title="匹配数据">
-        <Row gutter={16}>
-          <Col span={6}><Statistic title="匹配条数" value={match.total} /></Col>
           <Col span={6}>
-            <Statistic title="已匹配" value={match.publishable} valueStyle={{ color: '#3f8600' }} suffix={<Text type="secondary" style={{ fontSize: 14 }}>{publishableRate}%</Text>} />
+            <Statistic title="上传入库数据总量" value={progress.uploaded_rows ?? '统计中…'} suffix={progress.uploaded_rows == null ? undefined : '条'} />
+            <Text type="secondary">上传文件行数 {upload.file_rows.toLocaleString()}，去重拦截 {upload.dedup_skipped_rows.toLocaleString()}</Text>
           </Col>
-          <Col span={6}><Statistic title="已匹配（商品去重）" value={match.publishable_distinct} /></Col>
-          <Col span={6}><Statistic title="系统自动匹配率" value={automatedRate} suffix="%" /></Col>
-        </Row>
-        <Row gutter={16} style={{ marginTop: 16 }}>
-          <Col span={4}><Statistic title="URL 精准匹配" value={match.url_matched} /></Col>
-          <Col span={4}><Statistic title="自动匹配" value={match.matched} /></Col>
-          <Col span={4}><Statistic title="人工确认" value={match.confirmed} /></Col>
-          <Col span={4}><Statistic title="排除 / 忽略" value={match.excluded + match.ignored} /></Col>
-          <Col span={4}><Statistic title="待匹配" value={match.pending} valueStyle={{ color: '#d48806' }} /></Col>
-          <Col span={4}><Statistic title="URL 待确认 / 争议" value={`${match.text_only.toLocaleString()} / ${match.disputed.toLocaleString()}`} valueStyle={{ color: '#d48806' }} /></Col>
+          <Col span={6}>
+            <Statistic title="值得分发" value={progress.dispatchable} suffix="条" />
+          </Col>
+          <Col span={6}>
+            <Statistic title="已清理" value={progress.processed} suffix="条" valueStyle={{ color: '#3f8600' }} />
+          </Col>
+          <Col span={6}>
+            <Statistic
+              title="清理占比"
+              value={completionRate}
+              suffix="%"
+              valueStyle={{ color: completionRate >= 100 ? '#3f8600' : '#1677ff' }}
+            />
+          </Col>
         </Row>
         <Progress
-          style={{ marginTop: 16 }}
-          percent={publishableRate}
-          success={{ percent: percent(match.url_matched, match.total) }}
-          format={() => `${publishableRate}%`}
+          style={{ marginTop: 20 }}
+          percent={completionRate}
+          format={() => `${progress.processed.toLocaleString()} / ${progress.dispatchable.toLocaleString()}`}
         />
-        <Text type="secondary">深绿：URL 精准匹配占比；浅色：已匹配总占比</Text>
+        <Row gutter={16} style={{ marginTop: 8 }}>
+          <Col span={6}><Statistic title="已匹配成功" value={progress.matched} valueStyle={{ color: '#3f8600' }} /></Col>
+          <Col span={6}><Statistic title="已发布到分析库" value={progress.published} /></Col>
+          <Col span={6}><Statistic title="当前待处理" value={progress.pending} valueStyle={{ color: '#d48806' }} /></Col>
+          <Col span={6}><Statistic title="未清理" value={remaining} valueStyle={{ color: remaining > 0 ? '#d48806' : '#8c8c8c' }} /></Col>
+        </Row>
       </Card>
 
-      <Card title="品类 / 平台明细">
+      <Card title="处理进度明细（品类 / 平台）">
         <Space wrap style={{ marginBottom: 16 }}>
           <Select
             allowClear
@@ -243,73 +301,188 @@ export default function PlatformStatsPage() {
             style={{ width: 180 }}
             placeholder="品类"
             optionFilterProp="label"
-            value={categoryFilter}
-            options={categoryOptions}
-            onChange={setCategoryFilter}
+            value={progressCategoryFilter}
+            options={progressCategoryOptions}
+            onChange={setProgressCategoryFilter}
           />
           <Select
             allowClear
             style={{ width: 140 }}
             placeholder="平台"
-            value={platformFilter}
-            options={platformOptions}
-            onChange={setPlatformFilter}
-          />
-          <Select
-            allowClear
-            style={{ width: 140 }}
-            placeholder="月份"
-            value={monthFilter}
-            options={monthOptions}
-            onChange={setMonthFilter}
+            value={progressPlatformFilter}
+            options={progressPlatformOptions}
+            onChange={setProgressPlatformFilter}
           />
         </Space>
         <Table
-          dataSource={filteredCategories}
-          columns={categoryColumns}
-          rowKey={row => `${row.month ?? ''}-${row.category_code ?? ''}-${row.platform ?? ''}`}
+          dataSource={filteredProgress}
+          columns={progressColumns}
+          rowKey={row => `${row.category_code ?? ''}-${row.platform ?? ''}`}
           size="small"
-          scroll={{ x: 1000 }}
-          pagination={{ pageSize: 20 }}
+          scroll={{ x: 1100 }}
+          pagination={{ pageSize: 20, showSizeChanger: true }}
         />
       </Card>
 
-      <Row gutter={16}>
-        <Col span={14}>
-          <Card title="按月趋势">
-            <Table dataSource={data.monthly} columns={monthlyColumns} rowKey="month" size="small" pagination={false} scroll={{ x: 740 }} />
-          </Card>
-        </Col>
-        <Col span={10}>
-          <Card title="匹配来源分布">
-            <Table
-              dataSource={data.sources}
-              columns={sourceColumns}
-              rowKey={row => `${row.source}-${row.status}`}
-              size="small"
-              pagination={{ pageSize: 10 }}
-            />
-          </Card>
-        </Col>
-      </Row>
+      <Collapse
+        items={[
+          {
+            key: 'upload-clean-match',
+            label: '上传 / 清洗 / 匹配详情',
+            children: (
+              <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                <Card title="数据上传" size="small">
+                  <Row gutter={16}>
+                    <Col span={6}><Statistic title="上传文件数" value={upload.file_count} /></Col>
+                    <Col span={6}><Statistic title="上传数据行数" value={upload.file_rows} /></Col>
+                    <Col span={6}><Statistic title="实际入库行数" value={upload.raw_rows ?? '统计中…'} valueStyle={{ color: '#3f8600' }} /></Col>
+                    <Col span={6}><Statistic title="去重拦截行数" value={upload.dedup_skipped_rows} /></Col>
+                  </Row>
+                  <Text type="secondary">
+                    首次上传：{upload.first_uploaded_at ?? '-'}　最近上传：{upload.last_uploaded_at ?? '-'}
+                  </Text>
+                </Card>
 
-      <Card title="沉淀资产">
-        <Row gutter={16}>
-          <Col span={4}><Statistic title="URL 映射" value={assets.url_mappings} /></Col>
-          <Col span={4}><Statistic title="已关联型号的映射" value={assets.url_mappings_with_model} /></Col>
-          <Col span={4}><Statistic title="历史对照" value={assets.historical_mappings ?? '统计中…'} /></Col>
-          <Col span={4}><Statistic title="型号 / 品牌" value={`${assets.models.toLocaleString()} / ${assets.brands.toLocaleString()}`} /></Col>
-          <Col span={4}><Statistic title="排除库" value={assets.exclusions} /></Col>
-          <Col span={4}><Statistic title="用户（启用 / 近30天登录）" value={`${assets.active_users} / ${assets.login_users_30d}`} /></Col>
-        </Row>
-        <Space wrap style={{ marginTop: 16 }}>
-          {assets.url_mapping_sources.map(item => (
-            <Tag key={item.source}>
-              {mappingSourceLabelMap[item.source] ?? item.source}：{item.count.toLocaleString()}（有型号 {item.with_model.toLocaleString()}）
-            </Tag>
-          ))}
-        </Space>
-      </Card>
+                <Card title="清洗任务" size="small">
+                  <Row gutter={16}>
+                    <Col span={4}><Statistic title="有效任务" value={clean.task_total} /></Col>
+                    <Col span={4}>
+                      <Statistic title="清洗完成" value={clean.clean_finished} valueStyle={{ color: '#3f8600' }} suffix={<Text type="secondary" style={{ fontSize: 14 }}>{finishedRate}%</Text>} />
+                    </Col>
+                    <Col span={4}><Statistic title="仍有待处理" value={clean.has_pending} valueStyle={{ color: '#d48806' }} /></Col>
+                    <Col span={4}><Statistic title="处理中 / 失败" value={`${clean.processing} / ${clean.failed}`} /></Col>
+                    <Col span={4}><Statistic title="已发布任务" value={clean.published_tasks} /></Col>
+                    <Col span={4}><Statistic title="发布到分析库行数" value={clean.published_rows} /></Col>
+                  </Row>
+                  <Row gutter={16} style={{ marginTop: 16 }}>
+                    <Col span={6}><Statistic title="进入清洗行数" value={clean.row_in} /></Col>
+                    <Col span={6}><Statistic title="清洗后行数" value={clean.row_out} /></Col>
+                    <Col span={6}><Statistic title="过滤行数" value={clean.row_filtered} /></Col>
+                    <Col span={6}><Statistic title="已删除任务" value={clean.archived} valueStyle={{ color: '#8c8c8c' }} /></Col>
+                  </Row>
+                </Card>
+
+                <Card title="匹配数据" size="small">
+                  <Row gutter={16}>
+                    <Col span={6}><Statistic title="匹配条数" value={match.total} /></Col>
+                    <Col span={6}>
+                      <Statistic title="已匹配" value={match.publishable} valueStyle={{ color: '#3f8600' }} suffix={<Text type="secondary" style={{ fontSize: 14 }}>{publishableRate}%</Text>} />
+                    </Col>
+                    <Col span={6}><Statistic title="已匹配（商品去重）" value={match.publishable_distinct} /></Col>
+                    <Col span={6}><Statistic title="系统自动匹配率" value={automatedRate} suffix="%" /></Col>
+                  </Row>
+                  <Row gutter={16} style={{ marginTop: 16 }}>
+                    <Col span={4}><Statistic title="URL 精准匹配" value={match.url_matched} /></Col>
+                    <Col span={4}><Statistic title="自动匹配" value={match.matched} /></Col>
+                    <Col span={4}><Statistic title="人工确认" value={match.confirmed} /></Col>
+                    <Col span={4}><Statistic title="排除 / 忽略" value={match.excluded + match.ignored} /></Col>
+                    <Col span={4}><Statistic title="待匹配" value={match.pending} valueStyle={{ color: '#d48806' }} /></Col>
+                    <Col span={4}><Statistic title="URL 待确认 / 争议" value={`${match.text_only.toLocaleString()} / ${match.disputed.toLocaleString()}`} valueStyle={{ color: '#d48806' }} /></Col>
+                  </Row>
+                  <Progress
+                    style={{ marginTop: 16 }}
+                    percent={publishableRate}
+                    success={{ percent: percent(match.url_matched, match.total) }}
+                    format={() => `${publishableRate}%`}
+                  />
+                  <Text type="secondary">深绿：URL 精准匹配占比；浅色：已匹配总占比</Text>
+                </Card>
+              </Space>
+            ),
+          },
+          {
+            key: 'category-monthly',
+            label: '品类 / 平台明细（按月）',
+            children: (
+              <>
+                <Space wrap style={{ marginBottom: 16 }}>
+                  <Select
+                    allowClear
+                    showSearch
+                    style={{ width: 180 }}
+                    placeholder="品类"
+                    optionFilterProp="label"
+                    value={categoryFilter}
+                    options={categoryOptions}
+                    onChange={setCategoryFilter}
+                  />
+                  <Select
+                    allowClear
+                    style={{ width: 140 }}
+                    placeholder="平台"
+                    value={platformFilter}
+                    options={platformOptions}
+                    onChange={setPlatformFilter}
+                  />
+                  <Select
+                    allowClear
+                    style={{ width: 140 }}
+                    placeholder="月份"
+                    value={monthFilter}
+                    options={monthOptions}
+                    onChange={setMonthFilter}
+                  />
+                </Space>
+                <Table
+                  dataSource={filteredCategories}
+                  columns={categoryColumns}
+                  rowKey={row => `${row.month ?? ''}-${row.category_code ?? ''}-${row.platform ?? ''}`}
+                  size="small"
+                  scroll={{ x: 1000 }}
+                  pagination={{ pageSize: 20 }}
+                />
+              </>
+            ),
+          },
+          {
+            key: 'trend-source',
+            label: '按月趋势与匹配来源',
+            children: (
+              <Row gutter={16}>
+                <Col span={14}>
+                  <Card title="按月趋势" size="small">
+                    <Table dataSource={data.monthly} columns={monthlyColumns} rowKey="month" size="small" pagination={false} scroll={{ x: 740 }} />
+                  </Card>
+                </Col>
+                <Col span={10}>
+                  <Card title="匹配来源分布" size="small">
+                    <Table
+                      dataSource={data.sources}
+                      columns={sourceColumns}
+                      rowKey={row => `${row.source}-${row.status}`}
+                      size="small"
+                      pagination={{ pageSize: 10 }}
+                    />
+                  </Card>
+                </Col>
+              </Row>
+            ),
+          },
+          {
+            key: 'assets',
+            label: '沉淀资产',
+            children: (
+              <Card size="small">
+                <Row gutter={16}>
+                  <Col span={4}><Statistic title="URL 映射" value={assets.url_mappings} /></Col>
+                  <Col span={4}><Statistic title="已关联型号的映射" value={assets.url_mappings_with_model} /></Col>
+                  <Col span={4}><Statistic title="历史对照" value={assets.historical_mappings ?? '统计中…'} /></Col>
+                  <Col span={4}><Statistic title="型号 / 品牌" value={`${assets.models.toLocaleString()} / ${assets.brands.toLocaleString()}`} /></Col>
+                  <Col span={4}><Statistic title="排除库" value={assets.exclusions} /></Col>
+                  <Col span={4}><Statistic title="用户（启用 / 近30天登录）" value={`${assets.active_users} / ${assets.login_users_30d}`} /></Col>
+                </Row>
+                <Space wrap style={{ marginTop: 16 }}>
+                  {assets.url_mapping_sources.map(item => (
+                    <Tag key={item.source}>
+                      {mappingSourceLabelMap[item.source] ?? item.source}：{item.count.toLocaleString()}（有型号 {item.with_model.toLocaleString()}）
+                    </Tag>
+                  ))}
+                </Space>
+              </Card>
+            ),
+          },
+        ]}
+      />
     </Space>
   )
 }

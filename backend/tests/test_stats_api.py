@@ -14,7 +14,10 @@ from app.core.permissions import is_admin_only_path
 from app.models.database import Base, get_db
 from app.models.schemas import (
     Category,
+    CleanJobItemRecord,
     CleanJobRecord,
+    DispatchBatch,
+    DispatchItem,
     ItemUrlMapping,
     MatchResult,
     PublishJob,
@@ -181,6 +184,63 @@ def test_stats_overview_aggregates(client, session_factory):
     assert assets["users"] == 2
     assert assets["active_users"] == 1
     assert assets["login_users_30d"] == 1
+
+
+def test_progress_stats_uses_latest_done_batch(client, session_factory):
+    db = session_factory()
+    upload = UploadFileRecord(filename="p.xlsx", platform="jd", row_count=3, status="done")
+    db.add(upload)
+    db.flush()
+    raw = [
+        RawDataRecord(file_id=upload.id, item_id=str(i), platform="JD")
+        for i in range(3)
+    ]
+    db.add_all(raw)
+    db.add(Category(code="headphone", name="耳机"))
+    db.add(Category(code="camera", name="相机"))
+    db.flush()
+
+    done_batch = DispatchBatch(file_id=upload.id, status="done", total_rows=3, dispatched_rows=3)
+    db.add(done_batch)
+    db.flush()
+    db.add_all([
+        DispatchItem(batch_id=done_batch.id, raw_data_id=raw[0].id, category_code="headphone"),
+        DispatchItem(batch_id=done_batch.id, raw_data_id=raw[1].id, category_code="headphone"),
+        DispatchItem(batch_id=done_batch.id, raw_data_id=raw[2].id, category_code="camera"),
+        # 新发起但未完成的分发批次不应被统计
+        DispatchBatch(file_id=upload.id, status="running"),
+    ])
+    db.flush()
+
+    job = CleanJobRecord(status="reviewing", category_code="headphone", platform="jd")
+    db.add(job)
+    db.flush()
+    db.add_all([
+        CleanJobItemRecord(clean_job_id=job.id, raw_data_id=raw[0].id, category_code="headphone",
+                           platform="jd", dispatch_batch_id=done_batch.id),
+        CleanJobItemRecord(clean_job_id=job.id, raw_data_id=raw[1].id, category_code="headphone",
+                           platform="jd", dispatch_batch_id=done_batch.id),
+        MatchResult(clean_job_id=job.id, raw_data_id=raw[0].id, match_status="url_matched"),
+        MatchResult(clean_job_id=job.id, raw_data_id=raw[1].id, match_status="pending"),
+    ])
+    db.add(PublishJob(clean_job_id=job.id, status="done", published_count=1))
+    db.commit()
+    db.close()
+
+    progress = client.get("/api/stats/overview").json()["data"]["progress"]
+    assert progress["dispatchable"] == 3
+    assert progress["processed"] == 1
+    assert progress["matched"] == 1
+    assert progress["pending"] == 1
+    assert progress["published"] == 1
+
+    by_category = {(row["category_code"], row["platform"]): row for row in progress["categories"]}
+    assert by_category[("headphone", "jd")]["dispatched"] == 2
+    assert by_category[("headphone", "jd")]["processed"] == 1
+    assert by_category[("headphone", "jd")]["pending"] == 1
+    assert by_category[("headphone", "jd")]["published"] == 1
+    assert by_category[("camera", "jd")]["dispatched"] == 1
+    assert by_category[("camera", "jd")]["processed"] == 0
 
 
 def test_slow_counts_refresh_only_when_expired(client, monkeypatch):

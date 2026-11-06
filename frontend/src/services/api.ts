@@ -126,6 +126,24 @@ export interface PlatformStatsOverview {
     actionable: number
     auto_matched: number
   }
+  progress: {
+    uploaded_rows: number | null
+    dispatchable: number
+    processed: number
+    matched: number
+    pending: number
+    published: number
+    categories: Array<{
+      category_code: string | null
+      category_name: string
+      platform: string | null
+      dispatched: number
+      processed: number
+      matched: number
+      pending: number
+      published: number
+    }>
+  }
   sources: Array<{ source: string; status: string; count: number }>
   categories: Array<{
     category_code: string | null

@@ -57,6 +57,9 @@ const mappingSourceLabelMap: Record<string, string> = {
 const percent = (part: number, total: number) => (total > 0 ? Math.round((part / total) * 1000) / 10 : 0)
 const progressPercent = (part: number, total: number) => Math.min(100, percent(part, total))
 const unprocessed = (row: ProgressRow) => Math.max(row.dispatched - row.processed, 0)
+const formatMonth = (value: number | null | undefined) => (
+  value ? `${Math.floor(value / 100)}-${String(value % 100).padStart(2, '0')}` : '-'
+)
 
 const renderStatus = (status: string) => {
   const info = statusLabelMap[status] ?? { label: status, color: 'default' }
@@ -64,6 +67,11 @@ const renderStatus = (status: string) => {
 }
 
 const progressColumns: ColumnsType<ProgressRow> = [
+  {
+    title: '月份', dataIndex: 'month', width: 100, fixed: 'left',
+    sorter: (a, b) => a.month - b.month, defaultSortOrder: 'descend',
+    render: (v: number) => formatMonth(v),
+  },
   {
     title: '品类', dataIndex: 'category_name', width: 160, fixed: 'left',
     render: (_: string, row) => row.category_name || row.category_code || '未分类',
@@ -74,7 +82,7 @@ const progressColumns: ColumnsType<ProgressRow> = [
   },
   {
     title: '分发数据', dataIndex: 'dispatched', width: 120,
-    sorter: (a, b) => a.dispatched - b.dispatched, defaultSortOrder: 'descend',
+    sorter: (a, b) => a.dispatched - b.dispatched,
     render: (v: number) => v.toLocaleString(),
   },
   {
@@ -172,6 +180,7 @@ export default function PlatformStatsPage() {
   const [monthFilter, setMonthFilter] = useState<string>()
   const [progressCategoryFilter, setProgressCategoryFilter] = useState<string>()
   const [progressPlatformFilter, setProgressPlatformFilter] = useState<string>()
+  const [progressMonthFilter, setProgressMonthFilter] = useState<number>()
 
   const categoryOptions = useMemo(() => {
     const options = new Map<string, string>()
@@ -215,6 +224,14 @@ export default function PlatformStatsPage() {
     }))
   }, [data?.progress.categories])
 
+  const progressMonthOptions = useMemo(
+    () => (data?.progress.months ?? []).map(item => ({
+      value: item.month,
+      label: formatMonth(item.month),
+    })),
+    [data?.progress.months],
+  )
+
   const filteredCategories = useMemo(
     () => (data?.categories ?? []).filter(row => (
       (categoryFilter === undefined || (row.category_code ?? '') === categoryFilter)
@@ -226,10 +243,11 @@ export default function PlatformStatsPage() {
 
   const filteredProgress = useMemo(
     () => (data?.progress.categories ?? []).filter(row => (
-      (progressCategoryFilter === undefined || (row.category_code ?? '') === progressCategoryFilter)
+      (progressMonthFilter === undefined || row.month === progressMonthFilter)
+      && (progressCategoryFilter === undefined || (row.category_code ?? '') === progressCategoryFilter)
       && (progressPlatformFilter === undefined || (row.platform ?? '') === progressPlatformFilter)
     )),
-    [data?.progress.categories, progressCategoryFilter, progressPlatformFilter],
+    [data?.progress.categories, progressMonthFilter, progressCategoryFilter, progressPlatformFilter],
   )
 
   if (!data) {
@@ -240,8 +258,12 @@ export default function PlatformStatsPage() {
   const automatedRate = percent(match.auto_matched, match.total)
   const publishableRate = percent(match.publishable, match.total)
   const finishedRate = percent(clean.clean_finished, clean.task_total)
-  const completionRate = progressPercent(progress.processed, progress.dispatchable)
-  const remaining = Math.max(progress.dispatchable - progress.processed, 0)
+  const overview = progressMonthFilter === undefined
+    ? progress
+    : progress.months.find(item => item.month === progressMonthFilter)
+      ?? { uploaded_rows: null, dispatchable: 0, processed: 0, matched: 0, pending: 0, published: 0 }
+  const completionRate = progressPercent(overview.processed, overview.dispatchable)
+  const remaining = Math.max(overview.dispatchable - overview.processed, 0)
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -249,7 +271,7 @@ export default function PlatformStatsPage() {
         type="info"
         showIcon
         message="口径说明"
-        description="总览按「上传 → 值得分发 → 已清理」统计，三者均按商品去重：值得分发取每个文件/上传批次最新一次已完成分发的商品；已清理为其中已有处理结论（精准匹配、自动匹配、人工确认、已排除、已忽略）的商品数。下方明细按「品类 × 平台」统计条目数，同一商品分发到多个品类会分别计数。清洗任务与匹配数据均不含已删除任务和干扰过滤行；时间按北京时间统计；处理进度为近 2 分钟内的聚合结果。"
+        description="总览按「上传 → 值得分发 → 已清理」统计，三者均按商品去重：值得分发取每个文件/上传批次最新一次已完成分发的商品；已清理为其中已有处理结论（精准匹配、自动匹配、人工确认、已排除、已忽略）的商品数。月份取原始数据月份，可按月份筛选。下方明细按「月份 × 品类 × 平台」统计条目数，同一商品分发到多个品类会分别计数。清洗任务与匹配数据均不含已删除任务和干扰过滤行；时间按北京时间统计；处理进度为近 2 分钟内的聚合结果。"
         action={
           <Space direction="vertical" align="end">
             <Button icon={<ReloadOutlined />} loading={loading} onClick={refresh}>刷新</Button>
@@ -259,17 +281,31 @@ export default function PlatformStatsPage() {
         }
       />
 
-      <Card title="处理进度总览">
+      <Card
+        title={progressMonthFilter === undefined ? '处理进度总览' : `处理进度总览（${formatMonth(progressMonthFilter)}）`}
+        extra={(
+          <Select
+            allowClear
+            style={{ width: 160 }}
+            placeholder="全部月份"
+            value={progressMonthFilter}
+            options={progressMonthOptions}
+            onChange={setProgressMonthFilter}
+          />
+        )}
+      >
         <Row gutter={16}>
           <Col span={6}>
-            <Statistic title="上传入库数据总量" value={progress.uploaded_rows ?? '统计中…'} suffix={progress.uploaded_rows == null ? undefined : '条'} />
-            <Text type="secondary">上传文件行数 {upload.file_rows.toLocaleString()}，去重拦截 {upload.dedup_skipped_rows.toLocaleString()}</Text>
+            <Statistic title="上传入库数据总量" value={overview.uploaded_rows ?? '统计中…'} suffix={overview.uploaded_rows == null ? undefined : '条'} />
+            {progressMonthFilter === undefined && (
+              <Text type="secondary">上传文件行数 {upload.file_rows.toLocaleString()}，去重拦截 {upload.dedup_skipped_rows.toLocaleString()}</Text>
+            )}
           </Col>
           <Col span={6}>
-            <Statistic title="值得分发" value={progress.dispatchable} suffix="条" />
+            <Statistic title="值得分发" value={overview.dispatchable} suffix="条" />
           </Col>
           <Col span={6}>
-            <Statistic title="已清理" value={progress.processed} suffix="条" valueStyle={{ color: '#3f8600' }} />
+            <Statistic title="已清理" value={overview.processed} suffix="条" valueStyle={{ color: '#3f8600' }} />
           </Col>
           <Col span={6}>
             <Statistic
@@ -283,17 +319,17 @@ export default function PlatformStatsPage() {
         <Progress
           style={{ marginTop: 20 }}
           percent={completionRate}
-          format={() => `${progress.processed.toLocaleString()} / ${progress.dispatchable.toLocaleString()}`}
+          format={() => `${overview.processed.toLocaleString()} / ${overview.dispatchable.toLocaleString()}`}
         />
         <Row gutter={16} style={{ marginTop: 8 }}>
-          <Col span={6}><Statistic title="已匹配成功" value={progress.matched} valueStyle={{ color: '#3f8600' }} /></Col>
-          <Col span={6}><Statistic title="已发布到分析库" value={progress.published} /></Col>
-          <Col span={6}><Statistic title="当前待处理" value={progress.pending} valueStyle={{ color: '#d48806' }} /></Col>
+          <Col span={6}><Statistic title="已匹配成功" value={overview.matched} valueStyle={{ color: '#3f8600' }} /></Col>
+          <Col span={6}><Statistic title="已发布到分析库" value={overview.published} /></Col>
+          <Col span={6}><Statistic title="当前待处理" value={overview.pending} valueStyle={{ color: '#d48806' }} /></Col>
           <Col span={6}><Statistic title="未清理" value={remaining} valueStyle={{ color: remaining > 0 ? '#d48806' : '#8c8c8c' }} /></Col>
         </Row>
       </Card>
 
-      <Card title="处理进度明细（品类 / 平台）">
+      <Card title="处理进度明细（月份 / 品类 / 平台）">
         <Space wrap style={{ marginBottom: 16 }}>
           <Select
             allowClear
@@ -317,9 +353,9 @@ export default function PlatformStatsPage() {
         <Table
           dataSource={filteredProgress}
           columns={progressColumns}
-          rowKey={row => `${row.category_code ?? ''}-${row.platform ?? ''}`}
+          rowKey={row => `${row.month}-${row.category_code ?? ''}-${row.platform ?? ''}`}
           size="small"
-          scroll={{ x: 1100 }}
+          scroll={{ x: 1200 }}
           pagination={{ pageSize: 20, showSizeChanger: true }}
         />
       </Card>

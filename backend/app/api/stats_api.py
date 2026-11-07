@@ -67,8 +67,18 @@ _slow_count_cache: dict = {"values": {}, "computed_at": None, "running": False}
 
 
 def _refresh_slow_counts(db: Session) -> None:
+    month_rows = (
+        db.query(RawDataRecord.month, func.count(RawDataRecord.id))
+        .group_by(RawDataRecord.month)
+        .all()
+    )
     values = {
-        "raw_rows": _int(db.query(func.count(RawDataRecord.id)).scalar()),
+        "raw_rows": sum(_int(count) for _, count in month_rows),
+        "raw_rows_by_month": {
+            _int(month): _int(count)
+            for month, count in month_rows
+            if month is not None
+        },
         "historical_mappings": _int(db.query(func.count(HistoricalMapping.id)).scalar()),
     }
     with _slow_count_lock:
@@ -268,23 +278,30 @@ def _progress_join(query, latest_batches):
 
 
 def _progress_stats(db: Session) -> dict:
-    """处理进度：上传总量 → 值得分发 → 已清理（按品类 / 平台）。"""
+    """处理进度：上传总量 → 值得分发 → 已清理（按月份 / 品类 / 平台）。"""
     latest_batches = _latest_done_batch_subquery(db)
     status = MatchResult.match_status
 
-    totals = _progress_join(
-        db.query(
-            func.count(func.distinct(DispatchItem.raw_data_id)),
-            func.count(func.distinct(case((status.in_(RESOLVED_STATUSES), DispatchItem.raw_data_id)))),
-            func.count(func.distinct(case((status.in_(PUBLISHABLE_STATUSES), DispatchItem.raw_data_id)))),
-            func.count(func.distinct(case((status.in_(ACTIONABLE_STATUSES), DispatchItem.raw_data_id)))),
-        ),
-        latest_batches,
-    ).one()
+    monthly_rows = (
+        _progress_join(
+            db.query(
+                RawDataRecord.month.label("month"),
+                func.count(func.distinct(DispatchItem.raw_data_id)).label("dispatched"),
+                func.count(func.distinct(case((status.in_(RESOLVED_STATUSES), DispatchItem.raw_data_id)))).label("processed"),
+                func.count(func.distinct(case((status.in_(PUBLISHABLE_STATUSES), DispatchItem.raw_data_id)))).label("matched"),
+                func.count(func.distinct(case((status.in_(ACTIONABLE_STATUSES), DispatchItem.raw_data_id)))).label("pending"),
+            ),
+            latest_batches,
+        )
+        .filter(RawDataRecord.month.isnot(None))
+        .group_by(RawDataRecord.month)
+        .all()
+    )
 
     detail_rows = (
         _progress_join(
             db.query(
+                RawDataRecord.month.label("month"),
                 DispatchItem.category_code.label("category_code"),
                 func.lower(RawDataRecord.platform).label("platform"),
                 func.count(func.distinct(DispatchItem.raw_data_id)).label("dispatched"),
@@ -294,33 +311,57 @@ def _progress_stats(db: Session) -> dict:
             ),
             latest_batches,
         )
-        .group_by(DispatchItem.category_code, func.lower(RawDataRecord.platform))
+        .filter(RawDataRecord.month.isnot(None))
+        .group_by(RawDataRecord.month, DispatchItem.category_code, func.lower(RawDataRecord.platform))
         .all()
     )
 
+    # 发布任务只记录清洗任务维度，按任务内原始数据月份（取最早月份）归到月份
+    job_month = (
+        db.query(
+            CleanJobItemRecord.clean_job_id.label("clean_job_id"),
+            func.min(RawDataRecord.month).label("month"),
+        )
+        .join(RawDataRecord, RawDataRecord.id == CleanJobItemRecord.raw_data_id)
+        .filter(RawDataRecord.month.isnot(None))
+        .group_by(CleanJobItemRecord.clean_job_id)
+        .subquery()
+    )
+    job_publish = (
+        db.query(
+            PublishJob.clean_job_id.label("clean_job_id"),
+            func.sum(PublishJob.published_count).label("published"),
+        )
+        .filter(PublishJob.status == "done")
+        .group_by(PublishJob.clean_job_id)
+        .subquery()
+    )
     category_code = func.coalesce(CleanJobRecord.category_code, CleanJobRecord.dispatch_category_code)
     published_rows = (
         db.query(
+            job_month.c.month.label("month"),
             category_code.label("category_code"),
             func.lower(CleanJobRecord.platform).label("platform"),
-            func.sum(PublishJob.published_count).label("published"),
+            func.sum(job_publish.c.published).label("published"),
         )
-        .select_from(PublishJob)
-        .join(CleanJobRecord, CleanJobRecord.id == PublishJob.clean_job_id)
-        .filter(PublishJob.status == "done", CleanJobRecord.status != ARCHIVED_STATUS)
-        .group_by(category_code, func.lower(CleanJobRecord.platform))
+        .select_from(job_publish)
+        .join(CleanJobRecord, CleanJobRecord.id == job_publish.c.clean_job_id)
+        .join(job_month, job_month.c.clean_job_id == job_publish.c.clean_job_id)
+        .filter(CleanJobRecord.status != ARCHIVED_STATUS)
+        .group_by(job_month.c.month, category_code, func.lower(CleanJobRecord.platform))
         .all()
     )
 
     names = dict(db.query(Category.code, Category.name).all())
-    rows: dict[tuple[str, str], dict] = {}
+    rows: dict[tuple[int, str, str], dict] = {}
 
-    def bucket(code: str | None, platform: str | None) -> dict:
-        key = (code or "", _normalize_platform(platform))
+    def bucket(month: int | None, code: str | None, platform: str | None) -> dict:
+        key = (_int(month), code or "", _normalize_platform(platform))
         return rows.setdefault(key, {
+            "month": key[0],
             "category_code": code,
             "category_name": names.get(code) or code or "未分类",
-            "platform": key[1] or None,
+            "platform": key[2] or None,
             "dispatched": 0,
             "processed": 0,
             "matched": 0,
@@ -328,26 +369,45 @@ def _progress_stats(db: Session) -> dict:
             "published": 0,
         })
 
-    for code, platform, dispatched, processed, matched, pending in detail_rows:
-        item = bucket(code, platform)
+    for month, code, platform, dispatched, processed, matched, pending in detail_rows:
+        item = bucket(month, code, platform)
         item["dispatched"] = _int(dispatched)
         item["processed"] = _int(processed)
         item["matched"] = _int(matched)
         item["pending"] = _int(pending)
-    for code, platform, published in published_rows:
-        bucket(code, platform)["published"] = _int(published)
+    for month, code, platform, published in published_rows:
+        bucket(month, code, platform)["published"] = _int(published)
 
     categories = sorted(
         rows.values(),
-        key=lambda item: (item["dispatched"], item["processed"]),
+        key=lambda item: (item["month"], item["dispatched"], item["processed"]),
         reverse=True,
     )
+
+    published_by_month: dict[int, int] = {}
+    for item in categories:
+        published_by_month[item["month"]] = published_by_month.get(item["month"], 0) + item["published"]
+
+    months = [
+        {
+            "month": _int(month),
+            "dispatchable": _int(dispatched),
+            "processed": _int(processed),
+            "matched": _int(matched),
+            "pending": _int(pending),
+            "published": published_by_month.get(_int(month), 0),
+        }
+        for month, dispatched, processed, matched, pending in monthly_rows
+    ]
+    months.sort(key=lambda item: item["month"], reverse=True)
+
     return {
-        "dispatchable": _int(totals[0]),
-        "processed": _int(totals[1]),
-        "matched": _int(totals[2]),
-        "pending": _int(totals[3]),
-        "published": sum(item["published"] for item in categories),
+        "dispatchable": sum(item["dispatchable"] for item in months),
+        "processed": sum(item["processed"] for item in months),
+        "matched": sum(item["matched"] for item in months),
+        "pending": sum(item["pending"] for item in months),
+        "published": sum(item["published"] for item in months),
+        "months": months,
         "categories": categories,
     }
 
@@ -487,6 +547,11 @@ def get_stats_overview(
     slow_counts, slow_counts_at = _slow_counts()
     progress = dict(cached_value("platform_stats", "progress", 120.0, lambda: _progress_stats(db)))
     progress["uploaded_rows"] = slow_counts.get("raw_rows")
+    raw_rows_by_month = slow_counts.get("raw_rows_by_month") or {}
+    progress["months"] = [
+        {**item, "uploaded_rows": raw_rows_by_month.get(item.get("month"))}
+        for item in progress.get("months", [])
+    ]
     return {
         "code": 0,
         "data": {

@@ -195,6 +195,9 @@ def test_progress_stats_uses_latest_done_batch(client, session_factory):
         RawDataRecord(file_id=upload.id, item_id=str(i), platform="JD")
         for i in range(3)
     ]
+    raw[0].month = 202609
+    raw[1].month = 202609
+    raw[2].month = 202608
     db.add_all(raw)
     db.add(Category(code="headphone", name="耳机"))
     db.add(Category(code="camera", name="相机"))
@@ -234,13 +237,29 @@ def test_progress_stats_uses_latest_done_batch(client, session_factory):
     assert progress["pending"] == 1
     assert progress["published"] == 1
 
-    by_category = {(row["category_code"], row["platform"]): row for row in progress["categories"]}
-    assert by_category[("headphone", "jd")]["dispatched"] == 2
-    assert by_category[("headphone", "jd")]["processed"] == 1
-    assert by_category[("headphone", "jd")]["pending"] == 1
-    assert by_category[("headphone", "jd")]["published"] == 1
-    assert by_category[("camera", "jd")]["dispatched"] == 1
-    assert by_category[("camera", "jd")]["processed"] == 0
+    by_month = {row["month"]: row for row in progress["months"]}
+    assert by_month[202609]["dispatchable"] == 2
+    assert by_month[202609]["processed"] == 1
+    assert by_month[202609]["published"] == 1
+    assert by_month[202608]["dispatchable"] == 1
+    assert by_month[202608]["processed"] == 0
+
+    # 慢计数刷新完成后可拿到每月上传入库行数
+    progress = client.get("/api/stats/overview").json()["data"]["progress"]
+    by_month = {row["month"]: row for row in progress["months"]}
+    assert by_month[202609]["uploaded_rows"] == 2
+    assert by_month[202608]["uploaded_rows"] == 1
+
+    by_category = {
+        (row["month"], row["category_code"], row["platform"]): row
+        for row in progress["categories"]
+    }
+    assert by_category[(202609, "headphone", "jd")]["dispatched"] == 2
+    assert by_category[(202609, "headphone", "jd")]["processed"] == 1
+    assert by_category[(202609, "headphone", "jd")]["pending"] == 1
+    assert by_category[(202609, "headphone", "jd")]["published"] == 1
+    assert by_category[(202608, "camera", "jd")]["dispatched"] == 1
+    assert by_category[(202608, "camera", "jd")]["processed"] == 0
 
 
 def test_slow_counts_refresh_only_when_expired(client, monkeypatch):

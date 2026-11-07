@@ -133,7 +133,17 @@ export interface PlatformStatsOverview {
     matched: number
     pending: number
     published: number
+    months: Array<{
+      month: number
+      dispatchable: number
+      processed: number
+      matched: number
+      pending: number
+      published: number
+      uploaded_rows: number | null
+    }>
     categories: Array<{
+      month: number
       category_code: string | null
       category_name: string
       platform: string | null

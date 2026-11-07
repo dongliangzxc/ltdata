@@ -129,16 +129,32 @@ export interface PlatformStatsOverview {
   progress: {
     uploaded_rows: number | null
     dispatchable: number
+    task_created: number
+    not_task_created: number
     processed: number
+    not_processed: number
     matched: number
+    url_matched: number
+    auto_matched: number
+    confirmed: number
+    excluded_ignored: number
     pending: number
+    task_no_result: number
     published: number
     months: Array<{
       month: number
       dispatchable: number
+      task_created: number
+      not_task_created: number
       processed: number
+      not_processed: number
       matched: number
+      url_matched: number
+      auto_matched: number
+      confirmed: number
+      excluded_ignored: number
       pending: number
+      task_no_result: number
       published: number
       uploaded_rows: number | null
     }>
@@ -151,6 +167,10 @@ export interface PlatformStatsOverview {
       task_created: number
       processed: number
       matched: number
+      url_matched: number
+      auto_matched: number
+      confirmed: number
+      excluded_ignored: number
       pending: number
       published: number
       last_processed_at: string | null

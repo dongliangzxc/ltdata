@@ -60,6 +60,7 @@ const unprocessed = (row: ProgressRow) => Math.max(row.dispatched - row.processe
 const notTaskCreated = (row: ProgressRow) => Math.max(row.dispatched - row.task_created, 0)
 const taskPercent = (row: ProgressRow) => progressPercent(row.processed, row.task_created)
 const overallPercent = (row: ProgressRow) => progressPercent(row.processed, row.dispatched)
+const autoMatched = (row: ProgressRow) => row.url_matched + row.auto_matched
 const formatMonth = (value: number | null | undefined) => (
   value ? `${Math.floor(value / 100)}-${String(value % 100).padStart(2, '0')}` : '-'
 )
@@ -132,8 +133,18 @@ const progressColumns: ColumnsType<ProgressRow> = [
     render: (v: number) => <Text type={v > 0 ? 'warning' : undefined}>{v.toLocaleString()}</Text>,
   },
   {
-    title: '已匹配成功', dataIndex: 'matched', width: 120,
-    sorter: (a, b) => a.matched - b.matched,
+    title: '自动匹配', key: 'auto_matched', width: 110,
+    sorter: (a, b) => autoMatched(a) - autoMatched(b),
+    render: (_: unknown, row) => autoMatched(row).toLocaleString(),
+  },
+  {
+    title: '人工确认', dataIndex: 'confirmed', width: 110,
+    sorter: (a, b) => a.confirmed - b.confirmed,
+    render: (v: number) => v.toLocaleString(),
+  },
+  {
+    title: '排除 / 忽略', dataIndex: 'excluded_ignored', width: 110,
+    sorter: (a, b) => a.excluded_ignored - b.excluded_ignored,
     render: (v: number) => v.toLocaleString(),
   },
   {
@@ -309,9 +320,8 @@ export default function PlatformStatsPage() {
       dispatched: acc.dispatched + row.dispatched,
       task_created: acc.task_created + row.task_created,
       processed: acc.processed + row.processed,
-      pending: acc.pending + row.pending,
     }),
-    { dispatched: 0, task_created: 0, processed: 0, pending: 0 },
+    { dispatched: 0, task_created: 0, processed: 0 },
   ), [filteredProgress])
 
   if (!data) {
@@ -325,9 +335,23 @@ export default function PlatformStatsPage() {
   const overview = progressMonthFilter === undefined
     ? progress
     : (progress.months ?? []).find(item => item.month === progressMonthFilter)
-      ?? { uploaded_rows: null, dispatchable: 0, processed: 0, matched: 0, pending: 0, published: 0 }
+      ?? {
+        uploaded_rows: null,
+        dispatchable: 0,
+        task_created: 0,
+        not_task_created: 0,
+        processed: 0,
+        not_processed: 0,
+        matched: 0,
+        url_matched: 0,
+        auto_matched: 0,
+        confirmed: 0,
+        excluded_ignored: 0,
+        pending: 0,
+        task_no_result: 0,
+        published: 0,
+      }
   const completionRate = progressPercent(overview.processed, overview.dispatchable)
-  const remaining = Math.max(overview.dispatchable - overview.processed, 0)
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -335,7 +359,7 @@ export default function PlatformStatsPage() {
         type="info"
         showIcon
         message="口径说明"
-        description="总览按「上传 → 值得分发 → 已清理」统计，三者均按商品去重：值得分发取每个文件/上传批次最新一次已完成分发的商品；已清理为其中已有处理结论（精准匹配、自动匹配、人工确认、已排除、已忽略）的商品数。明细按月份、品类筛选，可选按平台拆分或聚合；已建任务 = 已进入有效清洗任务的分发数据，任务清洗进度 = 已清理 / 已建任务，整体清洗进度 = 已清理 / 分发数据，最后处理时间取该分组内最近一次匹配更新时间。清洗任务与匹配数据均不含已删除任务和干扰过滤行；时间按北京时间统计；处理进度为近 2 分钟内的聚合结果。"
+        description="总览与明细均按「分发条目」统计（同一商品分发到多个品类会分别计数）：值得分发 = 最新一次已完成分发批次中命中规则的条目；已清理 = 已有处理结论的条目，其中自动匹配 = URL 精准匹配 + 自动匹配，人工确认 = 人工选定型号，二者分开计数。对账关系：值得分发 = 已建任务 + 未建任务 = 已清理 + 未清理；已建任务 = 已清理 + 当前待处理 + 已建任务未出结果；已清理 = 自动匹配 + 人工确认 + 已排除/忽略。已发布为任务级发布行数，不与条目相加。明细可切换平台聚合或拆分；最后处理时间取分组内最近一次匹配更新时间。时间按北京时间统计，处理进度为近 2 分钟内的聚合结果。"
         action={
           <Space direction="vertical" align="end">
             <Button icon={<ReloadOutlined />} loading={loading} onClick={refresh}>刷新</Button>
@@ -366,7 +390,7 @@ export default function PlatformStatsPage() {
             )}
           </Col>
           <Col span={6}>
-            <Statistic title="值得分发" value={overview.dispatchable} suffix="条" />
+            <Statistic title="值得分发（分发条目）" value={overview.dispatchable} suffix="条" />
           </Col>
           <Col span={6}>
             <Statistic title="已清理" value={overview.processed} suffix="条" valueStyle={{ color: '#3f8600' }} />
@@ -385,12 +409,32 @@ export default function PlatformStatsPage() {
           percent={completionRate}
           format={() => `${overview.processed.toLocaleString()} / ${overview.dispatchable.toLocaleString()}`}
         />
-        <Row gutter={16} style={{ marginTop: 8 }}>
-          <Col span={6}><Statistic title="已匹配成功" value={overview.matched} valueStyle={{ color: '#3f8600' }} /></Col>
-          <Col span={6}><Statistic title="已发布到分析库" value={overview.published} /></Col>
-          <Col span={6}><Statistic title="当前待处理" value={overview.pending} valueStyle={{ color: '#d48806' }} /></Col>
-          <Col span={6}><Statistic title="未清理" value={remaining} valueStyle={{ color: remaining > 0 ? '#d48806' : '#8c8c8c' }} /></Col>
+        <Row gutter={16} style={{ marginTop: 16 }}>
+          <Col span={6}><Statistic title="已建任务" value={overview.task_created} /></Col>
+          <Col span={6}><Statistic title="未建任务" value={overview.not_task_created} valueStyle={{ color: '#d48806' }} /></Col>
+          <Col span={6}>
+            <Statistic title="自动匹配" value={overview.url_matched + overview.auto_matched} valueStyle={{ color: '#3f8600' }} />
+            <Text type="secondary">
+              URL 精准 {overview.url_matched.toLocaleString()} + 自动 {overview.auto_matched.toLocaleString()}
+            </Text>
+          </Col>
+          <Col span={6}>
+            <Statistic title="人工确认" value={overview.confirmed} />
+            <Text type="secondary">人工选定型号，单独计数</Text>
+          </Col>
         </Row>
+        <Row gutter={16} style={{ marginTop: 8 }}>
+          <Col span={6}><Statistic title="已排除 / 忽略" value={overview.excluded_ignored} /></Col>
+          <Col span={6}><Statistic title="当前待处理" value={overview.pending} valueStyle={{ color: '#d48806' }} /></Col>
+          <Col span={6}><Statistic title="已建任务未出结果" value={overview.task_no_result} valueStyle={{ color: '#d48806' }} /></Col>
+          <Col span={6}><Statistic title="未清理" value={overview.not_processed} valueStyle={{ color: '#d48806' }} /></Col>
+        </Row>
+        <Text type="secondary" style={{ display: 'block', marginTop: 12 }}>
+          对账关系：值得分发 = 已建任务 + 未建任务 = 已清理 + 未清理；已建任务 = 已清理 + 当前待处理 + 已建任务未出结果；已清理 = 自动匹配 + 人工确认 + 已排除 / 忽略。
+        </Text>
+        <Text type="secondary" style={{ display: 'block', marginTop: 4 }}>
+          已发布到分析库：{overview.published.toLocaleString()} 行（任务级发布行数，不参与上方条目对账）。
+        </Text>
       </Card>
 
       <Card title="处理进度明细（月份 / 品类 / 平台）">
@@ -433,19 +477,25 @@ export default function PlatformStatsPage() {
           <Col span={4}><Statistic title="已清理" value={progressTotals.processed} valueStyle={{ color: '#3f8600' }} /></Col>
           <Col span={4}>
             <Statistic
+              title="未清理"
+              value={Math.max(progressTotals.dispatched - progressTotals.processed, 0)}
+              valueStyle={{ color: '#d48806' }}
+            />
+          </Col>
+          <Col span={4}>
+            <Statistic
               title="整体清洗进度"
               value={progressPercent(progressTotals.processed, progressTotals.dispatched)}
               suffix="%"
             />
           </Col>
-          <Col span={4}><Statistic title="当前待处理" value={progressTotals.pending} valueStyle={{ color: '#d48806' }} /></Col>
         </Row>
         <Table
           dataSource={filteredProgress}
           columns={progressColumns}
           rowKey={row => `${row.month}-${row.category_code ?? ''}-${row.platform ?? ''}`}
           size="small"
-          scroll={{ x: 1550 }}
+          scroll={{ x: 1750 }}
           pagination={{ pageSize: 20, showSizeChanger: true }}
         />
       </Card>

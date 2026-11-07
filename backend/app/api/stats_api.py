@@ -46,6 +46,7 @@ FAILED_STATUSES = ("failed", "error")
 ARCHIVED_STATUS = "archived"
 # 已清理 = 人工/系统已给出结论的状态；disputed 仍算待处理
 RESOLVED_STATUSES = ("url_matched", "matched", "confirmed", "excluded", "ignored")
+EXCLUDED_STATUSES = ("excluded", "ignored")
 
 
 def _int(value) -> int:
@@ -286,10 +287,15 @@ def _progress_stats(db: Session) -> dict:
         _progress_join(
             db.query(
                 RawDataRecord.month.label("month"),
-                func.count(func.distinct(DispatchItem.raw_data_id)).label("dispatched"),
-                func.count(func.distinct(case((status.in_(RESOLVED_STATUSES), DispatchItem.raw_data_id)))).label("processed"),
-                func.count(func.distinct(case((status.in_(PUBLISHABLE_STATUSES), DispatchItem.raw_data_id)))).label("matched"),
-                func.count(func.distinct(case((status.in_(ACTIONABLE_STATUSES), DispatchItem.raw_data_id)))).label("pending"),
+                func.count(func.distinct(DispatchItem.id)).label("dispatched"),
+                func.count(func.distinct(case((CleanJobRecord.id.isnot(None), DispatchItem.id)))).label("task_created"),
+                func.count(func.distinct(case((status.in_(RESOLVED_STATUSES), DispatchItem.id)))).label("processed"),
+                func.count(func.distinct(case((status.in_(PUBLISHABLE_STATUSES), DispatchItem.id)))).label("matched"),
+                func.count(func.distinct(case((status == "url_matched", DispatchItem.id)))).label("url_matched"),
+                func.count(func.distinct(case((status == "matched", DispatchItem.id)))).label("auto_matched"),
+                func.count(func.distinct(case((status == "confirmed", DispatchItem.id)))).label("confirmed"),
+                func.count(func.distinct(case((status.in_(EXCLUDED_STATUSES), DispatchItem.id)))).label("excluded_ignored"),
+                func.count(func.distinct(case((status.in_(ACTIONABLE_STATUSES), DispatchItem.id)))).label("pending"),
             ),
             latest_batches,
         )
@@ -308,6 +314,10 @@ def _progress_stats(db: Session) -> dict:
                 func.count(func.distinct(case((CleanJobRecord.id.isnot(None), DispatchItem.raw_data_id)))).label("task_created"),
                 func.count(func.distinct(case((status.in_(RESOLVED_STATUSES), DispatchItem.raw_data_id)))).label("processed"),
                 func.count(func.distinct(case((status.in_(PUBLISHABLE_STATUSES), DispatchItem.raw_data_id)))).label("matched"),
+                func.count(func.distinct(case((status == "url_matched", DispatchItem.raw_data_id)))).label("url_matched"),
+                func.count(func.distinct(case((status == "matched", DispatchItem.raw_data_id)))).label("auto_matched"),
+                func.count(func.distinct(case((status == "confirmed", DispatchItem.raw_data_id)))).label("confirmed"),
+                func.count(func.distinct(case((status.in_(EXCLUDED_STATUSES), DispatchItem.raw_data_id)))).label("excluded_ignored"),
                 func.count(func.distinct(case((status.in_(ACTIONABLE_STATUSES), DispatchItem.raw_data_id)))).label("pending"),
                 func.max(MatchResult.updated_at).label("last_processed_at"),
             ),
@@ -368,17 +378,39 @@ def _progress_stats(db: Session) -> dict:
             "task_created": 0,
             "processed": 0,
             "matched": 0,
+            "url_matched": 0,
+            "auto_matched": 0,
+            "confirmed": 0,
+            "excluded_ignored": 0,
             "pending": 0,
             "published": 0,
             "last_processed_at": None,
         })
 
-    for month, code, platform, dispatched, task_created, processed, matched, pending, last_processed_at in detail_rows:
+    for (
+        month,
+        code,
+        platform,
+        dispatched,
+        task_created,
+        processed,
+        matched,
+        url_matched,
+        auto_matched,
+        confirmed,
+        excluded_ignored,
+        pending,
+        last_processed_at,
+    ) in detail_rows:
         item = bucket(month, code, platform)
         item["dispatched"] = _int(dispatched)
         item["task_created"] = _int(task_created)
         item["processed"] = _int(processed)
         item["matched"] = _int(matched)
+        item["url_matched"] = _int(url_matched)
+        item["auto_matched"] = _int(auto_matched)
+        item["confirmed"] = _int(confirmed)
+        item["excluded_ignored"] = _int(excluded_ignored)
         item["pending"] = _int(pending)
         item["last_processed_at"] = format_beijing_datetime(last_processed_at)
     for month, code, platform, published in published_rows:
@@ -394,25 +426,58 @@ def _progress_stats(db: Session) -> dict:
     for item in categories:
         published_by_month[item["month"]] = published_by_month.get(item["month"], 0) + item["published"]
 
-    months = [
-        {
+    months = []
+    for (
+        month,
+        dispatched,
+        task_created,
+        processed,
+        matched,
+        url_matched,
+        auto_matched,
+        confirmed,
+        excluded_ignored,
+        pending,
+    ) in monthly_rows:
+        dispatched = _int(dispatched)
+        task_created = _int(task_created)
+        processed = _int(processed)
+        pending = _int(pending)
+        months.append({
             "month": _int(month),
-            "dispatchable": _int(dispatched),
-            "processed": _int(processed),
+            "dispatchable": dispatched,
+            "task_created": task_created,
+            "not_task_created": max(dispatched - task_created, 0),
+            "processed": processed,
+            "not_processed": max(dispatched - processed, 0),
             "matched": _int(matched),
-            "pending": _int(pending),
+            "url_matched": _int(url_matched),
+            "auto_matched": _int(auto_matched),
+            "confirmed": _int(confirmed),
+            "excluded_ignored": _int(excluded_ignored),
+            "pending": pending,
+            "task_no_result": max(task_created - processed - pending, 0),
             "published": published_by_month.get(_int(month), 0),
-        }
-        for month, dispatched, processed, matched, pending in monthly_rows
-    ]
+        })
     months.sort(key=lambda item: item["month"], reverse=True)
 
+    def total(key: str) -> int:
+        return sum(item[key] for item in months)
+
     return {
-        "dispatchable": sum(item["dispatchable"] for item in months),
-        "processed": sum(item["processed"] for item in months),
-        "matched": sum(item["matched"] for item in months),
-        "pending": sum(item["pending"] for item in months),
-        "published": sum(item["published"] for item in months),
+        "dispatchable": total("dispatchable"),
+        "task_created": total("task_created"),
+        "not_task_created": total("not_task_created"),
+        "processed": total("processed"),
+        "not_processed": total("not_processed"),
+        "matched": total("matched"),
+        "url_matched": total("url_matched"),
+        "auto_matched": total("auto_matched"),
+        "confirmed": total("confirmed"),
+        "excluded_ignored": total("excluded_ignored"),
+        "pending": total("pending"),
+        "task_no_result": total("task_no_result"),
+        "published": total("published"),
         "months": months,
         "categories": categories,
     }

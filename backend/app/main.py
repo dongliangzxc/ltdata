@@ -47,6 +47,8 @@ async def lifespan(app: FastAPI):
             db.commit()
     finally:
         db.close()
+    # 平台统计处理进度较重，启动后后台预热并定时刷新，避免首个请求等待
+    stats_api.start_progress_background_refresher()
     yield
 
 

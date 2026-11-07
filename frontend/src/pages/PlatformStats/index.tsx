@@ -1,16 +1,21 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Alert, Button, Card, Col, Collapse, Progress, Row, Select, Space, Statistic, Table, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { ReloadOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
-import { getPlatformStatsOverview, type PlatformStatsOverview } from '../../services/api'
+import {
+  getPlatformStatsOverview,
+  getPlatformStatsProgress,
+  type PlatformStatsOverview,
+  type PlatformStatsProgress,
+} from '../../services/api'
 
 const { Text } = Typography
 
 type CategoryRow = PlatformStatsOverview['categories'][number]
 type MonthlyRow = PlatformStatsOverview['monthly'][number]
 type SourceRow = PlatformStatsOverview['sources'][number]
-type ProgressRow = PlatformStatsOverview['progress']['categories'][number]
+type ProgressRow = PlatformStatsProgress['categories'][number]
 
 const platformLabelMap: Record<string, string> = {
   jd: '京东',
@@ -215,12 +220,38 @@ const sourceColumns: ColumnsType<SourceRow> = [
 
 export default function PlatformStatsPage() {
   const { data, loading, refresh } = useRequest(getPlatformStatsOverview)
+  const [liveProgress, setLiveProgress] = useState<PlatformStatsProgress | null>(null)
+  const [liveProgressAt, setLiveProgressAt] = useState<string | null>(null)
   const [categoryFilter, setCategoryFilter] = useState<string>()
   const [platformFilter, setPlatformFilter] = useState<string>()
   const [monthFilter, setMonthFilter] = useState<string>()
   const [progressCategoryFilter, setProgressCategoryFilter] = useState<string>()
   const [progressPlatformView, setProgressPlatformView] = useState<string>('all')
   const [progressMonthFilter, setProgressMonthFilter] = useState<number>()
+  const progress = data?.progress ?? liveProgress
+  const progressAt = data?.progress_at ?? liveProgressAt
+
+  // 处理进度由后端后台聚合；缓存未就绪时轮询轻量接口，避免阻塞整页
+  useEffect(() => {
+    if (!data || progress) return
+    let cancelled = false
+    const tick = () => {
+      getPlatformStatsProgress()
+        .then(res => {
+          if (!cancelled && res.ready && res.progress) {
+            setLiveProgress(res.progress)
+            setLiveProgressAt(res.computed_at)
+          }
+        })
+        .catch(() => {})
+    }
+    tick()
+    const timer = window.setInterval(tick, 5000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [data, progress])
 
   const categoryOptions = useMemo(() => {
     const options = new Map<string, string>()
@@ -248,28 +279,28 @@ export default function PlatformStatsPage() {
 
   const progressCategoryOptions = useMemo(() => {
     const options = new Map<string, string>()
-    for (const row of data?.progress.categories ?? []) {
+    for (const row of progress?.categories ?? []) {
       const value = row.category_code ?? ''
       if (!options.has(value)) options.set(value, row.category_name || row.category_code || '未分类')
     }
     return Array.from(options, ([value, label]) => ({ value, label }))
       .sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'))
-  }, [data?.progress.categories])
+  }, [progress?.categories])
 
   const progressPlatformOptions = useMemo(() => {
-    const values = new Set((data?.progress.categories ?? []).map(row => row.platform ?? ''))
+    const values = new Set((progress?.categories ?? []).map(row => row.platform ?? ''))
     return Array.from(values, value => ({
       value,
       label: value ? platformLabelMap[value] ?? value : '未区分',
     }))
-  }, [data?.progress.categories])
+  }, [progress?.categories])
 
   const progressMonthOptions = useMemo(
-    () => (data?.progress.months ?? []).map(item => ({
+    () => (progress?.months ?? []).map(item => ({
       value: item.month,
       label: formatMonth(item.month),
     })),
-    [data?.progress.months],
+    [progress?.months],
   )
 
   const filteredCategories = useMemo(
@@ -282,7 +313,7 @@ export default function PlatformStatsPage() {
   )
 
   const filteredProgress = useMemo(() => {
-    const rows = (data?.progress.categories ?? []).filter(row => (
+    const rows = (progress?.categories ?? []).filter(row => (
       (progressMonthFilter === undefined || row.month === progressMonthFilter)
       && (progressCategoryFilter === undefined || (row.category_code ?? '') === progressCategoryFilter)
     ))
@@ -301,6 +332,10 @@ export default function PlatformStatsPage() {
       existing.task_created += row.task_created
       existing.processed += row.processed
       existing.matched += row.matched
+      existing.url_matched += row.url_matched
+      existing.auto_matched += row.auto_matched
+      existing.confirmed += row.confirmed
+      existing.excluded_ignored += row.excluded_ignored
       existing.pending += row.pending
       existing.published += row.published
       if (row.last_processed_at && (!existing.last_processed_at || row.last_processed_at > existing.last_processed_at)) {
@@ -309,7 +344,7 @@ export default function PlatformStatsPage() {
     }
     return Array.from(grouped.values())
   }, [
-    data?.progress.categories,
+    progress?.categories,
     progressMonthFilter,
     progressCategoryFilter,
     progressPlatformView,
@@ -328,30 +363,32 @@ export default function PlatformStatsPage() {
     return <Card loading={loading} />
   }
 
-  const { upload, clean, match, assets, progress } = data
+  const { upload, clean, match, assets } = data
   const automatedRate = percent(match.auto_matched, match.total)
   const publishableRate = percent(match.publishable, match.total)
   const finishedRate = percent(clean.clean_finished, clean.task_total)
-  const overview = progressMonthFilter === undefined
-    ? progress
-    : (progress.months ?? []).find(item => item.month === progressMonthFilter)
-      ?? {
-        uploaded_rows: null,
-        dispatchable: 0,
-        task_created: 0,
-        not_task_created: 0,
-        processed: 0,
-        not_processed: 0,
-        matched: 0,
-        url_matched: 0,
-        auto_matched: 0,
-        confirmed: 0,
-        excluded_ignored: 0,
-        pending: 0,
-        task_no_result: 0,
-        published: 0,
-      }
-  const completionRate = progressPercent(overview.processed, overview.dispatchable)
+  const overview = progress
+    ? (progressMonthFilter === undefined
+      ? progress
+      : (progress.months ?? []).find(item => item.month === progressMonthFilter)
+        ?? {
+          uploaded_rows: null,
+          dispatchable: 0,
+          task_created: 0,
+          not_task_created: 0,
+          processed: 0,
+          not_processed: 0,
+          matched: 0,
+          url_matched: 0,
+          auto_matched: 0,
+          confirmed: 0,
+          excluded_ignored: 0,
+          pending: 0,
+          task_no_result: 0,
+          published: 0,
+        })
+    : null
+  const completionRate = overview ? progressPercent(overview.processed, overview.dispatchable) : 0
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -359,16 +396,19 @@ export default function PlatformStatsPage() {
         type="info"
         showIcon
         message="口径说明"
-        description="总览与明细均按「分发条目」统计（同一商品分发到多个品类会分别计数）：值得分发 = 最新一次已完成分发批次中命中规则的条目；已清理 = 已有处理结论的条目，其中自动匹配 = URL 精准匹配 + 自动匹配，人工确认 = 人工选定型号，二者分开计数。对账关系：值得分发 = 已建任务 + 未建任务 = 已清理 + 未清理；已建任务 = 已清理 + 当前待处理 + 已建任务未出结果；已清理 = 自动匹配 + 人工确认 + 已排除/忽略。已发布为任务级发布行数，不与条目相加。明细可切换平台聚合或拆分；最后处理时间取分组内最近一次匹配更新时间。时间按北京时间统计，处理进度为近 2 分钟内的聚合结果。"
+        description="总览与明细均按「分发条目」统计（同一商品分发到多个品类会分别计数）：值得分发 = 最新一次已完成分发批次中命中规则的条目；已清理 = 已有处理结论的条目，其中自动匹配 = URL 精准匹配 + 自动匹配，人工确认 = 人工选定型号，二者分开计数。对账关系：值得分发 = 已建任务 + 未建任务 = 已清理 + 未清理；已建任务 = 已清理 + 当前待处理 + 已建任务未出结果；已清理 = 自动匹配 + 人工确认 + 已排除/忽略。已发布为任务级发布行数，不与条目相加。明细可切换平台聚合或拆分；最后处理时间取分组内最近一次匹配更新时间。时间按北京时间统计；处理进度后台定时刷新，最多延迟约 5 分钟。"
         action={
           <Space direction="vertical" align="end">
             <Button icon={<ReloadOutlined />} loading={loading} onClick={refresh}>刷新</Button>
             <Text type="secondary">统计时间：{data.generated_at}</Text>
+            <Text type="secondary">处理进度统计时间：{progressAt ?? '统计中，稍后自动刷新'}</Text>
             <Text type="secondary">入库行数 / 历史对照每小时刷新：{data.slow_counts_at ?? '统计中，稍后刷新'}</Text>
           </Space>
         }
       />
 
+      {progress && overview ? (
+        <>
       <Card
         title={progressMonthFilter === undefined ? '处理进度总览' : `处理进度总览（${formatMonth(progressMonthFilter)}）`}
         extra={(
@@ -499,6 +539,13 @@ export default function PlatformStatsPage() {
           pagination={{ pageSize: 20, showSizeChanger: true }}
         />
       </Card>
+        </>
+      ) : (
+        <>
+          <Card title="处理进度总览" loading />
+          <Card title="处理进度明细（月份 / 品类 / 平台）" loading />
+        </>
+      )}
 
       <Collapse
         items={[

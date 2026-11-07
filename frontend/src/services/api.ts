@@ -88,6 +88,61 @@ export const resetUserPassword = (id: number, password: string) =>
   api.post<ApiResponse<{ id: number }>>(`/users/${id}/reset-password`, { password }).then(r => r.data.data)
 
 // ─── Platform Stats（仅管理员） ───────────────────────────────
+export interface PlatformStatsProgressCategory {
+  month: number
+  category_code: string | null
+  category_name: string
+  platform: string | null
+  dispatched: number
+  task_created: number
+  processed: number
+  matched: number
+  url_matched: number
+  auto_matched: number
+  confirmed: number
+  excluded_ignored: number
+  pending: number
+  published: number
+  last_processed_at: string | null
+}
+
+export interface PlatformStatsProgressMonth {
+  month: number
+  dispatchable: number
+  task_created: number
+  not_task_created: number
+  processed: number
+  not_processed: number
+  matched: number
+  url_matched: number
+  auto_matched: number
+  confirmed: number
+  excluded_ignored: number
+  pending: number
+  task_no_result: number
+  published: number
+  uploaded_rows: number | null
+}
+
+export interface PlatformStatsProgress {
+  uploaded_rows: number | null
+  dispatchable: number
+  task_created: number
+  not_task_created: number
+  processed: number
+  not_processed: number
+  matched: number
+  url_matched: number
+  auto_matched: number
+  confirmed: number
+  excluded_ignored: number
+  pending: number
+  task_no_result: number
+  published: number
+  months: PlatformStatsProgressMonth[]
+  categories: PlatformStatsProgressCategory[]
+}
+
 export interface PlatformStatsOverview {
   upload: {
     file_count: number
@@ -126,56 +181,8 @@ export interface PlatformStatsOverview {
     actionable: number
     auto_matched: number
   }
-  progress: {
-    uploaded_rows: number | null
-    dispatchable: number
-    task_created: number
-    not_task_created: number
-    processed: number
-    not_processed: number
-    matched: number
-    url_matched: number
-    auto_matched: number
-    confirmed: number
-    excluded_ignored: number
-    pending: number
-    task_no_result: number
-    published: number
-    months: Array<{
-      month: number
-      dispatchable: number
-      task_created: number
-      not_task_created: number
-      processed: number
-      not_processed: number
-      matched: number
-      url_matched: number
-      auto_matched: number
-      confirmed: number
-      excluded_ignored: number
-      pending: number
-      task_no_result: number
-      published: number
-      uploaded_rows: number | null
-    }>
-    categories: Array<{
-      month: number
-      category_code: string | null
-      category_name: string
-      platform: string | null
-      dispatched: number
-      task_created: number
-      processed: number
-      matched: number
-      url_matched: number
-      auto_matched: number
-      confirmed: number
-      excluded_ignored: number
-      pending: number
-      published: number
-      last_processed_at: string | null
-    }>
-  }
+  progress: PlatformStatsProgress | null
+  progress_at: string | null
   sources: Array<{ source: string; status: string; count: number }>
   categories: Array<{
     category_code: string | null
@@ -214,6 +221,15 @@ export interface PlatformStatsOverview {
 
 export const getPlatformStatsOverview = () =>
   api.get<ApiResponse<PlatformStatsOverview>>('/stats/overview').then(r => r.data.data)
+
+export interface PlatformStatsProgressResponse {
+  ready: boolean
+  progress: PlatformStatsProgress | null
+  computed_at: string | null
+}
+
+export const getPlatformStatsProgress = () =>
+  api.get<ApiResponse<PlatformStatsProgressResponse>>('/stats/progress').then(r => r.data.data)
 
 // ─── Translation ───────────────────────────────────────────
 export interface TranslationStatus {

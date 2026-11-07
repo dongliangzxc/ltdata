@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import logging
+import sys
 import threading
+import time
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends
@@ -29,7 +31,6 @@ from app.models.schemas import (
     UploadFileRecord,
     User,
 )
-from app.services.rawdata_cache import cached_value
 from app.utils.time_utils import format_beijing_datetime
 
 
@@ -113,6 +114,89 @@ def _slow_counts() -> tuple[dict, datetime | None]:
     if should_start:
         _refresh_slow_counts_in_background()
     return values, computed_at
+
+
+# 处理进度聚合需要扫描最新分发批次（数百万行）并回连清洗/匹配表，生产库单次约 20~40s。
+# 改为后台线程定时刷新、接口直接读缓存，避免页面请求被阻塞。
+PROGRESS_TTL = timedelta(minutes=5)
+_PROGRESS_CACHE_ENABLED = "pytest" not in sys.modules
+_progress_lock = threading.Lock()
+_progress_cache: dict = {"data": None, "computed_at": None, "running": False}
+_progress_refresher_started = False
+
+
+def _decorate_progress(data: dict, slow_counts: dict) -> dict:
+    progress = dict(data)
+    progress["uploaded_rows"] = slow_counts.get("raw_rows")
+    raw_rows_by_month = slow_counts.get("raw_rows_by_month") or {}
+    progress["months"] = [
+        {**item, "uploaded_rows": raw_rows_by_month.get(item.get("month"))}
+        for item in progress.get("months", [])
+    ]
+    return progress
+
+
+def _refresh_progress(db: Session) -> None:
+    data = _progress_stats(db)
+    with _progress_lock:
+        _progress_cache["data"] = data
+        _progress_cache["computed_at"] = datetime.utcnow()
+
+
+def _refresh_progress_in_background() -> None:
+    def run():
+        db = SessionLocal()
+        try:
+            _refresh_progress(db)
+        except Exception:
+            logger.exception("refresh platform progress stats failed")
+        finally:
+            db.close()
+            with _progress_lock:
+                _progress_cache["running"] = False
+
+    threading.Thread(target=run, name="stats-progress", daemon=True).start()
+
+
+def _get_progress(db: Session) -> tuple[dict | None, datetime | None]:
+    if not _PROGRESS_CACHE_ENABLED:
+        return _progress_stats(db), datetime.utcnow()
+
+    with _progress_lock:
+        data = _progress_cache["data"]
+        computed_at = _progress_cache["computed_at"]
+        expired = computed_at is None or datetime.utcnow() - computed_at > PROGRESS_TTL
+        should_start = expired and not _progress_cache["running"]
+        if should_start:
+            _progress_cache["running"] = True
+    if should_start:
+        _refresh_progress_in_background()
+    return data, computed_at
+
+
+def start_progress_background_refresher() -> None:
+    """进程启动后预热并每 5 分钟刷新一次处理进度，避免首个请求等待。"""
+    global _progress_refresher_started
+    if not _PROGRESS_CACHE_ENABLED or _progress_refresher_started:
+        return
+    _progress_refresher_started = True
+
+    def loop():
+        while True:
+            with _progress_lock:
+                _progress_cache["running"] = True
+            db = SessionLocal()
+            try:
+                _refresh_progress(db)
+            except Exception:
+                logger.exception("refresh platform progress stats failed")
+            finally:
+                db.close()
+                with _progress_lock:
+                    _progress_cache["running"] = False
+            time.sleep(PROGRESS_TTL.total_seconds())
+
+    threading.Thread(target=loop, name="stats-progress-refresher", daemon=True).start()
 
 
 def _upload_stats(db: Session, slow_counts: dict) -> dict:
@@ -283,27 +367,6 @@ def _progress_stats(db: Session) -> dict:
     latest_batches = _latest_done_batch_subquery(db)
     status = MatchResult.match_status
 
-    monthly_rows = (
-        _progress_join(
-            db.query(
-                RawDataRecord.month.label("month"),
-                func.count(func.distinct(DispatchItem.id)).label("dispatched"),
-                func.count(func.distinct(case((CleanJobRecord.id.isnot(None), DispatchItem.id)))).label("task_created"),
-                func.count(func.distinct(case((status.in_(RESOLVED_STATUSES), DispatchItem.id)))).label("processed"),
-                func.count(func.distinct(case((status.in_(PUBLISHABLE_STATUSES), DispatchItem.id)))).label("matched"),
-                func.count(func.distinct(case((status == "url_matched", DispatchItem.id)))).label("url_matched"),
-                func.count(func.distinct(case((status == "matched", DispatchItem.id)))).label("auto_matched"),
-                func.count(func.distinct(case((status == "confirmed", DispatchItem.id)))).label("confirmed"),
-                func.count(func.distinct(case((status.in_(EXCLUDED_STATUSES), DispatchItem.id)))).label("excluded_ignored"),
-                func.count(func.distinct(case((status.in_(ACTIONABLE_STATUSES), DispatchItem.id)))).label("pending"),
-            ),
-            latest_batches,
-        )
-        .filter(RawDataRecord.month.isnot(None))
-        .group_by(RawDataRecord.month)
-        .all()
-    )
-
     detail_rows = (
         _progress_join(
             db.query(
@@ -422,42 +485,40 @@ def _progress_stats(db: Session) -> dict:
         reverse=True,
     )
 
-    published_by_month: dict[int, int] = {}
+    # 明细已按「月份 × 品类 × 平台」拆分，且总览按分发条目计数；
+    # 每条分发记录只属于一个品类/平台，因此按月直接求和即可，无需再扫一遍大表。
+    month_buckets: dict[int, dict] = {}
     for item in categories:
-        published_by_month[item["month"]] = published_by_month.get(item["month"], 0) + item["published"]
+        month = item["month"]
+        acc = month_buckets.setdefault(month, {
+            "month": month,
+            "dispatchable": 0,
+            "task_created": 0,
+            "processed": 0,
+            "matched": 0,
+            "url_matched": 0,
+            "auto_matched": 0,
+            "confirmed": 0,
+            "excluded_ignored": 0,
+            "pending": 0,
+            "published": 0,
+        })
+        for key in ("dispatched", "task_created", "processed", "matched",
+                    "url_matched", "auto_matched", "confirmed", "excluded_ignored",
+                    "pending", "published"):
+            acc["dispatchable" if key == "dispatched" else key] += item[key]
 
     months = []
-    for (
-        month,
-        dispatched,
-        task_created,
-        processed,
-        matched,
-        url_matched,
-        auto_matched,
-        confirmed,
-        excluded_ignored,
-        pending,
-    ) in monthly_rows:
-        dispatched = _int(dispatched)
-        task_created = _int(task_created)
-        processed = _int(processed)
-        pending = _int(pending)
+    for month, acc in month_buckets.items():
+        dispatched = acc["dispatchable"]
+        task_created = acc["task_created"]
+        processed = acc["processed"]
+        pending = acc["pending"]
         months.append({
-            "month": _int(month),
-            "dispatchable": dispatched,
-            "task_created": task_created,
+            **acc,
             "not_task_created": max(dispatched - task_created, 0),
-            "processed": processed,
             "not_processed": max(dispatched - processed, 0),
-            "matched": _int(matched),
-            "url_matched": _int(url_matched),
-            "auto_matched": _int(auto_matched),
-            "confirmed": _int(confirmed),
-            "excluded_ignored": _int(excluded_ignored),
-            "pending": pending,
             "task_no_result": max(task_created - processed - pending, 0),
-            "published": published_by_month.get(_int(month), 0),
         })
     months.sort(key=lambda item: item["month"], reverse=True)
 
@@ -616,25 +677,38 @@ def get_stats_overview(
     _: User = Depends(require_admin),
 ):
     slow_counts, slow_counts_at = _slow_counts()
-    progress = dict(cached_value("platform_stats", "progress", 120.0, lambda: _progress_stats(db)))
-    progress["uploaded_rows"] = slow_counts.get("raw_rows")
-    raw_rows_by_month = slow_counts.get("raw_rows_by_month") or {}
-    progress["months"] = [
-        {**item, "uploaded_rows": raw_rows_by_month.get(item.get("month"))}
-        for item in progress.get("months", [])
-    ]
+    progress_data, progress_at = _get_progress(db)
     return {
         "code": 0,
         "data": {
             "upload": _upload_stats(db, slow_counts),
             "clean": _clean_stats(db),
             "match": _match_stats(db),
-            "progress": progress,
+            "progress": _decorate_progress(progress_data, slow_counts) if progress_data else None,
+            "progress_at": format_beijing_datetime(progress_at) if progress_at else None,
             "sources": _source_stats(db),
             "categories": _category_stats(db),
             "monthly": _monthly_stats(db),
             "assets": _asset_stats(db, slow_counts),
             "generated_at": format_beijing_datetime(datetime.utcnow()),
             "slow_counts_at": format_beijing_datetime(slow_counts_at) if slow_counts_at else None,
+        },
+    }
+
+
+@router.get("/progress", response_model=dict)
+def get_stats_progress(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """轻量接口：只读处理进度缓存，供前端在缓存未就绪时轮询。"""
+    slow_counts, _ = _slow_counts()
+    progress_data, progress_at = _get_progress(db)
+    return {
+        "code": 0,
+        "data": {
+            "ready": progress_data is not None,
+            "progress": _decorate_progress(progress_data, slow_counts) if progress_data else None,
+            "computed_at": format_beijing_datetime(progress_at) if progress_at else None,
         },
     }

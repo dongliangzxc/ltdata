@@ -324,7 +324,7 @@ export default function PlatformStatsPage() {
   const finishedRate = percent(clean.clean_finished, clean.task_total)
   const overview = progressMonthFilter === undefined
     ? progress
-    : progress.months.find(item => item.month === progressMonthFilter)
+    : (progress.months ?? []).find(item => item.month === progressMonthFilter)
       ?? { uploaded_rows: null, dispatchable: 0, processed: 0, matched: 0, pending: 0, published: 0 }
   const completionRate = progressPercent(overview.processed, overview.dispatchable)
   const remaining = Math.max(overview.dispatchable - overview.processed, 0)
@@ -345,7 +345,19 @@ export default function PlatformStatsPage() {
         }
       />
 
-      <Card title={progressMonthFilter === undefined ? '处理进度总览' : `处理进度总览（${formatMonth(progressMonthFilter)}）`}>
+      <Card
+        title={progressMonthFilter === undefined ? '处理进度总览' : `处理进度总览（${formatMonth(progressMonthFilter)}）`}
+        extra={(
+          <Select
+            allowClear
+            style={{ width: 160 }}
+            placeholder="全部月份"
+            value={progressMonthFilter}
+            options={progressMonthOptions}
+            onChange={setProgressMonthFilter}
+          />
+        )}
+      >
         <Row gutter={16}>
           <Col span={6}>
             <Statistic title="上传入库数据总量" value={overview.uploaded_rows ?? '统计中…'} suffix={overview.uploaded_rows == null ? undefined : '条'} />

@@ -148,10 +148,12 @@ export interface PlatformStatsOverview {
       category_name: string
       platform: string | null
       dispatched: number
+      task_created: number
       processed: number
       matched: number
       pending: number
       published: number
+      last_processed_at: string | null
     }>
   }
   sources: Array<{ source: string; status: string; count: number }>

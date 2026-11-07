@@ -305,9 +305,11 @@ def _progress_stats(db: Session) -> dict:
                 DispatchItem.category_code.label("category_code"),
                 func.lower(RawDataRecord.platform).label("platform"),
                 func.count(func.distinct(DispatchItem.raw_data_id)).label("dispatched"),
+                func.count(func.distinct(case((CleanJobRecord.id.isnot(None), DispatchItem.raw_data_id)))).label("task_created"),
                 func.count(func.distinct(case((status.in_(RESOLVED_STATUSES), DispatchItem.raw_data_id)))).label("processed"),
                 func.count(func.distinct(case((status.in_(PUBLISHABLE_STATUSES), DispatchItem.raw_data_id)))).label("matched"),
                 func.count(func.distinct(case((status.in_(ACTIONABLE_STATUSES), DispatchItem.raw_data_id)))).label("pending"),
+                func.max(MatchResult.updated_at).label("last_processed_at"),
             ),
             latest_batches,
         )
@@ -363,18 +365,22 @@ def _progress_stats(db: Session) -> dict:
             "category_name": names.get(code) or code or "未分类",
             "platform": key[2] or None,
             "dispatched": 0,
+            "task_created": 0,
             "processed": 0,
             "matched": 0,
             "pending": 0,
             "published": 0,
+            "last_processed_at": None,
         })
 
-    for month, code, platform, dispatched, processed, matched, pending in detail_rows:
+    for month, code, platform, dispatched, task_created, processed, matched, pending, last_processed_at in detail_rows:
         item = bucket(month, code, platform)
         item["dispatched"] = _int(dispatched)
+        item["task_created"] = _int(task_created)
         item["processed"] = _int(processed)
         item["matched"] = _int(matched)
         item["pending"] = _int(pending)
+        item["last_processed_at"] = format_beijing_datetime(last_processed_at)
     for month, code, platform, published in published_rows:
         bucket(month, code, platform)["published"] = _int(published)
 

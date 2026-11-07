@@ -57,6 +57,9 @@ const mappingSourceLabelMap: Record<string, string> = {
 const percent = (part: number, total: number) => (total > 0 ? Math.round((part / total) * 1000) / 10 : 0)
 const progressPercent = (part: number, total: number) => Math.min(100, percent(part, total))
 const unprocessed = (row: ProgressRow) => Math.max(row.dispatched - row.processed, 0)
+const notTaskCreated = (row: ProgressRow) => Math.max(row.dispatched - row.task_created, 0)
+const taskPercent = (row: ProgressRow) => progressPercent(row.processed, row.task_created)
+const overallPercent = (row: ProgressRow) => progressPercent(row.processed, row.dispatched)
 const formatMonth = (value: number | null | undefined) => (
   value ? `${Math.floor(value / 100)}-${String(value % 100).padStart(2, '0')}` : '-'
 )
@@ -73,32 +76,60 @@ const progressColumns: ColumnsType<ProgressRow> = [
     render: (v: number) => formatMonth(v),
   },
   {
-    title: '品类', dataIndex: 'category_name', width: 160, fixed: 'left',
+    title: '品类', dataIndex: 'category_name', width: 150, fixed: 'left',
     render: (_: string, row) => row.category_name || row.category_code || '未分类',
   },
   {
-    title: '平台', dataIndex: 'platform', width: 100,
-    render: (v: string | null) => (v ? platformLabelMap[v] ?? v : '未区分'),
+    title: '平台', dataIndex: 'platform', width: 110,
+    render: (v: string | null) => (v === 'all'
+      ? <Tag color="blue">全部平台</Tag>
+      : v ? platformLabelMap[v] ?? v : '未区分'),
   },
   {
-    title: '分发数据', dataIndex: 'dispatched', width: 120,
+    title: '分发数据', dataIndex: 'dispatched', width: 110,
     sorter: (a, b) => a.dispatched - b.dispatched,
     render: (v: number) => v.toLocaleString(),
   },
   {
-    title: '已清理', dataIndex: 'processed', width: 120,
+    title: '已建任务', dataIndex: 'task_created', width: 110,
+    sorter: (a, b) => a.task_created - b.task_created,
+    render: (v: number) => v.toLocaleString(),
+  },
+  {
+    title: '未建任务', key: 'not_task_created', width: 110,
+    sorter: (a, b) => notTaskCreated(a) - notTaskCreated(b),
+    render: (_: unknown, row) => (
+      <Text type={notTaskCreated(row) > 0 ? 'warning' : undefined}>{notTaskCreated(row).toLocaleString()}</Text>
+    ),
+  },
+  {
+    title: '已清理', dataIndex: 'processed', width: 110,
     sorter: (a, b) => a.processed - b.processed,
     render: (v: number) => <Text type="success">{v.toLocaleString()}</Text>,
   },
   {
-    title: '待处理', dataIndex: 'pending', width: 110,
-    sorter: (a, b) => a.pending - b.pending,
-    render: (v: number) => <Text type={v > 0 ? 'warning' : undefined}>{v.toLocaleString()}</Text>,
-  },
-  {
-    title: '未清理', key: 'unprocessed', width: 110,
+    title: '未清理', key: 'unprocessed', width: 100,
     sorter: (a, b) => unprocessed(a) - unprocessed(b),
     render: (_: unknown, row) => unprocessed(row).toLocaleString(),
+  },
+  {
+    title: '任务清洗进度', key: 'task_rate', width: 160,
+    sorter: (a, b) => taskPercent(a) - taskPercent(b),
+    render: (_: unknown, row) => (row.task_created > 0
+      ? <Progress percent={taskPercent(row)} size="small" />
+      : <Text type="secondary">未建任务</Text>),
+  },
+  {
+    title: '整体清洗进度', key: 'overall_rate', width: 160,
+    sorter: (a, b) => overallPercent(a) - overallPercent(b),
+    render: (_: unknown, row) => (row.dispatched > 0
+      ? <Progress percent={overallPercent(row)} size="small" />
+      : <Text type="secondary">无分发数据</Text>),
+  },
+  {
+    title: '待处理', dataIndex: 'pending', width: 100,
+    sorter: (a, b) => a.pending - b.pending,
+    render: (v: number) => <Text type={v > 0 ? 'warning' : undefined}>{v.toLocaleString()}</Text>,
   },
   {
     title: '已匹配成功', dataIndex: 'matched', width: 120,
@@ -106,16 +137,14 @@ const progressColumns: ColumnsType<ProgressRow> = [
     render: (v: number) => v.toLocaleString(),
   },
   {
-    title: '已发布', dataIndex: 'published', width: 110,
+    title: '已发布', dataIndex: 'published', width: 100,
     sorter: (a, b) => a.published - b.published,
     render: (v: number) => v.toLocaleString(),
   },
   {
-    title: '清理占比', key: 'rate', width: 170,
-    sorter: (a, b) => progressPercent(a.processed, a.dispatched) - progressPercent(b.processed, b.dispatched),
-    render: (_: unknown, row) => (row.dispatched > 0
-      ? <Progress percent={progressPercent(row.processed, row.dispatched)} size="small" />
-      : <Text type="secondary">无分发数据</Text>),
+    title: '最后处理时间', dataIndex: 'last_processed_at', width: 170,
+    sorter: (a, b) => (a.last_processed_at ?? '').localeCompare(b.last_processed_at ?? ''),
+    render: (v: string | null) => v || '-',
   },
 ]
 
@@ -179,7 +208,7 @@ export default function PlatformStatsPage() {
   const [platformFilter, setPlatformFilter] = useState<string>()
   const [monthFilter, setMonthFilter] = useState<string>()
   const [progressCategoryFilter, setProgressCategoryFilter] = useState<string>()
-  const [progressPlatformFilter, setProgressPlatformFilter] = useState<string>()
+  const [progressPlatformView, setProgressPlatformView] = useState<string>('all')
   const [progressMonthFilter, setProgressMonthFilter] = useState<number>()
 
   const categoryOptions = useMemo(() => {
@@ -241,14 +270,49 @@ export default function PlatformStatsPage() {
     [data?.categories, categoryFilter, platformFilter, monthFilter],
   )
 
-  const filteredProgress = useMemo(
-    () => (data?.progress.categories ?? []).filter(row => (
+  const filteredProgress = useMemo(() => {
+    const rows = (data?.progress.categories ?? []).filter(row => (
       (progressMonthFilter === undefined || row.month === progressMonthFilter)
       && (progressCategoryFilter === undefined || (row.category_code ?? '') === progressCategoryFilter)
-      && (progressPlatformFilter === undefined || (row.platform ?? '') === progressPlatformFilter)
-    )),
-    [data?.progress.categories, progressMonthFilter, progressCategoryFilter, progressPlatformFilter],
-  )
+    ))
+    if (progressPlatformView !== 'all') {
+      return rows.filter(row => (row.platform ?? '') === progressPlatformView)
+    }
+    const grouped = new Map<string, ProgressRow>()
+    for (const row of rows) {
+      const key = `${row.month}-${row.category_code ?? ''}`
+      const existing = grouped.get(key)
+      if (!existing) {
+        grouped.set(key, { ...row, platform: 'all' })
+        continue
+      }
+      existing.dispatched += row.dispatched
+      existing.task_created += row.task_created
+      existing.processed += row.processed
+      existing.matched += row.matched
+      existing.pending += row.pending
+      existing.published += row.published
+      if (row.last_processed_at && (!existing.last_processed_at || row.last_processed_at > existing.last_processed_at)) {
+        existing.last_processed_at = row.last_processed_at
+      }
+    }
+    return Array.from(grouped.values())
+  }, [
+    data?.progress.categories,
+    progressMonthFilter,
+    progressCategoryFilter,
+    progressPlatformView,
+  ])
+
+  const progressTotals = useMemo(() => filteredProgress.reduce(
+    (acc, row) => ({
+      dispatched: acc.dispatched + row.dispatched,
+      task_created: acc.task_created + row.task_created,
+      processed: acc.processed + row.processed,
+      pending: acc.pending + row.pending,
+    }),
+    { dispatched: 0, task_created: 0, processed: 0, pending: 0 },
+  ), [filteredProgress])
 
   if (!data) {
     return <Card loading={loading} />
@@ -271,7 +335,7 @@ export default function PlatformStatsPage() {
         type="info"
         showIcon
         message="口径说明"
-        description="总览按「上传 → 值得分发 → 已清理」统计，三者均按商品去重：值得分发取每个文件/上传批次最新一次已完成分发的商品；已清理为其中已有处理结论（精准匹配、自动匹配、人工确认、已排除、已忽略）的商品数。月份取原始数据月份，可按月份筛选。下方明细按「月份 × 品类 × 平台」统计条目数，同一商品分发到多个品类会分别计数。清洗任务与匹配数据均不含已删除任务和干扰过滤行；时间按北京时间统计；处理进度为近 2 分钟内的聚合结果。"
+        description="总览按「上传 → 值得分发 → 已清理」统计，三者均按商品去重：值得分发取每个文件/上传批次最新一次已完成分发的商品；已清理为其中已有处理结论（精准匹配、自动匹配、人工确认、已排除、已忽略）的商品数。明细按月份、品类筛选，可选按平台拆分或聚合；已建任务 = 已进入有效清洗任务的分发数据，任务清洗进度 = 已清理 / 已建任务，整体清洗进度 = 已清理 / 分发数据，最后处理时间取该分组内最近一次匹配更新时间。清洗任务与匹配数据均不含已删除任务和干扰过滤行；时间按北京时间统计；处理进度为近 2 分钟内的聚合结果。"
         action={
           <Space direction="vertical" align="end">
             <Button icon={<ReloadOutlined />} loading={loading} onClick={refresh}>刷新</Button>
@@ -281,19 +345,7 @@ export default function PlatformStatsPage() {
         }
       />
 
-      <Card
-        title={progressMonthFilter === undefined ? '处理进度总览' : `处理进度总览（${formatMonth(progressMonthFilter)}）`}
-        extra={(
-          <Select
-            allowClear
-            style={{ width: 160 }}
-            placeholder="全部月份"
-            value={progressMonthFilter}
-            options={progressMonthOptions}
-            onChange={setProgressMonthFilter}
-          />
-        )}
-      >
+      <Card title={progressMonthFilter === undefined ? '处理进度总览' : `处理进度总览（${formatMonth(progressMonthFilter)}）`}>
         <Row gutter={16}>
           <Col span={6}>
             <Statistic title="上传入库数据总量" value={overview.uploaded_rows ?? '统计中…'} suffix={overview.uploaded_rows == null ? undefined : '条'} />
@@ -333,6 +385,14 @@ export default function PlatformStatsPage() {
         <Space wrap style={{ marginBottom: 16 }}>
           <Select
             allowClear
+            style={{ width: 150 }}
+            placeholder="全部月份"
+            value={progressMonthFilter}
+            options={progressMonthOptions}
+            onChange={setProgressMonthFilter}
+          />
+          <Select
+            allowClear
             showSearch
             style={{ width: 180 }}
             placeholder="品类"
@@ -342,20 +402,38 @@ export default function PlatformStatsPage() {
             onChange={setProgressCategoryFilter}
           />
           <Select
-            allowClear
-            style={{ width: 140 }}
-            placeholder="平台"
-            value={progressPlatformFilter}
-            options={progressPlatformOptions}
-            onChange={setProgressPlatformFilter}
+            style={{ width: 170 }}
+            value={progressPlatformView}
+            options={[{ value: 'all', label: '全部平台（聚合）' }, ...progressPlatformOptions]}
+            onChange={setProgressPlatformView}
           />
         </Space>
+        <Row gutter={16} style={{ marginBottom: 16 }}>
+          <Col span={4}><Statistic title="分发合计" value={progressTotals.dispatched} /></Col>
+          <Col span={4}><Statistic title="已建任务" value={progressTotals.task_created} /></Col>
+          <Col span={4}>
+            <Statistic
+              title="未建任务"
+              value={Math.max(progressTotals.dispatched - progressTotals.task_created, 0)}
+              valueStyle={{ color: '#d48806' }}
+            />
+          </Col>
+          <Col span={4}><Statistic title="已清理" value={progressTotals.processed} valueStyle={{ color: '#3f8600' }} /></Col>
+          <Col span={4}>
+            <Statistic
+              title="整体清洗进度"
+              value={progressPercent(progressTotals.processed, progressTotals.dispatched)}
+              suffix="%"
+            />
+          </Col>
+          <Col span={4}><Statistic title="当前待处理" value={progressTotals.pending} valueStyle={{ color: '#d48806' }} /></Col>
+        </Row>
         <Table
           dataSource={filteredProgress}
           columns={progressColumns}
           rowKey={row => `${row.month}-${row.category_code ?? ''}-${row.platform ?? ''}`}
           size="small"
-          scroll={{ x: 1200 }}
+          scroll={{ x: 1550 }}
           pagination={{ pageSize: 20, showSizeChanger: true }}
         />
       </Card>

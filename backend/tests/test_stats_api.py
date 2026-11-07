@@ -255,10 +255,13 @@ def test_progress_stats_uses_latest_done_batch(client, session_factory):
         for row in progress["categories"]
     }
     assert by_category[(202609, "headphone", "jd")]["dispatched"] == 2
+    assert by_category[(202609, "headphone", "jd")]["task_created"] == 2
     assert by_category[(202609, "headphone", "jd")]["processed"] == 1
     assert by_category[(202609, "headphone", "jd")]["pending"] == 1
     assert by_category[(202609, "headphone", "jd")]["published"] == 1
+    assert by_category[(202609, "headphone", "jd")]["last_processed_at"]
     assert by_category[(202608, "camera", "jd")]["dispatched"] == 1
+    assert by_category[(202608, "camera", "jd")]["task_created"] == 0
     assert by_category[(202608, "camera", "jd")]["processed"] == 0
 
 

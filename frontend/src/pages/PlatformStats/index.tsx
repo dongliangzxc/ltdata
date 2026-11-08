@@ -3,6 +3,7 @@ import { Alert, Button, Card, Col, Collapse, Progress, Row, Select, Space, Stati
 import type { ColumnsType } from 'antd/es/table'
 import { ReloadOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
+import { useNavigate } from 'react-router-dom'
 import {
   getPlatformStatsOverview,
   getPlatformStatsProgress,
@@ -162,6 +163,12 @@ const progressColumns: ColumnsType<ProgressRow> = [
     sorter: (a, b) => (a.last_processed_at ?? '').localeCompare(b.last_processed_at ?? ''),
     render: (v: string | null) => v || '-',
   },
+  {
+    title: '处理完成时间', dataIndex: 'completed_at', width: 170,
+    render: (v: string | null) => v
+      ? <Tag color="green">{v}</Tag>
+      : <Text type="secondary">未完成</Text>,
+  },
 ]
 
 const categoryColumns: ColumnsType<CategoryRow> = [
@@ -219,6 +226,7 @@ const sourceColumns: ColumnsType<SourceRow> = [
 ]
 
 export default function PlatformStatsPage() {
+  const navigate = useNavigate()
   const { data, loading, refresh } = useRequest(getPlatformStatsOverview)
   const [liveProgress, setLiveProgress] = useState<PlatformStatsProgress | null>(null)
   const [liveProgressAt, setLiveProgressAt] = useState<string | null>(null)
@@ -230,6 +238,28 @@ export default function PlatformStatsPage() {
   const [progressMonthFilter, setProgressMonthFilter] = useState<number>()
   const progress = data?.progress ?? liveProgress
   const progressAt = data?.progress_at ?? liveProgressAt
+
+  const progressTableColumns = useMemo<ColumnsType<ProgressRow>>(() => {
+    const openClean = (row: ProgressRow) => {
+      const params = new URLSearchParams()
+      if (row.category_code) params.set('category_code', row.category_code)
+      params.set('month', String(row.month))
+      if (row.platform && row.platform !== 'all') params.set('platform', row.platform)
+      navigate(`/clean?${params.toString()}`)
+    }
+    return [
+      ...progressColumns,
+      {
+        title: '操作',
+        key: 'action',
+        width: 110,
+        fixed: 'right',
+        render: (_: unknown, row: ProgressRow) => (
+          <Button type="link" size="small" onClick={() => openClean(row)}>查看清洗</Button>
+        ),
+      },
+    ]
+  }, [navigate])
 
   // 处理进度由后端后台聚合；缓存未就绪时轮询轻量接口，避免阻塞整页
   useEffect(() => {
@@ -532,10 +562,10 @@ export default function PlatformStatsPage() {
         </Row>
         <Table
           dataSource={filteredProgress}
-          columns={progressColumns}
+          columns={progressTableColumns}
           rowKey={row => `${row.month}-${row.category_code ?? ''}-${row.platform ?? ''}`}
           size="small"
-          scroll={{ x: 1750 }}
+          scroll={{ x: 2050 }}
           pagination={{ pageSize: 20, showSizeChanger: true }}
         />
       </Card>

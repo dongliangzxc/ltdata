@@ -104,6 +104,7 @@ export interface PlatformStatsProgressCategory {
   pending: number
   published: number
   last_processed_at: string | null
+  completed_at: string | null
 }
 
 export interface PlatformStatsProgressMonth {

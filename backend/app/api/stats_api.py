@@ -484,6 +484,12 @@ def _progress_stats(db: Session) -> dict:
         key=lambda item: (item["month"], item["dispatched"], item["processed"]),
         reverse=True,
     )
+    for item in categories:
+        item["completed_at"] = (
+            item["last_processed_at"]
+            if item["dispatched"] > 0 and item["processed"] >= item["dispatched"]
+            else None
+        )
 
     # 明细已按「月份 × 品类 × 平台」拆分，且总览按分发条目计数；
     # 每条分发记录只属于一个品类/平台，因此按月直接求和即可，无需再扫一遍大表。

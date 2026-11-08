@@ -7,7 +7,7 @@ import {
 import type { ColumnsType } from 'antd/es/table'
 import { EyeOutlined, AimOutlined, CheckCircleFilled, DeleteOutlined, LineChartOutlined, FileSearchOutlined, TagsOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   deleteCleanJob,
   getCleanMonthlyPool,
@@ -428,6 +428,7 @@ const matchedTabLabels: Record<CleanMatchedGroup, string> = {
 
 export default function CleanPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const currentUser = readStoredUser()
   const { options: categoryOptions, loading: categoryLoading } = useCategoryOptions()
   const visibleCategoryOptions = useMemo(() => {
@@ -437,7 +438,14 @@ export default function CleanPage() {
     const allowed = new Set(currentUser.category_permissions)
     return categoryOptions.filter(c => allowed.has(c.value))
   }, [categoryOptions, currentUser])
-  const [filters, setFilters] = useState<FilterState>({})
+  const [filters, setFilters] = useState<FilterState>(() => {
+    const monthRaw = searchParams.get('month')
+    return {
+      category_code: searchParams.get('category_code') || undefined,
+      platform: searchParams.get('platform') || undefined,
+      month: monthRaw && /^\d{6}$/.test(monthRaw) ? Number(monthRaw) : undefined,
+    }
+  })
   const hasCategory = !!filters.category_code
   const [jobView, setJobView] = useState<CleanJobListView>('active')
   const [jobSortBy, setJobSortBy] = useState<'created_at' | 'updated_at'>('created_at')

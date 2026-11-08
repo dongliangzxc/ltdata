@@ -95,6 +95,7 @@ export interface PlatformStatsProgressCategory {
   platform: string | null
   dispatched: number
   task_created: number
+  task_count: number
   processed: number
   matched: number
   url_matched: number
@@ -111,6 +112,7 @@ export interface PlatformStatsProgressMonth {
   month: number
   dispatchable: number
   task_created: number
+  task_count: number
   not_task_created: number
   processed: number
   not_processed: number
@@ -129,6 +131,7 @@ export interface PlatformStatsProgress {
   uploaded_rows: number | null
   dispatchable: number
   task_created: number
+  task_count: number
   not_task_created: number
   processed: number
   not_processed: number

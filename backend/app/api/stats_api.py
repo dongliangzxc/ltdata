@@ -375,6 +375,7 @@ def _progress_stats(db: Session) -> dict:
                 func.lower(RawDataRecord.platform).label("platform"),
                 func.count(func.distinct(DispatchItem.raw_data_id)).label("dispatched"),
                 func.count(func.distinct(case((CleanJobRecord.id.isnot(None), DispatchItem.raw_data_id)))).label("task_created"),
+                func.count(func.distinct(CleanJobRecord.id)).label("task_count"),
                 func.count(func.distinct(case((status.in_(RESOLVED_STATUSES), DispatchItem.raw_data_id)))).label("processed"),
                 func.count(func.distinct(case((status.in_(PUBLISHABLE_STATUSES), DispatchItem.raw_data_id)))).label("matched"),
                 func.count(func.distinct(case((status == "url_matched", DispatchItem.raw_data_id)))).label("url_matched"),
@@ -439,6 +440,7 @@ def _progress_stats(db: Session) -> dict:
             "platform": key[2] or None,
             "dispatched": 0,
             "task_created": 0,
+            "task_count": 0,
             "processed": 0,
             "matched": 0,
             "url_matched": 0,
@@ -456,6 +458,7 @@ def _progress_stats(db: Session) -> dict:
         platform,
         dispatched,
         task_created,
+        task_count,
         processed,
         matched,
         url_matched,
@@ -468,6 +471,7 @@ def _progress_stats(db: Session) -> dict:
         item = bucket(month, code, platform)
         item["dispatched"] = _int(dispatched)
         item["task_created"] = _int(task_created)
+        item["task_count"] = _int(task_count)
         item["processed"] = _int(processed)
         item["matched"] = _int(matched)
         item["url_matched"] = _int(url_matched)
@@ -500,6 +504,7 @@ def _progress_stats(db: Session) -> dict:
             "month": month,
             "dispatchable": 0,
             "task_created": 0,
+            "task_count": 0,
             "processed": 0,
             "matched": 0,
             "url_matched": 0,
@@ -509,7 +514,7 @@ def _progress_stats(db: Session) -> dict:
             "pending": 0,
             "published": 0,
         })
-        for key in ("dispatched", "task_created", "processed", "matched",
+        for key in ("dispatched", "task_created", "task_count", "processed", "matched",
                     "url_matched", "auto_matched", "confirmed", "excluded_ignored",
                     "pending", "published"):
             acc["dispatchable" if key == "dispatched" else key] += item[key]
@@ -534,6 +539,7 @@ def _progress_stats(db: Session) -> dict:
     return {
         "dispatchable": total("dispatchable"),
         "task_created": total("task_created"),
+        "task_count": total("task_count"),
         "not_task_created": total("not_task_created"),
         "processed": total("processed"),
         "not_processed": total("not_processed"),

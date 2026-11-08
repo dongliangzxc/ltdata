@@ -93,17 +93,22 @@ const progressColumns: ColumnsType<ProgressRow> = [
       : v ? platformLabelMap[v] ?? v : '未区分'),
   },
   {
-    title: '分发数据', dataIndex: 'dispatched', width: 110,
+    title: '分发条数', dataIndex: 'dispatched', width: 110,
     sorter: (a, b) => a.dispatched - b.dispatched,
     render: (v: number) => v.toLocaleString(),
   },
   {
-    title: '已建任务', dataIndex: 'task_created', width: 110,
+    title: '已入任务条数', dataIndex: 'task_created', width: 130,
     sorter: (a, b) => a.task_created - b.task_created,
     render: (v: number) => v.toLocaleString(),
   },
   {
-    title: '未建任务', key: 'not_task_created', width: 110,
+    title: '清洗任务数', dataIndex: 'task_count', width: 120,
+    sorter: (a, b) => a.task_count - b.task_count,
+    render: (v: number) => v.toLocaleString(),
+  },
+  {
+    title: '未入任务条数', key: 'not_task_created', width: 130,
     sorter: (a, b) => notTaskCreated(a) - notTaskCreated(b),
     render: (_: unknown, row) => (
       <Text type={notTaskCreated(row) > 0 ? 'warning' : undefined}>{notTaskCreated(row).toLocaleString()}</Text>
@@ -124,7 +129,7 @@ const progressColumns: ColumnsType<ProgressRow> = [
     sorter: (a, b) => taskPercent(a) - taskPercent(b),
     render: (_: unknown, row) => (row.task_created > 0
       ? <Progress percent={taskPercent(row)} size="small" />
-      : <Text type="secondary">未建任务</Text>),
+      : <Text type="secondary">未入任务</Text>),
   },
   {
     title: '整体清洗进度', key: 'overall_rate', width: 160,
@@ -360,6 +365,7 @@ export default function PlatformStatsPage() {
       }
       existing.dispatched += row.dispatched
       existing.task_created += row.task_created
+      existing.task_count += row.task_count
       existing.processed += row.processed
       existing.matched += row.matched
       existing.url_matched += row.url_matched
@@ -384,9 +390,11 @@ export default function PlatformStatsPage() {
     (acc, row) => ({
       dispatched: acc.dispatched + row.dispatched,
       task_created: acc.task_created + row.task_created,
+      task_count: acc.task_count + row.task_count,
       processed: acc.processed + row.processed,
+      pending: acc.pending + row.pending,
     }),
-    { dispatched: 0, task_created: 0, processed: 0 },
+    { dispatched: 0, task_created: 0, task_count: 0, processed: 0, pending: 0 },
   ), [filteredProgress])
 
   if (!data) {
@@ -405,6 +413,7 @@ export default function PlatformStatsPage() {
           uploaded_rows: null,
           dispatchable: 0,
           task_created: 0,
+          task_count: 0,
           not_task_created: 0,
           processed: 0,
           not_processed: 0,
@@ -426,7 +435,7 @@ export default function PlatformStatsPage() {
         type="info"
         showIcon
         message="口径说明"
-        description="总览与明细均按「分发条目」统计（同一商品分发到多个品类会分别计数）：值得分发 = 最新一次已完成分发批次中命中规则的条目；已清理 = 已有处理结论的条目，其中自动匹配 = URL 精准匹配 + 自动匹配，人工确认 = 人工选定型号，二者分开计数。对账关系：值得分发 = 已建任务 + 未建任务 = 已清理 + 未清理；已建任务 = 已清理 + 当前待处理 + 已建任务未出结果；已清理 = 自动匹配 + 人工确认 + 已排除/忽略。已发布为任务级发布行数，不与条目相加。明细可切换平台聚合或拆分；最后处理时间取分组内最近一次匹配更新时间。时间按北京时间统计；处理进度后台定时刷新，最多延迟约 5 分钟。"
+        description="总览与明细均按「分发条目」统计（同一商品分发到多个品类会分别计数）：值得分发 = 最新一次已完成分发批次中命中规则的条目；已清理 = 已有处理结论的条目，其中自动匹配 = URL 精准匹配 + 自动匹配，人工确认 = 人工选定型号，二者分开计数。对账关系：值得分发 = 已入任务条数 + 未入任务条数 = 已清理 + 未清理；已入任务条数 = 已清理 + 当前待处理 + 已入任务未出结果；已清理 = 自动匹配 + 人工确认 + 已排除/忽略。注意：任务相关数字按数据条目计数，清洗页「任务总数」按清洗任务个数计数，两者口径不同。已发布为任务级发布行数，不与条目相加。明细可切换平台聚合或拆分；最后处理时间取分组内最近一次匹配更新时间。时间按北京时间统计；处理进度后台定时刷新，最多延迟约 5 分钟。"
         action={
           <Space direction="vertical" align="end">
             <Button icon={<ReloadOutlined />} loading={loading} onClick={refresh}>刷新</Button>
@@ -480,8 +489,11 @@ export default function PlatformStatsPage() {
           format={() => `${overview.processed.toLocaleString()} / ${overview.dispatchable.toLocaleString()}`}
         />
         <Row gutter={16} style={{ marginTop: 16 }}>
-          <Col span={6}><Statistic title="已建任务" value={overview.task_created} /></Col>
-          <Col span={6}><Statistic title="未建任务" value={overview.not_task_created} valueStyle={{ color: '#d48806' }} /></Col>
+          <Col span={6}>
+            <Statistic title="已入任务条数" value={overview.task_created} />
+            <Text type="secondary">共 {overview.task_count.toLocaleString()} 个清洗任务</Text>
+          </Col>
+          <Col span={6}><Statistic title="未入任务条数" value={overview.not_task_created} valueStyle={{ color: '#d48806' }} /></Col>
           <Col span={6}>
             <Statistic title="自动匹配" value={overview.url_matched + overview.auto_matched} valueStyle={{ color: '#3f8600' }} />
             <Text type="secondary">
@@ -496,11 +508,11 @@ export default function PlatformStatsPage() {
         <Row gutter={16} style={{ marginTop: 8 }}>
           <Col span={6}><Statistic title="已排除 / 忽略" value={overview.excluded_ignored} /></Col>
           <Col span={6}><Statistic title="当前待处理" value={overview.pending} valueStyle={{ color: '#d48806' }} /></Col>
-          <Col span={6}><Statistic title="已建任务未出结果" value={overview.task_no_result} valueStyle={{ color: '#d48806' }} /></Col>
+          <Col span={6}><Statistic title="已入任务未出结果" value={overview.task_no_result} valueStyle={{ color: '#d48806' }} /></Col>
           <Col span={6}><Statistic title="未清理" value={overview.not_processed} valueStyle={{ color: '#d48806' }} /></Col>
         </Row>
         <Text type="secondary" style={{ display: 'block', marginTop: 12 }}>
-          对账关系：值得分发 = 已建任务 + 未建任务 = 已清理 + 未清理；已建任务 = 已清理 + 当前待处理 + 已建任务未出结果；已清理 = 自动匹配 + 人工确认 + 已排除 / 忽略。
+          对账关系：值得分发 = 已入任务条数 + 未入任务条数 = 已清理 + 未清理；已入任务条数 = 已清理 + 当前待处理 + 已入任务未出结果；已清理 = 自动匹配 + 人工确认 + 已排除 / 忽略。
         </Text>
         <Text type="secondary" style={{ display: 'block', marginTop: 4 }}>
           已发布到分析库：{overview.published.toLocaleString()} 行（任务级发布行数，不参与上方条目对账）。
@@ -535,24 +547,26 @@ export default function PlatformStatsPage() {
           />
         </Space>
         <Row gutter={16} style={{ marginBottom: 16 }}>
-          <Col span={4}><Statistic title="分发合计" value={progressTotals.dispatched} /></Col>
-          <Col span={4}><Statistic title="已建任务" value={progressTotals.task_created} /></Col>
-          <Col span={4}>
+          <Col span={3}><Statistic title="分发条数" value={progressTotals.dispatched} /></Col>
+          <Col span={3}><Statistic title="已入任务条数" value={progressTotals.task_created} /></Col>
+          <Col span={3}><Statistic title="清洗任务数" value={progressTotals.task_count} /></Col>
+          <Col span={3}>
             <Statistic
-              title="未建任务"
+              title="未入任务条数"
               value={Math.max(progressTotals.dispatched - progressTotals.task_created, 0)}
               valueStyle={{ color: '#d48806' }}
             />
           </Col>
-          <Col span={4}><Statistic title="已清理" value={progressTotals.processed} valueStyle={{ color: '#3f8600' }} /></Col>
-          <Col span={4}>
+          <Col span={3}><Statistic title="已清理" value={progressTotals.processed} valueStyle={{ color: '#3f8600' }} /></Col>
+          <Col span={3}>
             <Statistic
               title="未清理"
               value={Math.max(progressTotals.dispatched - progressTotals.processed, 0)}
               valueStyle={{ color: '#d48806' }}
             />
           </Col>
-          <Col span={4}>
+          <Col span={3}><Statistic title="当前待处理" value={progressTotals.pending} valueStyle={{ color: '#d48806' }} /></Col>
+          <Col span={3}>
             <Statistic
               title="整体清洗进度"
               value={progressPercent(progressTotals.processed, progressTotals.dispatched)}
@@ -560,12 +574,19 @@ export default function PlatformStatsPage() {
             />
           </Col>
         </Row>
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="口径提示"
+          description="此处「已入任务条数 / 未入任务条数」按分发条目计数；清洗页的「任务总数」按清洗任务个数计数，两者不是同一口径。对照清洗页时请选择相同品类 + 月份 + 平台范围。"
+        />
         <Table
           dataSource={filteredProgress}
           columns={progressTableColumns}
           rowKey={row => `${row.month}-${row.category_code ?? ''}-${row.platform ?? ''}`}
           size="small"
-          scroll={{ x: 2050 }}
+          scroll={{ x: 2200 }}
           pagination={{ pageSize: 20, showSizeChanger: true }}
         />
       </Card>

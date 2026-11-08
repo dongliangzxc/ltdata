@@ -168,7 +168,7 @@ const progressColumns: ColumnsType<ProgressRow> = [
     render: (v: string | null) => v || '-',
   },
   {
-    title: '处理完成时间', dataIndex: 'completed_at', width: 170,
+    title: '处理完成时间', dataIndex: 'completed_at', width: 170, fixed: 'right',
     render: (v: string | null) => v
       ? <Tag color="green">{v}</Tag>
       : <Text type="secondary">未完成</Text>,

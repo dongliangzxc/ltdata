@@ -3,7 +3,6 @@ import { Alert, Button, Card, Col, Collapse, Progress, Row, Select, Space, Stati
 import type { ColumnsType } from 'antd/es/table'
 import { ReloadOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
-import { useNavigate } from 'react-router-dom'
 import {
   getPlatformStatsOverview,
   getPlatformStatsProgress,
@@ -231,7 +230,6 @@ const sourceColumns: ColumnsType<SourceRow> = [
 ]
 
 export default function PlatformStatsPage() {
-  const navigate = useNavigate()
   const { data, loading, refresh } = useRequest(getPlatformStatsOverview)
   const [liveProgress, setLiveProgress] = useState<PlatformStatsProgress | null>(null)
   const [liveProgressAt, setLiveProgressAt] = useState<string | null>(null)
@@ -245,12 +243,12 @@ export default function PlatformStatsPage() {
   const progressAt = data?.progress_at ?? liveProgressAt
 
   const progressTableColumns = useMemo<ColumnsType<ProgressRow>>(() => {
-    const openClean = (row: ProgressRow) => {
+    const cleanHref = (row: ProgressRow) => {
       const params = new URLSearchParams()
       if (row.category_code) params.set('category_code', row.category_code)
       params.set('month', String(row.month))
       if (row.platform && row.platform !== 'all') params.set('platform', row.platform)
-      navigate(`/clean?${params.toString()}`)
+      return `/clean?${params.toString()}`
     }
     return [
       ...progressColumns,
@@ -260,11 +258,19 @@ export default function PlatformStatsPage() {
         width: 110,
         fixed: 'right',
         render: (_: unknown, row: ProgressRow) => (
-          <Button type="link" size="small" onClick={() => openClean(row)}>查看清洗</Button>
+          <Button
+            type="link"
+            size="small"
+            href={cleanHref(row)}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            查看清洗
+          </Button>
         ),
       },
     ]
-  }, [navigate])
+  }, [])
 
   // 处理进度由后端后台聚合；缓存未就绪时轮询轻量接口，避免阻塞整页
   useEffect(() => {

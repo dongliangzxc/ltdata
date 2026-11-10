@@ -1,16 +1,21 @@
 from datetime import datetime
+import logging
 import re
+import shutil
 import sys
 import threading
 import time
+import uuid
+from pathlib import Path
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy import String, and_, case, func, or_, select
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from app.core.auth_deps import get_current_user
+from app.core.config import settings
 from app.core.permissions import visible_category_codes
-from app.services.currency_service import amount_to_cny, build_rate_map
+from app.services.currency_service import amount_to_cny, build_rate_map, get_country
 from app.models.database import get_db
 from app.models.analytics_db import AnalyticsSession
 from app.models.schemas import (
@@ -37,6 +42,7 @@ from app.models.schemas import (
     UploadFileRecord,
     Category,
     CleanJobItemRecord,
+    ColumnTemplate,
     BrandRecord,
     User,
 )
@@ -44,19 +50,27 @@ from app.services.clean_task_snapshot import (
     ACTIVE_TASK_STATUSES,
     _find_monthly_job,
     _has_reviewed_or_published_state,
+    _job_months,
     create_category_task_snapshot,
     get_clean_pool_summary,
     get_monthly_clean_pool,
+    normalize_platform,
     touch_clean_job,
     upsert_monthly_task_snapshot,
 )
 from app.services.exclusion_store import upsert_exclusion_for_raw
 from app.services.data_cleaner import run_clean, _load_brand_alias_map, manual_brand_std
-from app.services.matcher import run_match
+from app.services.excel_parser import iter_mapped_chunks
+from app.services.filename_metadata import parse_filename_metadata
+from app.services.matcher import run_match, run_match_for_result
+from app.services.attribute_matcher import run_attribute_matching
+from app.services.price_auditor import audit_price
 from app.services.publisher import delete_published_data
+from app.services.rawdata_cache import invalidate_rawdata_cache
 from app.utils.time_utils import format_beijing_datetime
 
 router = APIRouter(prefix="/api/clean", tags=["clean"])
+logger = logging.getLogger(__name__)
 
 # 「只清洗品牌」默认范围排除的匹配状态：已匹配/已人工确认/已排除/已忽略
 BRAND_CLEAN_RESOLVED_STATUSES = ("matched", "url_matched", "confirmed", "excluded", "ignored")
@@ -681,6 +695,328 @@ def upsert_monthly_clean_task(
 
     invalidate_clean_pool_cache()
     return {"job": job, "snapshot_count": snapshot_count, "action": action, "match_status": "done"}
+
+
+SUPPLEMENT_REQUIRED_FIELDS = {"item_id", "item_name", "sales_qty", "sales_amount", "price"}
+
+
+def _int_scope_list(values) -> list[int]:
+    parsed: list[int] = []
+    if not isinstance(values, list):
+        return parsed
+    for value in values:
+        try:
+            parsed.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    return parsed
+
+
+def _resolve_supplement_mapping(db: Session, columns: list, template_id: int | None) -> tuple[dict, list]:
+    from app.api.upload import REQUIRED_FIELDS, _find_best_template
+
+    if template_id:
+        template = db.query(ColumnTemplate).filter(ColumnTemplate.id == template_id).first()
+        if not template:
+            raise HTTPException(status_code=404, detail="列映射模板不存在")
+        return dict(template.mapping or {}), list(template.ignore_columns or [])
+
+    best_template, score = _find_best_template(columns, db)
+    if best_template and score >= 60:
+        return dict(best_template.mapping or {}), list(best_template.ignore_columns or [])
+
+    standard_fields = set(REQUIRED_FIELDS) | {
+        "brand_raw", "brand", "shop_name", "item_url", "ref_price", "item_image", "week",
+    }
+    return {column: column for column in columns if column in standard_fields}, []
+
+
+@router.post("/tasks/{job_id}/supplement")
+def supplement_clean_task(
+    job_id: int,
+    file: UploadFile = File(...),
+    template_id: Optional[int] = Form(None),
+    country_code: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """给已有清洗任务补充本月新增数据：只处理新增行，保留原任务结果。"""
+    from app.api.upload import (
+        _cleanup_old_tmp,
+        _existing_upload_keys,
+        _raw_insert_row,
+        _read_columns,
+    )
+
+    job = _get_visible_clean_job_or_404(db, current_user, job_id)
+    category_code = job.category_code or job.dispatch_category_code
+    if not category_code:
+        raise HTTPException(status_code=400, detail="任务缺少品类，无法补充数据")
+    _ensure_clean_category_visible(db, current_user, category_code)
+    platform = normalize_platform(job.platform)
+    if not platform:
+        raise HTTPException(status_code=400, detail="任务缺少平台，无法补充数据")
+    months = sorted({int(month) for month in _job_months(job)})
+    job_month = _job_month(job)
+    if not months and job_month is not None:
+        months = [job_month]
+    if not months:
+        raise HTTPException(status_code=400, detail="任务缺少月份信息，暂不支持补充数据")
+    if len(months) != 1:
+        raise HTTPException(status_code=400, detail="任务包含多个月份，暂不支持补充数据")
+    month = months[0]
+
+    if not file.filename or not file.filename.lower().endswith((".xlsx", ".xls", ".csv")):
+        raise HTTPException(status_code=400, detail="只支持 .xlsx / .xls / .csv 格式文件")
+
+    safe_filename = Path(file.filename).name
+    tmp_dir = Path(settings.UPLOAD_DIR) / "tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    _cleanup_old_tmp(tmp_dir)
+    temp_path = tmp_dir / f"supplement_{uuid.uuid4().hex}_{safe_filename}"
+    with open(temp_path, "wb") as handle:
+        shutil.copyfileobj(file.file, handle)
+    safe_stem = Path(safe_filename).stem[:80]
+    safe_suffix = Path(safe_filename).suffix
+    final_name = f"补充-{job.id}-{uuid.uuid4().hex[:6]}-{safe_stem}{safe_suffix}"
+    final_path = Path(settings.UPLOAD_DIR) / final_name
+    batch_key = f"supplement:{job.id}:{uuid.uuid4().hex[:10]}"
+
+    file_record: UploadFileRecord | None = None
+    try:
+        columns = _read_columns(temp_path)
+        mapping, ignore_columns = _resolve_supplement_mapping(db, columns, template_id)
+        mapped_targets = {value for value in mapping.values() if value != "__ext__"}
+        missing = SUPPLEMENT_REQUIRED_FIELDS - mapped_targets
+        if missing:
+            raise HTTPException(
+                status_code=422,
+                detail=f"文件缺少必要列映射：{', '.join(sorted(missing))}；请使用与原始上传一致的模板",
+            )
+
+        country = (country_code or "").strip().upper() or None
+        if not country:
+            countries = {
+                code for code, in db.query(RawDataRecord.country_code)
+                .join(CleanJobItemRecord, CleanJobItemRecord.raw_data_id == RawDataRecord.id)
+                .filter(CleanJobItemRecord.clean_job_id == job.id)
+                .distinct()
+                .all()
+                if code
+            }
+            if len(countries) == 1:
+                country = next(iter(countries))
+        if not country:
+            country = parse_filename_metadata(safe_filename, db).country_code
+        if not country:
+            country = "CN"
+        if country != "CN":
+            country_row = get_country(db, country)
+            if country_row is None or country_row.is_active != 1:
+                raise HTTPException(status_code=400, detail="国家不存在或已停用")
+        data_region = "domestic" if country == "CN" else "overseas"
+
+        file_record = UploadFileRecord(
+            filename=final_name,
+            platform=platform.upper(),
+            month_range=str(month),
+            row_count=0,
+            status="processing",
+            batch_key=batch_key,
+            data_region=data_region,
+            country_code=country,
+            data_year=month // 100,
+            data_month=month % 100,
+        )
+        db.add(file_record)
+        db.flush()
+
+        seen_keys: set = set()
+        total_rows = inserted_rows = skipped_rows = 0
+        for records, _chunk_platform, _chunk_months in iter_mapped_chunks(str(temp_path), mapping, ignore_columns):
+            for record in records:
+                record["month"] = month
+                record["platform"] = platform
+                record["source_category_code"] = category_code
+            candidates = []
+            for record in records:
+                item_id = record.get("item_id")
+                if item_id is not None:
+                    key = (country, str(item_id), month, platform)
+                    if key in seen_keys:
+                        continue
+                    seen_keys.add(key)
+                candidates.append(record)
+            existing_keys = _existing_upload_keys(db, candidates, country, filter_country=True)
+            to_insert = [
+                record for record in candidates
+                if (country, str(record.get("item_id")), record.get("month"), record.get("platform")) not in existing_keys
+            ]
+            for start in range(0, len(to_insert), 5000):
+                db.execute(
+                    RawDataRecord.__table__.insert(),
+                    [_raw_insert_row(file_record.id, country, record) for record in to_insert[start:start + 5000]],
+                )
+            total_rows += len(records)
+            inserted_rows += len(to_insert)
+            skipped_rows += len(records) - len(to_insert)
+
+        if inserted_rows == 0:
+            raise HTTPException(status_code=400, detail="文件中的数据均已存在，没有可补充的新数据")
+
+        file_record.row_count = total_rows
+        file_record.status = "done"
+        db.flush()
+
+        new_raw_ids = [
+            raw_id for raw_id, in db.query(RawDataRecord.id)
+            .filter(RawDataRecord.file_id == file_record.id)
+            .all()
+        ]
+
+        batch = DispatchBatch(
+            file_id=file_record.id,
+            batch_key=batch_key,
+            status="done",
+            total_rows=len(new_raw_ids),
+            dispatched_rows=len(new_raw_ids),
+            unmatched_rows=0,
+            finished_at=datetime.utcnow(),
+        )
+        db.add(batch)
+        db.flush()
+        db.add_all([
+            DispatchItem(
+                batch_id=batch.id,
+                raw_data_id=raw_id,
+                category_code=category_code,
+                matched_rule_id=None,
+            )
+            for raw_id in new_raw_ids
+        ])
+        db.flush()
+
+        already_in_task = {
+            raw_id for raw_id, in db.query(CleanJobItemRecord.raw_data_id)
+            .filter(CleanJobItemRecord.raw_data_id.in_(new_raw_ids))
+            .filter(CleanJobItemRecord.category_code == category_code)
+            .all()
+        }
+        append_ids = [raw_id for raw_id in new_raw_ids if raw_id not in already_in_task]
+        db.add_all([
+            CleanJobItemRecord(
+                clean_job_id=job.id,
+                raw_data_id=raw_id,
+                category_code=category_code,
+                platform=platform,
+                dispatch_batch_id=batch.id,
+            )
+            for raw_id in append_ids
+        ])
+        db.flush()
+
+        job.file_ids = sorted({*(job.file_ids or []), file_record.id})
+        scope = job.source_scope if isinstance(job.source_scope, dict) else {}
+        job.source_scope = {
+            "months": sorted({*_int_scope_list(scope.get("months")), month}),
+            "platforms": sorted({*(scope.get("platforms") or []), platform}),
+            "dispatch_batch_ids": sorted({*_int_scope_list(scope.get("dispatch_batch_ids")), batch.id}),
+            "file_ids": job.file_ids,
+        }
+
+        if append_ids:
+            run_clean(
+                db,
+                job.id,
+                job.file_ids or [],
+                job.rules or {},
+                batch.id,
+                category_code,
+                commit=False,
+                raw_data_ids=append_ids,
+            )
+
+            already_matched = {
+                raw_id for raw_id, in db.query(MatchResult.raw_data_id)
+                .filter(MatchResult.clean_job_id == job.id)
+                .filter(MatchResult.raw_data_id.in_(append_ids))
+                .all()
+            }
+            cleaned_raw_ids = {
+                raw_id for raw_id, in db.query(CleanedDataRecord.raw_data_id)
+                .filter(CleanedDataRecord.clean_job_id == job.id)
+                .filter(CleanedDataRecord.raw_data_id.in_(append_ids))
+                .all()
+            }
+            new_results = []
+            for raw_id in append_ids:
+                if raw_id in already_matched or raw_id not in cleaned_raw_ids:
+                    continue
+                result = MatchResult(
+                    clean_job_id=job.id,
+                    raw_data_id=raw_id,
+                    match_status="pending",
+                    matched_by="auto",
+                )
+                db.add(result)
+                new_results.append(result)
+            db.flush()
+
+            for result in new_results:
+                run_match_for_result(db, result.id, commit=False)
+            db.flush()
+
+            matched_ids = [
+                result_id for result_id, in db.query(MatchResult.id)
+                .filter(MatchResult.clean_job_id == job.id)
+                .filter(MatchResult.raw_data_id.in_(append_ids))
+                .filter(MatchResult.match_status.in_(["matched", "url_matched"]))
+                .all()
+            ]
+            if matched_ids:
+                run_attribute_matching(db, matched_ids, commit=False)
+                try:
+                    audit_price(db, matched_ids, commit=False)
+                except Exception:
+                    logger.exception("Price audit failed after supplement clean_job_id=%s", job.id)
+
+        job.row_in = db.query(CleanJobItemRecord).filter(CleanJobItemRecord.clean_job_id == job.id).count()
+        job.row_out = db.query(CleanedDataRecord).filter(CleanedDataRecord.clean_job_id == job.id).count()
+        job.row_filtered = db.query(FilteredItem).filter(FilteredItem.clean_job_id == job.id).count()
+        if job.status in ("done", "published"):
+            job.status = "reviewing"
+        job.updated_at = datetime.utcnow()
+        db.commit()
+        shutil.move(str(temp_path), str(final_path))
+    except HTTPException:
+        db.rollback()
+        temp_path.unlink(missing_ok=True)
+        raise
+    except Exception as exc:
+        db.rollback()
+        temp_path.unlink(missing_ok=True)
+        logger.exception("Supplement clean task failed job_id=%s", job_id)
+        raise HTTPException(status_code=500, detail=f"补充数据失败: {exc}") from exc
+
+    invalidate_rawdata_cache()
+    invalidate_clean_pool_cache()
+    counts = _match_status_counts(db, job.id)
+    return {
+        "code": 0,
+        "data": {
+            "job_id": job.id,
+            "file_id": file_record.id if file_record else None,
+            "total_rows": total_rows,
+            "inserted_rows": inserted_rows,
+            "duplicate_rows": skipped_rows,
+            "appended_items": len(append_ids),
+            "matched_count": counts.get("matched", 0) + counts.get("url_matched", 0) + counts.get("confirmed", 0),
+            "pending_count": counts.get("pending", 0) + counts.get("text_only", 0) + counts.get("disputed", 0),
+            "row_in": job.row_in,
+            "row_out": job.row_out,
+            "row_filtered": job.row_filtered,
+        },
+    }
 
 
 @router.post("/tasks/{job_id}/rerun-with-current-rules")

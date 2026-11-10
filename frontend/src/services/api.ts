@@ -537,6 +537,25 @@ export const upsertMonthlyCleanTask = (payload: UpsertMonthlyCleanTaskPayload) =
 export const createCleanTask = (payload: CreateCleanTaskPayload) =>
   api.post<CreateCleanTaskResponse>('/clean/tasks', payload)
 
+export interface SupplementCleanTaskResult {
+  job_id: number
+  file_id: number | null
+  total_rows: number
+  inserted_rows: number
+  duplicate_rows: number
+  appended_items: number
+  matched_count: number
+  pending_count: number
+  row_in: number
+  row_out: number
+  row_filtered: number
+}
+
+export const supplementCleanTask = (jobId: number, formData: FormData) =>
+  api.post<ApiResponse<SupplementCleanTaskResult>>(`/clean/tasks/${jobId}/supplement`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then(r => r.data.data)
+
 export const listCleanJobs = (params?: {
   category_code?: string
   platform?: string

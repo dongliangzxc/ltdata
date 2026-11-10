@@ -263,8 +263,13 @@ def run_clean(
     dispatch_batch_id: int | None = None,
     dispatch_category_code: str | None = None,
     commit: bool = True,
+    raw_data_ids: list[int] | None = None,
 ) -> int:
-    """执行清洗逻辑，返回写入 cleaned_data 的行数"""
+    """执行清洗逻辑，返回写入 cleaned_data 的行数。
+
+    ``raw_data_ids`` 非空时只清洗这些原始行（用于补充数据增量处理），
+    并会预载任务已有清洗结果参与去重，避免与历史数据重复。
+    """
     dedup: bool = rules.get("dedup", True)
 
     # ── 加载规则表 ─────────────────────────────────────────────
@@ -274,27 +279,37 @@ def run_clean(
 
     # ── 数据源选取 ─────────────────────────────────────────────
     from app.models.schemas import CleanJobItemRecord
-    records = (
+    records_query = (
         db.query(RawDataRecord)
         .join(CleanJobItemRecord, CleanJobItemRecord.raw_data_id == RawDataRecord.id)
         .filter(CleanJobItemRecord.clean_job_id == clean_job_id)
-        .order_by(CleanJobItemRecord.id)
-        .all()
     )
+    if raw_data_ids is not None:
+        records_query = records_query.filter(RawDataRecord.id.in_(raw_data_ids))
+    records = records_query.order_by(CleanJobItemRecord.id).all()
     if not records:
         if dispatch_batch_id and dispatch_category_code:
             from app.models.schemas import DispatchItem
-            raw_data_ids = select(DispatchItem.raw_data_id).filter(
+            raw_data_ids_in_batch = select(DispatchItem.raw_data_id).filter(
                 DispatchItem.batch_id == dispatch_batch_id,
                 DispatchItem.category_code == dispatch_category_code,
             )
-            records = db.query(RawDataRecord).filter(RawDataRecord.id.in_(raw_data_ids)).all()
-        else:
+            records = db.query(RawDataRecord).filter(RawDataRecord.id.in_(raw_data_ids_in_batch)).all()
+        elif raw_data_ids is None:
             records = db.query(RawDataRecord).filter(RawDataRecord.file_id.in_(file_ids)).all()
 
     cleaned: list[CleanedDataRecord] = []
     filtered: list[FilteredItem] = []
     seen_keys: set = set()
+    if dedup and raw_data_ids is not None:
+        seen_keys = {
+            (item_id, month, shop_name)
+            for item_id, month, shop_name in db.query(
+                CleanedDataRecord.item_id,
+                CleanedDataRecord.month,
+                CleanedDataRecord.shop_name,
+            ).filter(CleanedDataRecord.clean_job_id == clean_job_id).all()
+        }
 
     for r in records:
         # ── Step 1: 干扰链接库（按品类剔除）────────────────────────

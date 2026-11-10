@@ -2,10 +2,11 @@ import { useMemo, useState } from 'react'
 import type { Key } from 'react'
 import {
   Card, Button, Table, Tag, Modal, Row, Col, Alert,
-  Space, Statistic, Select, message, Tabs, Popconfirm, Input, InputNumber, Typography
+  Space, Statistic, Select, message, Tabs, Popconfirm, Input, InputNumber, Typography, Upload
 } from 'antd'
+import type { UploadFile } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { EyeOutlined, AimOutlined, CheckCircleFilled, DeleteOutlined, LineChartOutlined, FileSearchOutlined, TagsOutlined } from '@ant-design/icons'
+import { EyeOutlined, AimOutlined, CheckCircleFilled, DeleteOutlined, LineChartOutlined, FileSearchOutlined, TagsOutlined, UploadOutlined, InboxOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
@@ -16,10 +17,12 @@ import {
   previewCleanJob,
   upsertMonthlyCleanTask,
   listExchangeRateOptions,
+  supplementCleanTask,
 } from '../../services/api'
 import type {
   CleanJobItem, CleanMonthlyPoolItem, CleanJobListView, UserProfile,
   CleanMatchedGroup, CleanMatchedItem, CleanMatchedResponse, ExchangeRateOption,
+  SupplementCleanTaskResult,
 } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 
@@ -137,6 +140,7 @@ const jobColumns = (
   onDelete: (id: number) => void,
   view: CleanJobListView,
   onMatched: (id: number) => void,
+  onSupplement: (row: CleanJobItem) => void,
 ): ColumnsType<CleanJobItem> => [
   {
     title: '任务名称', dataIndex: 'task_name', width: 180,
@@ -189,11 +193,14 @@ const jobColumns = (
     render: (v?: string | null) => v || '-',
   },
   {
-    title: '操作', width: 440, fixed: 'right',
+    title: '操作', width: 520, fixed: 'right',
     render: (_: unknown, row) => (
       <Space size={4}>
         {view === 'active' && (
           <Button type="link" icon={<AimOutlined />} size="small" onClick={() => onEnter(row.id)}>进入处理</Button>
+        )}
+        {view === 'active' && row.month != null && (
+          <Button type="link" icon={<UploadOutlined />} size="small" onClick={() => onSupplement(row)}>补充数据</Button>
         )}
         {view === 'active' && (
           <Button type="link" icon={<LineChartOutlined />} size="small" onClick={() => onAdjust(row.id)}>数据调整</Button>
@@ -462,6 +469,11 @@ export default function CleanPage() {
   const [upsertingRowKey, setUpsertingRowKey] = useState<string | null>(null)
   const [selectedMonthlyRowKeys, setSelectedMonthlyRowKeys] = useState<Key[]>([])
   const [batchUpserting, setBatchUpserting] = useState(false)
+  const [supplementJob, setSupplementJob] = useState<CleanJobItem | null>(null)
+  const [supplementFile, setSupplementFile] = useState<File | null>(null)
+  const [supplementFileList, setSupplementFileList] = useState<UploadFile[]>([])
+  const [supplementing, setSupplementing] = useState(false)
+  const [supplementResult, setSupplementResult] = useState<SupplementCleanTaskResult | null>(null)
 
   const requestParams = useMemo(() => cleanParams(filters), [filters])
   const monthlyPoolRequestParams = useMemo(() => ({ ...requestParams, limit: 50 }), [requestParams])
@@ -562,6 +574,43 @@ export default function CleanPage() {
     },
     { manual: true }
   )
+
+  const openSupplement = (job: CleanJobItem) => {
+    setSupplementJob(job)
+    setSupplementFile(null)
+    setSupplementFileList([])
+    setSupplementResult(null)
+  }
+
+  const closeSupplement = () => {
+    if (supplementing) return
+    setSupplementJob(null)
+    setSupplementFile(null)
+    setSupplementFileList([])
+    setSupplementResult(null)
+  }
+
+  const handleSupplement = async () => {
+    if (!supplementJob) return
+    if (!supplementFile) {
+      message.warning('请先选择补充数据文件')
+      return
+    }
+    const formData = new FormData()
+    formData.append('file', supplementFile)
+    setSupplementing(true)
+    try {
+      const result = await supplementCleanTask(supplementJob.id, formData)
+      setSupplementResult(result)
+      message.success(`补充完成：新增 ${result.inserted_rows} 条，重复跳过 ${result.duplicate_rows} 条`)
+      refreshMonthlyPool()
+      refreshJobs()
+    } catch {
+      // 错误信息由请求拦截器统一提示
+    } finally {
+      setSupplementing(false)
+    }
+  }
 
   const handleBatchUpsertMonthlyTasks = async () => {
     if (batchUpserting) return
@@ -761,16 +810,81 @@ export default function CleanPage() {
                 handleDeleteJob,
                 jobView,
                 id => { setMatchedJobId(id); setMatchedGroup('mapping'); setMatchedPage(1); setMatchedKeyword(''); setMatchedKeywordInput('') },
+                openSupplement,
               )}
               rowKey="id"
               size="small"
               loading={jobsLoading}
-              scroll={{ x: 1280 }}
+              scroll={{ x: 1360 }}
               pagination={{ pageSize: 10 }}
             />
           </>
         )}
       </Card>
+
+      <Modal
+        title={supplementJob
+          ? `补充数据 · ${supplementJob.task_name || supplementJob.scope_desc || `任务 #${supplementJob.id}`}`
+          : '补充数据'}
+        open={!!supplementJob}
+        onCancel={closeSupplement}
+        onOk={handleSupplement}
+        okText="开始补充"
+        cancelText="取消"
+        confirmLoading={supplementing}
+        okButtonProps={{ disabled: !supplementFile || !!supplementResult }}
+        width={600}
+        destroyOnClose
+      >
+        {supplementJob && (
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Alert
+              type="info"
+              showIcon
+              message="只补充新增数据"
+              description={`任务范围：${supplementJob.category_code || '-'} / ${formatPlatform(supplementJob.platform)} / ${supplementJob.month ?? '-'}。新数据会直接归入当前任务，只清洗/匹配新增行（匹配会使用当前历史库、映射库和规则），保留已有处理结果。`}
+            />
+            <Upload.Dragger
+              accept=".xlsx,.xls,.csv"
+              maxCount={1}
+              fileList={supplementFileList}
+              disabled={supplementing || !!supplementResult}
+              beforeUpload={file => {
+                setSupplementFile(file as File)
+                setSupplementFileList([file as UploadFile])
+                return false
+              }}
+              onRemove={() => {
+                setSupplementFile(null)
+                setSupplementFileList([])
+                return true
+              }}
+            >
+              <p className="ant-upload-drag-icon"><InboxOutlined /></p>
+              <p className="ant-upload-text">点击或拖拽文件到这里</p>
+              <p className="ant-upload-hint">支持 .xlsx / .xls / .csv；列名需与原始上传模板一致，系统会自动套用模板</p>
+            </Upload.Dragger>
+            {supplementResult && (
+              <>
+                <Alert type="success" showIcon message="补充完成" />
+                <Row gutter={16}>
+                  <Col span={8}><Statistic title="文件总行数" value={supplementResult.total_rows} /></Col>
+                  <Col span={8}><Statistic title="新增入库" value={supplementResult.inserted_rows} valueStyle={{ color: '#3f8600' }} /></Col>
+                  <Col span={8}><Statistic title="重复跳过" value={supplementResult.duplicate_rows} /></Col>
+                </Row>
+                <Row gutter={16}>
+                  <Col span={8}><Statistic title="追加到任务" value={supplementResult.appended_items} /></Col>
+                  <Col span={8}><Statistic title="任务已匹配" value={supplementResult.matched_count} /></Col>
+                  <Col span={8}><Statistic title="任务待处理" value={supplementResult.pending_count} valueStyle={{ color: '#d48806' }} /></Col>
+                </Row>
+                <Text type="secondary">
+                  任务当前行数：原始行 {supplementResult.row_in}，清洗后 {supplementResult.row_out}，过滤 {supplementResult.row_filtered}
+                </Text>
+              </>
+            )}
+          </Space>
+        )}
+      </Modal>
 
       <Modal
         title={

@@ -6,7 +6,7 @@ from sqlalchemy import event
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.clean import router
+from app.api.clean import router, _acquire_clean_scope_lock, _release_clean_scope_lock, _clean_scope_lock_key
 from app.core.auth_deps import get_current_user
 from app.services.clean_task_snapshot import get_monthly_clean_pool, upsert_monthly_task_snapshot
 from app.models.database import get_db
@@ -1865,6 +1865,106 @@ def test_upsert_monthly_clean_task_rolls_back_failed_rerun_and_allows_retry(db, 
     assert retry.json()["action"] == "created"
     assert db.query(CleanJobRecord).filter_by(category_code="soundbar", platform="jd").count() == 1
     assert db.query(CleanJobItemRecord).filter_by(category_code="soundbar", platform="jd").count() == 1
+
+
+def test_upsert_monthly_clean_task_conflict_returns_409_when_same_scope_running(db, monkeypatch):
+    """同（品类/平台/月份）范围已有任务在处理时，第二个请求直接 409，不撞库锁。"""
+    client = _make_client(db)
+    _create_monthly_pending_row(db, item_id="sb-1")
+
+    key = _clean_scope_lock_key("soundbar", "jd", 202605)
+    assert _acquire_clean_scope_lock(key)
+    try:
+        response = client.post("/api/clean/tasks/upsert-monthly", json={
+            "category_code": "soundbar",
+            "platform": "jd",
+            "month": 202605,
+        })
+        assert response.status_code == 409
+        assert "正在处理中" in response.json()["detail"]
+    finally:
+        _release_clean_scope_lock(key)
+
+    # 锁释放后同一范围可以正常创建
+    monkeypatch.setattr("app.api.clean.run_clean", lambda *args, **kwargs: 1)
+    monkeypatch.setattr("app.api.clean.run_match", lambda match_db, clean_job_id, **kwargs: {"total": 1, "matched": 0})
+    response = client.post("/api/clean/tasks/upsert-monthly", json={
+        "category_code": "soundbar",
+        "platform": "jd",
+        "month": 202605,
+    })
+    assert response.status_code == 200
+    assert response.json()["action"] == "created"
+
+
+def test_upsert_monthly_clean_task_releases_scope_lock_on_failure(db, monkeypatch):
+    """清洗失败后范围锁必须释放，否则后续创建会被自己残留的锁永久 409。"""
+    client = _make_client(db, raise_server_exceptions=False)
+    _create_monthly_pending_row(db, item_id="sb-1")
+
+    def failing_run_clean(*args, **kwargs):
+        raise RuntimeError("clean failed")
+
+    monkeypatch.setattr("app.api.clean.run_clean", failing_run_clean)
+    response = client.post("/api/clean/tasks/upsert-monthly", json={
+        "category_code": "soundbar",
+        "platform": "jd",
+        "month": 202605,
+    })
+    assert response.status_code == 500
+    assert db.query(CleanJobRecord).filter_by(category_code="soundbar", platform="jd").count() == 0
+
+    key = _clean_scope_lock_key("soundbar", "jd", 202605)
+    assert _acquire_clean_scope_lock(key)
+    _release_clean_scope_lock(key)
+
+
+def test_upsert_monthly_clean_task_removes_job_when_match_fails_after_snapshot_commit(db, monkeypatch):
+    """快照已提交、匹配阶段失败时，任务连同清洗产物被整单清理，保持「失败即无任务」。"""
+    client = _make_client(db, raise_server_exceptions=False)
+    _create_monthly_pending_row(db, item_id="sb-1")
+
+    def fake_run_clean(*args, **kwargs):
+        raw = db.query(RawDataRecord).first()
+        db.add(CleanedDataRecord(clean_job_id=kwargs["clean_job_id"] if "clean_job_id" in kwargs else args[1], raw_data_id=raw.id, item_id="cleaned-1"))
+        db.commit()
+        return 1
+
+    def failing_run_match(*args, **kwargs):
+        raise RuntimeError("match failed")
+
+    monkeypatch.setattr("app.api.clean.run_clean", fake_run_clean)
+    monkeypatch.setattr("app.api.clean.run_match", failing_run_match)
+
+    response = client.post("/api/clean/tasks/upsert-monthly", json={
+        "category_code": "soundbar",
+        "platform": "jd",
+        "month": 202605,
+    })
+    assert response.status_code == 500
+    assert db.query(CleanJobRecord).filter_by(category_code="soundbar", platform="jd").count() == 0
+    assert db.query(CleanJobItemRecord).filter_by(category_code="soundbar", platform="jd").count() == 0
+    assert db.query(CleanedDataRecord).filter_by(item_id="cleaned-1").count() == 0
+
+
+def test_create_clean_task_conflict_returns_409_when_same_scope_running(db, monkeypatch):
+    """派发创建任务：同品类/平台范围已有任务在处理时返回 409。"""
+    client = _make_client(db, raise_server_exceptions=False)
+    _create_monthly_pending_row(db, item_id="sb-1")
+
+    key = _clean_scope_lock_key("soundbar", "jd")
+    assert _acquire_clean_scope_lock(key)
+    try:
+        response = client.post("/api/clean/tasks", json={
+            "category_code": "soundbar",
+            "platform": "jd",
+            "rules": {"dedup": True},
+        })
+        assert response.status_code == 409
+        assert "正在处理中" in response.json()["detail"]
+    finally:
+        _release_clean_scope_lock(key)
+
 
 
 def test_upsert_monthly_clean_task_clears_old_match_child_rows_on_rerun(db, monkeypatch):

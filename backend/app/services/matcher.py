@@ -376,6 +376,13 @@ def _history_lookup_in_memory(
     return None
 
 
+def _history_platform_expr(db: Session):
+    bind = db.get_bind()
+    if bind is not None and bind.dialect.name == "sqlite":
+        return func.lower(HistoricalMapping.platform)
+    return HistoricalMapping.platform
+
+
 def _build_history_index(db: Session, ctx: MatchContext, rows: list) -> None:
     """一次性加载任务所需的历史库数据到 ctx 内存索引，替代 _history_lookup 的逐行查询。
 
@@ -407,8 +414,10 @@ def _build_history_index(db: Session, ctx: MatchContext, rows: list) -> None:
             HistoricalMapping.id,
             HistoricalMapping.model_id,
         )
-        # func.lower 归一化平台：对齐 MySQL ci 排序规则（历史库平台可能存成 JD/Tmall 等）
-        .filter(func.lower(HistoricalMapping.platform).in_(platforms))
+        # 平台列是 utf8mb4_0900_ai_ci（大小写不敏感），MySQL 上直接 IN 与 func.lower 结果一致；
+        # 包 func.lower 会让 MySQL 放弃 (platform, ...) 索引全表扫描 150 万行（实测 8s → 0.1s）。
+        # SQLite（测试）比较区分大小写，仍用 func.lower 对齐。
+        .filter(_history_platform_expr(db).in_(platforms))
     )
     if not has_monthless:
         query = query.filter(or_(

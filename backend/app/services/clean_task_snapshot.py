@@ -86,6 +86,8 @@ def _deduped_dispatch_item_ids(
     db: Session,
     category_code: str | None = None,
     dispatch_batch_id: int | None = None,
+    month: int | None = None,
+    platform_aliases: set[str] | None = None,
 ):
     dispatch_item_ids = db.query(
         func.min(DispatchItem.id).label("dispatch_item_id"),
@@ -103,6 +105,14 @@ def _deduped_dispatch_item_ids(
             latest_batches,
             DispatchItem.batch_id == latest_batches.c.batch_id,
         )
+    if month is not None or platform_aliases:
+        # 月份/平台是原始行属性，同一 raw_data_id 的分组要么整组保留要么整组排除，
+        # 先过滤再分组结果不变，只是不必对整个品类全部月份的派发明细做分组。
+        dispatch_item_ids = dispatch_item_ids.join(RawDataRecord, RawDataRecord.id == DispatchItem.raw_data_id)
+        if month is not None:
+            dispatch_item_ids = dispatch_item_ids.filter(RawDataRecord.month == month)
+        if platform_aliases:
+            dispatch_item_ids = dispatch_item_ids.filter(func.lower(RawDataRecord.platform).in_(platform_aliases))
     return dispatch_item_ids.group_by(
         DispatchItem.raw_data_id,
         DispatchItem.category_code,
@@ -132,8 +142,16 @@ def _pending_dispatch_query(
     category_code: str | None = None,
     platform: str | None = None,
     dispatch_batch_id: int | None = None,
+    month: int | None = None,
 ):
-    deduped_dispatch_item_ids = _deduped_dispatch_item_ids(db, category_code, dispatch_batch_id)
+    normalized_platform = normalize_platform(platform)
+    deduped_dispatch_item_ids = _deduped_dispatch_item_ids(
+        db,
+        category_code,
+        dispatch_batch_id,
+        month=month,
+        platform_aliases=platform_aliases_for(normalized_platform) if normalized_platform else None,
+    )
 
     q = (
         db.query(DispatchItem, RawDataRecord)
@@ -149,7 +167,6 @@ def _pending_dispatch_query(
         .filter(CleanJobItemRecord.id.is_(None))
     )
 
-    normalized_platform = normalize_platform(platform)
     if normalized_platform:
         q = q.filter(func.lower(RawDataRecord.platform).in_(platform_aliases_for(normalized_platform)))
 
@@ -205,7 +222,7 @@ def _monthly_pending_rows(
     platform: str | None = None,
     month: int | None = None,
 ):
-    q = _pending_dispatch_query(db, category_code=category_code, platform=platform)
+    q = _pending_dispatch_query(db, category_code=category_code, platform=platform, month=month)
     if month is not None:
         q = q.filter(RawDataRecord.month == month)
     return q

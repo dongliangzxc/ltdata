@@ -54,7 +54,9 @@ brand_identified 标记：S1/S2/S3 任意阶段识别到品牌即置 1，即使�
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 from app.models.schemas import CleanedDataRecord, ModelRecord, ModelAlias, MatchResult, MatchResultAttr, MatchResultCandidate, MatchResultExtraValue, ItemUrlMapping, MatchRule, HistoricalMapping, CleanJobRecord, RawDataRecord
 from app.utils.url_utils import extract_item_id
@@ -82,6 +84,13 @@ class MatchContext:
     exclusion_url_keys: set = field(default_factory=set)
     exclusion_name_keys: set = field(default_factory=set)
     url_reusable_model_ids: set = field(default_factory=set)
+    # 历史库内存索引（run_match 预载，消除 _history_lookup 逐行 N+1 查询）：
+    # None 表示未加载，_history_lookup 回退逐条查库。键为 (平台小写, 键值)。
+    hist_item_id: dict | None = None
+    hist_item_url: dict | None = None
+    hist_item_name_norm: dict | None = None
+    # 已加载「全量（含无月份行）」历史的平台；仅按月加载子集的平台不在其中
+    hist_full_platforms: set = field(default_factory=set)
 
 
 def _load_match_context(db: Session, category_code: str | None) -> MatchContext:
@@ -206,7 +215,7 @@ def _apply_history_period(query, year: int | None, month_num: int | None, week: 
     return query.filter(HistoricalMapping.week.is_(None)).order_by(HistoricalMapping.updated_at.desc(), HistoricalMapping.id.desc())
 
 
-def _history_lookup(db: Session, row: CleanedDataRecord) -> HistoricalMapping | None:
+def _history_lookup(db: Session, row: CleanedDataRecord, ctx: MatchContext | None = None) -> "HistoricalMapping | _HistoryHit | None":
     row_platform = (row.platform or "").lower()
     parsed = extract_item_id(row.item_url) if row.item_url else None
     keys = []
@@ -228,6 +237,15 @@ def _history_lookup(db: Session, row: CleanedDataRecord) -> HistoricalMapping | 
             deduped_keys.append(key)
             seen.add(key)
 
+    # ── 内存索引路径（run_match 已把任务所需历史库预载进 ctx）──────
+    if ctx is not None and ctx.hist_item_id is not None:
+        indexes = {
+            "item_id": ctx.hist_item_id,
+            "item_url": ctx.hist_item_url,
+            "item_name": ctx.hist_item_name_norm,
+        }
+        return _history_lookup_in_memory(indexes, ctx.hist_full_platforms, row, deduped_keys)
+
     for key_type, platform, value in deduped_keys:
         for year, month_num, week in _period_candidates(row):
             q = db.query(HistoricalMapping).filter(HistoricalMapping.platform == platform.lower())
@@ -241,6 +259,116 @@ def _history_lookup(db: Session, row: CleanedDataRecord) -> HistoricalMapping | 
             if hit:
                 return hit
     return None
+
+
+class _HistoryHit:
+    """内存索引命中的轻量结果：调用方只使用 model_id。"""
+
+    __slots__ = ("model_id",)
+
+    def __init__(self, model_id):
+        self.model_id = model_id
+
+
+def _history_lookup_in_memory(
+    indexes: dict,
+    full_platforms: set,
+    row: CleanedDataRecord,
+    deduped_keys: list,
+) -> _HistoryHit | None:
+    """与逐条查库同语义：按键顺序、周期偏好取第一条，命中键内按
+    (updated_at desc, id desc) 取最新。无月份行要求平台已全量加载
+    （_build_history_index 保证：任务含无月份行时加载平台全量）。"""
+    year, month_num = _month_parts(getattr(row, "month", None))
+    week = str(getattr(row, "week", None)) if getattr(row, "week", None) is not None else None
+    if year and month_num:
+        periods = [(year, month_num, week), (year, month_num, None)]
+    else:
+        periods = [(None, None, None)]
+
+    for key_type, platform, value in deduped_keys:
+        # 与索引键一致的大小写归一化（平台已小写；键值 casefold 对齐 MySQL ci 排序规则）
+        bucket = indexes[key_type].get((platform, value.casefold()))
+        if not bucket:
+            continue
+        for p_year, p_month, p_week in periods:
+            best: tuple | None = None
+            for rec_year, rec_month, rec_week, updated_at, rid, model_id in bucket:
+                if p_year is None:
+                    if platform not in full_platforms:
+                        continue  # 未全量加载，无法按无月份周期判定，跳过该周期
+                    matched = True
+                else:
+                    matched = rec_year == p_year and rec_month == p_month
+                    if matched and p_week is not None:
+                        matched = rec_week == p_week
+                    elif matched:
+                        matched = rec_week is None
+                if not matched:
+                    continue
+                sort_key = (updated_at if updated_at is not None else datetime.min, rid)
+                if best is None or sort_key > best[0]:
+                    best = (sort_key, model_id)
+            if best is not None:
+                return _HistoryHit(best[1])
+    return None
+
+
+def _build_history_index(db: Session, ctx: MatchContext, rows: list) -> None:
+    """一次性加载任务所需的历史库数据到 ctx 内存索引，替代 _history_lookup 的逐行查询。
+
+    按月任务只加载对应 (平台, 年月) 子集；存在无月份的行时回退加载平台全量，
+    保证 (None, None, None) 周期判定与逐条查库一致。加载行只取查找所需列。
+    """
+    platforms = {(r.platform or "").lower() for r in rows if r.platform}
+    if not platforms:
+        return
+    has_monthless = False
+    periods: set[tuple[int, int]] = set()
+    for r in rows:
+        year, month_num = _month_parts(getattr(r, "month", None))
+        if year and month_num:
+            periods.add((year, month_num))
+        else:
+            has_monthless = True
+
+    query = (
+        db.query(
+            HistoricalMapping.platform,
+            HistoricalMapping.item_id,
+            HistoricalMapping.item_url,
+            HistoricalMapping.item_name_norm,
+            HistoricalMapping.year,
+            HistoricalMapping.month_num,
+            HistoricalMapping.week,
+            HistoricalMapping.updated_at,
+            HistoricalMapping.id,
+            HistoricalMapping.model_id,
+        )
+        # func.lower 归一化平台：对齐 MySQL ci 排序规则（历史库平台可能存成 JD/Tmall 等）
+        .filter(func.lower(HistoricalMapping.platform).in_(platforms))
+    )
+    if not has_monthless:
+        query = query.filter(or_(
+            and_(HistoricalMapping.year == y, HistoricalMapping.month_num == m)
+            for y, m in periods
+        ))
+
+    ctx.hist_item_id = {}
+    ctx.hist_item_url = {}
+    ctx.hist_item_name_norm = {}
+    for row in query.all():
+        # 键值大小写归一化，对齐 MySQL ci 排序规则下逐条查库的匹配行为
+        platform = (row.platform or "").lower()
+        record = (row.year, row.month_num, row.week, row.updated_at, row.id, row.model_id)
+        if row.item_id:
+            ctx.hist_item_id.setdefault((platform, row.item_id.casefold()), []).append(record)
+        if row.item_url:
+            ctx.hist_item_url.setdefault((platform, row.item_url.casefold()), []).append(record)
+        if row.item_name_norm:
+            ctx.hist_item_name_norm.setdefault((platform, row.item_name_norm.casefold()), []).append(record)
+    if has_monthless:
+        ctx.hist_full_platforms = platforms
 
 
 def _candidates_by_brand_raw(ctx: MatchContext, brand_raw: str) -> list[ModelRecord]:
@@ -483,6 +611,9 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
         .all()
     )
     _t3 = time.perf_counter()
+    # 历史库一次性载入内存索引，避免逐行 N+1 查询（headphone 2.3 万行曾耗时约 5 分钟）
+    _build_history_index(db, ctx, cleaned_rows)
+    _t3b = time.perf_counter()
 
     results: list[MatchResult] = []
     matched_count = 0
@@ -585,7 +716,7 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
             continue
 
         # ── S0.2: 历史库精确匹配 ─────────────────────────────────
-        hist_hit = _history_lookup(db, row)
+        hist_hit = _history_lookup(db, row, ctx)
         if hist_hit:
             historical_model_id = hist_hit.model_id if hist_hit.model_id in valid_model_ids else None
             historical_status = "matched" if historical_model_id else "pending"
@@ -785,9 +916,9 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
             audit_price(db, matched_result_ids, commit=commit)
 
     logger.info(
-        "run_match job=%s total=%d matched=%d ignored=%d old=%.1fs ctx=%.1fs load=%.1fs loop=%.1fs cand=%.1fs total=%.1fs",
+        "run_match job=%s total=%d matched=%d ignored=%d old=%.1fs ctx=%.1fs load=%.1fs hist=%.1fs loop=%.1fs cand=%.1fs total=%.1fs",
         clean_job_id, total, matched_count, ignored_count,
-        _t1 - _t0, _t2 - _t1, _t3 - _t2, _t4 - _t3, time.perf_counter() - _t4, time.perf_counter() - _t0,
+        _t1 - _t0, _t2 - _t1, _t3 - _t2, _t3b - _t3, _t4 - _t3b, time.perf_counter() - _t4, time.perf_counter() - _t0,
     )
     return {
         "total": total,
@@ -861,7 +992,7 @@ def run_match_for_result(
         return mr
 
     # ── S0.2: 历史库精确匹配 ─────────────────────────────────
-    hist_hit = _history_lookup(db, raw)
+    hist_hit = _history_lookup(db, raw, ctx)
     if hist_hit:
         historical_model_id = hist_hit.model_id if hist_hit.model_id in ctx.valid_model_ids else None
         mr.model_id = historical_model_id

@@ -6,7 +6,7 @@ import {
 } from 'antd'
 import type { UploadFile } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { EyeOutlined, AimOutlined, CheckCircleFilled, DeleteOutlined, LineChartOutlined, FileSearchOutlined, TagsOutlined, UploadOutlined, InboxOutlined } from '@ant-design/icons'
+import { EyeOutlined, AimOutlined, CheckCircleFilled, DeleteOutlined, LineChartOutlined, FileSearchOutlined, TagsOutlined, InboxOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
@@ -140,7 +140,6 @@ const jobColumns = (
   onDelete: (id: number) => void,
   view: CleanJobListView,
   onMatched: (id: number) => void,
-  onSupplement: (row: CleanJobItem) => void,
 ): ColumnsType<CleanJobItem> => [
   {
     title: '任务名称', dataIndex: 'task_name', width: 180,
@@ -200,9 +199,6 @@ const jobColumns = (
           <Button type="link" icon={<AimOutlined />} size="small" onClick={() => onEnter(row.id)}>进入处理</Button>
         )}
         {view === 'active' && row.month != null && (
-          <Button type="link" icon={<UploadOutlined />} size="small" onClick={() => onSupplement(row)}>补充数据</Button>
-        )}
-        {view === 'active' && (
           <Button type="link" icon={<LineChartOutlined />} size="small" onClick={() => onAdjust(row.id)}>数据调整</Button>
         )}
         {view === 'active' && (
@@ -575,13 +571,6 @@ export default function CleanPage() {
     { manual: true }
   )
 
-  const openSupplement = (job: CleanJobItem) => {
-    setSupplementJob(job)
-    setSupplementFile(null)
-    setSupplementFileList([])
-    setSupplementResult(null)
-  }
-
   const closeSupplement = () => {
     if (supplementing) return
     setSupplementJob(null)
@@ -810,7 +799,6 @@ export default function CleanPage() {
                 handleDeleteJob,
                 jobView,
                 id => { setMatchedJobId(id); setMatchedGroup('mapping'); setMatchedPage(1); setMatchedKeyword(''); setMatchedKeywordInput('') },
-                openSupplement,
               )}
               rowKey="id"
               size="small"

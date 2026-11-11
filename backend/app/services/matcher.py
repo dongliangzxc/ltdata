@@ -78,6 +78,14 @@ class MatchContext:
     explicit_rules: list = field(default_factory=list)
     brand_code_index: dict = field(default_factory=dict)
     brand_name_index: dict = field(default_factory=dict)
+    # 品牌码/品牌名的 1/2 字符前缀索引与顺序映射（S2/S3 提速：避免每行遍历全部品牌）
+    brand_code_prefix: dict = field(default_factory=dict)
+    brand_name_prefix: dict = field(default_factory=dict)
+    brand_code_order: dict = field(default_factory=dict)
+    brand_name_order: dict = field(default_factory=dict)
+    # 长码型号的（型号码/型号名/别名）前缀索引与顺序映射（S4 提速）
+    model_prefix: dict = field(default_factory=dict)
+    long_code_model_order: dict = field(default_factory=dict)
     long_code_models: list = field(default_factory=list)
     alias_map: dict = field(default_factory=dict)
     brand_raw_cache: dict = field(default_factory=dict)
@@ -136,6 +144,31 @@ def _load_match_context(db: Session, category_code: str | None) -> MatchContext:
         if len(key) >= 2:
             ctx.brand_name_index.setdefault(key, []).append(m)
     ctx.long_code_models = [m for m in all_models if len(_norm(m.model_code)) >= 5]
+
+    # ── 前缀索引：把「每行遍历全部品牌/型号」剪枝为「只查文本中出现的前缀」──
+    ctx.brand_code_order = {key: i for i, key in enumerate(ctx.brand_code_index)}
+    for key in ctx.brand_code_index:
+        for p in _key_prefixes(key):
+            ctx.brand_code_prefix.setdefault(p, []).append(key)
+    ctx.brand_name_order = {key: i for i, key in enumerate(ctx.brand_name_index)}
+    for key in ctx.brand_name_index:
+        for p in _key_prefixes(key):
+            ctx.brand_name_prefix.setdefault(p, []).append(key)
+    ctx.long_code_model_order = {m.id: i for i, m in enumerate(ctx.long_code_models)}
+    for m in ctx.long_code_models:
+        probe_keys = []
+        mc = _norm(m.model_code)
+        if mc:
+            probe_keys.append(mc)
+        mn = _norm(m.model_name) if m.model_name else None
+        if mn and len(mn) >= 3:
+            probe_keys.append(mn)
+        for alias in ctx.alias_map.get(m.id, []):
+            if alias and len(alias) >= 4:
+                probe_keys.append(alias)
+        for probe in probe_keys:
+            for p in _key_prefixes(probe):
+                ctx.model_prefix.setdefault(p, []).append(m)
 
     for a in db.query(ModelAlias).all():
         ctx.alias_map.setdefault(a.model_id, []).append(_norm(a.alias_code))
@@ -435,6 +468,43 @@ def _top_candidates(
     return scored[:n]
 
 
+def _grams(text: str) -> set[str]:
+    """文本的一元/二元字符集合，用于按品牌/型号前缀剪枝候选。
+
+    只含 1/2 字符前缀：若某键（品牌码/品牌名/型号码等）是文本的子串，
+    其前 1 或 2 个字符必然出现在该位置的 grams 中，因此剪枝不丢失命中；
+    后续仍保留逐键的 `in` 精确判定，语义与剪枝前完全一致。
+    """
+    if not text:
+        return set()
+    grams = set()
+    for i in range(len(text)):
+        grams.add(text[i])
+        if i + 1 < len(text):
+            grams.add(text[i : i + 2])
+    return grams
+
+
+def _key_prefixes(key: str) -> list[str]:
+    return [p for p in {key[:1], key[:2]} if p]
+
+
+def _index_keys_by_grams(prefix_index: dict, order: dict, grams: set) -> list:
+    """返回前缀出现在 grams 中的索引键，按索引插入顺序排序。
+
+    顺序保持与直接遍历索引一致，确保并列同分时的选取结果不变。
+    """
+    keys = []
+    seen = set()
+    for g in grams:
+        for key in prefix_index.get(g, ()):
+            if key not in seen:
+                seen.add(key)
+                keys.append(key)
+    keys.sort(key=order.__getitem__)
+    return keys
+
+
 def _match_text_stages(
     raw,
     item_upper: str,
@@ -475,12 +545,13 @@ def _match_text_stages(
                     best_model = top[0][0]
                     match_source = "s1"
 
-        # S2: item_name 里找 brand_code
+        # S2: item_name 里找 brand_code（前缀索引剪枝）
         if best_model is None:
-            for bc, grp in ctx.brand_code_index.items():
-                if bc and bc in item_upper:
+            grams = _grams(item_upper)
+            for bc in _index_keys_by_grams(ctx.brand_code_prefix, ctx.brand_code_order, grams):
+                if bc in item_upper:
                     brand_identified = True
-                    top = _top_candidates(ctx, grp, item_upper, "s2")
+                    top = _top_candidates(ctx, ctx.brand_code_index[bc], item_upper, "s2")
                     row_candidates.extend(top)
                     if top:
                         if len(_norm(top[0][0].model_code)) > len(_norm(best_model.model_code) if best_model else ""):
@@ -489,19 +560,27 @@ def _match_text_stages(
 
         # S3: item_name 里找 brand_name
         if best_model is None:
-            for bn, grp in ctx.brand_name_index.items():
+            for bn in _index_keys_by_grams(ctx.brand_name_prefix, ctx.brand_name_order, grams):
                 if len(bn) >= 2 and bn in item_upper:
                     brand_identified = True
-                    top = _top_candidates(ctx, grp, item_upper, "s3")
+                    top = _top_candidates(ctx, ctx.brand_name_index[bn], item_upper, "s3")
                     row_candidates.extend(top)
                     if top:
                         if len(_norm(top[0][0].model_code)) > len(_norm(best_model.model_code) if best_model else ""):
                             best_model = top[0][0]
                             match_source = "s3"
 
-        # S4: 仅在品牌完全未识别时才做全局长码兜底
+        # S4: 仅在品牌完全未识别时才做全局长码兜底（前缀剪枝）
         if best_model is None and not brand_identified:
-            top = _top_candidates(ctx, ctx.long_code_models, item_upper, "s4", allow_alias=False)
+            pruned = []
+            seen = set()
+            for g in grams:
+                for m in ctx.model_prefix.get(g, ()):
+                    if m.id not in seen:
+                        seen.add(m.id)
+                        pruned.append(m)
+            pruned.sort(key=lambda m: ctx.long_code_model_order[m.id])
+            top = _top_candidates(ctx, pruned, item_upper, "s4", allow_alias=False)
             row_candidates.extend(top)
             if top:
                 best_model = top[0][0]

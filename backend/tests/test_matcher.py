@@ -221,6 +221,45 @@ def test_match_source_s2(db):
     assert result.match_source == "s2"
 
 
+def test_s2_prefix_pruning_finds_single_char_brand_code(db):
+    """S2 前缀剪枝不能漏掉单字符品牌码（1-gram 索引，回归）。"""
+    _seed(db, brand_code="X", model_code="X100", brand_name="X牌")
+    clean_job_id = _seed_clean_row(db, brand_raw=None, item_name="X100 蓝牙音箱")
+    db.commit()
+
+    run_match(db, clean_job_id)
+
+    result = db.query(MatchResult).filter(MatchResult.clean_job_id == clean_job_id).first()
+    assert result.match_status == "matched"
+    assert result.match_source == "s2"
+
+
+def test_s3_prefix_pruning_finds_multi_word_brand_name(db):
+    """S3 前缀剪枝不能漏掉含空格的多词品牌名（回归）。"""
+    _seed(db, brand_code="ZZZ", model_code="AB200", brand_name="AB SUPER")
+    clean_job_id = _seed_clean_row(db, brand_raw=None, item_name="AB SUPER AB200 蓝牙音箱")
+    db.commit()
+
+    run_match(db, clean_job_id)
+
+    result = db.query(MatchResult).filter(MatchResult.clean_job_id == clean_job_id).first()
+    assert result.match_status == "matched"
+    assert result.match_source == "s3"
+
+
+def test_s3_prefix_pruning_finds_chinese_brand_name(db):
+    """S3 前缀剪枝对中文品牌名（双字符 gram）同样生效（回归）。"""
+    _seed(db, brand_code="CHBRX", model_code="CHBR200", brand_name="中国品牌")
+    clean_job_id = _seed_clean_row(db, brand_raw=None, item_name="中国品牌 CHBR200 蓝牙音箱")
+    db.commit()
+
+    run_match(db, clean_job_id)
+
+    result = db.query(MatchResult).filter(MatchResult.clean_job_id == clean_job_id).first()
+    assert result.match_status == "matched"
+    assert result.match_source == "s3"
+
+
 def test_alias_match_within_brand(db):
     """别名出现在 item_name 中，应命中对应型号（品牌内匹配）。"""
     m = _seed(db, brand_code="EDIFIER", brand_name="漫步者", model_code="B2-PRO")

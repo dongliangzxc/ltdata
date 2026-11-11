@@ -638,13 +638,21 @@ export default function MatchPage() {
 
   useEffect(() => {
     if (!selectedReviewId || activeTab === 'filtered') return
+    // 快速切换选中项时，先发出的详情请求可能后返回；用 cancelled 丢弃过期响应，
+    // 避免右侧详情停留在上一条记录（与左侧选中项不一致）。
+    let cancelled = false
     setReviewDetailLoading(true)
+    setReviewDetail(null)
     getMatchReviewDetail(selectedReviewId)
       .then(r => {
+        if (cancelled) return
         setReviewDetail(r.data)
         setReviewReason(r.data.dispute_reason || r.data.review_note || '')
       })
-      .finally(() => setReviewDetailLoading(false))
+      .finally(() => {
+        if (!cancelled) setReviewDetailLoading(false)
+      })
+    return () => { cancelled = true }
   }, [activeTab, selectedReviewId])
 
   const refreshCurrentReviewDetail = async () => {

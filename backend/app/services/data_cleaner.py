@@ -9,7 +9,7 @@
 import logging
 import time
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from app.models.schemas import (
     RawDataRecord, CleanedDataRecord, CleanJobRecord,
@@ -97,15 +97,40 @@ def _load_brand_alias_map(db: Session) -> dict[str, str]:
     )
 
 
+def _alias_name_group_expr(db: Session):
+    """按精确字符串分组；MySQL 默认排序规则大小写/全半角不敏感，会把不同写法合并。"""
+    expr = BrandAlias.alias_name
+    bind = db.get_bind()
+    if bind is not None and bind.dialect.name != "sqlite":
+        expr = expr.collate("utf8mb4_bin")
+    return expr
+
+
 def _load_brand_alias_map_uncached(db: Session) -> dict[str, str]:
     result = {}
-    rows = db.query(BrandAlias).filter(BrandAlias.is_active == 1).all()
-    for r in rows:
-        normalized = r.alias_name.strip().upper()
+    # 同一写法在表里可能有大量重复行（历史批量导入未去重，实测 28 万行只对应 3 千多个写法）。
+    # 旧实现按 id 全量遍历、后写覆盖先写，等价于「每个写法只保留 id 最大的那行」；
+    # 这里先用 SQL 收敛到每个写法的最新一行，返回结果与全量遍历完全一致，
+    # 但行数从几十万降到几千。分组必须用 binary 排序规则，否则数据库的大小写/全半角
+    # 不敏感排序会把不同写法的行合并，导致少 key。
+    latest_alias_ids = (
+        db.query(func.max(BrandAlias.id).label("mid"))
+        .filter(BrandAlias.is_active == 1)
+        .group_by(_alias_name_group_expr(db))
+        .subquery()
+    )
+    rows = (
+        db.query(BrandAlias.alias_name, BrandAlias.brand_code)
+        .join(latest_alias_ids, BrandAlias.id == latest_alias_ids.c.mid)
+        .order_by(BrandAlias.id)
+        .all()
+    )
+    for r_alias_name, brand_code in rows:
+        normalized = r_alias_name.strip().upper()
         candidates = [normalized]
         candidates.extend(part.strip() for part in normalized.split("/") if part.strip())
         for candidate in candidates:
-            result[candidate] = r.brand_code
+            result[candidate] = brand_code
     return result
 
 

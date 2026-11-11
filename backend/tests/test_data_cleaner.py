@@ -7,7 +7,7 @@ from app.models.schemas import (
     BrandAlias, FilteredItem, CleanedDataRecord,
     DispatchBatch, DispatchItem, InterventionRule,
 )
-from app.services.data_cleaner import run_clean
+from app.services.data_cleaner import run_clean, _load_brand_alias_map
 
 
 def _make_raw(db, file_id, item_name, brand_raw="SONY", shop_name="测试店铺"):
@@ -457,6 +457,39 @@ def test_brand_alias_case_insensitive(db):
 
     cleaned = db.query(CleanedDataRecord).first()
     assert cleaned.brand_std == "BOSE"
+
+
+def test_brand_alias_map_dedupes_duplicate_rows_and_keeps_latest(db):
+    """同一写法大量重复时只保留 id 最大的一条，映射结果与全量遍历一致"""
+    db.add_all([
+        BrandAlias(alias_name="PISEN/品胜", brand_code="OLD1"),
+        BrandAlias(alias_name="PISEN/品胜", brand_code="PISEN"),
+        BrandAlias(alias_name="PISEN/品胜", brand_code="品胜"),
+        BrandAlias(alias_name="索尼", brand_code="SONY"),
+        BrandAlias(alias_name="索尼", brand_code="OLD2"),
+    ])
+    db.commit()
+
+    alias_map = _load_brand_alias_map(db)
+
+    assert alias_map["PISEN/品胜"] == "品胜"
+    assert alias_map["PISEN"] == "品胜"
+    assert alias_map["品胜"] == "品胜"
+    assert alias_map["索尼"] == "OLD2"
+
+
+def test_brand_alias_map_keeps_width_variant_aliases(db):
+    """全角/半角等不同写法不能被分组合并掉"""
+    db.add_all([
+        BrandAlias(alias_name="Ｕ＆Ｈ", brand_code="FULL"),
+        BrandAlias(alias_name="U&H", brand_code="HALF"),
+    ])
+    db.commit()
+
+    alias_map = _load_brand_alias_map(db)
+
+    assert alias_map["Ｕ＆Ｈ"] == "FULL"
+    assert alias_map["U&H"] == "HALF"
 
 
 def test_no_alias_keeps_original_brand_std(db):

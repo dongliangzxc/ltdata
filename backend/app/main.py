@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,6 +16,13 @@ from app.api.upload_templates_api import router as upload_templates_router
 from app.api.brands_api import router as brands_router
 from app.api.countries_api import router as countries_router
 from app.api.translation_api import router as translation_router
+
+
+# 应用日志默认 INFO：清洗/匹配阶段计时、后台任务进度等诊断日志依赖此级别
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(name)s %(levelname)s %(message)s",
+)
 
 
 # 不需要鉴权的路径（精确匹配或前缀匹配）

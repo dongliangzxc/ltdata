@@ -92,6 +92,8 @@ class MatchContext:
     long_code_model_order: dict = field(default_factory=dict)
     long_code_models: list = field(default_factory=list)
     alias_map: dict = field(default_factory=dict)
+    # 进入索引的全部有效型号（run_match 用于把这些只读对象移出会话）
+    models: list = field(default_factory=list)
     brand_raw_cache: dict = field(default_factory=dict)
     exclusion_url_keys: set = field(default_factory=set)
     exclusion_name_keys: set = field(default_factory=set)
@@ -155,6 +157,7 @@ def _load_match_context(db: Session, category_code: str | None) -> MatchContext:
     )
 
     all_models = [m for m in model_rows if m.id in ctx.valid_model_ids]
+    ctx.models = all_models
 
     for m in all_models:
         key = _norm(m.brand_code)
@@ -727,6 +730,13 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
         .filter(CleanedDataRecord.clean_job_id == clean_job_id)
         .all()
     )
+    if commit:
+        # 每批 commit 会 expire 会话内全部对象（expire_on_commit），之后访问型号/
+        # 清洗行/规则的属性会逐个触发单行 SELECT（headphone 3 万行任务因此跑了 20 分钟+）。
+        # 这些对象在匹配中只读，移出会话后保留已加载的值，commit 不再使其失效。
+        for obj in (*ctx.models, *explicit_rules, *cleaned_rows):
+            if obj in db:
+                db.expunge(obj)
     _t3 = time.perf_counter()
     # 历史库一次性载入内存索引，避免逐行 N+1 查询（headphone 2.3 万行曾耗时约 5 分钟）
     _build_history_index(db, ctx, cleaned_rows)

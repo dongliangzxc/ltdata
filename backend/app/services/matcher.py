@@ -510,6 +510,7 @@ def _match_text_stages(
     item_upper: str,
     url_brand_hint: str | None,
     ctx: MatchContext,
+    stage_time: dict | None = None,
 ) -> tuple[ModelRecord | None, str | None, bool, list[tuple]]:
     """S1-S4 文本匹配主体。返回 (best_model, match_source, brand_identified, row_candidates)。
 
@@ -517,14 +518,21 @@ def _match_text_stages(
     - S2: 商品名里找 brand_code。
     - S3: 商品名里找 brand_name。
     - S4: 品牌完全未识别时的全局长码兜底。
+
+    ``stage_time`` 非空时累计各阶段耗时（诊断用）。
     """
     best_model: ModelRecord | None = None
     brand_identified = False
     match_source: str | None = None
     row_candidates: list[tuple] = []
 
+    def _acc(stage: str, t0: float) -> None:
+        if stage_time is not None:
+            stage_time[stage] = stage_time.get(stage, 0.0) + (time.perf_counter() - t0)
+
     if url_brand_hint:
         # URL 映射中有品牌线索：只在该品牌下查型号，跳过 S2/S3/S4
+        _t0 = time.perf_counter()
         candidates = _candidates_by_brand_raw(ctx, url_brand_hint)
         if candidates:
             brand_identified = True
@@ -533,9 +541,11 @@ def _match_text_stages(
             if top:
                 best_model = top[0][0]
                 match_source = "s1"
+        _acc("s1", _t0)
     else:
         # S1: 用 brand_raw 缩窄候选
         if raw.brand_raw:
+            _t0 = time.perf_counter()
             candidates = _candidates_by_brand_raw(ctx, raw.brand_raw)
             if candidates:
                 brand_identified = True
@@ -544,9 +554,11 @@ def _match_text_stages(
                 if top:
                     best_model = top[0][0]
                     match_source = "s1"
+            _acc("s1", _t0)
 
         # S2: item_name 里找 brand_code（前缀索引剪枝）
         if best_model is None:
+            _t0 = time.perf_counter()
             grams = _grams(item_upper)
             for bc in _index_keys_by_grams(ctx.brand_code_prefix, ctx.brand_code_order, grams):
                 if bc in item_upper:
@@ -557,9 +569,11 @@ def _match_text_stages(
                         if len(_norm(top[0][0].model_code)) > len(_norm(best_model.model_code) if best_model else ""):
                             best_model = top[0][0]
                             match_source = "s2"
+            _acc("s2", _t0)
 
         # S3: item_name 里找 brand_name
         if best_model is None:
+            _t0 = time.perf_counter()
             for bn in _index_keys_by_grams(ctx.brand_name_prefix, ctx.brand_name_order, grams):
                 if len(bn) >= 2 and bn in item_upper:
                     brand_identified = True
@@ -569,9 +583,11 @@ def _match_text_stages(
                         if len(_norm(top[0][0].model_code)) > len(_norm(best_model.model_code) if best_model else ""):
                             best_model = top[0][0]
                             match_source = "s3"
+            _acc("s3", _t0)
 
         # S4: 仅在品牌完全未识别时才做全局长码兜底（前缀剪枝）
         if best_model is None and not brand_identified:
+            _t0 = time.perf_counter()
             pruned = []
             seen = set()
             for g in grams:
@@ -585,6 +601,7 @@ def _match_text_stages(
             if top:
                 best_model = top[0][0]
                 match_source = "s4"
+            _acc("s4", _t0)
 
     return best_model, match_source, brand_identified, row_candidates
 
@@ -701,6 +718,10 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
     total = len(cleaned_rows)
     # raw_data_id → list of (model, score, source) for S1-S4 hits
     raw_data_candidates: dict[int, list[tuple]] = {}
+    stage_time: dict[str, float] = {}
+
+    def _acc(stage: str, t0: float) -> None:
+        stage_time[stage] = stage_time.get(stage, 0.0) + (time.perf_counter() - t0)
 
     for i, row in enumerate(cleaned_rows):
         # A task-local ignored row must not enter any matching stage, even on
@@ -742,6 +763,7 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
                 results = []
             continue
 
+        _t_stage = time.perf_counter()
         item_upper = _norm(row.item_name)
 
         # ── S0: URL精确匹配 ────────────────────────────────────
@@ -769,11 +791,14 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
                     if progress_cb:
                         progress_cb(i + 1, total, matched_count)
                     results = []
+                _acc("s0", _t_stage)
                 continue  # 跳过 S1-S4
             # model_id=NULL 但 brand_code 有值：作为 S1 品牌线索
             url_brand_hint = url_brand_map.get((platform, item_id))
+        _acc("s0", _t_stage)
 
         # ── S0.1: 人工排除沉淀库沿用 ───────────────────────────────
+        _t_stage = time.perf_counter()
         if _is_excluded(ctx, *(url_info or (None, None)), row.item_name):
             results.append(MatchResult(
                 clean_job_id=clean_job_id,
@@ -792,9 +817,12 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
                 if progress_cb:
                     progress_cb(i + 1, total, matched_count)
                 results = []
+            _acc("s01", _t_stage)
             continue
+        _acc("s01", _t_stage)
 
         # ── S0.2: 历史库精确匹配 ─────────────────────────────────
+        _t_stage = time.perf_counter()
         hist_hit = _history_lookup(db, row, ctx)
         if hist_hit:
             historical_model_id = hist_hit.model_id if hist_hit.model_id in valid_model_ids else None
@@ -820,8 +848,10 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
                     progress_cb(i + 1, total, matched_count)
                 results = []
             continue  # 跳过 S0.5 / S1-S4
+        _acc("hist", _t_stage)
 
         # ── S0.5: 显式规则匹配 ─────────────────────────────────────
+        _t_stage = time.perf_counter()
         s05_model_id: int | None = None
         for rule in explicit_rules:
             kw = rule.keyword.upper()
@@ -855,12 +885,16 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
                 if progress_cb:
                     progress_cb(i + 1, total, matched_count)
                 results = []
+            _acc("s05", _t_stage)
             continue  # 跳过 S1-S4
+        _acc("s05", _t_stage)
 
         # ── S1-S4 文本匹配 ─────────────────────────────────────
+        _t_stage = time.perf_counter()
         best_model, match_source, brand_identified, row_candidates = _match_text_stages(
-            row, item_upper, url_brand_hint, ctx,
+            row, item_upper, url_brand_hint, ctx, stage_time=stage_time,
         )
+        _acc("s14", _t_stage)
 
         # 记录候选（仅当有多于1个候选或best_model有候选时）
         if row_candidates:
@@ -995,9 +1029,12 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
             audit_price(db, matched_result_ids, commit=commit)
 
     logger.info(
-        "run_match job=%s total=%d matched=%d ignored=%d old=%.1fs ctx=%.1fs load=%.1fs hist=%.1fs loop=%.1fs cand=%.1fs total=%.1fs",
+        "run_match job=%s total=%d matched=%d ignored=%d old=%.1fs ctx=%.1fs load=%.1fs hist=%.1fs loop=%.1fs cand=%.1fs total=%.1fs s0=%.1fs s01=%.1fs s0_2=%.1fs s05=%.1fs s14=%.1fs(s1=%.1fs s2=%.1fs s3=%.1fs s4=%.1fs)",
         clean_job_id, total, matched_count, ignored_count,
         _t1 - _t0, _t2 - _t1, _t3 - _t2, _t3b - _t3, _t4 - _t3b, time.perf_counter() - _t4, time.perf_counter() - _t0,
+        stage_time.get("s0", 0.0), stage_time.get("s01", 0.0), stage_time.get("hist", 0.0),
+        stage_time.get("s05", 0.0), stage_time.get("s14", 0.0),
+        stage_time.get("s1", 0.0), stage_time.get("s2", 0.0), stage_time.get("s3", 0.0), stage_time.get("s4", 0.0),
     )
     return {
         "total": total,

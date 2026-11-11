@@ -52,6 +52,7 @@ brand_identified 标记：S1/S2/S3 任意阶段识别到品牌即置 1，即使�
 支持重复执行：每次运行先删除该 clean_job 的旧结果再重新写入。
 """
 import logging
+import time
 from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
@@ -385,6 +386,7 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
     """
     progress_cb(processed: int, total: int, matched: int) — 每批次调用一次
     """
+    _t0 = time.perf_counter()
     # ── 删除旧结果（支持重跑）────────────────────────────────────
     # ``ignored`` is a task-local manual decision.  Matching is deliberately
     # rebuildable, so retain the decision by raw_data_id before deleting the
@@ -460,6 +462,7 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
     db.query(MatchResult).filter(MatchResult.clean_job_id == clean_job_id).delete(
         synchronize_session=False
     )
+    _t1 = time.perf_counter()
 
     clean_job = db.query(CleanJobRecord).filter(CleanJobRecord.id == clean_job_id).first()
     job_category_code = None
@@ -471,6 +474,7 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
     url_brand_map = ctx.url_brand_map
     valid_model_ids = ctx.valid_model_ids
     explicit_rules = ctx.explicit_rules
+    _t2 = time.perf_counter()
 
     # ── 加载清洗数据 ──────────────────────────────────────────────
     cleaned_rows = (
@@ -478,6 +482,7 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
         .filter(CleanedDataRecord.clean_job_id == clean_job_id)
         .all()
     )
+    _t3 = time.perf_counter()
 
     results: list[MatchResult] = []
     matched_count = 0
@@ -691,6 +696,7 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
             db.commit()
         else:
             db.flush()
+    _t4 = time.perf_counter()
 
     # ── 写入候选记录 ──────────────────────────────────────────────
     if raw_data_candidates:
@@ -778,6 +784,11 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
         else:
             audit_price(db, matched_result_ids, commit=commit)
 
+    logger.info(
+        "run_match job=%s total=%d matched=%d ignored=%d old=%.1fs ctx=%.1fs load=%.1fs loop=%.1fs cand=%.1fs total=%.1fs",
+        clean_job_id, total, matched_count, ignored_count,
+        _t1 - _t0, _t2 - _t1, _t3 - _t2, _t4 - _t3, time.perf_counter() - _t4, time.perf_counter() - _t0,
+    )
     return {
         "total": total,
         "matched": matched_count,

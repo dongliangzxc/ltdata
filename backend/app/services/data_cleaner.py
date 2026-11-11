@@ -6,12 +6,17 @@
 4. 去重（同 item_id + month + shop_name 保留第一条）
 5. brand_std 兜底补全（无匹配时用 brand_raw）
 """
+import logging
+import time
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.models.schemas import (
     RawDataRecord, CleanedDataRecord, CleanJobRecord,
     FilteredItem, BrandAlias, InterventionRule, InterferenceLink,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _load_intervention_rules(db: Session, category_code: str | None = None) -> list[InterventionRule]:
@@ -271,11 +276,13 @@ def run_clean(
     并会预载任务已有清洗结果参与去重，避免与历史数据重复。
     """
     dedup: bool = rules.get("dedup", True)
+    _t0 = time.perf_counter()
 
     # ── 加载规则表 ─────────────────────────────────────────────
     intervention_rules = _load_intervention_rules(db, dispatch_category_code)
     brand_alias_map = _load_brand_alias_map(db)
     interference_links = _load_interference_links(db)
+    _t1 = time.perf_counter()
 
     # ── 数据源选取 ─────────────────────────────────────────────
     from app.models.schemas import CleanJobItemRecord
@@ -297,6 +304,7 @@ def run_clean(
             records = db.query(RawDataRecord).filter(RawDataRecord.id.in_(raw_data_ids_in_batch)).all()
         elif raw_data_ids is None:
             records = db.query(RawDataRecord).filter(RawDataRecord.file_id.in_(file_ids)).all()
+    _t2 = time.perf_counter()
 
     cleaned: list[CleanedDataRecord] = []
     filtered: list[FilteredItem] = []
@@ -395,6 +403,7 @@ def run_clean(
             corrected_sales_qty=r.sales_qty,
             corrected_sales_amount=r.sales_amount,
         ))
+    _t3 = time.perf_counter()
 
     # ── 批量写入 ──────────────────────────────────────────────
     if filtered:
@@ -411,4 +420,9 @@ def run_clean(
 
     if commit:
         db.commit()
+    logger.info(
+        "run_clean job=%s rows=%d cleaned=%d filtered=%d rules=%.1fs query=%.1fs loop=%.1fs write=%.1fs total=%.1fs",
+        clean_job_id, len(records), len(cleaned), len(filtered),
+        _t1 - _t0, _t2 - _t1, _t3 - _t2, time.perf_counter() - _t3, time.perf_counter() - _t0,
+    )
     return len(cleaned)

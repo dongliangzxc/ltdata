@@ -390,11 +390,13 @@ def _maybe_commit_and_refresh(db: Session, job: CleanJobRecord, commit: bool) ->
 
 
 def _run_clean_and_match_for_job(db: Session, job: CleanJobRecord, commit: bool = True) -> None:
+    _t0 = time.perf_counter()
     job.status = "cleaning"
     _maybe_commit_and_refresh(db, job, commit)
 
     _clear_clean_job_outputs(db, job.id)
     _maybe_commit_and_refresh(db, job, commit)
+    _t1 = time.perf_counter()
 
     row_out = run_clean(
         db,
@@ -408,10 +410,15 @@ def _run_clean_and_match_for_job(db: Session, job: CleanJobRecord, commit: bool 
     job.row_out = row_out
     job.status = "matching"
     _maybe_commit_and_refresh(db, job, commit)
+    _t2 = time.perf_counter()
 
     run_match(db, job.id, commit=commit)
     job.status = "reviewing"
     _maybe_commit_and_refresh(db, job, commit)
+    logger.info(
+        "clean_and_match job=%s clear=%.1fs clean=%.1fs match=%.1fs total=%.1fs",
+        job.id, _t1 - _t0, _t2 - _t1, time.perf_counter() - _t2, time.perf_counter() - _t0,
+    )
 
 
 def _manual_review_snapshot(db: Session, clean_job_id: int) -> dict[int, dict]:

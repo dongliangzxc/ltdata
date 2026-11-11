@@ -67,22 +67,60 @@ def _load_interference_links_uncached(db: Session) -> dict[str, dict[str, str]]:
     return result
 
 
-def _matches_interference_links(
-    record: RawDataRecord,
+# 干扰链接索引片段长度：长度 >= 该值的链接按末尾 N 个字符分组。
+# 取末尾而非开头：链接开头基本都是 https://item.xxx.com/，末尾的商品 ID 区分度高。
+_LINK_KEY_TAIL_LEN = 10
+
+
+def _build_interference_link_index(
     links: dict[str, dict[str, str]],
-    category_code: str | None = None,
-) -> str | None:
-    """商品链接包含当前品类库中的任意链接时返回命中的库中链接原文，否则 None。"""
-    url = (record.item_url or "").casefold().strip()
-    if not url or not category_code:
+    category_code: str | None,
+) -> tuple[dict[str, list[tuple[int, str, str]]], list[tuple[int, str, str]]] | None:
+    """把当前品类的干扰链接建成索引：(按末尾 N 字符分组, 短于 N 的链接)。
+
+    元素为 (库中顺序, 规范化链接, 原文)。若某链接是商品链接的子串，其末尾 N 个字符
+    必然是商品链接某个位置开始的 N 字符片段，因此按片段查索引不会漏掉命中；
+    命中多条时取库中顺序最靠前的一条，与逐条遍历的返回结果一致。
+    """
+    if not category_code:
         return None
     bucket = links.get(category_code)
     if not bucket:
         return None
-    for key, original in bucket.items():
-        if key and key in url:
-            return original
-    return None
+    by_tail: dict[str, list[tuple[int, str, str]]] = {}
+    short: list[tuple[int, str, str]] = []
+    for order, (key, original) in enumerate(bucket.items()):
+        if not key:
+            continue
+        if len(key) >= _LINK_KEY_TAIL_LEN:
+            by_tail.setdefault(key[-_LINK_KEY_TAIL_LEN:], []).append((order, key, original))
+        else:
+            short.append((order, key, original))
+    return by_tail, short
+
+
+def _matches_interference_links(
+    record: RawDataRecord,
+    link_index: tuple[dict[str, list[tuple[int, str, str]]], list[tuple[int, str, str]]] | None,
+) -> str | None:
+    """商品链接包含当前品类库中的任意链接时返回命中的库中链接原文，否则 None。"""
+    if not link_index:
+        return None
+    url = (record.item_url or "").casefold().strip()
+    if not url:
+        return None
+    by_tail, short = link_index
+    best: tuple[int, str] | None = None
+    for order, key, original in short:
+        if key in url:
+            best = (order, original)
+            break
+    n = _LINK_KEY_TAIL_LEN
+    for pos in range(len(url) - n + 1):
+        for order, key, original in by_tail.get(url[pos:pos + n], ()):
+            if (best is None or order < best[0]) and key in url:
+                best = (order, original)
+    return best[1] if best else None
 
 
 def _load_brand_alias_map(db: Session) -> dict[str, str]:
@@ -334,7 +372,9 @@ def run_clean(
     # ── 加载规则表 ─────────────────────────────────────────────
     intervention_rules = _load_intervention_rules(db, dispatch_category_code)
     brand_alias_map = _load_brand_alias_map(db)
-    interference_links = _load_interference_links(db)
+    interference_link_index = _build_interference_link_index(
+        _load_interference_links(db), dispatch_category_code,
+    )
     _t1 = time.perf_counter()
 
     # ── 数据源选取 ─────────────────────────────────────────────
@@ -359,8 +399,8 @@ def run_clean(
             records = db.query(RawDataRecord).filter(RawDataRecord.file_id.in_(file_ids)).all()
     _t2 = time.perf_counter()
 
-    cleaned: list[CleanedDataRecord] = []
-    filtered: list[FilteredItem] = []
+    cleaned: list[dict] = []
+    filtered: list[dict] = []
     seen_keys: set = set()
     if dedup and raw_data_ids is not None:
         seen_keys = {
@@ -374,9 +414,9 @@ def run_clean(
 
     for r in records:
         # ── Step 1: 干扰链接库（按品类剔除）────────────────────────
-        hit_link = _matches_interference_links(r, interference_links, dispatch_category_code)
+        hit_link = _matches_interference_links(r, interference_link_index)
         if hit_link is not None:
-            filtered.append(FilteredItem(
+            filtered.append(dict(
                 raw_data_id=r.id,
                 clean_job_id=clean_job_id,
                 matched_keyword="干扰链接库",
@@ -390,7 +430,7 @@ def run_clean(
         matched_rule = _first_matching_intervention_rule(r, intervention_rules, brand_alias_map)
         if matched_rule is not None:
             if matched_rule.action == "filter":
-                filtered.append(FilteredItem(
+                filtered.append(dict(
                     raw_data_id=r.id,
                     clean_job_id=clean_job_id,
                     matched_keyword=matched_rule.name,
@@ -421,7 +461,7 @@ def run_clean(
         if not brand_std:
             brand_std = r.brand_raw  # 兜底
 
-        cleaned.append(CleanedDataRecord(
+        cleaned.append(dict(
             raw_data_id=r.id,
             clean_job_id=clean_job_id,
             country_code=r.country_code,
@@ -459,10 +499,11 @@ def run_clean(
     _t3 = time.perf_counter()
 
     # ── 批量写入 ──────────────────────────────────────────────
+    # 直接按字典批量插入，省去逐行构造 ORM 对象；列默认值（created_at/is_recovered）照常填充
     if filtered:
-        db.bulk_save_objects(filtered)
+        db.bulk_insert_mappings(FilteredItem, filtered)
     if cleaned:
-        db.bulk_save_objects(cleaned)
+        db.bulk_insert_mappings(CleanedDataRecord, cleaned)
 
     # ── 更新 job 统计 ─────────────────────────────────────────
     job = db.query(CleanJobRecord).filter(CleanJobRecord.id == clean_job_id).first()

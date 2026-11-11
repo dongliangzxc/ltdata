@@ -115,11 +115,16 @@ def _build_url_maps(db: Session, url_reusable_model_ids: set[int]) -> tuple[dict
     """
     url_map: dict[tuple[str, str], int] = {}
     url_brand_map: dict[tuple[str, str], str] = {}
-    for um in db.query(ItemUrlMapping).all():
-        if um.model_id and um.model_id in url_reusable_model_ids:
-            url_map[(um.platform, um.item_id)] = um.model_id
-        elif um.brand_code:
-            url_brand_map[(um.platform, um.item_id)] = um.brand_code
+    # 只取用到的 4 列，92 万行不再逐行构造 ORM 对象
+    rows = db.query(
+        ItemUrlMapping.platform, ItemUrlMapping.item_id,
+        ItemUrlMapping.model_id, ItemUrlMapping.brand_code,
+    ).all()
+    for platform, item_id, model_id, brand_code in rows:
+        if model_id and model_id in url_reusable_model_ids:
+            url_map[(platform, item_id)] = model_id
+        elif brand_code:
+            url_brand_map[(platform, item_id)] = brand_code
     return url_map, url_brand_map
 
 

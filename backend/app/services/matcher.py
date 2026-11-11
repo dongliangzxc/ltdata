@@ -58,6 +58,10 @@ from datetime import datetime
 
 from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
+from app.services.rawdata_cache import cached_value
+
+# item_url_mappings（92 万行）进程内缓存 TTL；URL 映射导入/确认时显式失效
+URL_MAP_CACHE_TTL = 60.0
 from app.models.schemas import CleanedDataRecord, ModelRecord, ModelAlias, MatchResult, MatchResultAttr, MatchResultCandidate, MatchResultExtraValue, ItemUrlMapping, MatchRule, HistoricalMapping, CleanJobRecord, RawDataRecord
 from app.utils.url_utils import extract_item_id
 from app.utils.text_utils import title_key
@@ -101,6 +105,22 @@ class MatchContext:
     hist_full_platforms: set = field(default_factory=set)
 
 
+def _build_url_maps(db: Session, url_reusable_model_ids: set[int]) -> tuple[dict, dict]:
+    """从 item_url_mappings 构建 (url_map, url_brand_map)。
+
+    与 _load_match_context 原逻辑一致：model_id 落在可复用型号集内 → url_map，
+    否则有 brand_code → url_brand_map。
+    """
+    url_map: dict[tuple[str, str], int] = {}
+    url_brand_map: dict[tuple[str, str], str] = {}
+    for um in db.query(ItemUrlMapping).all():
+        if um.model_id and um.model_id in url_reusable_model_ids:
+            url_map[(um.platform, um.item_id)] = um.model_id
+        elif um.brand_code:
+            url_brand_map[(um.platform, um.item_id)] = um.brand_code
+    return url_map, url_brand_map
+
+
 def _load_match_context(db: Session, category_code: str | None) -> MatchContext:
     """加载给定品类下的匹配上下文；category_code=None 时不做品类过滤，
     保留 run_match 原有行为（全部有效型号进入 valid_model_ids）。"""
@@ -120,11 +140,12 @@ def _load_match_context(db: Session, category_code: str | None) -> MatchContext:
         if m.status == "active" and not _is_generic_brand_code(m.brand_code)
     }
 
-    for um in db.query(ItemUrlMapping).all():
-        if um.model_id and um.model_id in ctx.url_reusable_model_ids:
-            ctx.url_map[(um.platform, um.item_id)] = um.model_id
-        elif um.brand_code:
-            ctx.url_brand_map[(um.platform, um.item_id)] = um.brand_code
+    # item_url_mappings 92 万行，每个任务全量重载曾耗时 23-86s；按品类缓存，
+    # URL 映射写入时 invalidate_rawdata_cache 显式失效，TTL 兜底（型号变更最多延迟 60s）。
+    ctx.url_map, ctx.url_brand_map = cached_value(
+        "match_ctx", ("url_map", category_code), URL_MAP_CACHE_TTL,
+        lambda: _build_url_maps(db, ctx.url_reusable_model_ids),
+    )
 
     ctx.explicit_rules = (
         db.query(MatchRule)

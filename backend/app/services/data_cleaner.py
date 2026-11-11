@@ -15,14 +15,28 @@ from app.models.schemas import (
     RawDataRecord, CleanedDataRecord, CleanJobRecord,
     FilteredItem, BrandAlias, InterventionRule, InterferenceLink,
 )
+from app.services.rawdata_cache import cached_value
 
 logger = logging.getLogger(__name__)
+
+
+# 规则表进程内缓存：品牌别名/干扰链接是几十万行的重表，每个任务都全量重查会打满
+# RDS（实测并发任务时单次 brand_aliases 查询 5-25s）。规则变更少，TTL 兜底 + 写入时
+# 显式失效（invalidate_rawdata_cache）。
+_RULES_CACHE_TTL = 300.0
 
 
 def _load_intervention_rules(db: Session, category_code: str | None = None) -> list[InterventionRule]:
     """返回指定分发品类的 active 干预规则；未指定品类时不应用规则。"""
     if not category_code:
         return []
+    return cached_value(
+        "clean_rules", ("intervention_rules", category_code), _RULES_CACHE_TTL,
+        lambda: _load_intervention_rules_uncached(db, category_code),
+    )
+
+
+def _load_intervention_rules_uncached(db: Session, category_code: str) -> list[InterventionRule]:
     return (
         db.query(InterventionRule)
         .filter(
@@ -36,6 +50,13 @@ def _load_intervention_rules(db: Session, category_code: str | None = None) -> l
 
 def _load_interference_links(db: Session) -> dict[str, dict[str, str]]:
     """返回 {品类码: {链接(小写去空格): 原文}}，按品类严格隔离。"""
+    return cached_value(
+        "clean_rules", ("interference_links",), _RULES_CACHE_TTL,
+        lambda: _load_interference_links_uncached(db),
+    )
+
+
+def _load_interference_links_uncached(db: Session) -> dict[str, dict[str, str]]:
     result: dict[str, dict[str, str]] = {}
     for row in db.query(InterferenceLink).all():
         normalized = (row.url or "").casefold().strip()
@@ -70,6 +91,13 @@ def _load_brand_alias_map(db: Session) -> dict[str, str]:
     一条别名可写多个写法并用 `/` 分隔（如「汉王（Hanvon）/HANVON/汉王」），
     这里拆成「整串 + 每个分隔部分」分别作为 key，便于对原始品牌文本做精确匹配。
     """
+    return cached_value(
+        "clean_rules", ("brand_alias_map",), _RULES_CACHE_TTL,
+        lambda: _load_brand_alias_map_uncached(db),
+    )
+
+
+def _load_brand_alias_map_uncached(db: Session) -> dict[str, str]:
     result = {}
     rows = db.query(BrandAlias).filter(BrandAlias.is_active == 1).all()
     for r in rows:

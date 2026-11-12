@@ -26,8 +26,13 @@ logger = logging.getLogger(__name__)
 _RULES_CACHE_TTL = 300.0
 
 
-def _load_intervention_rules(db: Session, category_code: str | None = None) -> list[InterventionRule]:
-    """返回指定分发品类的 active 干预规则；未指定品类时不应用规则。"""
+def _load_intervention_rules(db: Session, category_code: str | None = None) -> list[dict]:
+    """返回指定分发品类的 active 干预规则；未指定品类时不应用规则。
+
+    缓存里只放普通 dict：ORM 实例绑定在加载它的 Session 上，跨请求复用缓存时
+    原 Session 已关闭，访问属性会触发 DetachedInstanceError（attribute refresh
+    operation cannot proceed）。
+    """
     if not category_code:
         return []
     return cached_value(
@@ -36,9 +41,14 @@ def _load_intervention_rules(db: Session, category_code: str | None = None) -> l
     )
 
 
-def _load_intervention_rules_uncached(db: Session, category_code: str) -> list[InterventionRule]:
-    return (
-        db.query(InterventionRule)
+def _load_intervention_rules_uncached(db: Session, category_code: str) -> list[dict]:
+    rows = (
+        db.query(
+            InterventionRule.id,
+            InterventionRule.name,
+            InterventionRule.action,
+            InterventionRule.conditions,
+        )
         .filter(
             InterventionRule.is_active == 1,
             InterventionRule.category_code == category_code,
@@ -46,6 +56,10 @@ def _load_intervention_rules_uncached(db: Session, category_code: str) -> list[I
         .order_by(InterventionRule.priority, InterventionRule.id)
         .all()
     )
+    return [
+        {"id": rule_id, "name": name, "action": action, "conditions": conditions or {}}
+        for rule_id, name, action, conditions in rows
+    ]
 
 
 def _load_interference_links(db: Session) -> dict[str, dict[str, str]]:
@@ -274,11 +288,11 @@ def _matches_price_condition(ref_price: object, condition: dict) -> bool:
 
 def _matches_intervention_rule(
     record: RawDataRecord,
-    rule: InterventionRule,
+    rule: dict,
     brand_alias_map: dict[str, str] | None = None,
 ) -> bool:
     """所有已配置条件均需满足，且至少一个已识别条件匹配。"""
-    conditions = rule.conditions or {}
+    conditions = rule.get("conditions") or {}
     brand_raw = (record.brand_raw or "").strip()
     item_name = (record.item_name or "").casefold()
     has_recognized_condition = False
@@ -342,9 +356,9 @@ def _matches_intervention_rule(
 
 def _first_matching_intervention_rule(
     record: RawDataRecord,
-    intervention_rules: list[InterventionRule],
+    intervention_rules: list[dict],
     brand_alias_map: dict[str, str] | None = None,
-) -> InterventionRule | None:
+) -> dict | None:
     for rule in intervention_rules:
         if _matches_intervention_rule(record, rule, brand_alias_map):
             return rule
@@ -429,20 +443,20 @@ def run_clean(
         # ── Step 2: 清洗干预规则 ─────────────────────────────────
         matched_rule = _first_matching_intervention_rule(r, intervention_rules, brand_alias_map)
         if matched_rule is not None:
-            if matched_rule.action == "filter":
+            if matched_rule["action"] == "filter":
                 filtered.append(dict(
                     raw_data_id=r.id,
                     clean_job_id=clean_job_id,
-                    matched_keyword=matched_rule.name,
-                    intervention_rule_id=matched_rule.id,
-                    intervention_rule_name=matched_rule.name,
+                    matched_keyword=matched_rule["name"],
+                    intervention_rule_id=matched_rule["id"],
+                    intervention_rule_name=matched_rule["name"],
                     matched_reason=(
-                        f"命中规则「{matched_rule.name}」："
-                        f"{_intervention_condition_summary(matched_rule.conditions or {})}"
+                        f"命中规则「{matched_rule['name']}」："
+                        f"{_intervention_condition_summary(matched_rule.get('conditions') or {})}"
                     ),
                 ))
                 continue
-            if matched_rule.action == "allow":
+            if matched_rule["action"] == "allow":
                 pass
 
         # ── Step 3: 去重 ─────────────────────────────────────────

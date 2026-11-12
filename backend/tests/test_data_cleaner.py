@@ -251,6 +251,37 @@ def test_dispatch_category_clean_uses_same_category_intervention_rules(db):
     assert db.query(FilteredItem).filter_by(raw_data_id=raw.id).count() == 1
 
 
+def test_intervention_rule_cache_returns_plain_dicts_across_sessions(db, monkeypatch):
+    """规则缓存不能放 ORM 实例：跨请求复用时原 Session 已关闭，访问属性会报 detached。"""
+    from app.services import data_cleaner
+
+    db.add(InterventionRule(
+        name="配件过滤",
+        category_code="projector",
+        action="filter",
+        priority=10,
+        conditions={"item_name_contains_any": ["配件"]},
+    ))
+    db.commit()
+
+    cache: dict = {}
+
+    def fake_cached_value(namespace, key, ttl, loader):
+        if key not in cache:
+            cache[key] = loader()
+        return cache[key]
+
+    monkeypatch.setattr(data_cleaner, "cached_value", fake_cached_value)
+
+    data_cleaner._load_intervention_rules(db, "projector")
+    db.expunge_all()
+    rules = data_cleaner._load_intervention_rules(db, "projector")
+
+    assert isinstance(rules[0], dict)
+    assert rules[0]["name"] == "配件过滤"
+    assert rules[0]["conditions"] == {"item_name_contains_any": ["配件"]}
+
+
 def test_intervention_filter_rule_records_reason(db):
     f = _make_file(db)
     raw = _make_raw(db, f.id, "海信遥控器配件", brand_raw="海信")

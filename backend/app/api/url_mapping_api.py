@@ -135,6 +135,7 @@ def _get_or_create_url_import_model(
     model = ModelRecord(
         brand_code=brand_code,
         model_code=model_code,
+        model_name=model_code,
         category_code=category_code,
         series=series,
         brand_name=brand.brand_name if brand else brand_code,
@@ -212,6 +213,7 @@ def _get_or_create_series_url_import_model(
     model = ModelRecord(
         brand_code=brand_code,
         model_code=code,
+        model_name=code,
         category_code=category_code,
         series=series,
         brand_name=brand.brand_name if brand else brand_code,

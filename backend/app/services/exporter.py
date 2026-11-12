@@ -145,10 +145,16 @@ def _base_row(
         elif field == "brand_name":
             if brand_name_override is not None:
                 row[field] = brand_name_override
+            elif model:
+                # 型号品牌名称可能为空（如自动建号只写了品牌码），回退品牌码，
+                # 再退回清洗品牌，避免已匹配数据「入库品牌」为空。
+                row[field] = model.brand_name or model.brand_code or brand_name_fallback or ""
             else:
-                row[field] = model.brand_name if model else (brand_name_fallback or "")
+                row[field] = brand_name_fallback or ""
         elif field == "model_name":
-            row[field] = model.model_name if model else ""
+            # 型号名称可能为空（如 URL 映射导入自动建号、历史数据未补别名），
+            # 此时回退到型号码，避免已匹配数据导出时「型号」整列为空。
+            row[field] = (model.model_name or model.model_code or "") if model else ""
         elif field == "series":
             row[field] = model.series if model else ""
         elif field == "price_coefficient":
@@ -512,6 +518,7 @@ def _export_match_jobs(
         for mr, rd, model, cleaned in matched_rows:
             row = _base_row(
                 rd, model,
+                brand_name_fallback=cleaned_brand_names.get((mr.clean_job_id, rd.id)),
                 brand_name_override=_brand_override(mr.clean_job_id, rd.id),
                 match_result=mr,
                 cleaned=cleaned,

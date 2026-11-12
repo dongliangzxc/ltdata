@@ -284,6 +284,7 @@ def import_model_db(
             rec = ModelRecord(
                 brand_code=brand_code,
                 model_code=model_code,
+                model_name=model_code,
                 category_code=category_code,
                 brand_name=brand_name,
             )

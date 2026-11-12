@@ -98,6 +98,30 @@ def test_brand_name_and_model_name_in_export(db):
     assert xl["产品系列"].iloc[0] == "XM5 系列"
 
 
+def test_brand_name_falls_back_to_brand_code_when_empty(db):
+    """入库品牌（型号品牌名）为空时，应回退到品牌码，不能整列为空。"""
+    clean_job_id = _seed(db)
+    model = db.query(ModelRecord).filter(ModelRecord.model_code == "WH-1000XM5").first()
+    model.brand_name = None
+    db.commit()
+
+    result = export_match_job(db, clean_job_id)
+    xl = pd.read_excel(result[0]["path"], sheet_name="耳机-已处理")
+    assert xl["入库品牌"].iloc[0] == "sony"
+
+
+def test_model_name_falls_back_to_model_code_when_empty(db):
+    """型号名称（别名）为空时，「型号」列应回退到型号码，不能整列为空。"""
+    clean_job_id = _seed(db)
+    model = db.query(ModelRecord).filter(ModelRecord.model_code == "WH-1000XM5").first()
+    model.model_name = None
+    db.commit()
+
+    result = export_match_job(db, clean_job_id)
+    xl = pd.read_excel(result[0]["path"], sheet_name="耳机-已处理")
+    assert xl["型号"].iloc[0] == "WH-1000XM5"
+
+
 def test_series_column_after_model_in_matched_sheet(db):
     """已处理 Sheet 列顺序应为 品牌 → 产品系列 → 型号（产品系列在「型号」之前）。"""
     clean_job_id = _seed(db)

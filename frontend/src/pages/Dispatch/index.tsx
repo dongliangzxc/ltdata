@@ -398,20 +398,7 @@ function DispatchManagementTab({ onRulesChanged, visibleCategories }: { onRulesC
                   `${statsData.unmatched_rows ?? 0} 条`
                 )}
               </Descriptions.Item>
-              {statsData.other_category_rows ? (
-                <Descriptions.Item label="其他品类（无权限）">
-                  {statsData.other_category_rows} 条
-                </Descriptions.Item>
-              ) : null}
             </Descriptions>
-            {statsData.other_category_rows ? (
-              <Alert
-                type="info"
-                showIcon
-                style={{ marginBottom: 12 }}
-                message={`分发结果数只统计你有权限的品类；另有 ${statsData.other_category_rows} 条分发到无权限品类，未在下方表格展示。总数 = 分发结果数 + 其他品类 + 未命中。`}
-              />
-            ) : null}
             <Alert
               type="info"
               showIcon

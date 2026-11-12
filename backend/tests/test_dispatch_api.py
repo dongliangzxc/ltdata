@@ -1928,3 +1928,53 @@ def test_rule_coverage_lists_zero_match_rules(client_and_db):
     filtered_body = filtered.json()
     assert filtered_body["total"] == 2
     assert {row["rule_id"] for row in filtered_body["rows"]} == {matched_rule.id, empty_rule.id}
+
+
+def test_rule_coverage_dedupes_keyed_and_single_file_batches(client_and_db):
+    """同一文件既有上传批次分发、又有单文件补分发时，只按最新批次统计一次。
+
+    复现监控摄像头 202610 分发结果翻倍：带 batch_key 的批次和补分发产生的
+    batch_key 为空的批次被当成两个身份，导致同一批数据被重复计数。
+    """
+    client, db = client_and_db
+    db.add(Category(code="camera", name="监控摄像头"))
+    rule = DispatchRule(
+        category_code="camera", platform=None, field="category_lv1",
+        match_type="contains", value="摄像头", priority=1, is_active=1,
+    )
+    file_record = UploadFileRecord(
+        filename="camera.xlsx", platform="JD", row_count=1, status="done",
+        batch_key="upload-batch-camera",
+    )
+    db.add_all([rule, file_record])
+    db.flush()
+    raw = RawDataRecord(
+        file_id=file_record.id, platform="JD", month=202610,
+        item_id="camera-1", item_name="监控摄像头", category_lv1="摄像头",
+    )
+    db.add(raw)
+    db.flush()
+    keyed_batch = DispatchBatch(
+        file_id=file_record.id, batch_key="upload-batch-camera", status="done",
+        total_rows=1, dispatched_rows=1, unmatched_rows=0,
+    )
+    single_file_batch = DispatchBatch(
+        file_id=file_record.id, batch_key=None, status="done",
+        total_rows=1, dispatched_rows=1, unmatched_rows=0,
+    )
+    db.add_all([keyed_batch, single_file_batch])
+    db.flush()
+    db.add_all([
+        DispatchItem(batch_id=keyed_batch.id, raw_data_id=raw.id, category_code="camera", matched_rule_id=rule.id),
+        DispatchItem(batch_id=single_file_batch.id, raw_data_id=raw.id, category_code="camera", matched_rule_id=rule.id),
+    ])
+    db.commit()
+
+    response = client.get(
+        "/api/dispatch/rule-coverage",
+        params={"months": [202610], "category_codes": ["camera"]},
+    )
+    assert response.status_code == 200, response.text
+    rows_by_rule = {row["rule_id"]: row for row in response.json()["rows"]}
+    assert rows_by_rule[rule.id]["assigned_count"] == 1
+

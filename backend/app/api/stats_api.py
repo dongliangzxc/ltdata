@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import String, and_, case, cast, func, literal_column, or_
+from sqlalchemy import and_, case, func, literal_column, or_
 from sqlalchemy.orm import Session
 
 from app.core.auth_deps import require_admin
@@ -18,7 +18,6 @@ from app.models.schemas import (
     Category,
     CleanJobItemRecord,
     CleanJobRecord,
-    DispatchBatch,
     DispatchItem,
     HistoricalMapping,
     ItemExclusion,
@@ -32,6 +31,7 @@ from app.models.schemas import (
     User,
 )
 from app.utils.time_utils import format_beijing_datetime
+from app.services.dispatch_scope import latest_done_batch_subquery
 
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
@@ -309,20 +309,8 @@ def _match_stats(db: Session) -> dict:
 
 
 def _latest_done_batch_subquery(db: Session):
-    """每个文件/上传批次最新一次已完成分发批次（与分发页、导出页同口径）。"""
-    batch_identity = func.coalesce(DispatchBatch.batch_key, cast(DispatchBatch.file_id, String))
-    return (
-        db.query(
-            batch_identity.label("batch_identity"),
-            func.max(DispatchBatch.id).label("batch_id"),
-        )
-        .filter(
-            DispatchBatch.status == "done",
-            or_(DispatchBatch.file_id.isnot(None), DispatchBatch.batch_key.isnot(None)),
-        )
-        .group_by(batch_identity)
-        .subquery()
-    )
+    """每个文件最新一次已完成分发批次（与分发页、导出页同口径）。"""
+    return latest_done_batch_subquery(db)
 
 
 def _normalize_platform(value: str | None) -> str:

@@ -1,19 +1,19 @@
 from datetime import datetime
 
-from sqlalchemy import String, and_, case, cast, func, or_
+from sqlalchemy import and_, case, func, or_
 from sqlalchemy.orm import Session
 
 from app.models.schemas import (
     Category,
     CleanJobItemRecord,
     CleanJobRecord,
-    DispatchBatch,
     DispatchItem,
     MatchResult,
     MatchResultAttr,
     PublishJob,
     RawDataRecord,
 )
+from app.services.dispatch_scope import latest_done_batch_subquery
 
 
 ACTIVE_TASK_STATUSES = {"created", "cleaning", "matching", "reviewing", "processing", "done"}
@@ -61,25 +61,13 @@ def _platform_label_expr():
 
 
 def _latest_done_batch_ids(db: Session):
-    """每个文件/上传批次的最新已完成分发批次。
+    """每个文件的最新已完成分发批次。
 
-    与分发结果下载、规则命中核对保持同一口径：上传批次用 `batch_key` 标识，
-    单文件分发用 `file_id` 标识；重新分发/补分发会生成更新的批次，旧批次
-    不再是取数依据。
+    与分发结果下载、规则命中核对保持同一口径，口径细节见
+    `app.services.dispatch_scope.latest_done_batch_subquery`；重新分发/补分发
+    会生成更新的批次，旧批次不再是取数依据。
     """
-    batch_identity = func.coalesce(
-        func.nullif(DispatchBatch.batch_key, ""),
-        cast(DispatchBatch.file_id, String),
-    )
-    return (
-        db.query(func.max(DispatchBatch.id).label("batch_id"))
-        .filter(
-            DispatchBatch.status == "done",
-            or_(DispatchBatch.file_id.isnot(None), DispatchBatch.batch_key.isnot(None)),
-        )
-        .group_by(batch_identity)
-        .subquery()
-    )
+    return latest_done_batch_subquery(db)
 
 
 def _deduped_dispatch_item_ids(

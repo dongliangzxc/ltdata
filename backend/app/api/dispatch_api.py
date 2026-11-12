@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 import pandas as pd
 from openpyxl import Workbook
 from pydantic import BaseModel, Field
-from sqlalchemy import String, case, cast, func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 from app.core.auth_deps import get_current_user
 from app.core.config import settings
@@ -40,6 +40,7 @@ from app.services.export_guards import (
     ensure_export_row_limit,
     reserve_async_export_capacity,
 )
+from app.services.dispatch_scope import latest_done_batch_subquery
 
 router = APIRouter(prefix="/api/dispatch", tags=["dispatch"])
 
@@ -374,22 +375,7 @@ def _latest_dispatch_export_query(
     months: list[int] | None = None,
     allowed_category_codes: list[str] | None = None,
 ):
-    batch_identity = func.coalesce(
-        DispatchBatch.batch_key,
-        cast(DispatchBatch.file_id, String),
-    )
-    latest_batches = (
-        db.query(
-            batch_identity.label("batch_identity"),
-            func.max(DispatchBatch.id).label("batch_id"),
-        )
-        .filter(
-            DispatchBatch.status == "done",
-            or_(DispatchBatch.file_id.isnot(None), DispatchBatch.batch_key.isnot(None)),
-        )
-        .group_by(batch_identity)
-        .subquery()
-    )
+    latest_batches = latest_done_batch_subquery(db)
     query = (
         db.query(DispatchItem, RawDataRecord, UploadFileRecord, ColumnTemplate)
         .join(latest_batches, DispatchItem.batch_id == latest_batches.c.batch_id)
@@ -1454,22 +1440,7 @@ def download_dispatch_export(token: str, db: Session = Depends(get_db), current_
 
 
 def _latest_done_batch_subquery(db: Session):
-    batch_identity = func.coalesce(
-        DispatchBatch.batch_key,
-        cast(DispatchBatch.file_id, String),
-    )
-    return (
-        db.query(
-            batch_identity.label("batch_identity"),
-            func.max(DispatchBatch.id).label("batch_id"),
-        )
-        .filter(
-            DispatchBatch.status == "done",
-            or_(DispatchBatch.file_id.isnot(None), DispatchBatch.batch_key.isnot(None)),
-        )
-        .group_by(batch_identity)
-        .subquery()
-    )
+    return latest_done_batch_subquery(db)
 
 
 @router.get("/rule-coverage")

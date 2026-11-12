@@ -10,7 +10,7 @@ import {
 import { useRequest } from 'ahooks'
 import dayjs from 'dayjs'
 import {
-  listUploadFiles, listDispatchBatches, runDispatch, runDispatchBatch, enqueueDispatchCategoryForClean,
+  listUploadFiles, listDispatchBatches, runDispatch, runDispatchBatch,
   getDispatchBatchStats, listDispatchUnmatched, listDispatchRules,
   createDispatchRule, updateDispatchRule, deleteDispatchRule,
   createDispatchExportJob, listDispatchExportJobs, deleteDispatchExportJob, downloadDispatchExport,
@@ -184,7 +184,6 @@ const groupDispatchFiles = (files: UploadFile[]): DispatchFileRow[] => {
 // ─── Tab 1: 分发管理 ──────────────────────────────────────────
 function DispatchManagementTab({ onRulesChanged, visibleCategories }: { onRulesChanged: () => void; visibleCategories: CategoryOption[] }) {
   const [runningKeys, setRunningKeys] = useState<Set<string>>(new Set())
-  const [runningCategoryKeys, setRunningCategoryKeys] = useState<Set<string>>(new Set())
   const [statsVisible, setStatsVisible] = useState(false)
   const [statsData, setStatsData] = useState<DispatchBatchStatsResponse | null>(null)
   const [currentStatsBatch, setCurrentStatsBatch] = useState<DispatchBatch | null>(null)
@@ -255,19 +254,6 @@ function DispatchManagementTab({ onRulesChanged, visibleCategories }: { onRulesC
   const refreshStats = async (batchId: number) => {
     const res = await getDispatchBatchStats(batchId)
     setStatsData(res.data)
-  }
-
-  const handleRunCategory = async (category: DispatchCategoryStat) => {
-    if (!currentStatsBatch) return
-    const key = `${currentStatsBatch.id}-${category.category_code}`
-    setRunningCategoryKeys(prev => new Set(prev).add(key))
-    try {
-      const res = await enqueueDispatchCategoryForClean(currentStatsBatch.id, category.category_code)
-      const queuedText = res.data.queued_count > 0 ? `，已入任务 ${res.data.queued_count} 条` : ''
-      message.success(`${category.category_name || category.category_code} 分发成功：分发结果 ${res.data.dispatch_count} 条，新增待入队 ${res.data.pending_count} 条${queuedText}`)
-    } finally {
-      setRunningCategoryKeys(prev => { const s = new Set(prev); s.delete(key); return s })
-    }
   }
 
   const handleShowStats = async (batch: DispatchBatch) => {
@@ -412,7 +398,20 @@ function DispatchManagementTab({ onRulesChanged, visibleCategories }: { onRulesC
                   `${statsData.unmatched_rows ?? 0} 条`
                 )}
               </Descriptions.Item>
+              {statsData.other_category_rows ? (
+                <Descriptions.Item label="其他品类（无权限）">
+                  {statsData.other_category_rows} 条
+                </Descriptions.Item>
+              ) : null}
             </Descriptions>
+            {statsData.other_category_rows ? (
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 12 }}
+                message={`分发结果数只统计你有权限的品类；另有 ${statsData.other_category_rows} 条分发到无权限品类，未在下方表格展示。总数 = 分发结果数 + 其他品类 + 未命中。`}
+              />
+            ) : null}
             <Alert
               type="info"
               showIcon
@@ -478,25 +477,6 @@ function DispatchManagementTab({ onRulesChanged, visibleCategories }: { onRulesC
                       </Space>
                     )
                   }
-                },
-                {
-                  title: '操作', width: 120,
-                  render: (_: unknown, row: DispatchCategoryStat) => {
-                    const key = currentStatsBatch ? `${currentStatsBatch.id}-${row.category_code}` : row.category_code
-                    return (
-                      <Popconfirm
-                        title="加入待入清洗队列"
-                        description={`将当前批次下的 ${row.category_name || row.category_code} 数据加入待入清洗队列？不会改变当前分发明细。`}
-                        okText="确认"
-                        cancelText="取消"
-                        onConfirm={() => handleRunCategory(row)}
-                      >
-                        <Button type="link" size="small" loading={runningCategoryKeys.has(key)}>
-                          分发
-                        </Button>
-                      </Popconfirm>
-                    )
-                  },
                 },
               ]}
             />

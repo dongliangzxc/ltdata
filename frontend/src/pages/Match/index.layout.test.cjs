@@ -159,7 +159,7 @@ const interventionRuleModalPath = path.join(__dirname, 'components', 'Interventi
 const interventionRuleModalSource = fs.readFileSync(interventionRuleModalPath, 'utf8');
 
 const detailTitleIndex = source.indexOf("title={activeTab === 'filtered' ? '干扰项详情' : '详情处理'}");
-const productDetailIndex = source.indexOf('<Descriptions.Item label="商品名称" span={2}>{reviewDetail.item_name || \'-\'}</Descriptions.Item>');
+const productDetailIndex = source.indexOf('{translatedName(reviewDetail.item_name, reviewDetail.country_code)}');
 const candidatesIndex = source.indexOf('<Card size="small" title="候选型号"');
 const batchActionsIndex = source.indexOf('<SameTitleBatchActions');
 const attributeInsightIndex = source.indexOf('<AttributeInsightCard detail={reviewDetail} onMetadataChanged={refreshCurrentReviewDetail} />');

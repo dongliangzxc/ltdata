@@ -16,4 +16,7 @@ assert.match(apiSource, /export const batchIgnoreMatches = \(clean_job_id: numbe
 assert.match(apiSource, /data: \{ model_id\?: number; excluded\?: boolean; ignored\?: boolean/, 'single-row API should accept ignored payloads')
 assert.match(source, /batchRestoreMatches\(selectedJobId, payload\)/, 'batch restore should use the clean job endpoint')
 assert.match(source, /一键恢复/, 'the ignored toolbar should expose batch restore')
+assert.match(source, /batchExcludeMatches\(selectedJobId, payload\)/, 'batch exclude should use the clean job endpoint')
+assert.match(source, /一键排除/, 'the review toolbar should expose batch exclude')
+assert.match(apiSource, /export const batchExcludeMatches = \(clean_job_id: number, payload: BatchIgnorePayload\)/, 'API should expose batch exclude helper')
 assert.match(apiSource, /export const batchRestoreMatches = \(clean_job_id: number, payload: BatchRestorePayload\)/, 'API should expose batch restore helper')

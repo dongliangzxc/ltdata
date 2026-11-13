@@ -183,6 +183,39 @@ def test_run_match_preserves_ignored_rows_on_rerun(db):
     assert refreshed.review_note == "本任务忽略"
 
 
+def test_batch_exclude_ids_marks_status_and_writes_exclusion(db, match_client):
+    job, _raw, first = _seed_ignored_row(db, name="排除第一条")
+    second = _seed_ignored_row(db, name="排除第二条")[2]
+    second.clean_job_id = job.id
+    db.commit()
+
+    response = match_client.post(
+        f"/api/match/{job.id}/batch-exclude",
+        json={"mode": "ids", "ids": [first.id, second.id]},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["excluded"] == 2
+    assert body["failed"] == 0
+    assert db.get(MatchResult, first.id).match_status == "excluded"
+    assert db.get(MatchResult, second.id).match_status == "excluded"
+    assert db.query(ItemExclusion).count() == 2
+
+
+def test_batch_exclude_skips_already_excluded_rows(db, match_client):
+    job, _raw, first = _seed_ignored_row(db, name="已排除")
+    first.match_status = "excluded"
+    db.commit()
+
+    response = match_client.post(
+        f"/api/match/{job.id}/batch-exclude",
+        json={"mode": "filter", "filter": {"tab": "text_only"}},
+    )
+    assert response.status_code == 200
+    assert response.json()["excluded"] == 0
+    assert db.get(MatchResult, first.id).match_status == "excluded"
+
+
 def test_batch_ignore_filter_honors_category_and_top_brands(db, match_client):
     db.add(Category(code="camera", name="摄像头"))
     db.flush()

@@ -70,6 +70,34 @@ def test_create_duplicate_code_returns_409(client):
     assert r.status_code == 409
 
 
+def test_create_duplicate_name_returns_409(client):
+    client.post("/api/categories", json={"code": "tv", "name": "电视"})
+    r = client.post("/api/categories", json={"code": "tv2", "name": "  电视  "})
+    assert r.status_code == 409
+    assert r.json()["detail"] == "品类名称 '电视' 已存在"
+
+
+def test_create_name_duplicate_ignores_case_and_width(client):
+    client.post("/api/categories", json={"code": "tv", "name": "TV"})
+    r = client.post("/api/categories", json={"code": "tv2", "name": "ｔｖ"})
+    assert r.status_code == 409
+
+
+def test_update_name_to_existing_returns_409(client):
+    client.post("/api/categories", json={"code": "tv", "name": "电视"})
+    res = client.post("/api/categories", json={"code": "spk", "name": "音箱"})
+    r = client.put(f"/api/categories/{res.json()['id']}", json={"name": "电视"})
+    assert r.status_code == 409
+
+
+def test_update_keeps_own_name(client):
+    res = client.post("/api/categories", json={"code": "tv", "name": "电视"})
+    cat_id = res.json()["id"]
+    r = client.put(f"/api/categories/{cat_id}", json={"name": "电视", "sort_order": 1})
+    assert r.status_code == 200
+    assert r.json()["name"] == "电视"
+
+
 def test_update_name(client):
     res = client.post("/api/categories", json={"code": "spk", "name": "音箱"})
     cat_id = res.json()["id"]

@@ -20,6 +20,17 @@
 
 > 目的：让产品负责人可以随时打开 `问题记录.md`，一次性拿着所有问题去找需求方确认。
 
+## 测试规范
+
+- **开发功能必须写测试**：每次新增或修改功能，必须同步新增/更新对应测试用例，不允许只改业务代码不补测试。
+  - 后端测试放在 `backend/tests/`，使用 pytest。
+  - 前端测试放在对应页面目录下，命名为 `*.test.cjs`（如 `frontend/src/pages/Match/index.ignore.test.cjs`）。
+- **提交前必须跑完全部测试**：每次 `git commit` 之前，必须把后端、前端全部测试用例完整跑一遍，并确认全部通过；测试未通过或未运行不得提交。
+- 后端全量测试：`cd backend && .venv/bin/python -m pytest tests/ -q`
+- 前端全量测试：`cd frontend && for f in $(find src -name '*.test.cjs'); do node "$f" || exit 1; done`
+- 前端类型检查：`cd frontend && npx tsc --noEmit`
+- 若本机缺少 node/pytest 等依赖，应主动说明并使用可用环境（如 Docker/项目虚拟环境）补跑，不得默认跳过。
+
 ## Git 规范
 
 - **禁止使用 `git add -f`**：`.gitignore` 中列出的路径/文件不允许强制加入版本库，即使是文档、设计稿等非代码文件也不例外。如果某个文件需要被追踪，应先修改 `.gitignore` 并征得用户同意，而不是绕过它。

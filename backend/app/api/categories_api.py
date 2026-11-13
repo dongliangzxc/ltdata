@@ -1,5 +1,6 @@
 # backend/app/api/categories_api.py
 """品类管理 API — /api/categories"""
+import unicodedata
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -79,6 +80,19 @@ def get_category_tree(db: Session = Depends(get_db), current_user=Depends(get_cu
 @router.get("/all", response_model=list[CategoryOut])
 def list_all_categories(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     return db.query(Category).order_by(Category.sort_order, Category.name).all()
+
+
+def _category_name_key(name: str) -> str:
+    """品类名称查重键：去首尾空白 + NFKC 归一化 + 大小写不敏感。"""
+    return unicodedata.normalize("NFKC", (name or "").strip()).casefold()
+
+
+def _category_name_exists(db: Session, name: str, exclude_id: Optional[int] = None) -> bool:
+    key = _category_name_key(name)
+    query = db.query(Category.id, Category.name)
+    if exclude_id is not None:
+        query = query.filter(Category.id != exclude_id)
+    return any(_category_name_key(existing) == key for _, existing in query.all())
 
 
 def _optional_text(value: Optional[str]) -> Optional[str]:
@@ -217,13 +231,18 @@ def list_categories(db: Session = Depends(get_db), current_user=Depends(get_curr
 def create_category(payload: CategoryCreate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     if db.query(Category).filter(Category.code == payload.code).first():
         raise HTTPException(status_code=409, detail=f"品类码 {payload.code} 已存在")
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="品类名称不能为空")
+    if _category_name_exists(db, name):
+        raise HTTPException(status_code=409, detail=f"品类名称 '{name}' 已存在")
     if payload.parent_code:
         if not db.query(Category).filter(Category.code == payload.parent_code).first():
             raise HTTPException(status_code=404, detail=f"父品类码 '{payload.parent_code}' 不存在")
         _ensure_category_in_scope(db, current_user, payload.parent_code)
     cat = Category(
         code=payload.code.strip(),
-        name=payload.name.strip(),
+        name=name,
         parent_code=payload.parent_code,
         sort_order=payload.sort_order,
     )
@@ -244,7 +263,12 @@ def update_category(category_id: int, payload: CategoryUpdate, db: Session = Dep
         raise HTTPException(status_code=404, detail="品类不存在")
     _ensure_category_in_scope(db, current_user, cat.code)
     if "name" in payload.model_fields_set and payload.name is not None:
-        cat.name = payload.name.strip()
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="品类名称不能为空")
+        if _category_name_key(name) != _category_name_key(cat.name) and _category_name_exists(db, name, exclude_id=cat.id):
+            raise HTTPException(status_code=409, detail=f"品类名称 '{name}' 已存在")
+        cat.name = name
     if "parent_code" in payload.model_fields_set:
         # Validate proposed parent exists BEFORE cycle check
         if payload.parent_code:

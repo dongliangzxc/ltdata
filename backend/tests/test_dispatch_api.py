@@ -625,6 +625,50 @@ def test_get_batch_stats_returns_category_names_and_rule_counts(client_and_db):
     ]
 
 
+def test_get_batch_stats_reports_other_category_rows_for_scoped_user(client_and_db):
+    client, db = client_and_db
+    _set_dispatch_user(client, category_permissions=["headphone"])
+    db.add(Category(code="headphone", name="耳机", sort_order=1))
+    db.add(Category(code="speaker", name="音箱", sort_order=2))
+    file_record = UploadFileRecord(filename="scoped-stats.xlsx", platform="JD", row_count=4, status="done")
+    db.add(file_record)
+    db.flush()
+    raw_rows = [
+        RawDataRecord(file_id=file_record.id, platform="jd", item_id="item-1", item_name="耳机A"),
+        RawDataRecord(file_id=file_record.id, platform="jd", item_id="item-2", item_name="耳机B"),
+        RawDataRecord(file_id=file_record.id, platform="jd", item_id="item-3", item_name="音箱C"),
+        RawDataRecord(file_id=file_record.id, platform="jd", item_id="item-4", item_name="其它D"),
+    ]
+    db.add_all(raw_rows)
+    db.flush()
+    batch = DispatchBatch(
+        file_id=file_record.id,
+        status="done",
+        total_rows=4,
+        dispatched_rows=3,
+        unmatched_rows=1,
+    )
+    db.add(batch)
+    db.flush()
+    db.add_all([
+        DispatchItem(batch_id=batch.id, raw_data_id=raw_rows[0].id, category_code="headphone"),
+        DispatchItem(batch_id=batch.id, raw_data_id=raw_rows[1].id, category_code="headphone"),
+        DispatchItem(batch_id=batch.id, raw_data_id=raw_rows[2].id, category_code="speaker"),
+    ])
+    db.commit()
+
+    response = client.get(f"/api/dispatch/batches/{batch.id}/stats")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_rows"] == 4
+    assert payload["dispatched_rows"] == 2
+    assert payload["unmatched_rows"] == 1
+    assert payload["other_category_rows"] == 1
+    assert [category["category_code"] for category in payload["categories"]] == ["headphone"]
+    assert payload["dispatched_rows"] + payload["unmatched_rows"] + payload["other_category_rows"] == payload["total_rows"]
+
+
 def test_get_batch_stats_rule_count_uses_assigned_rows_without_recount(client_and_db):
     client, db = client_and_db
     db.add(Category(code="projector", name="投影仪", sort_order=1))

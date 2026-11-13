@@ -4,7 +4,7 @@ import {
   Alert, Button, Card, Divider, Input, Popconfirm, Radio, Select, Space, Table, Tag, Typography, message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { ArrowLeftOutlined, DownloadOutlined, PlusOutlined, SaveOutlined, StopOutlined } from '@ant-design/icons'
+import { ArrowLeftOutlined, DownloadOutlined, PlusOutlined, StopOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import CreateBrandModal from '../../components/CreateBrandModal'
 import ProgressModal from '../../components/ProgressModal'
@@ -67,10 +67,11 @@ export default function BrandCleanPage() {
   const [searchBy, setSearchBy] = useState<BrandCleanSearchBy>('item_name')
   const [sortBy, setSortBy] = useState('default')
   const [group, setGroup] = useState<BrandCleanGroup>('actionable')
-  const [draft, setDraft] = useState<Record<number, string | null | undefined>>({})
+  const [pendingValues, setPendingValues] = useState<Record<number, string | null>>({})
+  const [savingRowIds, setSavingRowIds] = useState<number[]>([])
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [batchBrand, setBatchBrand] = useState<string | undefined>(undefined)
-  const [saving, setSaving] = useState(false)
+  const [batchApplying, setBatchApplying] = useState(false)
   const [excluding, setExcluding] = useState(false)
   const [brandOptions, setBrandOptions] = useState<BrandOption[]>([])
   const [brandSearchOptions, setBrandSearchOptions] = useState<BrandOption[]>([])
@@ -158,7 +159,7 @@ export default function BrandCleanPage() {
   const rows = useMemo(() => data?.items ?? [], [data])
 
   useEffect(() => {
-    setDraft({})
+    setPendingValues({})
     setSelectedIds([])
     setBatchBrand(undefined)
   }, [page, pageSize, keyword, searchBy, group, sortBy, jobId])
@@ -170,21 +171,43 @@ export default function BrandCleanPage() {
   }
 
   const rowValue = (row: BrandCleanRow): string | undefined => {
-    if (draft[row.cleaned_data_id] !== undefined) return draft[row.cleaned_data_id] ?? undefined
+    if (pendingValues[row.cleaned_data_id] !== undefined) return pendingValues[row.cleaned_data_id] ?? undefined
     return originalValue(row) ?? undefined
   }
 
-  const changedItems = useMemo(
-    () => rows
-      .filter(row => draft[row.cleaned_data_id] !== undefined)
-      .filter(row => (draft[row.cleaned_data_id] ?? null) !== originalValue(row))
-      .map(row => ({ cleaned_data_id: row.cleaned_data_id, brand_std: draft[row.cleaned_data_id] ?? null })),
-    [rows, draft],
-  )
+  const persistBrandValues = async (items: { cleaned_data_id: number; brand_std: string | null }[]) => {
+    if (items.length === 0) return
+    const ids = items.map(item => item.cleaned_data_id)
+    setPendingValues(prev => {
+      const next = { ...prev }
+      items.forEach(item => { next[item.cleaned_data_id] = item.brand_std })
+      return next
+    })
+    setSavingRowIds(prev => Array.from(new Set([...prev, ...ids])))
+    try {
+      const res = await updateCleanJobBrandRows(jobId, items)
+      message.success(`已保存 ${res.data.updated} 条`)
+      await refresh()
+    } catch {
+      setPendingValues(prev => {
+        const next = { ...prev }
+        ids.forEach(id => { delete next[id] })
+        return next
+      })
+    } finally {
+      setSavingRowIds(prev => prev.filter(id => !ids.includes(id)))
+      setPendingValues(prev => {
+        const next = { ...prev }
+        ids.forEach(id => { delete next[id] })
+        return next
+      })
+    }
+  }
 
   const handleSet = (row: BrandCleanRow, value: string | undefined) => {
-    setDraft(prev => ({ ...prev, [row.cleaned_data_id]: value ?? null }))
     rememberBrandOption(value)
+    if ((value ?? null) === originalValue(row)) return
+    persistBrandValues([{ cleaned_data_id: row.cleaned_data_id, brand_std: value ?? null }])
   }
 
   const openCreateBrand = (rowId?: number) => {
@@ -207,7 +230,7 @@ export default function BrandCleanPage() {
     </>
   )
 
-  const handleBatchApply = () => {
+  const handleBatchApply = async () => {
     const chosenBrand = batchBrand
     if (chosenBrand === undefined) {
       message.warning('请先选择要设置的品牌')
@@ -217,15 +240,17 @@ export default function BrandCleanPage() {
       message.warning('请先勾选要处理的数据行')
       return
     }
-    setDraft(prev => {
-      const next = { ...prev }
-      selectedIds.forEach(id => { next[id] = chosenBrand })
-      return next
-    })
-    message.success(`已为 ${selectedIds.length} 行设置品牌，记得点击保存`)
+    setBatchApplying(true)
+    try {
+      await persistBrandValues(selectedIds.map(id => ({ cleaned_data_id: id, brand_std: chosenBrand })))
+      setSelectedIds([])
+      setBatchBrand(undefined)
+    } finally {
+      setBatchApplying(false)
+    }
   }
 
-  const handleCreatedBrand = (brand: BrandItem) => {
+  const handleCreatedBrand = async (brand: BrandItem) => {
     const createdOption = toBrandOption(brand)
     const mergeOption = (prev: BrandOption[]) => (
       prev.some(o => o.value === createdOption.value)
@@ -234,39 +259,18 @@ export default function BrandCleanPage() {
     )
     setBrandOptions(mergeOption)
     setBrandSearchOptions(mergeOption)
-    if (brandTargetRowId != null) {
-      setDraft(prev => ({ ...prev, [brandTargetRowId]: brand.brand_code }))
-      message.success('品牌已创建并设为该行品牌，记得点击保存')
+    setBrandModalOpen(false)
+    const targetRowId = brandTargetRowId
+    setBrandTargetRowId(null)
+    if (targetRowId != null) {
+      await persistBrandValues([{ cleaned_data_id: targetRowId, brand_std: brand.brand_code }])
     } else if (selectedIds.length > 0) {
-      setDraft(prev => {
-        const next = { ...prev }
-        selectedIds.forEach(id => { next[id] = brand.brand_code })
-        return next
-      })
-      message.success(`品牌已创建，已为选中的 ${selectedIds.length} 行设置，记得点击保存`)
+      const ids = selectedIds
+      await persistBrandValues(ids.map(id => ({ cleaned_data_id: id, brand_std: brand.brand_code })))
+      setSelectedIds([])
     } else {
       setBatchBrand(brand.brand_code)
       message.success('品牌已创建，可在「批量设置品牌」中选择并应用')
-    }
-    setBrandModalOpen(false)
-    setBrandTargetRowId(null)
-  }
-
-  const handleSave = async () => {
-    if (changedItems.length === 0) {
-      message.info('没有需要保存的修改')
-      return
-    }
-    setSaving(true)
-    try {
-      const res = await updateCleanJobBrandRows(jobId, changedItems)
-      message.success(`已保存 ${res.data.updated} 条`)
-      setDraft({})
-      setSelectedIds([])
-      setBatchBrand(undefined)
-      refresh()
-    } finally {
-      setSaving(false)
     }
   }
 
@@ -277,7 +281,6 @@ export default function BrandCleanPage() {
       const res = await excludeCleanJobBrandRows(jobId, cleanedDataIds)
       message.success(`已排除 ${res.data.excluded} 条`)
       setSelectedIds([])
-      setDraft({})
       refresh()
     } finally {
       setExcluding(false)
@@ -340,7 +343,12 @@ export default function BrandCleanPage() {
 
   const columns: ColumnsType<BrandCleanRow> = [
     { title: '平台', dataIndex: 'platform', width: 90, render: formatText },
-    { title: '商品名称', dataIndex: 'item_name', ellipsis: true, render: formatText },
+    {
+      title: '商品名称', dataIndex: 'item_name', width: 360,
+      render: (v: string | null) => (
+        <div style={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>{formatText(v)}</div>
+      ),
+    },
     { title: '销量', dataIndex: 'sales_qty', width: 90, render: (v: number | null) => (v ?? '-') },
     { title: '原品牌', dataIndex: 'brand_raw', width: 140, ellipsis: true, render: formatText },
     {
@@ -365,6 +373,7 @@ export default function BrandCleanPage() {
           options={brandSelectOptions}
           value={rowValue(row)}
           disabled={!row.editable}
+          loading={savingRowIds.includes(row.cleaned_data_id)}
           popupRender={renderBrandDropdown(row.cleaned_data_id)}
           notFoundContent={brandSearchLoading ? '搜索中...' : undefined}
           filterOption={false}
@@ -415,7 +424,7 @@ export default function BrandCleanPage() {
           type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message="在此补充「入库品牌」，保存后只更新该行的入库品牌字段（品牌码）；人工设置的品牌在详情/导出中优先于型号品牌。不会写入型号匹配结果，任务也不会因此标记为「清洗完成」。默认显示待处理（待确认 / URL映射待确认 / 争议）行，可在「全部数据行」中查看其它行。"
+          message="在此补充「入库品牌」，选择后即时生效，仅更新该行的入库品牌字段（品牌码）；人工设置的品牌在详情/导出中优先于型号品牌。不会写入型号匹配结果，任务也不会因此标记为「清洗完成」。默认显示待处理（待确认 / URL映射待确认 / 争议）行，可在「全部数据行」中查看其它行。"
         />
         <Space wrap style={{ marginBottom: 12 }}>
           <Radio.Group
@@ -460,16 +469,7 @@ export default function BrandCleanPage() {
             onChange={(value: string | undefined) => { setBatchBrand(value); rememberBrandOption(value) }}
           />
           <Button icon={<PlusOutlined />} onClick={() => openCreateBrand()}>新建品牌</Button>
-          <Button onClick={handleBatchApply} disabled={selectedIds.length === 0}>批量设置选中（{selectedIds.length}）</Button>
-          <Button
-            type="primary"
-            icon={<SaveOutlined />}
-            loading={saving}
-            disabled={changedItems.length === 0}
-            onClick={handleSave}
-          >
-            保存修改（{changedItems.length}）
-          </Button>
+          <Button onClick={handleBatchApply} loading={batchApplying} disabled={selectedIds.length === 0}>批量设置选中（{selectedIds.length}）</Button>
           <Button
             danger
             icon={<StopOutlined />}
@@ -487,7 +487,7 @@ export default function BrandCleanPage() {
           rowKey="cleaned_data_id"
           size="small"
           loading={loading}
-          scroll={{ x: 1280 }}
+          scroll={{ x: 1500 }}
           rowSelection={{
             selectedRowKeys: selectedIds,
             onChange: keys => setSelectedIds(keys as number[]),

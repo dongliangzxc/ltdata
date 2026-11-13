@@ -20,8 +20,13 @@ assert.match(
   /title: '下载人'/,
   'Dispatch export jobs table should show a downloader column',
 )
+const exportJobColumnsStart = dispatchSource.indexOf('const exportJobColumns')
+const exportJobColumnsSource = dispatchSource.slice(
+  exportJobColumnsStart,
+  dispatchSource.indexOf('\n  ]', exportJobColumnsStart),
+)
 assert.doesNotMatch(
-  dispatchSource,
+  exportJobColumnsSource,
   /title: '完成时间'/,
   'Dispatch export jobs table should no longer show the completion-time column',
 )

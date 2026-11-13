@@ -15,6 +15,10 @@ import {
 
 const { Text } = Typography
 
+function normalizeCategoryName(name: string): string {
+  return (name || '').trim().normalize('NFKC').toLowerCase()
+}
+
 function flattenTree(nodes: CategoryTreeNode[]): CategoryTreeNode[] {
   return nodes.flatMap(n => [n, ...flattenTree(n.children)])
 }
@@ -295,7 +299,23 @@ export default function CategoriesPage() {
               <Input placeholder="e.g. headphones" />
             </Form.Item>
           )}
-          <Form.Item name="name" label="品类名称" rules={[{ required: true, message: '请输入品类名称' }]}>
+          <Form.Item
+            name="name"
+            label="品类名称"
+            rules={[
+              { required: true, whitespace: true, message: '请输入品类名称' },
+              {
+                validator: async (_, value: string) => {
+                  const key = normalizeCategoryName(value)
+                  if (!key) return
+                  if (editing && key === normalizeCategoryName(editing.name)) return
+                  if (flatAll.some(c => normalizeCategoryName(c.name) === key)) {
+                    throw new Error('品类名称已存在')
+                  }
+                },
+              },
+            ]}
+          >
             <Input />
           </Form.Item>
           <Form.Item name="parent_code" label="父品类（留空表示顶级）">

@@ -15,7 +15,7 @@ import {
   triggerExport, getExportJob, getDownloadUrl,
   getCleanMonthlyPool, rerunCleanTaskWithCurrentRules,
   listFilteredItems, recoverFilteredItem,
-  batchConfirmMatch, previewBatchConfirmMatch, reassignInvalidModel, batchIgnoreMatches, batchRestoreMatches,
+  batchConfirmMatch, previewBatchConfirmMatch, reassignInvalidModel, batchIgnoreMatches, batchExcludeMatches, batchRestoreMatches,
   searchCleanTasks, transferMatchItem, getTransferNotice, fetchAllCategories,
   listExchangeRateOptions, getTranslationStatus, translateTexts,
   updateMatchCustomField,
@@ -249,6 +249,7 @@ export default function MatchPage() {
   const [selectedBatchIds, setSelectedBatchIds] = useState<Set<number>>(new Set())
   const [batchConfirming, setBatchConfirming] = useState(false)
   const [batchIgnoring, setBatchIgnoring] = useState(false)
+  const [batchExcluding, setBatchExcluding] = useState(false)
   const [batchRestoring, setBatchRestoring] = useState(false)
   const [batchConfirmIds, setBatchConfirmIds] = useState<number[]>([])
   const [batchAllPages, setBatchAllPages] = useState(false)
@@ -1210,6 +1211,60 @@ export default function MatchPage() {
     })
   }
 
+  const handleBatchExclude = () => {
+    if (!selectedJobId) return
+    const useFilterMode = batchAllPages
+    const filter: BatchIgnoreFilter = {
+      tab: activeTab as BatchIgnoreFilter['tab'],
+      keyword: keyword || null,
+      search_by: searchBy,
+      category_name: categoryName ?? null,
+      sort_by: sortBy as BatchIgnoreFilter['sort_by'],
+      top_brands: topBrandsOnly && isPowerBankJob ? TOP_BRANDS_LIMIT : null,
+      price_min: priceMin,
+      price_max: priceMax,
+      sales_min: salesMin,
+      sales_max: salesMax,
+    }
+    const count = useFilterMode ? (pendingData?.total ?? 0) : selectedBatchIds.size
+    if (count === 0) {
+      message.info('请先选择要排除的数据')
+      return
+    }
+    Modal.confirm({
+      title: `确认排除 ${count} 条数据？`,
+      content: '排除后的数据不会发布，也不会写入 URL 映射库；同时会写入排除沉淀库，后续同品类任务复核时自动沿用。可在「已排除」分类撤销。',
+      okText: '确认排除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        setBatchExcluding(true)
+        try {
+          const payload = useFilterMode
+            ? { mode: 'filter' as const, filter }
+            : { mode: 'ids' as const, ids: Array.from(selectedBatchIds) }
+          const { data } = await batchExcludeMatches(selectedJobId, payload)
+          const excludedCount = data.excluded ?? data.success ?? 0
+          const failedCount = data.failed ?? 0
+          if (data.truncated) {
+            message.warning(`本次已排除 ${excludedCount} 条，超出单次上限的记录请再次执行一键排除`)
+          } else if (failedCount > 0) {
+            message.warning(`已排除 ${excludedCount} 条，${failedCount} 条处理失败`)
+          } else {
+            message.success(`已排除 ${excludedCount} 条`)
+          }
+          resetBatchSelection()
+          refreshPending()
+          fetchSummary()
+        } catch (err: any) {
+          message.error(err?.response?.data?.detail || '一键排除失败')
+        } finally {
+          setBatchExcluding(false)
+        }
+      },
+    })
+  }
+
   const handleBatchRestore = () => {
     if (!selectedJobId) return
     const useFilterMode = batchAllPages
@@ -1958,6 +2013,14 @@ export default function MatchPage() {
                   </Button>
                 ) : (
                   <>
+                    <Button
+                      danger
+                      loading={batchExcluding}
+                      disabled={batchAllPages ? (pendingData?.total ?? 0) === 0 : selectedBatchIds.size === 0}
+                      onClick={handleBatchExclude}
+                    >
+                      一键排除（{batchAllPages ? pendingData?.total ?? 0 : selectedBatchIds.size}）
+                    </Button>
                     <Button
                       type="primary"
                       loading={batchConfirming}

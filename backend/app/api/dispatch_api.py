@@ -1089,6 +1089,30 @@ def get_batch_stats(batch_id: int, db: Session = Depends(get_db), current_user=D
         .all()
     )
 
+    dispatched_rows = (
+        sum(int(row.count or 0) for row in category_rows)
+        if scoped_codes is not None
+        else batch.dispatched_rows
+    )
+    # 受限用户的分发结果只统计可见品类，但 total/unmatched 是整批全品类口径，
+    # 二者会差出「分发到无权品类」的行数。这里补一个兜底值，便于页面把账对上。
+    other_category_rows = 0
+    if scoped_codes is not None and batch.total_rows is not None:
+        visible_distinct = (
+            db.query(func.count(func.distinct(DispatchItem.raw_data_id)))
+            .filter(
+                DispatchItem.batch_id == batch_id,
+                DispatchItem.raw_data_id.isnot(None),
+                DispatchItem.category_code.in_(scoped_codes),
+            )
+            .scalar()
+            or 0
+        )
+        other_category_rows = max(
+            int(batch.total_rows) - int(visible_distinct) - int(batch.unmatched_rows or 0),
+            0,
+        )
+
     platform_query = (
         db.query(
             DispatchItem.category_code,
@@ -1148,8 +1172,9 @@ def get_batch_stats(batch_id: int, db: Session = Depends(get_db), current_user=D
     return {
         "batch_id": batch_id,
         "total_rows": batch.total_rows,
-        "dispatched_rows": sum(int(row.count or 0) for row in category_rows) if scoped_codes is not None else batch.dispatched_rows,
+        "dispatched_rows": dispatched_rows,
         "unmatched_rows": batch.unmatched_rows,
+        "other_category_rows": other_category_rows,
         "categories": [
             {
                 "category_code": row.category_code,

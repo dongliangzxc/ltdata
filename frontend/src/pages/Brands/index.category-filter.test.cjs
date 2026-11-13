@@ -220,6 +220,15 @@ const stubAntd = {
     )
   },
   message: { success() {}, error() {} },
+  Alert: ({ message: text, description, children }) => MiniReact.createElement('div', null, text, description, children),
+  Typography: Object.assign(
+    ({ children }) => MiniReact.createElement('span', null, children),
+    {
+      Text: ({ children }) => MiniReact.createElement('span', null, children),
+      Title: ({ children }) => MiniReact.createElement('span', null, children),
+      Link: ({ children }) => MiniReact.createElement('span', null, children),
+    },
+  ),
 }
 
 const originalLoad = Module._load
@@ -232,13 +241,20 @@ Module._load = function patchedLoad(request, parent, isMain) {
       PlusOutlined: () => null,
       DeleteOutlined: () => null,
       EditOutlined: () => null,
+      ExclamationCircleFilled: () => null,
     }
   }
   if (request === 'ahooks') {
     return {
       useRequest: (service) => {
+        const source = typeof service === 'function' ? service.toString() : ''
         if (typeof service === 'function') service()
-        return { data: brandPage, loading: false, refresh() {}, mutate() {} }
+        return {
+          data: source.includes('fetchAllCategories') ? [] : brandPage,
+          loading: false,
+          refresh() {},
+          mutate() {},
+        }
       },
     }
   }
@@ -254,6 +270,7 @@ Module._load = function patchedLoad(request, parent, isMain) {
       updateBrand: async () => ({ data: brands[0] }),
       createBrand: async () => ({ data: brands[0] }),
       fetchCategories: async () => [],
+      fetchAllCategories: async () => [],
     }
   }
   if (request.endsWith('/hooks/useCategoryOptions') || request.endsWith('hooks/useCategoryOptions')) {

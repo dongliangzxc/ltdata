@@ -1408,6 +1408,12 @@ _BATCH_IGNORE_ALLOWED_STATUSES = {
 }
 _BATCH_IGNORE_MAX_IDS = 500
 
+# 一键排除会把行写入排除沉淀库（item_exclusions），与单条「排除」一致。
+# 已排除 / 已忽略的行不再参与，避免重复覆盖人工状态。
+_BATCH_EXCLUDE_ALLOWED_STATUSES = {
+    "pending", "text_only", "disputed", "matched", "url_matched", "confirmed",
+}
+
 
 def _ensure_task_can_ignore(db: Session, clean_job_id: int) -> None:
     """Avoid leaving already-published analytics rows stale after an ignore."""
@@ -1807,6 +1813,20 @@ def _batch_restore_filter_query(db: Session, clean_job_id: int, filter_payload: 
     return _batch_status_filter_query(db, clean_job_id, filter_payload, {"ignored"})
 
 
+def _batch_exclude_filter_query(db: Session, clean_job_id: int, filter_payload: dict):
+    """Build a filtered query for batch exclusions."""
+    requested = filter_payload.get("status") or filter_payload.get("tab")
+    if requested in (None, "", "all"):
+        statuses = _BATCH_EXCLUDE_ALLOWED_STATUSES
+    elif requested == "matched":
+        statuses = {"matched", "url_matched"}
+    elif requested in _BATCH_EXCLUDE_ALLOWED_STATUSES:
+        statuses = {requested}
+    else:
+        raise HTTPException(status_code=400, detail="不支持一键排除的状态")
+    return _batch_status_filter_query(db, clean_job_id, filter_payload, statuses)
+
+
 def _run_batch_ignore(db: Session, targets: list[MatchResult], reason: str | None) -> dict:
     success = 0
     failures: list[dict] = []
@@ -1883,6 +1903,90 @@ def batch_ignore(
             "matched_total": matched_total,
             "truncated": truncated,
             "ignored": result["success"],
+            **result,
+        }
+    raise HTTPException(status_code=400, detail="mode 必须为 ids 或 filter")
+
+
+def _run_batch_exclude(
+    db: Session, clean_job_id: int, targets: list[MatchResult], reason: str | None
+) -> dict:
+    success = 0
+    failures: list[dict] = []
+    now = datetime.utcnow()
+    category_code = _clean_job_category_code(db, clean_job_id)
+    for mr in targets:
+        rd = db.query(RawDataRecord).filter(RawDataRecord.id == mr.raw_data_id).first()
+        item_name = rd.item_name if rd else None
+        if mr.match_status not in _BATCH_EXCLUDE_ALLOWED_STATUSES:
+            failures.append({"id": mr.id, "item_name": item_name, "reason": "状态已变更"})
+            continue
+        _snapshot_prev_state(mr)
+        mr.match_status = "excluded"
+        mr.model_id = None
+        mr.matched_by = "manual"
+        mr.dispute_reason = None
+        mr.review_note = reason
+        mr.reviewed_at = now
+        if rd is not None:
+            upsert_exclusion_for_raw(db, rd, category_code, reason=reason, source="manual")
+        success += 1
+    db.commit()
+    return {"success": success, "failed": len(failures), "failures": failures}
+
+
+@router.post("/{clean_job_id}/batch-exclude")
+def batch_exclude(
+    clean_job_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """将当前任务中的一批数据标记为「已排除」，并写入排除沉淀库。
+
+    与单条「排除」一致：排除后的数据不会发布，也不会写入 URL 映射库；
+    后续同品类任务复核时会自动沿用。支持显式 ``ids`` 和筛选器 ``filter``。
+    """
+    payload = payload or {}
+    _get_visible_match_clean_job_or_404(db, current_user, clean_job_id)
+    mode = payload.get("mode")
+    reason = (payload.get("reason") or "").strip() or None
+    if mode == "ids":
+        ids = payload.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            raise HTTPException(status_code=400, detail="ids 不能为空")
+        if len(ids) > _BATCH_IGNORE_MAX_IDS:
+            raise HTTPException(status_code=400, detail=f"单次最多排除 {_BATCH_IGNORE_MAX_IDS} 条")
+        rows = db.query(MatchResult).filter(
+            MatchResult.clean_job_id == clean_job_id,
+            MatchResult.id.in_(ids),
+        ).all()
+        by_id = {mr.id: mr for mr in rows}
+        targets = [by_id[i] for i in ids if i in by_id]
+        result = _run_batch_exclude(db, clean_job_id, targets, reason)
+        for missing in [i for i in ids if i not in by_id]:
+            result["failures"].append({"id": missing, "item_name": None, "reason": "状态已变更"})
+            result["failed"] += 1
+        touch_clean_job(db, clean_job_id)
+        db.commit()
+        return {
+            "total": len(ids), "matched_total": len(ids), "truncated": False,
+            "excluded": result["success"], **result,
+        }
+    if mode == "filter":
+        f = payload.get("filter") or {}
+        q = _batch_exclude_filter_query(db, clean_job_id, f)
+        matched_total = q.count()
+        truncated = matched_total > _BATCH_FILTER_LIMIT
+        targets = q.limit(_BATCH_FILTER_LIMIT).all()
+        result = _run_batch_exclude(db, clean_job_id, targets, reason)
+        touch_clean_job(db, clean_job_id)
+        db.commit()
+        return {
+            "total": len(targets),
+            "matched_total": matched_total,
+            "truncated": truncated,
+            "excluded": result["success"],
             **result,
         }
     raise HTTPException(status_code=400, detail="mode 必须为 ids 或 filter")

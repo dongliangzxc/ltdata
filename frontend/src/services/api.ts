@@ -781,6 +781,7 @@ export interface DispatchBatchStatsResponse {
   total_rows: number | null
   dispatched_rows: number | null
   unmatched_rows: number | null
+  other_category_rows?: number
   categories: DispatchCategoryStat[]
   rules: DispatchRuleStat[]
 }
@@ -1173,6 +1174,19 @@ export type BatchIgnoreResult = {
 
 export const batchIgnoreMatches = (clean_job_id: number, payload: BatchIgnorePayload) =>
   api.post<BatchIgnoreResult>(`/match/${clean_job_id}/batch-ignore`, payload)
+
+export type BatchExcludeResult = {
+  total: number
+  excluded?: number
+  success?: number
+  failed: number
+  truncated?: boolean
+  matched_total?: number
+  failures?: BatchConfirmFailure[]
+}
+
+export const batchExcludeMatches = (clean_job_id: number, payload: BatchIgnorePayload) =>
+  api.post<BatchExcludeResult>(`/match/${clean_job_id}/batch-exclude`, payload)
 
 export type BatchRestoreFilter = Omit<BatchIgnoreFilter, 'tab'> & { tab: 'ignored' }
 

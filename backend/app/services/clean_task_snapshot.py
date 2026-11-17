@@ -17,6 +17,7 @@ from app.services.dispatch_scope import latest_done_batch_subquery
 
 
 ACTIVE_TASK_STATUSES = {"created", "cleaning", "matching", "reviewing", "processing", "done"}
+_SNAPSHOT_INSERT_BATCH_SIZE = 1000
 
 _PLATFORM_ALIAS_GROUPS = {
     "jd": {"jd", "jingdong", "京东"},
@@ -476,6 +477,47 @@ def _default_task_name(db: Session, category_code: str, platform: str | None) ->
     return f"{category_name}{platform_suffix} {today} 第{batch_number}批"
 
 
+def _insert_snapshot_items(
+    db: Session,
+    clean_job_id: int,
+    rows: list,
+    *,
+    return_ids: bool = False,
+) -> list[int]:
+    """按分发顺序批量写快照，由调用方统一提交或回滚。
+
+    ORM add_all 为获取每行自增主键会退化成逐行 INSERT。这里不请求插入时
+    返回主键；月度入口需要新快照 ID 时，每批只补一次查询并按输入顺序返回。
+    """
+    snapshot_ids: list[int] = []
+    for start in range(0, len(rows), _SNAPSHOT_INSERT_BATCH_SIZE):
+        mappings = [
+            dict(
+                clean_job_id=clean_job_id,
+                raw_data_id=raw.id,
+                category_code=dispatch_item.category_code,
+                platform=normalize_platform(raw.platform),
+                dispatch_batch_id=dispatch_item.batch_id,
+            )
+            for dispatch_item, raw in rows[start:start + _SNAPSHOT_INSERT_BATCH_SIZE]
+        ]
+        # 显式写入 nullable 列，让不同平台/批次空值的行也能合在同一批。
+        db.bulk_insert_mappings(CleanJobItemRecord, mappings, render_nulls=True)
+        if return_ids:
+            ids_by_raw = {
+                raw_id: item_id
+                for item_id, raw_id in db.query(CleanJobItemRecord.id, CleanJobItemRecord.raw_data_id)
+                .filter(
+                    CleanJobItemRecord.clean_job_id == clean_job_id,
+                    CleanJobItemRecord.raw_data_id.in_([item["raw_data_id"] for item in mappings]),
+                )
+                .all()
+            }
+            snapshot_ids.extend(ids_by_raw[item["raw_data_id"]] for item in mappings)
+    db.flush()
+    return snapshot_ids
+
+
 def create_category_task_snapshot(
     db: Session,
     *,
@@ -517,17 +559,7 @@ def create_category_task_snapshot(
     db.add(job)
     db.flush()
 
-    db.add_all([
-        CleanJobItemRecord(
-            clean_job_id=job.id,
-            raw_data_id=raw.id,
-            category_code=dispatch_item.category_code,
-            platform=normalize_platform(raw.platform),
-            dispatch_batch_id=dispatch_item.batch_id,
-        )
-        for dispatch_item, raw in rows
-    ])
-    db.flush()
+    _insert_snapshot_items(db, job.id, rows)
     return job, len(rows)
 
 
@@ -716,18 +748,6 @@ def upsert_monthly_task_snapshot(
             file_ids=file_ids,
         )
 
-    new_items = [
-        CleanJobItemRecord(
-            clean_job_id=job.id,
-            raw_data_id=raw.id,
-            category_code=dispatch_item.category_code,
-            platform=normalize_platform(raw.platform),
-            dispatch_batch_id=dispatch_item.batch_id,
-        )
-        for dispatch_item, raw in rows
-    ]
-    db.add_all(new_items)
-    db.flush()
-    new_snapshot_ids = [item.id for item in new_items]
+    new_snapshot_ids = _insert_snapshot_items(db, job.id, rows, return_ids=True)
     job.row_in = db.query(CleanJobItemRecord).filter(CleanJobItemRecord.clean_job_id == job.id).count()
     return job, len(rows), action, new_snapshot_ids

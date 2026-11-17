@@ -2,7 +2,7 @@
 数据清洗服务：
 1. 干扰链接库（interference_links）→ 按当前品类过滤并记录原因
 2. 清洗干预规则（intervention_rules）→ 按优先级首条命中决定过滤或放行
-3. 去重（同 item_id + month + shop_name 保留第一条）
+3. 去重（有商品 ID 时按 item_id + month + shop_name；缺失时仅去重同一原始记录）
 4. 品牌写法标准化（brand_aliases）→ brand_raw 查表覆盖 brand_std
 5. brand_std 兜底补全（无匹配时用 brand_raw）
 """
@@ -479,6 +479,21 @@ def _iter_clean_record_batches(
     yield from _iter_query_batches(query, RawDataRecord.id)
 
 
+def _clean_dedup_key(
+    item_id: str | None, month: int | None, shop_name: str | None, raw_data_id: int | None,
+) -> tuple | None:
+    """空商品 ID 不足以识别同款，仅阻止同一原始记录被重复写入。
+
+    非空 ID 保留原比较方式，不顺带调整空格、国家或其他去重维度。
+    旧输出若连原始记录 ID 都没有，就不能据此排除任何新记录。
+    """
+    if item_id is not None and item_id.strip():
+        return (item_id, month, shop_name)
+    if raw_data_id is not None:
+        return ("raw_record", raw_data_id)
+    return None
+
+
 def run_clean(
     db: Session,
     clean_job_id: int,
@@ -513,10 +528,12 @@ def run_clean(
     if dedup and raw_data_ids is not None:
         # 先完整消费已有键的读取，再开始交错的分批读取/写入。
         seen_keys = {
-            (item_id, month, shop_name)
-            for item_id, month, shop_name in db.query(
-                CleanedDataRecord.item_id, CleanedDataRecord.month, CleanedDataRecord.shop_name,
+            key
+            for item_id, month, shop_name, raw_id in db.query(
+                CleanedDataRecord.item_id, CleanedDataRecord.month,
+                CleanedDataRecord.shop_name, CleanedDataRecord.raw_data_id,
             ).filter(CleanedDataRecord.clean_job_id == clean_job_id).yield_per(_CLEAN_BATCH_SIZE)
+            if (key := _clean_dedup_key(item_id, month, shop_name, raw_id)) is not None
         }
     query_seconds += time.perf_counter() - query_start
     batches = _iter_clean_record_batches(
@@ -564,10 +581,11 @@ def run_clean(
 
             # ── Step 3: 去重 ─────────────────────────────────────────
             if dedup:
-                key = (r.item_id, r.month, r.shop_name)
-                if key in seen_keys:
-                    continue
-                seen_keys.add(key)
+                key = _clean_dedup_key(r.item_id, r.month, r.shop_name, r.id)
+                if key is not None:
+                    if key in seen_keys:
+                        continue
+                    seen_keys.add(key)
 
             # ── Step 4: 品牌写法标准化 ───────────────────────────────
             brand_std = r.brand_std  # 原始已有标准品牌码（上传时从 Excel 读取）

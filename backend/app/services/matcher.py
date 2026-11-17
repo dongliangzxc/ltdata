@@ -53,6 +53,7 @@ brand_identified 标记：S1/S2/S3 任意阶段识别到品牌即置 1，即使�
 """
 import logging
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -60,8 +61,9 @@ from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 from app.services.rawdata_cache import cached_value
 
-# item_url_mappings（92 万行）进程内缓存 TTL；URL 映射导入/确认时显式失效
+# 按平台及商品键批次缓存原始映射；共享缓存失效机制，TTL 兜底。
 URL_MAP_CACHE_TTL = 60.0
+_URL_MAP_BATCH_SIZE = 1000
 from app.models.schemas import CleanedDataRecord, ModelRecord, ModelAlias, MatchResult, MatchResultAttr, MatchResultCandidate, MatchResultExtraValue, ItemUrlMapping, MatchRule, HistoricalMapping, CleanJobRecord, RawDataRecord
 from app.utils.url_utils import extract_item_id
 from app.utils.text_utils import title_key
@@ -107,28 +109,51 @@ class MatchContext:
     hist_full_platforms: set = field(default_factory=set)
 
 
-def _build_url_maps(db: Session, url_reusable_model_ids: set[int]) -> tuple[dict, dict]:
-    """从 item_url_mappings 构建 (url_map, url_brand_map)。
+def _load_url_mapping_rows(db: Session, platform: str, item_ids: tuple[str, ...]) -> tuple:
+    """使用 (platform, item_id) 联合索引，只读取当前批次需要的四列。"""
+    return tuple(
+        tuple(row) for row in db.query(
+            ItemUrlMapping.platform, ItemUrlMapping.item_id,
+            ItemUrlMapping.model_id, ItemUrlMapping.brand_code,
+        ).filter(
+            ItemUrlMapping.platform == platform,
+            ItemUrlMapping.item_id.in_(item_ids),
+        ).all()
+    )
 
-    与 _load_match_context 原逻辑一致：model_id 落在可复用型号集内 → url_map，
-    否则有 brand_code → url_brand_map。
+
+def _build_url_maps(
+    db: Session, url_reusable_model_ids: set[int], url_keys: Iterable[tuple[str, str]],
+) -> tuple[dict, dict]:
+    """仅为本次商品构建 (url_map, url_brand_map)，空集合不查询映射表。
+
+    不按映射的品类过滤，保留跨品类映射的品牌提示。缓存原始四列而非
+    品类相关判断，让同一批商品跨任务复用，并按本次有效型号集合重新判断。
     """
     url_map: dict[tuple[str, str], int] = {}
     url_brand_map: dict[tuple[str, str], str] = {}
-    # 只取用到的 4 列，92 万行不再逐行构造 ORM 对象
-    rows = db.query(
-        ItemUrlMapping.platform, ItemUrlMapping.item_id,
-        ItemUrlMapping.model_id, ItemUrlMapping.brand_code,
-    ).all()
-    for platform, item_id, model_id, brand_code in rows:
-        if model_id and model_id in url_reusable_model_ids:
-            url_map[(platform, item_id)] = model_id
-        elif brand_code:
-            url_brand_map[(platform, item_id)] = brand_code
+    by_platform: dict[str, set[str]] = {}
+    for platform, item_id in url_keys:
+        by_platform.setdefault(platform, set()).add(item_id)
+    for platform in sorted(by_platform):
+        item_ids = sorted(by_platform[platform])
+        for start in range(0, len(item_ids), _URL_MAP_BATCH_SIZE):
+            batch = tuple(item_ids[start:start + _URL_MAP_BATCH_SIZE])
+            rows = cached_value(
+                "match_ctx", ("url_rows", platform, batch), URL_MAP_CACHE_TTL,
+                lambda: _load_url_mapping_rows(db, platform, batch),
+            )
+            for row_platform, item_id, model_id, brand_code in rows:
+                if model_id and model_id in url_reusable_model_ids:
+                    url_map[(row_platform, item_id)] = model_id
+                elif brand_code:
+                    url_brand_map[(row_platform, item_id)] = brand_code
     return url_map, url_brand_map
 
 
-def _load_match_context(db: Session, category_code: str | None) -> MatchContext:
+def _load_match_context(
+    db: Session, category_code: str | None, url_keys: Iterable[tuple[str, str]] = (),
+) -> MatchContext:
     """加载给定品类下的匹配上下文；category_code=None 时不做品类过滤，
     保留 run_match 原有行为（全部有效型号进入 valid_model_ids）。"""
     ctx = MatchContext(job_category_code=category_code)
@@ -147,12 +172,7 @@ def _load_match_context(db: Session, category_code: str | None) -> MatchContext:
         if m.status == "active" and not _is_generic_brand_code(m.brand_code)
     }
 
-    # item_url_mappings 92 万行，每个任务全量重载曾耗时 23-86s；按品类缓存，
-    # URL 映射写入时 invalidate_rawdata_cache 显式失效，TTL 兜底（型号变更最多延迟 60s）。
-    ctx.url_map, ctx.url_brand_map = cached_value(
-        "match_ctx", ("url_map", category_code), URL_MAP_CACHE_TTL,
-        lambda: _build_url_maps(db, ctx.url_reusable_model_ids),
-    )
+    ctx.url_map, ctx.url_brand_map = _build_url_maps(db, ctx.url_reusable_model_ids, url_keys)
 
     ctx.explicit_rules = (
         db.query(MatchRule)
@@ -731,19 +751,23 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
     if clean_job:
         job_category_code = clean_job.category_code or clean_job.dispatch_category_code
 
-    ctx = _load_match_context(db, job_category_code)
-    url_map = ctx.url_map
-    url_brand_map = ctx.url_brand_map
-    valid_model_ids = ctx.valid_model_ids
-    explicit_rules = ctx.explicit_rules
-    _t2 = time.perf_counter()
-
     # ── 加载清洗数据 ──────────────────────────────────────────────
     cleaned_rows = (
         db.query(CleanedDataRecord)
         .filter(CleanedDataRecord.clean_job_id == clean_job_id)
         .all()
     )
+    # 与 S0 使用同一次 URL 解析结果；不能用原始 platform/item_id 替代链接键。
+    url_infos = [extract_item_id(row.item_url) if row.item_url else None for row in cleaned_rows]
+    _t2 = time.perf_counter()
+    ctx = _load_match_context(db, job_category_code, (
+        key for row, key in zip(cleaned_rows, url_infos)
+        if key is not None and row.raw_data_id not in ignored_snapshot
+    ))
+    url_map = ctx.url_map
+    url_brand_map = ctx.url_brand_map
+    valid_model_ids = ctx.valid_model_ids
+    explicit_rules = ctx.explicit_rules
     if commit:
         # 每批 commit 会 expire 会话内全部对象（expire_on_commit），之后访问型号/
         # 清洗行/规则的属性会逐个触发单行 SELECT（headphone 3 万行任务因此跑了 20 分钟+）。
@@ -768,7 +792,7 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
     def _acc(stage: str, t0: float) -> None:
         stage_time[stage] = stage_time.get(stage, 0.0) + (time.perf_counter() - t0)
 
-    for i, row in enumerate(cleaned_rows):
+    for i, (row, url_info) in enumerate(zip(cleaned_rows, url_infos)):
         # A task-local ignored row must not enter any matching stage, even on
         # a rerun.  Restore only the minimal manual metadata needed by the
         # ignored tab; no model, attributes, URL mapping, or exclusion-store
@@ -812,7 +836,6 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
         item_upper = _norm(row.item_name)
 
         # ── S0: URL精确匹配 ────────────────────────────────────
-        url_info = extract_item_id(row.item_url) if row.item_url else None
         url_brand_hint: str | None = None
         if url_info:
             platform, item_id = url_info
@@ -1076,7 +1099,7 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
     logger.info(
         "run_match job=%s total=%d matched=%d ignored=%d old=%.1fs ctx=%.1fs load=%.1fs hist=%.1fs loop=%.1fs cand=%.1fs total=%.1fs s0=%.1fs s01=%.1fs s0_2=%.1fs s05=%.1fs s14=%.1fs(s1=%.1fs s2=%.1fs s3=%.1fs s4=%.1fs)",
         clean_job_id, total, matched_count, ignored_count,
-        _t1 - _t0, _t2 - _t1, _t3 - _t2, _t3b - _t3, _t4 - _t3b, time.perf_counter() - _t4, time.perf_counter() - _t0,
+        _t1 - _t0, _t3 - _t2, _t2 - _t1, _t3b - _t3, _t4 - _t3b, time.perf_counter() - _t4, time.perf_counter() - _t0,
         stage_time.get("s0", 0.0), stage_time.get("s01", 0.0), stage_time.get("hist", 0.0),
         stage_time.get("s05", 0.0), stage_time.get("s14", 0.0),
         stage_time.get("s1", 0.0), stage_time.get("s2", 0.0), stage_time.get("s3", 0.0), stage_time.get("s4", 0.0),
@@ -1120,12 +1143,12 @@ def run_match_for_result(
     if clean_job:
         job_category_code = clean_job.category_code or clean_job.dispatch_category_code
 
-    ctx = _load_match_context(db, job_category_code)
+    url_info = extract_item_id(raw.item_url) if raw.item_url else None
+    ctx = _load_match_context(db, job_category_code, [url_info] if url_info else ())
 
     item_upper = _norm(raw.item_name)
 
     # ── S0: URL 精确匹配 ─────────────────────────────────────
-    url_info = extract_item_id(raw.item_url) if raw.item_url else None
     url_brand_hint: str | None = None
     if url_info:
         platform, item_id = url_info

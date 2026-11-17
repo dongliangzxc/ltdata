@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 echo ">>> 执行数据库迁移..."
 alembic upgrade head

@@ -664,7 +664,8 @@ def _match_text_stages(
     return best_model, match_source, brand_identified, row_candidates
 
 
-def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = True) -> dict:
+def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = True,
+              stage_progress_cb=None, strict_audit: bool = False) -> dict:
     """
     progress_cb(processed: int, total: int, matched: int) — 每批次调用一次
     """
@@ -759,6 +760,8 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
     )
     # 与 S0 使用同一次 URL 解析结果；不能用原始 platform/item_id 替代链接键。
     url_infos = [extract_item_id(row.item_url) if row.item_url else None for row in cleaned_rows]
+    if stage_progress_cb:
+        stage_progress_cb("型号匹配中", 0, len(cleaned_rows))
     _t2 = time.perf_counter()
     ctx = _load_match_context(db, job_category_code, (
         key for row, key in zip(cleaned_rows, url_infos)
@@ -1008,6 +1011,8 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
             db.commit()
         else:
             db.flush()
+    if progress_cb:
+        progress_cb(total, total, matched_count)
     _t4 = time.perf_counter()
 
     # ── 写入候选记录 ──────────────────────────────────────────────
@@ -1086,15 +1091,22 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
         .all()
     ]
     if matched_result_ids:
-        run_attribute_matching(db, matched_result_ids, commit=commit)
-        if commit:
+        if stage_progress_cb:
+            stage_progress_cb("属性匹配中", 0, len(matched_result_ids))
+        run_attribute_matching(db, matched_result_ids, commit=commit, **({
+            "progress_cb": lambda done, total: stage_progress_cb("属性匹配中", done, total),
+        } if stage_progress_cb else {}))
+        if stage_progress_cb:
+            stage_progress_cb("价格审核中", 0, len(matched_result_ids))
+        audit_kwargs = {"progress_cb": lambda done, total: stage_progress_cb("价格审核中", done, total)} if stage_progress_cb else {}
+        if commit and not strict_audit:
             try:
-                audit_price(db, matched_result_ids, commit=commit)
+                audit_price(db, matched_result_ids, commit=commit, **audit_kwargs)
             except Exception:
                 logger.exception("Price audit failed after matching clean_job_id=%s", clean_job_id)
                 db.rollback()
         else:
-            audit_price(db, matched_result_ids, commit=commit)
+            audit_price(db, matched_result_ids, commit=commit, **audit_kwargs)
 
     logger.info(
         "run_match job=%s total=%d matched=%d ignored=%d old=%.1fs ctx=%.1fs load=%.1fs hist=%.1fs loop=%.1fs cand=%.1fs total=%.1fs s0=%.1fs s01=%.1fs s0_2=%.1fs s05=%.1fs s14=%.1fs(s1=%.1fs s2=%.1fs s3=%.1fs s4=%.1fs)",

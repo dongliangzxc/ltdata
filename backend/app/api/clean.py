@@ -18,6 +18,9 @@ from app.core.config import settings
 from app.core.permissions import visible_category_codes
 from app.services.currency_service import amount_to_cny, build_rate_map, get_country
 from app.models.database import get_db
+from app.services.clean_task_queue import (
+    BUSY_CLEAN_STATUSES, clean_heavy_slot, enqueue_clean_job, ensure_clean_job_idle,
+)
 from app.models.analytics_db import AnalyticsSession
 from app.models.schemas import (
     CleanJobRecord,
@@ -35,6 +38,7 @@ from app.models.schemas import (
     FilteredItem,
     MatchResult,
     MatchResultAttr,
+    MatchResultExtraValue,
     MatchResultCandidate,
     ModelRecord,
     ItemUrlMapping,
@@ -43,6 +47,7 @@ from app.models.schemas import (
     UploadFileRecord,
     Category,
     CleanJobItemRecord,
+    CleanTaskRun,
     ColumnTemplate,
     BrandRecord,
     User,
@@ -323,6 +328,9 @@ def _clean_job_to_dict(
         "platform": job.platform,
         "month": _job_month(job),
         "source_scope": job.source_scope,
+        "progress": job.progress or 0,
+        "progress_stage": job.progress_stage,
+        "error_msg": job.error_msg,
         "pending_count": pending_count,
         "disputed_count": disputed_count,
         "confirmed_count": confirmed_count,
@@ -389,9 +397,12 @@ def _maybe_commit_and_refresh(db: Session, job: CleanJobRecord, commit: bool) ->
         db.flush()
 
 
-def _run_clean_and_match_for_job(db: Session, job: CleanJobRecord, commit: bool = True) -> None:
+def _run_clean_and_match_for_job(db: Session, job: CleanJobRecord, commit: bool = True, stage_progress_cb=None) -> None:
     _t0 = time.perf_counter()
     job.status = "cleaning"
+    job.progress = 10
+    job.progress_stage = "清洗中"
+    job.error_msg = None
     _maybe_commit_and_refresh(db, job, commit)
 
     _clear_clean_job_outputs(db, job.id)
@@ -406,14 +417,24 @@ def _run_clean_and_match_for_job(db: Session, job: CleanJobRecord, commit: bool 
         job.dispatch_batch_id,
         job.dispatch_category_code or job.category_code,
         commit=commit,
+        **({"progress_cb": lambda processed: stage_progress_cb("清洗中", processed, job.row_in or 0)} if stage_progress_cb else {}),
     )
     job.row_out = row_out
     job.status = "matching"
+    job.progress = 50
+    job.progress_stage = "匹配中"
     _maybe_commit_and_refresh(db, job, commit)
     _t2 = time.perf_counter()
 
-    run_match(db, job.id, commit=commit)
+    if stage_progress_cb:
+        run_match(db, job.id, commit=commit,
+                  progress_cb=lambda processed, total, matched: stage_progress_cb("型号匹配中", processed, total),
+                  stage_progress_cb=stage_progress_cb, strict_audit=True)
+    else:
+        run_match(db, job.id, commit=commit)
     job.status = "reviewing"
+    job.progress = 100
+    job.progress_stage = "待处理"
     _maybe_commit_and_refresh(db, job, commit)
     logger.info(
         "clean_and_match job=%s clear=%.1fs clean=%.1fs match=%.1fs total=%.1fs",
@@ -631,6 +652,11 @@ def get_monthly_clean_pool_endpoint(
     # 这样不同权限的用户也能命中同一份结果。
     cache_key = (category_code, platform, month, limit)
     rows = _clean_pool_cache_get(cache_key)
+    if rows is not None:
+        job_ids = {row["existing_job_id"] for row in rows if row.get("existing_job_id")}
+        statuses = dict(db.query(CleanJobRecord.id, CleanJobRecord.status).filter(CleanJobRecord.id.in_(job_ids)).all()) if job_ids else {}
+        if any(row.get("existing_job_id") and statuses.get(row["existing_job_id"]) != row.get("existing_job_status") for row in rows):
+            rows = None  # Worker runs in another process and cannot clear this cache.
     if rows is None:
         rows = get_monthly_clean_pool(
             db,
@@ -662,8 +688,16 @@ def create_clean_task(
                 task_name=payload.task_name,
                 rules=payload.rules,
             )
+            if settings.CLEAN_BACKGROUND_ENABLED:
+                enqueue_clean_job(db, job)
             db.commit()
             db.refresh(job)
+            if settings.CLEAN_BACKGROUND_ENABLED:
+                invalidate_clean_pool_cache()
+                return {"job": job, "snapshot_count": snapshot_count, "match_status": "queued"}
+        except HTTPException:
+            db.rollback()
+            raise
         except ValueError as e:
             db.rollback()
             raise HTTPException(status_code=400, detail=f"没有可创建任务的数据: {str(e)}") from e
@@ -716,6 +750,10 @@ def upsert_monthly_clean_task(
     _ensure_clean_category_visible(db, current_user, payload.category_code)
     with _clean_scope_guard(payload.category_code, payload.platform, payload.month):
         try:
+            existing = _find_monthly_job(db, category_code=payload.category_code,
+                                         platform=payload.platform, month=payload.month)
+            if existing:
+                ensure_clean_job_idle(db, existing.id, allow_failed=True)
             if payload.force_rebuild:
                 existing = _find_monthly_job(
                     db,
@@ -736,8 +774,13 @@ def upsert_monthly_clean_task(
             )
             # 快照先提交：避免「快照 + 清洗 + 匹配」挤在一个长事务里，导致其它
             # 请求在 filtered_items / cleaned_data 上长时间等锁（1205）。
+            if settings.CLEAN_BACKGROUND_ENABLED:
+                enqueue_clean_job(db, job)
             db.commit()
             db.refresh(job)
+            if settings.CLEAN_BACKGROUND_ENABLED:
+                invalidate_clean_pool_cache()
+                return {"job": job, "snapshot_count": snapshot_count, "action": action, "match_status": "queued"}
             job_id = job.id
             try:
                 _run_clean_and_match_for_job(db, job, commit=True)
@@ -756,6 +799,9 @@ def upsert_monthly_clean_task(
                     db.query(CleanJobRecord).filter(CleanJobRecord.id == job_id).delete(synchronize_session=False)
                     db.commit()
                 raise HTTPException(status_code=500, detail=f"更新清洗任务失败: {str(e)}") from e
+        except HTTPException:
+            db.rollback()
+            raise
         except ValueError as e:
             db.rollback()
             raise HTTPException(status_code=400, detail=str(e)) from e
@@ -765,6 +811,57 @@ def upsert_monthly_clean_task(
 
         invalidate_clean_pool_cache()
         return {"job": job, "snapshot_count": snapshot_count, "action": action, "match_status": "done"}
+
+
+@router.get("/jobs/progress")
+def get_clean_job_progress(
+    ids: str = Query(..., min_length=1, max_length=2200, pattern=r"^[0-9]+(,[0-9]+)*$"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    job_ids = sorted({int(value) for value in ids.split(",")})
+    if len(job_ids) > 200:
+        raise HTTPException(400, "一次最多查询 200 个任务")
+    query = db.query(
+        CleanJobRecord.id, CleanJobRecord.status, CleanJobRecord.progress_stage,
+        CleanJobRecord.error_msg, CleanTaskRun.stage, CleanTaskRun.processed,
+        CleanTaskRun.total, CleanTaskRun.state, CleanJobRecord.updated_at,
+    ).outerjoin(CleanTaskRun, CleanTaskRun.clean_job_id == CleanJobRecord.id).filter(CleanJobRecord.id.in_(job_ids))
+    query = _filter_clean_job_visible_categories(query, db, current_user)
+    return [dict(id=job_id, status=status, progress_stage=stage or job_stage,
+                 progress_processed=processed or 0, progress_total=total or 0,
+                 error_msg=error_msg, can_retry=state == "failed" and status == "failed", updated_at=updated_at)
+            for job_id, status, job_stage, error_msg, stage, processed, total, state, updated_at in query.all()]
+
+
+@router.post("/tasks/{job_id}/retry", response_model=CleanJobOut)
+def retry_clean_task(
+    job_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
+):
+    _get_visible_clean_job_or_404(db, current_user, job_id)
+    job = ensure_clean_job_idle(db, job_id, allow_failed=True)
+    run = db.query(CleanTaskRun).filter_by(clean_job_id=job_id).first()
+    if not settings.CLEAN_BACKGROUND_ENABLED or job.status != "failed" or run is None or run.state != "failed":
+        raise HTTPException(409, "仅支持重试失败或中断的后台任务")
+    if not db.query(CleanJobItemRecord.id).filter_by(clean_job_id=job_id).first():
+        raise HTTPException(400, "任务数据范围为空，无法重试")
+    # Automatic attributes from a partial run are safe to rebuild. Manual edits
+    # or publishing are not; do not discard them on retry.
+    manual = db.query(MatchResult.id).filter(MatchResult.clean_job_id == job_id, or_(
+        MatchResult.matched_by == "manual", MatchResult.reviewed_at.isnot(None),
+        MatchResult.review_note.isnot(None), MatchResult.is_disabled == 1,
+        MatchResult.sales_coefficient.isnot(None), MatchResult.dispute_reason.isnot(None),
+    )).first()
+    manual_fields = db.query(MatchResultExtraValue.id).join(
+        MatchResult, MatchResult.id == MatchResultExtraValue.match_result_id,
+    ).filter(MatchResult.clean_job_id == job_id, MatchResultExtraValue.source == "manual").first()
+    if manual or manual_fields or db.query(PublishJob.id).filter_by(clean_job_id=job_id).first():
+        raise HTTPException(409, "任务已有人工处理或发布记录，不能直接重试")
+    enqueue_clean_job(db, job)
+    db.commit()
+    db.refresh(job)
+    invalidate_clean_pool_cache()
+    return job
 
 
 SUPPLEMENT_REQUIRED_FIELDS = {"item_id", "item_name", "sales_qty", "sales_amount", "price"}
@@ -809,6 +906,7 @@ def supplement_clean_task(
     country_code: Optional[str] = Form(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    _heavy_slot=Depends(clean_heavy_slot),
 ):
     """给已有清洗任务补充本月新增数据：只处理新增行，保留原任务结果。"""
     from app.api.upload import (
@@ -819,6 +917,7 @@ def supplement_clean_task(
     )
 
     job = _get_visible_clean_job_or_404(db, current_user, job_id)
+    ensure_clean_job_idle(db, job_id)
     category_code = job.category_code or job.dispatch_category_code
     if not category_code:
         raise HTTPException(status_code=400, detail="任务缺少品类，无法补充数据")
@@ -1094,8 +1193,10 @@ def rerun_clean_task_with_current_rules(
     job_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    _heavy_slot=Depends(clean_heavy_slot),
 ):
     job = _get_visible_clean_job_or_404(db, current_user, job_id)
+    ensure_clean_job_idle(db, job_id)
     if db.query(PublishJob.id).filter(PublishJob.clean_job_id == job_id).first():
         raise HTTPException(status_code=400, detail="已发布任务不支持重新处理")
 
@@ -1151,6 +1252,7 @@ def run_clean_job(
     payload: dict,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    _heavy_slot=Depends(clean_heavy_slot),
 ):
     """
     执行数据清洗任务。
@@ -1217,6 +1319,7 @@ def run_dispatch_batch_clean(
     payload: dict,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    _heavy_slot=Depends(clean_heavy_slot),
 ):
     dispatch_batch_id: int | None = payload.get("dispatch_batch_id")
     rules: dict = payload.get("rules", {"dedup": True})
@@ -1332,6 +1435,7 @@ def delete_clean_job(
     current_user: User = Depends(get_current_user),
 ):
     job = _get_visible_clean_job_or_404(db, current_user, job_id)
+    ensure_clean_job_idle(db, job_id, allow_failed=True)
     job.status = "archived"
     db.commit()
     db.refresh(job)
@@ -1782,6 +1886,7 @@ def update_clean_job_brand_rows(
     不写 match_results、不改任务状态与待处理计数。
     已匹配/已人工确认/已排除/已禁用的行跳过不更新；有型号的（如 URL映射待确认）行允许人工覆盖品牌。"""
     _get_visible_clean_job_or_404(db, current_user, job_id)
+    ensure_clean_job_idle(db, job_id)
     if not payload.items:
         return {"updated": 0}
 
@@ -1864,6 +1969,7 @@ def exclude_clean_job_brand_rows(
     """「只清洗品牌」一键排除：把所选行标记为已排除（status=excluded），
     并写入排除沉淀库，供后续同品类任务沿用。已匹配/已人工确认/已排除/已禁用的行跳过。"""
     job = _get_visible_clean_job_or_404(db, current_user, job_id)
+    ensure_clean_job_idle(db, job_id)
     if not payload.cleaned_data_ids:
         return {"excluded": 0}
 

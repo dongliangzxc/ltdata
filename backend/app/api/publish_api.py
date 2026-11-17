@@ -5,6 +5,7 @@ from app.models.analytics_db import get_analytics_db
 from app.models.schemas import PublishJob, PublishJobOut
 from app.services.publisher import run_publish
 from app.services.clean_task_snapshot import touch_clean_job
+from app.services.clean_task_queue import ensure_clean_job_idle
 
 router = APIRouter(prefix="/api/publish", tags=["publish"])
 
@@ -20,6 +21,7 @@ def publish_run(
     支持重复发布（覆盖上次）。
     """
     clean_job_id: int = payload["clean_job_id"]
+    ensure_clean_job_idle(db, clean_job_id)
 
     result = run_publish(db, analytics_db, clean_job_id)
     published_count = result["published_count"]

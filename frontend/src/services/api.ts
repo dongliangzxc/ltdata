@@ -432,6 +432,11 @@ export interface CleanJobItem {
   platform?: string | null
   month?: number | null
   source_scope?: Record<string, unknown> | null
+  progress_stage?: string | null
+  progress_processed?: number
+  progress_total?: number
+  error_msg?: string | null
+  can_retry?: boolean
   pending_count?: number | null
   disputed_count?: number | null
   confirmed_count?: number | null
@@ -536,6 +541,18 @@ export const upsertMonthlyCleanTask = (payload: UpsertMonthlyCleanTaskPayload) =
 
 export const createCleanTask = (payload: CreateCleanTaskPayload) =>
   api.post<CreateCleanTaskResponse>('/clean/tasks', payload)
+
+export type CleanJobProgress = Pick<CleanJobItem, 'id' | 'status' | 'progress_stage' | 'progress_processed' | 'progress_total' | 'error_msg' | 'can_retry' | 'updated_at'>
+
+export const getCleanJobProgress = async (ids: number[]): Promise<CleanJobProgress[]> => {
+  const requests = []
+  for (let start = 0; start < ids.length; start += 200) {
+    requests.push(api.get<CleanJobProgress[]>('/clean/jobs/progress', { params: { ids: ids.slice(start, start + 200).join(',') } }))
+  }
+  return (await Promise.all(requests)).flatMap(response => response.data)
+}
+
+export const retryCleanTask = (id: number) => api.post<CleanJobItem>(`/clean/tasks/${id}/retry`)
 
 export interface SupplementCleanTaskResult {
   job_id: number

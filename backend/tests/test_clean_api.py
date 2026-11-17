@@ -37,6 +37,12 @@ class DummyUser:
         self.category_permissions = category_permissions
 
 
+@pytest.fixture(autouse=True)
+def synchronous_cleaning_compatibility(monkeypatch):
+    """Keep this module's synchronous rollback tests; async coverage is separate."""
+    monkeypatch.setattr("app.core.config.settings.CLEAN_BACKGROUND_ENABLED", False)
+
+
 def _make_client(db, *, current_user=None, raise_server_exceptions=True):
     app = FastAPI()
     app.include_router(router)
@@ -1446,7 +1452,7 @@ def test_monthly_pool_skips_archived_job_without_downstream(db):
     assert items[0]["has_reviewed_or_published"] is False
 
 
-@pytest.mark.parametrize("status", ["matching", "processing"])
+@pytest.mark.parametrize("status", ["queued", "cleaning", "matching", "processing"])
 def test_upsert_monthly_clean_task_rejects_processing_existing_task(db, status):
     client = _make_client(db)
     _create_monthly_pending_row(db, item_id="sb-1")
@@ -1468,8 +1474,8 @@ def test_upsert_monthly_clean_task_rejects_processing_existing_task(db, status):
         "month": 202605,
     })
 
-    assert response.status_code == 400
-    assert "不能追加" in response.json()["detail"]
+    assert response.status_code == 409
+    assert "排队或处理中" in response.json()["detail"]
 
 
 def test_run_match_rerun_clears_old_match_attrs(db, monkeypatch):

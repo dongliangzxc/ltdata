@@ -10,13 +10,14 @@ from app.models.schemas import (
     DispatchItem,
     MatchResult,
     MatchResultAttr,
+    MatchResultExtraValue,
     PublishJob,
     RawDataRecord,
 )
 from app.services.dispatch_scope import latest_done_batch_subquery
 
 
-ACTIVE_TASK_STATUSES = {"created", "cleaning", "matching", "reviewing", "processing", "done"}
+ACTIVE_TASK_STATUSES = {"queued", "created", "cleaning", "matching", "reviewing", "processing", "done"}
 _SNAPSHOT_INSERT_BATCH_SIZE = 1000
 
 _PLATFORM_ALIAS_GROUPS = {
@@ -635,6 +636,11 @@ def _jobs_with_reviewed_or_published_state(db: Session, clean_job_ids) -> set[in
     )
     result.update(row[0] for row in attr_rows)
 
+    manual_fields = db.query(MatchResult.clean_job_id).join(
+        MatchResultExtraValue, MatchResultExtraValue.match_result_id == MatchResult.id,
+    ).filter(MatchResult.clean_job_id.in_(job_ids), MatchResultExtraValue.source == "manual").distinct().all()
+    result.update(row[0] for row in manual_fields)
+
     publish_rows = db.query(PublishJob.clean_job_id).filter(
         PublishJob.clean_job_id.in_(job_ids)
     ).distinct().all()
@@ -677,6 +683,8 @@ def upsert_monthly_task_snapshot(
         month=month,
     )
     action = "appended" if job else "created"
+    if job and job.status in {"queued", "created", "cleaning", "matching", "processing"}:
+        raise ValueError(f"任务状态为 {job.status}，正在排队或处理中，不能修改数据范围")
     has_downstream = _has_reviewed_or_published_state(db, job.id) if job else False
 
     # 已有任务「重新清洗」时，若无人工/发布记录，按最新分发范围重建快照，

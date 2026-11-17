@@ -55,7 +55,9 @@ from app.services.price_auditor import audit_price
 from app.utils.text_utils import title_key
 from app.utils.time_utils import format_beijing_datetime
 
-router = APIRouter(prefix="/api/match", tags=["match"])
+from app.services.clean_task_queue import guard_queued_match_mutation, clean_execution_lock
+
+router = APIRouter(prefix="/api/match", tags=["match"], dependencies=[Depends(guard_queued_match_mutation)])
 logger = logging.getLogger(__name__)
 
 # 可发布/可复核的匹配状态（发布与复核队列共用口径）
@@ -326,7 +328,11 @@ def _run_match_thread(clean_job_id: int):
                 processed=processed, total=total, matched=matched
             )
 
-        stats = run_match(db, clean_job_id, progress_cb=on_progress)
+        with clean_execution_lock(db.get_bind()) as execution_connection:
+            if execution_connection is None:
+                raise RuntimeError("后台正在执行清洗任务，请稍后重试匹配")
+            with SessionLocal(bind=execution_connection) as execution_db:
+                stats = run_match(execution_db, clean_job_id, progress_cb=on_progress)
         _progress[clean_job_id].update(
             status="done",
             total=stats["total"],

@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     DATABASE_MAX_OVERFLOW: int = 30
     DATABASE_POOL_TIMEOUT: int = 60
     DATABASE_POOL_RECYCLE: int = 1800
+    CLEAN_BACKGROUND_ENABLED: bool = True
     SECRET_KEY: str = "luotu-change-me-in-production"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 小时
     UPLOAD_DIR: str = "./uploads"

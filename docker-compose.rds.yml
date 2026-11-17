@@ -9,7 +9,7 @@
 # 部署：bash deploy-server.sh（会构建前后端镜像并重启）
 
 services:
-  backend:
+  backend: &backend
     build:
       context: ./backend
       dockerfile: Dockerfile.prod
@@ -39,6 +39,22 @@ services:
     volumes:
       - /data/luotu/uploads:/app/uploads
       - /data/luotu/exports:/app/exports
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  clean-worker:
+    <<: *backend
+    command: ["python", "-m", "app.workers.clean_worker"]
+    healthcheck:
+      disable: true
+    stop_grace_period: 120s
+    depends_on:
+      backend:
+        condition: service_healthy
 
   frontend:
     build:

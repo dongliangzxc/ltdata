@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.models.schemas import AttrRule, MatchResult, MatchResultAttr, RawDataRecord, ModelRecord
 
 
-def run_attribute_matching(db: Session, match_result_ids: list[int], commit: bool = True) -> dict:
+def run_attribute_matching(db: Session, match_result_ids: list[int], commit: bool = True, progress_cb=None) -> dict:
     """
     对指定 match_result_ids 执行属性规则匹配。
     返回 {"matched_attrs": N, "items_processed": N}
@@ -28,6 +28,8 @@ def run_attribute_matching(db: Session, match_result_ids: list[int], commit: boo
         .all()
     )
     if not rules:
+        if progress_cb:
+            progress_cb(len(match_result_ids), len(match_result_ids))
         return {"matched_attrs": 0, "items_processed": len(match_result_ids)}
 
     # 2. 加载 match_results + raw_data + model（一次查询）
@@ -49,7 +51,9 @@ def run_attribute_matching(db: Session, match_result_ids: list[int], commit: boo
     total_attrs = 0
     items_processed = 0
 
-    for mr, rd, model in rows:
+    for index, (mr, rd, model) in enumerate(rows):
+        if progress_cb and index % 1000 == 0:
+            progress_cb(index, len(rows))
         if mr.model_id is None:
             continue
         items_processed += 1
@@ -99,4 +103,6 @@ def run_attribute_matching(db: Session, match_result_ids: list[int], commit: boo
 
     if commit:
         db.commit()
+    if progress_cb:
+        progress_cb(len(rows), len(rows))
     return {"matched_attrs": total_attrs, "items_processed": items_processed}

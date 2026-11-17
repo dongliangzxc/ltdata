@@ -503,6 +503,7 @@ def run_clean(
     dispatch_category_code: str | None = None,
     commit: bool = True,
     raw_data_ids: list[int] | None = None,
+    progress_cb=None,
 ) -> int:
     """分批清洗，所有批次共用去重集合和事务，返回本次写入的行数。
 
@@ -510,6 +511,8 @@ def run_clean(
     ``commit=False`` 时由调用方统一提交或回滚，分批写入不会自行提交。
     """
     dedup: bool = rules.get("dedup", True)
+    if progress_cb:
+        progress_cb(0)
     _t0 = time.perf_counter()
     intervention_rules = [
         _prepare_intervention_rule(rule)
@@ -640,6 +643,8 @@ def run_clean(
         row_out += len(cleaned)
         row_filtered += len(filtered)
         write_seconds += time.perf_counter() - write_start
+        if progress_cb:
+            progress_cb(row_in)
 
     write_start = time.perf_counter()
     job = db.query(CleanJobRecord).filter(CleanJobRecord.id == clean_job_id).first()

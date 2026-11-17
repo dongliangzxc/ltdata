@@ -5,6 +5,7 @@ from sqlalchemy import (
     ForeignKey, JSON, SmallInteger, UniqueConstraint, CheckConstraint, Enum, Index
 )
 from sqlalchemy.orm import relationship, validates
+from sqlalchemy.dialects.mysql import DATETIME as MySQLDateTime
 from pydantic import BaseModel, Field, field_serializer, field_validator
 from app.models.database import Base
 from app.utils.text_utils import title_key
@@ -180,6 +181,9 @@ class CleanJobRecord(Base):
     category_code = Column(String(50), nullable=True, index=True)
     platform = Column(String(50), nullable=True, index=True)
     source_scope = Column(JSON, nullable=True)
+    progress = Column(Integer, default=0, nullable=False)
+    progress_stage = Column(String(30), nullable=True)
+    error_msg = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -204,6 +208,24 @@ class CleanJobItemRecord(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     job = relationship("CleanJobRecord", back_populates="snapshot_items")
+
+
+class CleanTaskRun(Base):
+    """持久化清洗队列；进度独立于清洗产物的长事务。"""
+    __tablename__ = "clean_task_runs"
+    __table_args__ = (Index("idx_clean_runs_queue", "state", "queued_at", "id"),)
+
+    id = Column(Integer, primary_key=True)
+    clean_job_id = Column(Integer, ForeignKey("clean_jobs.id", ondelete="CASCADE"), nullable=False, unique=True)
+    state = Column(String(20), nullable=False, default="queued")
+    stage = Column(String(30), nullable=False, default="排队中")
+    processed = Column(Integer, nullable=False, default=0)
+    total = Column(Integer, nullable=False, default=0)
+    worker_token = Column(String(36), nullable=True)
+    # Preserve FIFO ordering when a retry and a new submission share a second.
+    queued_at = Column(DateTime().with_variant(MySQLDateTime(fsp=6), "mysql"), nullable=False, default=datetime.utcnow)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
 
 
 class CleanedDataRecord(Base):
@@ -437,6 +459,9 @@ class CleanJobOut(BaseModel):
     platform: Optional[str] = None
     month: Optional[int] = None
     source_scope: Optional[dict] = None
+    progress: int = 0
+    progress_stage: Optional[str] = None
+    error_msg: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 

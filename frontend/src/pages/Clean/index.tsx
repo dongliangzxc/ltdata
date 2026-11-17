@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Key } from 'react'
 import {
   Card, Button, Table, Tag, Modal, Row, Col, Alert,
@@ -18,6 +18,8 @@ import {
   upsertMonthlyCleanTask,
   listExchangeRateOptions,
   supplementCleanTask,
+  getCleanJobProgress,
+  retryCleanTask,
 } from '../../services/api'
 import type {
   CleanJobItem, CleanMonthlyPoolItem, CleanJobListView, UserProfile,
@@ -25,10 +27,11 @@ import type {
   SupplementCleanTaskResult,
 } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
+import { finishedCleanJobIds, formatCleanProgress, mergeCleanProgress, processingStatuses } from './cleanProgress'
 
 const { Text } = Typography
 
-type CleanJobStatus = 'created' | 'cleaning' | 'matching' | 'processing' | 'reviewing' | 'published' | 'failed' | 'done' | 'error' | 'archived'
+type CleanJobStatus = 'queued' | 'created' | 'cleaning' | 'matching' | 'processing' | 'reviewing' | 'published' | 'failed' | 'done' | 'error' | 'archived'
 
 type CleanPreviewRow = {
   id?: number
@@ -88,9 +91,9 @@ const platformLabelMap = platformOptions.reduce<Record<string, string>>((acc, op
 }, {})
 
 const appendableStatuses = new Set(['reviewing', 'done', 'published'])
-const processingStatuses = new Set(['created', 'cleaning', 'matching', 'processing'])
 
 const statusMap: Record<CleanJobStatus, { label: string; color: string }> = {
+  queued: { label: '排队中', color: 'default' },
   created: { label: '已创建', color: 'default' },
   cleaning: { label: '清洗中', color: 'processing' },
   matching: { label: '匹配中', color: 'processing' },
@@ -140,6 +143,7 @@ const jobColumns = (
   onDelete: (id: number) => void,
   view: CleanJobListView,
   onMatched: (id: number) => void,
+  onRetry: (id: number) => void,
 ): ColumnsType<CleanJobItem> => [
   {
     title: '任务名称', dataIndex: 'task_name', width: 180,
@@ -174,8 +178,14 @@ const jobColumns = (
     render: formatNumber,
   },
   {
-    title: '状态', dataIndex: 'status', width: 110,
+    title: '状态 / 进度', dataIndex: 'status', width: 250,
     render: (status: string, row) => {
+      if (processingStatuses.has(status)) {
+        return <Space direction="vertical" size={0}>{renderStatus(status)}<Text>{formatCleanProgress(row)}</Text></Space>
+      }
+      if (status === 'failed' || status === 'error') {
+        return <Space direction="vertical" size={0}>{renderStatus(status)}<Text type="danger" style={{ maxWidth: 230 }} ellipsis={{ tooltip: row.error_msg }}>{row.error_msg || '处理失败'}</Text></Space>
+      }
       const cleanFinished = (status === 'done' || status === 'reviewing') && (row.pending_count ?? 0) === 0
       if (cleanFinished) {
         return <Tag icon={<CheckCircleFilled />} color="success">清洗完成</Tag>
@@ -196,24 +206,28 @@ const jobColumns = (
     render: (_: unknown, row) => (
       <Space size={4}>
         {view === 'active' && (
-          <Button type="link" icon={<AimOutlined />} size="small" onClick={() => onEnter(row.id)}>进入处理</Button>
+          <Button type="link" icon={<AimOutlined />} size="small" disabled={processingStatuses.has(row.status) || row.status === 'failed'} onClick={() => onEnter(row.id)}>进入处理</Button>
         )}
         {view === 'active' && row.month != null && (
-          <Button type="link" icon={<LineChartOutlined />} size="small" onClick={() => onAdjust(row.id)}>数据调整</Button>
+          <Button type="link" icon={<LineChartOutlined />} size="small" disabled={processingStatuses.has(row.status) || row.status === 'failed'} onClick={() => onAdjust(row.id)}>数据调整</Button>
         )}
         {view === 'active' && (
-          <Button type="link" icon={<TagsOutlined />} size="small" onClick={() => onBrandClean(row.id)}>只清洗品牌</Button>
+          <Button type="link" icon={<TagsOutlined />} size="small" disabled={processingStatuses.has(row.status) || row.status === 'failed'} onClick={() => onBrandClean(row.id)}>只清洗品牌</Button>
         )}
         <Button type="link" icon={<EyeOutlined />} size="small" onClick={() => onView(row.id)}>预览</Button>
         <Button type="link" icon={<FileSearchOutlined />} size="small" onClick={() => onMatched(row.id)}>查看已匹配</Button>
+        {view === 'active' && row.can_retry && (
+          <Button type="link" size="small" onClick={() => onRetry(row.id)}>重试</Button>
+        )}
         {view === 'active' && (
           <Popconfirm
             title="确认删除该清洗任务？"
             okText="删除"
             cancelText="取消"
             onConfirm={() => onDelete(row.id)}
+            disabled={processingStatuses.has(row.status)}
           >
-            <Button type="link" danger icon={<DeleteOutlined />} size="small">删除</Button>
+            <Button type="link" danger icon={<DeleteOutlined />} size="small" disabled={processingStatuses.has(row.status)}>删除</Button>
           </Popconfirm>
         )}
       </Space>
@@ -225,6 +239,9 @@ const getMonthlyQueueRowKey = (row: CleanMonthlyPoolItem) => `${row.category_cod
 
 const getQueueAction = (row: CleanMonthlyPoolItem) => {
   if (!row.platform) return { label: '缺少平台', disabled: true, action: 'blocked' as const }
+  if (row.existing_job_status && processingStatuses.has(row.existing_job_status)) {
+    return { label: '处理中', disabled: true, action: 'processing' as const }
+  }
   if (row.existing_job_status === 'archived' && row.has_reviewed_or_published) {
     return { label: '强制重建', disabled: false, action: 'rebuild' as const }
   }
@@ -234,9 +251,6 @@ const getQueueAction = (row: CleanMonthlyPoolItem) => {
   if (!row.existing_job_id) return { label: '创建任务', disabled: false, action: 'created' as const }
   if (row.existing_job_status && appendableStatuses.has(row.existing_job_status)) {
     return { label: '追加到任务', disabled: false, action: 'appended' as const }
-  }
-  if (row.existing_job_status && processingStatuses.has(row.existing_job_status)) {
-    return { label: '处理中', disabled: true, action: 'processing' as const }
   }
   return { label: '先处理失败任务', disabled: true, action: 'blocked' as const }
 }
@@ -496,7 +510,30 @@ export default function CleanPage() {
     { refreshDeps: [jobRequestParams, hasCategory] },
   )
 
-  const jobs = jobsData ?? []
+  const notifiedFinishedJobs = useRef(new Set<number>())
+  useEffect(() => {
+    (jobsData ?? []).filter(job => processingStatuses.has(job.status)).forEach(job => notifiedFinishedJobs.current.delete(job.id))
+  }, [jobsData])
+  const progressIds = useMemo(() => (jobsData ?? []).map(job => job.id), [jobsData])
+  const { data: progressData } = useRequest(
+    () => getCleanJobProgress(progressIds),
+    {
+      ready: hasCategory && progressIds.length > 0,
+      refreshDeps: [progressIds, hasCategory],
+      pollingInterval: (jobsData ?? []).some(job => processingStatuses.has(job.status)) ? 3000 : 0,
+      pollingWhenHidden: false,
+      onSuccess: progress => {
+        progress.filter(row => processingStatuses.has(row.status)).forEach(row => notifiedFinishedJobs.current.delete(row.id))
+        const finished = finishedCleanJobIds(jobsData ?? [], progress).filter(id => !notifiedFinishedJobs.current.has(id))
+        if (finished.length > 0) {
+          finished.forEach(id => notifiedFinishedJobs.current.add(id))
+          refreshJobs()
+          refreshMonthlyPool()
+        }
+      },
+    },
+  )
+  const jobs = useMemo(() => mergeCleanProgress(jobsData ?? [], progressData ?? []), [jobsData, progressData])
   const monthlyPool = monthlyPoolData ?? []
   const selectedMonthlyRowKeySet = useMemo(() => new Set(selectedMonthlyRowKeys), [selectedMonthlyRowKeys])
   const selectedActionableRows = useMemo(
@@ -505,7 +542,7 @@ export default function CleanPage() {
   )
   const monthOptions = useMemo(() => collectMonths(monthlyPool, jobsData ?? []), [monthlyPool, jobsData])
   const summary = useMemo(() => {
-    const activeProcessingStatuses = new Set(['cleaning', 'matching', 'processing'])
+    const activeProcessingStatuses = processingStatuses
 
     return {
       pendingTasks: jobs.filter(job => (job.pending_count ?? 0) + (job.disputed_count ?? 0) > 0).length,
@@ -551,7 +588,7 @@ export default function CleanPage() {
               : action === 'appended' || response.data.action === 'appended'
                 ? '已追加到清洗任务'
                 : '已创建清洗任务'
-        message.success(successText)
+        message.success(response.data.match_status === 'queued' ? '已加入清洗队列，可在下方查看进度' : successText)
         refreshMonthlyPool()
         refreshJobs()
       } finally {
@@ -630,7 +667,7 @@ export default function CleanPage() {
       }
 
       if (failedCount === 0) {
-        message.success(`已创建/追加 ${successCount} 个清洗任务`)
+        message.success(`已提交 ${successCount} 个清洗任务，可在下方查看进度`)
       } else if (successCount > 0) {
         message.warning(`已创建/追加 ${successCount} 个清洗任务，${failedCount} 个失败`)
       } else {
@@ -799,6 +836,12 @@ export default function CleanPage() {
                 handleDeleteJob,
                 jobView,
                 id => { setMatchedJobId(id); setMatchedGroup('mapping'); setMatchedPage(1); setMatchedKeyword(''); setMatchedKeywordInput('') },
+                async id => {
+                  await retryCleanTask(id)
+                  message.success('已重新加入清洗队列')
+                  refreshJobs()
+                  refreshMonthlyPool()
+                },
               )}
               rowKey="id"
               size="small"

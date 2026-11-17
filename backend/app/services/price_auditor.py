@@ -52,7 +52,7 @@ def _round_price_ref(avg_price) -> Decimal:
     return average.quantize(Decimal("0.01"))
 
 
-def audit_price(db: Session, match_result_ids: list[int], commit: bool = True) -> dict:
+def audit_price(db: Session, match_result_ids: list[int], commit: bool = True, progress_cb=None) -> dict:
     if not match_result_ids:
         return {"audited": 0}
 
@@ -103,7 +103,9 @@ def audit_price(db: Session, match_result_ids: list[int], commit: bool = True) -
                 for model_code, month, price_sum, price_count in history_rows
             }
 
-        for match_result, raw_data, model in rows:
+        for index, (match_result, raw_data, model) in enumerate(rows):
+            if progress_cb and index % 1000 == 0:
+                progress_cb(index, len(rows))
             if raw_data.price is None or raw_data.month is None or not model.model_code:
                 match_result.price_flag = "no_history"
                 match_result.price_ref = None
@@ -126,6 +128,8 @@ def audit_price(db: Session, match_result_ids: list[int], commit: bool = True) -
 
         if commit:
             db.commit()
+        if progress_cb:
+            progress_cb(len(rows), len(rows))
     finally:
         analytics_db.close()
 

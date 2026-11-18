@@ -15,7 +15,7 @@ from functools import cached_property
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 from app.models.schemas import (
-    RawDataRecord, CleanedDataRecord, CleanJobRecord,
+    RawDataRecord, CleanedDataRecord, CleanJobRecord, CleanDuplicateRecord,
     FilteredItem, BrandAlias, InterventionRule, InterferenceLink,
     CleanJobItemRecord, DispatchItem,
 )
@@ -525,19 +525,25 @@ def run_clean(
     )
     _t1 = time.perf_counter()
 
-    row_in = row_out = row_filtered = 0
+    row_in = row_out = row_filtered = row_duplicated = 0
     query_seconds = loop_seconds = write_seconds = 0.0
-    seen_keys: set = set()
+    seen_keys: dict[tuple, int | None] = {}
+    recorded_duplicate_ids: set[int] = set()
     query_start = time.perf_counter()
     if dedup and raw_data_ids is not None:
         # 先完整消费已有键的读取，再开始交错的分批读取/写入。
-        seen_keys = {
-            key
-            for item_id, month, shop_name, raw_id in db.query(
+        for item_id, month, shop_name, raw_id in db.query(
                 CleanedDataRecord.item_id, CleanedDataRecord.month,
                 CleanedDataRecord.shop_name, CleanedDataRecord.raw_data_id,
-            ).filter(CleanedDataRecord.clean_job_id == clean_job_id).yield_per(_CLEAN_BATCH_SIZE)
-            if (key := _clean_dedup_key(item_id, month, shop_name, raw_id)) is not None
+            ).filter(CleanedDataRecord.clean_job_id == clean_job_id).order_by(CleanedDataRecord.id).yield_per(_CLEAN_BATCH_SIZE):
+            key = _clean_dedup_key(item_id, month, shop_name, raw_id)
+            if key is not None:
+                seen_keys.setdefault(key, raw_id)
+        recorded_duplicate_ids = {
+            raw_id for raw_id, in db.query(CleanDuplicateRecord.raw_data_id).filter(
+                CleanDuplicateRecord.clean_job_id == clean_job_id,
+                CleanDuplicateRecord.raw_data_id.in_(raw_data_ids),
+            )
         }
     query_seconds += time.perf_counter() - query_start
     batches = _iter_clean_record_batches(
@@ -552,6 +558,7 @@ def run_clean(
         row_in += len(records)
         cleaned: list[dict] = []
         filtered: list[dict] = []
+        duplicates: list[dict] = []
         loop_start = time.perf_counter()
         for r in records:
             # ── Step 1: 干扰链接库（按品类剔除）────────────────────────
@@ -588,8 +595,18 @@ def run_clean(
                 key = _clean_dedup_key(r.item_id, r.month, r.shop_name, r.id)
                 if key is not None:
                     if key in seen_keys:
+                        kept_raw_id = seen_keys[key]
+                        # Reprocessing the very same source isn't another input
+                        # row. Keep append/supplement retries idempotent.
+                        if kept_raw_id != r.id and r.id not in recorded_duplicate_ids:
+                            duplicates.append(dict(
+                                clean_job_id=clean_job_id, raw_data_id=r.id,
+                                kept_raw_data_id=kept_raw_id, dedup_basis="item_id_month_shop",
+                                dedup_key={"item_id": r.item_id, "month": r.month, "shop_name": r.shop_name},
+                            ))
+                            recorded_duplicate_ids.add(r.id)
                         continue
-                    seen_keys.add(key)
+                    seen_keys[key] = r.id
 
             # ── Step 4: 品牌写法标准化 ───────────────────────────────
             brand_std = r.brand_std  # 原始已有标准品牌码（上传时从 Excel 读取）
@@ -641,8 +658,11 @@ def run_clean(
             db.bulk_insert_mappings(FilteredItem, filtered)
         if cleaned:
             db.bulk_insert_mappings(CleanedDataRecord, cleaned)
+        if duplicates:
+            db.bulk_insert_mappings(CleanDuplicateRecord, duplicates, render_nulls=True)
         row_out += len(cleaned)
         row_filtered += len(filtered)
+        row_duplicated += len(duplicates)
         write_seconds += time.perf_counter() - write_start
         if progress_cb:
             progress_cb(row_in)
@@ -653,12 +673,16 @@ def run_clean(
         job.row_in = row_in
         job.row_out = row_out
         job.row_filtered = row_filtered
+        if raw_data_ids is None:
+            job.row_duplicated = row_duplicated
+        elif job.row_duplicated is not None:
+            job.row_duplicated = db.query(CleanDuplicateRecord).filter_by(clean_job_id=clean_job_id).count()
     if commit:
         db.commit()
     write_seconds += time.perf_counter() - write_start
     logger.info(
-        "run_clean job=%s rows=%d cleaned=%d filtered=%d rules=%.1fs query=%.1fs loop=%.1fs write=%.1fs total=%.1fs",
-        clean_job_id, row_in, row_out, row_filtered,
+        "run_clean job=%s rows=%d cleaned=%d filtered=%d duplicates=%d rules=%.1fs query=%.1fs loop=%.1fs write=%.1fs total=%.1fs",
+        clean_job_id, row_in, row_out, row_filtered, row_duplicated,
         _t1 - _t0, query_seconds, loop_seconds, write_seconds, time.perf_counter() - _t0,
     )
     return row_out

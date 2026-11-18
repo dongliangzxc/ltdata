@@ -15,6 +15,7 @@ from app.models.schemas import (
     CleanJobItemRecord,
     CleanedDataRecord,
     FilteredItem,
+    CleanDuplicateRecord,
     UploadFileRecord,
     UploadDownloadJob,
     RawDataRecord,
@@ -597,6 +598,7 @@ def delete_upload_batch(batch_key: str, db: Session = Depends(get_db)):
         db.query(CleanJobItemRecord.id).filter(CleanJobItemRecord.raw_data_id.in_(raw_data_ids)).first()
         or db.query(CleanedDataRecord.id).filter(CleanedDataRecord.raw_data_id.in_(raw_data_ids)).first()
         or db.query(FilteredItem.id).filter(FilteredItem.raw_data_id.in_(raw_data_ids)).first()
+        or db.query(CleanDuplicateRecord.id).filter(or_(CleanDuplicateRecord.raw_data_id.in_(raw_data_ids), CleanDuplicateRecord.kept_raw_data_id.in_(raw_data_ids))).first()
     )
     if has_downstream_refs:
         raise HTTPException(
@@ -626,6 +628,7 @@ def delete_upload_file(file_id: int, db: Session = Depends(get_db)):
         db.query(CleanJobItemRecord.id).filter(CleanJobItemRecord.raw_data_id.in_(raw_data_ids)).first()
         or db.query(CleanedDataRecord.id).filter(CleanedDataRecord.raw_data_id.in_(raw_data_ids)).first()
         or db.query(FilteredItem.id).filter(FilteredItem.raw_data_id.in_(raw_data_ids)).first()
+        or db.query(CleanDuplicateRecord.id).filter(or_(CleanDuplicateRecord.raw_data_id.in_(raw_data_ids), CleanDuplicateRecord.kept_raw_data_id.in_(raw_data_ids))).first()
     )
     if has_downstream_refs:
         raise HTTPException(

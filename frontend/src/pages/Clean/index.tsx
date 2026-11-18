@@ -28,6 +28,8 @@ import type {
 } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 import { finishedCleanJobIds, formatCleanProgress, mergeCleanProgress, processingStatuses } from './cleanProgress'
+import { formatCleanAccounting, formatDuplicateBasis } from './cleanAccounting'
+import { FilterReason } from './FilterReason'
 
 const { Text } = Typography
 
@@ -166,6 +168,10 @@ const jobColumns = (
     render: formatNumber,
   },
   {
+    title: '重复', dataIndex: 'row_duplicated', width: 110,
+    render: (value: number | null | undefined) => value == null ? '未完整记录' : formatNumber(value),
+  },
+  {
     title: '待处理', dataIndex: 'pending_count', width: 90,
     render: formatNumber,
   },
@@ -215,7 +221,7 @@ const jobColumns = (
           <Button type="link" icon={<TagsOutlined />} size="small" disabled={processingStatuses.has(row.status) || row.status === 'failed'} onClick={() => onBrandClean(row.id)}>只清洗品牌</Button>
         )}
         <Button type="link" icon={<EyeOutlined />} size="small" onClick={() => onView(row.id)}>预览</Button>
-        <Button type="link" icon={<FileSearchOutlined />} size="small" onClick={() => onMatched(row.id)}>查看已匹配</Button>
+        <Button type="link" icon={<FileSearchOutlined />} size="small" onClick={() => onMatched(row.id)}>查看清洗明细</Button>
         {view === 'active' && row.can_retry && (
           <Button type="link" size="small" onClick={() => onRetry(row.id)}>重试</Button>
         )}
@@ -424,8 +430,8 @@ const matchedFilteredCols: ColumnsType<CleanMatchedItem> = [
     render: (_: unknown, row) => row.intervention_rule_name || row.matched_keyword || '-',
   },
   {
-    title: '命中原因', dataIndex: 'matched_reason', ellipsis: true,
-    render: formatText,
+    title: '过滤原因', dataIndex: 'matched_reason', width: 340,
+    render: (reason: string | null | undefined) => <FilterReason reason={reason} />,
   },
   {
     title: '销量', dataIndex: 'sales_qty', width: 80,
@@ -440,8 +446,21 @@ const matchedFilteredCols: ColumnsType<CleanMatchedItem> = [
 const matchedTabLabels: Record<CleanMatchedGroup, string> = {
   mapping: '映射匹配',
   interference_link: '干扰链接',
-  interference_archive: '干扰项存档',
+  interference_archive: '规则过滤',
+  duplicates: '重复明细',
 }
+
+const matchedDuplicateCols: ColumnsType<CleanMatchedItem> = [
+  { title: '平台', dataIndex: 'platform', width: 80, render: formatPlatform },
+  { title: '重复商品', width: 270,
+    render: (_, row) => <Space direction="vertical" size={0} style={{ maxWidth: 240 }}><Text style={{ maxWidth: 240 }} ellipsis={{ tooltip: row.item_name }}>{row.item_name || '-'}</Text><Text type="secondary">原始记录 #{row.raw_data_id} · 文件 #{row.file_id}</Text></Space> },
+  { title: '保留商品', width: 270,
+    render: (_, row) => row.kept_raw_data_id != null
+      ? <Space direction="vertical" size={0} style={{ maxWidth: 240 }}><Text style={{ maxWidth: 240 }} ellipsis={{ tooltip: row.kept_item_name }}>{row.kept_item_name || '-'}</Text><Text type="secondary">原始记录 #{row.kept_raw_data_id} · 文件 #{row.kept_file_id}</Text></Space>
+      : '保留记录的来源未记录' },
+  { title: '去重依据', width: 340, render: (_, row) => formatDuplicateBasis(row) },
+  { title: '记录时间', dataIndex: 'created_at', width: 170, render: formatText },
+]
 
 export default function CleanPage() {
   const navigate = useNavigate()
@@ -738,7 +757,7 @@ export default function CleanPage() {
     { ready: matchedJobId != null, refreshDeps: [matchedJobId, matchedGroup, matchedPage, matchedKeyword, matchedPriceMin, matchedPriceMax] }
   )
   const currentMatchedData: (CleanMatchedResponse & { jobId: number }) | undefined =
-    matchedData?.jobId === matchedJobId ? matchedData : undefined
+    matchedData?.jobId === matchedJobId && matchedData.group === matchedGroup ? matchedData : undefined
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -973,12 +992,13 @@ export default function CleanPage() {
       </Modal>
 
       <Modal
-        title={`已匹配数据查看（任务 #${matchedJobId}）`}
+        title={`清洗明细（任务 #${matchedJobId}）`}
         open={matchedJobId != null}
         onCancel={() => setMatchedJobId(null)}
         footer={null}
         width={1200}
       >
+        {currentMatchedData?.accounting && <Alert {...formatCleanAccounting(currentMatchedData.accounting)} showIcon style={{ marginBottom: 16 }} />}
         <Tabs
           activeKey={matchedGroup}
           onChange={key => { setMatchedGroup(key as CleanMatchedGroup); setMatchedPage(1) }}
@@ -990,7 +1010,7 @@ export default function CleanPage() {
         <Space style={{ marginBottom: 12 }} wrap>
           <Input.Search
             allowClear
-            placeholder="按商品名称搜索"
+            placeholder={matchedGroup === 'duplicates' ? '搜索重复或保留商品名称' : '按商品名称搜索'}
             style={{ width: 260 }}
             value={matchedKeywordInput}
             onChange={e => setMatchedKeywordInput(e.target.value)}
@@ -1015,7 +1035,7 @@ export default function CleanPage() {
         </Space>
         <Table
           dataSource={currentMatchedData?.items ?? []}
-          columns={matchedGroup === 'mapping' ? matchedMappingCols : matchedFilteredCols}
+          columns={matchedGroup === 'mapping' ? matchedMappingCols : matchedGroup === 'duplicates' ? matchedDuplicateCols : matchedFilteredCols}
           rowKey="id"
           size="small"
           loading={matchedLoading}

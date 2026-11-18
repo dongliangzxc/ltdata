@@ -175,6 +175,8 @@ class CleanJobRecord(Base):
     row_in = Column(Integer, default=0)
     row_out = Column(Integer, default=0)
     row_filtered = Column(Integer, default=0)
+    # NULL means historical duplicate decisions were not recorded completely.
+    row_duplicated = Column(Integer, nullable=True)
     dispatch_batch_id = Column(Integer, nullable=True)
     dispatch_category_code = Column(String(50), nullable=True)
     task_name = Column(String(200), nullable=True)
@@ -230,6 +232,22 @@ class CleanTaskRun(Base):
     queued_at = Column(DateTime().with_variant(MySQLDateTime(fsp=6), "mysql"), nullable=False, default=datetime.utcnow)
     started_at = Column(DateTime, nullable=True)
     finished_at = Column(DateTime, nullable=True)
+
+
+class CleanDuplicateRecord(Base):
+    __tablename__ = "clean_duplicates"
+    __table_args__ = (
+        UniqueConstraint("clean_job_id", "raw_data_id", name="uq_clean_duplicate_job_raw"),
+        Index("idx_clean_duplicates_job_id", "clean_job_id", "id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    clean_job_id = Column(Integer, ForeignKey("clean_jobs.id", ondelete="CASCADE"), nullable=False)
+    raw_data_id = Column(Integer, ForeignKey("raw_data.id"), nullable=False, index=True)
+    kept_raw_data_id = Column(Integer, ForeignKey("raw_data.id"), nullable=True, index=True)
+    dedup_basis = Column(String(40), nullable=False)
+    dedup_key = Column(JSON, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
 class CleanedDataRecord(Base):
@@ -456,6 +474,7 @@ class CleanJobOut(BaseModel):
     row_in: int
     row_out: int
     row_filtered: int = 0
+    row_duplicated: Optional[int] = None
     dispatch_batch_id: Optional[int] = None
     dispatch_category_code: Optional[str] = None
     task_name: Optional[str] = None

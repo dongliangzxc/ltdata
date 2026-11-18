@@ -425,6 +425,7 @@ export interface CleanJobItem {
   row_in: number
   row_out: number
   row_filtered: number
+  row_duplicated?: number | null
   dispatch_batch_id?: number | null
   dispatch_category_code?: string | null
   task_name?: string | null
@@ -592,7 +593,17 @@ export const deleteCleanJob = (jobId: number) =>
 export const previewCleanJob = (jobId: number, params?: Record<string, unknown>) =>
   api.get(`/clean/jobs/${jobId}/preview`, { params })
 
-export type CleanMatchedGroup = 'mapping' | 'interference_link' | 'interference_archive'
+export type CleanMatchedGroup = 'mapping' | 'interference_link' | 'interference_archive' | 'duplicates'
+
+export type CleanAccounting = {
+  input_count: number
+  retained_count: number
+  filtered_count: number
+  duplicate_count: number
+  audit_complete: boolean
+  difference: number | null
+  status: 'balanced' | 'mismatch' | 'legacy' | 'processing' | 'failed'
+}
 
 export type CleanMatchedItem = {
   id: number
@@ -619,11 +630,19 @@ export type CleanMatchedItem = {
   sales_amount: number | null
   sales_amount_cny?: number | null
   created_at?: string | null
+  kept_raw_data_id?: number | null
+  kept_item_name?: string | null
+  kept_item_url?: string | null
+  file_id?: number | null
+  kept_file_id?: number | null
+  dedup_basis?: string | null
+  dedup_key?: { item_id?: string | null; month?: number | null; shop_name?: string | null } | null
 }
 
 export type CleanMatchedResponse = PaginatedResponse<CleanMatchedItem> & {
   group: CleanMatchedGroup
   counts: Record<CleanMatchedGroup, number>
+  accounting?: CleanAccounting
 }
 
 export const listCleanJobMatched = (jobId: number, params: Record<string, unknown>) =>

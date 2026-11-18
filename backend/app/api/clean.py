@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy import String, and_, case, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 from pydantic import BaseModel
 from app.core.auth_deps import get_current_user
 from app.core.config import settings
@@ -21,9 +21,11 @@ from app.models.database import get_db
 from app.services.clean_task_queue import (
     BUSY_CLEAN_STATUSES, clean_heavy_slot, enqueue_clean_job, ensure_clean_job_idle,
 )
+from app.services.clean_accounting import clean_accounting
 from app.models.analytics_db import AnalyticsSession
 from app.models.schemas import (
     CleanJobRecord,
+    CleanDuplicateRecord,
     CleanedDataRecord,
     CleanJobOut,
     CleanedDataOut,
@@ -321,6 +323,7 @@ def _clean_job_to_dict(
         "row_in": job.row_in,
         "row_out": job.row_out,
         "row_filtered": job.row_filtered,
+        "row_duplicated": job.row_duplicated,
         "dispatch_batch_id": job.dispatch_batch_id,
         "dispatch_category_code": job.dispatch_category_code,
         "task_name": job.task_name,
@@ -344,6 +347,7 @@ def _clean_job_to_dict(
 
 def _reset_clean_job_downstream(db: Session, clean_job_id: int) -> None:
     """强制重建前清除任务的全部下游记录：发布数据（含分析库）、人工处理结果、清洗产物。"""
+    _clear_duplicate_audit(db, clean_job_id)
     old_match_result_ids = [
         row.id
         for row in db.query(MatchResult.id)
@@ -371,6 +375,7 @@ def _reset_clean_job_downstream(db: Session, clean_job_id: int) -> None:
 
 
 def _clear_clean_job_outputs(db: Session, clean_job_id: int) -> None:
+    _clear_duplicate_audit(db, clean_job_id)
     old_match_result_ids = [
         row.id
         for row in db.query(MatchResult.id)
@@ -387,6 +392,13 @@ def _clear_clean_job_outputs(db: Session, clean_job_id: int) -> None:
     db.query(MatchResult).filter(MatchResult.clean_job_id == clean_job_id).delete(synchronize_session=False)
     db.query(FilteredItem).filter(FilteredItem.clean_job_id == clean_job_id).delete(synchronize_session=False)
     db.query(CleanedDataRecord).filter(CleanedDataRecord.clean_job_id == clean_job_id).delete(synchronize_session=False)
+
+
+def _clear_duplicate_audit(db: Session, clean_job_id: int) -> None:
+    db.query(CleanDuplicateRecord).filter_by(clean_job_id=clean_job_id).delete(synchronize_session=False)
+    job = db.get(CleanJobRecord, clean_job_id)
+    if job:
+        job.row_duplicated = None
 
 
 def _maybe_commit_and_refresh(db: Session, job: CleanJobRecord, commit: bool) -> None:
@@ -465,7 +477,7 @@ def _run_incremental_clean_and_match_for_job(
     raw_ids = select(CleanJobItemRecord.raw_data_id).where(*scope)
     # A successful append commits run=done with its outputs. A failed or killed
     # attempt rolls back all outputs; never clear old results to repair a scope.
-    for model in (CleanedDataRecord, FilteredItem, MatchResult):
+    for model in (CleanedDataRecord, FilteredItem, MatchResult, CleanDuplicateRecord):
         if db.query(model.id).filter(model.clean_job_id == job.id, model.raw_data_id.in_(raw_ids)).first():
             raise ValueError("追加范围已存在处理结果，请检查任务，不能重复写入")
     job.status, job.progress_stage, job.error_msg = "cleaning", "清洗中", None
@@ -485,6 +497,8 @@ def _run_incremental_clean_and_match_for_job(
     job.row_in = db.query(CleanJobItemRecord).filter_by(clean_job_id=job.id).count()
     job.row_out = db.query(CleanedDataRecord).filter_by(clean_job_id=job.id).count()
     job.row_filtered = db.query(FilteredItem).filter_by(clean_job_id=job.id).count()
+    if job.row_duplicated is not None:
+        job.row_duplicated = db.query(CleanDuplicateRecord).filter_by(clean_job_id=job.id).count()
     job.status, job.progress_stage = "reviewing", "处理完成"
     db.flush()
 
@@ -1211,6 +1225,8 @@ def supplement_clean_task(
         job.row_in = db.query(CleanJobItemRecord).filter(CleanJobItemRecord.clean_job_id == job.id).count()
         job.row_out = db.query(CleanedDataRecord).filter(CleanedDataRecord.clean_job_id == job.id).count()
         job.row_filtered = db.query(FilteredItem).filter(FilteredItem.clean_job_id == job.id).count()
+        if job.row_duplicated is not None:
+            job.row_duplicated = db.query(CleanDuplicateRecord).filter_by(clean_job_id=job.id).count()
         if job.status in ("done", "published"):
             job.status = "reviewing"
         job.updated_at = datetime.utcnow()
@@ -1565,7 +1581,7 @@ def preview_clean_job(
 @router.get("/jobs/{job_id}/matched")
 def list_clean_job_matched(
     job_id: int,
-    group: str = Query("mapping", pattern="^(mapping|interference_link|interference_archive)$"),
+    group: str = Query("mapping", pattern="^(mapping|interference_link|interference_archive|duplicates)$"),
     keyword: Optional[str] = Query(None),
     price_min: Optional[float] = Query(None, ge=0),
     price_max: Optional[float] = Query(None, ge=0),
@@ -1578,10 +1594,11 @@ def list_clean_job_matched(
     - mapping：匹配到型号的结果（matched/url_matched/confirmed）
     - interference_link：命中干扰链接库被剔除的数据
     - interference_archive：命中干扰项规则被存档的数据
+    - duplicates：清洗去重时实际记录的重复行及其保留行
 
     支持按价格区间筛选（price_min / price_max，单位为元）。
     """
-    _get_visible_clean_job_or_404(db, current_user, job_id)
+    job = _get_visible_clean_job_or_404(db, current_user, job_id)
 
     mapping_count = (
         db.query(func.count(MatchResult.id))
@@ -1616,6 +1633,7 @@ def list_clean_job_matched(
         "mapping": mapping_count,
         "interference_link": interference_link_count,
         "interference_archive": interference_archive_count,
+        "duplicates": db.query(CleanDuplicateRecord).filter_by(clean_job_id=job_id).count(),
     }
 
     kw = (keyword or "").strip()
@@ -1670,6 +1688,30 @@ def list_clean_job_matched(
                 "sales_amount": float(rd.sales_amount) if rd.sales_amount is not None else None,
                 "sales_amount_cny": amount_to_cny(rd.sales_amount, rate),
             })
+    elif group == "duplicates":
+        kept = aliased(RawDataRecord)
+        q = (
+            db.query(CleanDuplicateRecord, RawDataRecord, kept)
+            .join(RawDataRecord, RawDataRecord.id == CleanDuplicateRecord.raw_data_id)
+            .outerjoin(kept, kept.id == CleanDuplicateRecord.kept_raw_data_id)
+            .filter(CleanDuplicateRecord.clean_job_id == job_id)
+        )
+        if kw:
+            q = q.filter(or_(RawDataRecord.item_name.ilike(f"%{kw}%"), kept.item_name.ilike(f"%{kw}%")))
+        q = _apply_price_filter(q)
+        total = q.count()
+        rows = q.order_by(CleanDuplicateRecord.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
+        items = [dict(
+            id=entry.id, raw_data_id=raw.id, item_name=raw.item_name, item_url=raw.item_url,
+            item_id=raw.item_id, platform=raw.platform, brand_raw=raw.brand_raw,
+            shop_name=raw.shop_name, month=raw.month, file_id=raw.file_id,
+            price=float(raw.price) if raw.price is not None else None,
+            sales_qty=raw.sales_qty, sales_amount=float(raw.sales_amount) if raw.sales_amount is not None else None,
+            kept_raw_data_id=entry.kept_raw_data_id, kept_item_name=retained.item_name if retained else None,
+            kept_item_url=retained.item_url if retained else None, kept_file_id=retained.file_id if retained else None,
+            dedup_basis=entry.dedup_basis, dedup_key=entry.dedup_key,
+            created_at=format_beijing_datetime(entry.created_at),
+        ) for entry, raw, retained in rows]
     else:
         q = (
             db.query(FilteredItem, RawDataRecord)
@@ -1717,6 +1759,10 @@ def list_clean_job_matched(
     return {
         "group": group,
         "counts": counts,
+        "accounting": clean_accounting(
+            job, db.query(CleanedDataRecord).filter_by(clean_job_id=job_id).count(),
+            interference_link_count + interference_archive_count, counts["duplicates"],
+        ),
         "total": total,
         "page": page,
         "page_size": page_size,

@@ -30,6 +30,7 @@ import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 import { finishedCleanJobIds, formatCleanProgress, mergeCleanProgress, processingStatuses } from './cleanProgress'
 import { formatCleanAccounting, formatDuplicateBasis } from './cleanAccounting'
 import { FilterReason } from './FilterReason'
+import { supplementFeedback } from './supplementFeedback'
 
 const { Text } = Typography
 
@@ -655,7 +656,8 @@ export default function CleanPage() {
     try {
       const result = await supplementCleanTask(supplementJob.id, formData)
       setSupplementResult(result)
-      message.success(`补充完成：新增 ${result.inserted_rows} 条，重复跳过 ${result.duplicate_rows} 条`)
+      const feedback = supplementFeedback(result)
+      message[feedback.type === 'info' ? 'info' : 'success'](feedback.message)
       refreshMonthlyPool()
       refreshJobs()
     } catch {
@@ -890,7 +892,7 @@ export default function CleanPage() {
         open={!!supplementJob}
         onCancel={closeSupplement}
         onOk={handleSupplement}
-        okText="开始补充"
+        okText="上传并提交"
         cancelText="取消"
         confirmLoading={supplementing}
         okButtonProps={{ disabled: !supplementFile || !!supplementResult }}
@@ -903,7 +905,7 @@ export default function CleanPage() {
               type="info"
               showIcon
               message="只补充新增数据"
-              description={`任务范围：${supplementJob.category_code || '-'} / ${formatPlatform(supplementJob.platform)} / ${supplementJob.month ?? '-'}。新数据会直接归入当前任务，只清洗/匹配新增行（匹配会使用当前历史库、映射库和规则），保留已有处理结果。`}
+              description={`任务范围：${supplementJob.category_code || '-'} / ${formatPlatform(supplementJob.platform)} / ${supplementJob.month ?? '-'}。文件上传、校验和入库后提交后台队列，只清洗/匹配新增行（使用当前历史库、映射库和规则），保留已有处理结果。`}
             />
             <Upload.Dragger
               accept=".xlsx,.xls,.csv"
@@ -927,7 +929,7 @@ export default function CleanPage() {
             </Upload.Dragger>
             {supplementResult && (
               <>
-                <Alert type="success" showIcon message="补充完成" />
+                <Alert {...supplementFeedback(supplementResult)} showIcon />
                 <Row gutter={16}>
                   <Col span={8}><Statistic title="文件总行数" value={supplementResult.total_rows} /></Col>
                   <Col span={8}><Statistic title="新增入库" value={supplementResult.inserted_rows} valueStyle={{ color: '#3f8600' }} /></Col>
@@ -935,11 +937,11 @@ export default function CleanPage() {
                 </Row>
                 <Row gutter={16}>
                   <Col span={8}><Statistic title="追加到任务" value={supplementResult.appended_items} /></Col>
-                  <Col span={8}><Statistic title="任务已匹配" value={supplementResult.matched_count} /></Col>
-                  <Col span={8}><Statistic title="任务待处理" value={supplementResult.pending_count} valueStyle={{ color: '#d48806' }} /></Col>
+                  <Col span={8}><Statistic title={supplementResult.match_status === 'queued' ? '提交时已匹配' : '任务已匹配'} value={supplementResult.matched_count} /></Col>
+                  <Col span={8}><Statistic title={supplementResult.match_status === 'queued' ? '提交时待处理' : '任务待处理'} value={supplementResult.pending_count} valueStyle={{ color: '#d48806' }} /></Col>
                 </Row>
                 <Text type="secondary">
-                  任务当前行数：原始行 {supplementResult.row_in}，清洗后 {supplementResult.row_out}，过滤 {supplementResult.row_filtered}
+                  提交时任务行数：原始行 {supplementResult.row_in}，清洗后 {supplementResult.row_out}，过滤 {supplementResult.row_filtered}
                 </Text>
               </>
             )}

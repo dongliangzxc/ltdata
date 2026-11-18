@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from sqlalchemy import String, and_, case, func, or_, select
+from sqlalchemy import String, and_, case, func, literal, or_, select
 from sqlalchemy.orm import Session, aliased
 from pydantic import BaseModel
 from app.core.auth_deps import get_current_user
@@ -70,7 +70,7 @@ from app.services.exclusion_store import upsert_exclusion_for_raw
 from app.services.data_cleaner import run_clean, _load_brand_alias_map, manual_brand_std
 from app.services.excel_parser import iter_mapped_chunks
 from app.services.filename_metadata import parse_filename_metadata
-from app.services.matcher import run_match, run_match_for_result
+from app.services.matcher import run_match
 from app.services.attribute_matcher import run_attribute_matching
 from app.services.price_auditor import audit_price
 from app.services.publisher import delete_published_data
@@ -917,17 +917,27 @@ def retry_clean_task(
         raise HTTPException(409, "仅支持重试失败或中断的后台任务")
     if not db.query(CleanJobItemRecord.id).filter_by(clean_job_id=job_id).first():
         raise HTTPException(400, "任务数据范围为空，无法重试")
-    # Automatic attributes from a partial run are safe to rebuild. Manual edits
-    # or publishing are not; do not discard them on retry.
-    manual = db.query(MatchResult.id).filter(MatchResult.clean_job_id == job_id, or_(
+    # Full retries must protect all manual/published output. Incremental retries
+    # only touch their saved range, so pre-existing manual output is safe.
+    retry_scope = [MatchResult.clean_job_id == job_id]
+    if run.mode == "incremental":
+        if (not run.snapshot_start_id or not run.snapshot_end_id or run.snapshot_start_id > run.snapshot_end_id
+                or not run.input_count or run.input_count < 0):
+            raise HTTPException(409, "追加数据范围不完整，不能重试")
+        retry_raw_ids = select(CleanJobItemRecord.raw_data_id).where(
+            CleanJobItemRecord.clean_job_id == job_id,
+            CleanJobItemRecord.id.between(run.snapshot_start_id, run.snapshot_end_id),
+        )
+        retry_scope.append(MatchResult.raw_data_id.in_(retry_raw_ids))
+    manual = db.query(MatchResult.id).filter(*retry_scope, or_(
         MatchResult.matched_by == "manual", MatchResult.reviewed_at.isnot(None),
         MatchResult.review_note.isnot(None), MatchResult.is_disabled == 1,
         MatchResult.sales_coefficient.isnot(None), MatchResult.dispute_reason.isnot(None),
     )).first()
     manual_fields = db.query(MatchResultExtraValue.id).join(
         MatchResult, MatchResult.id == MatchResultExtraValue.match_result_id,
-    ).filter(MatchResult.clean_job_id == job_id, MatchResultExtraValue.source == "manual").first()
-    if manual or manual_fields or db.query(PublishJob.id).filter_by(clean_job_id=job_id).first():
+    ).filter(*retry_scope, MatchResultExtraValue.source == "manual").first()
+    if manual or manual_fields or (run.mode != "incremental" and db.query(PublishJob.id).filter_by(clean_job_id=job_id).first()):
         raise HTTPException(409, "任务已有人工处理或发布记录，不能直接重试")
     enqueue_clean_job(db, job, mode=run.mode, snapshot_start_id=run.snapshot_start_id,
                       snapshot_end_id=run.snapshot_end_id, input_count=run.input_count)
@@ -979,7 +989,6 @@ def supplement_clean_task(
     country_code: Optional[str] = Form(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-    _heavy_slot=Depends(clean_heavy_slot),
 ):
     """给已有清洗任务补充本月新增数据：只处理新增行，保留原任务结果。"""
     from app.api.upload import (
@@ -1016,8 +1025,6 @@ def supplement_clean_task(
     tmp_dir.mkdir(parents=True, exist_ok=True)
     _cleanup_old_tmp(tmp_dir)
     temp_path = tmp_dir / f"supplement_{uuid.uuid4().hex}_{safe_filename}"
-    with open(temp_path, "wb") as handle:
-        shutil.copyfileobj(file.file, handle)
     safe_stem = Path(safe_filename).stem[:80]
     safe_suffix = Path(safe_filename).suffix
     final_name = f"补充-{job.id}-{uuid.uuid4().hex[:6]}-{safe_stem}{safe_suffix}"
@@ -1026,6 +1033,8 @@ def supplement_clean_task(
 
     file_record: UploadFileRecord | None = None
     try:
+        with open(temp_path, "wb") as handle:
+            shutil.copyfileobj(file.file, handle)
         columns = _read_columns(temp_path)
         mapping, ignore_columns = _resolve_supplement_mapping(db, columns, template_id)
         mapped_targets = {value for value in mapping.values() if value != "__ext__"}
@@ -1110,52 +1119,30 @@ def supplement_clean_task(
         file_record.status = "done"
         db.flush()
 
-        new_raw_ids = [
-            raw_id for raw_id, in db.query(RawDataRecord.id)
-            .filter(RawDataRecord.file_id == file_record.id)
-            .all()
-        ]
-
+        # Every source belongs to the just-created upload. Insert membership in
+        # SQL rather than materialising IDs and issuing per-row ORM inserts.
         batch = DispatchBatch(
-            file_id=file_record.id,
-            batch_key=batch_key,
-            status="done",
-            total_rows=len(new_raw_ids),
-            dispatched_rows=len(new_raw_ids),
-            unmatched_rows=0,
-            finished_at=datetime.utcnow(),
+            file_id=file_record.id, batch_key=batch_key, status="done",
+            total_rows=inserted_rows, dispatched_rows=inserted_rows,
+            unmatched_rows=0, finished_at=datetime.utcnow(),
         )
         db.add(batch)
         db.flush()
-        db.add_all([
-            DispatchItem(
-                batch_id=batch.id,
-                raw_data_id=raw_id,
-                category_code=category_code,
-                matched_rule_id=None,
-            )
-            for raw_id in new_raw_ids
-        ])
-        db.flush()
-
-        already_in_task = {
-            raw_id for raw_id, in db.query(CleanJobItemRecord.raw_data_id)
-            .filter(CleanJobItemRecord.raw_data_id.in_(new_raw_ids))
-            .filter(CleanJobItemRecord.category_code == category_code)
-            .all()
-        }
-        append_ids = [raw_id for raw_id in new_raw_ids if raw_id not in already_in_task]
-        db.add_all([
-            CleanJobItemRecord(
-                clean_job_id=job.id,
-                raw_data_id=raw_id,
-                category_code=category_code,
-                platform=platform,
-                dispatch_batch_id=batch.id,
-            )
-            for raw_id in append_ids
-        ])
-        db.flush()
+        db.execute(DispatchItem.__table__.insert().from_select(
+            ["batch_id", "raw_data_id", "category_code"],
+            select(literal(batch.id), RawDataRecord.id, literal(category_code))
+            .where(RawDataRecord.file_id == file_record.id).order_by(RawDataRecord.id),
+        ))
+        db.execute(CleanJobItemRecord.__table__.insert().from_select(
+            ["clean_job_id", "raw_data_id", "category_code", "platform", "dispatch_batch_id"],
+            select(literal(job.id), RawDataRecord.id, literal(category_code), literal(platform), literal(batch.id))
+            .where(RawDataRecord.file_id == file_record.id).order_by(RawDataRecord.id),
+        ))
+        start_id, end_id, append_count = db.query(
+            func.min(CleanJobItemRecord.id), func.max(CleanJobItemRecord.id), func.count(CleanJobItemRecord.id),
+        ).filter_by(clean_job_id=job.id, dispatch_batch_id=batch.id).one()
+        if append_count != inserted_rows:
+            raise ValueError("补充数据快照数量与新增来源不一致，未提交任务")
 
         job.file_ids = sorted({*(job.file_ids or []), file_record.id})
         scope = job.source_scope if isinstance(job.source_scope, dict) else {}
@@ -1166,79 +1153,29 @@ def supplement_clean_task(
             "file_ids": job.file_ids,
         }
 
-        if append_ids:
-            run_clean(
-                db,
-                job.id,
-                job.file_ids or [],
-                job.rules or {},
-                batch.id,
-                category_code,
-                commit=False,
-                raw_data_ids=append_ids,
+        job.row_in = db.query(CleanJobItemRecord).filter_by(clean_job_id=job.id).count()
+        if settings.CLEAN_BACKGROUND_ENABLED:
+            enqueue_clean_job(db, job, mode="incremental", snapshot_start_id=start_id,
+                              snapshot_end_id=end_id, input_count=append_count)
+        else:
+            # Compatibility mode shares bounded batch matching and strict audit.
+            _run_incremental_clean_and_match_for_job(
+                db, job, snapshot_id_range=(start_id, end_id), expected_count=append_count,
             )
-
-            already_matched = {
-                raw_id for raw_id, in db.query(MatchResult.raw_data_id)
-                .filter(MatchResult.clean_job_id == job.id)
-                .filter(MatchResult.raw_data_id.in_(append_ids))
-                .all()
-            }
-            cleaned_raw_ids = {
-                raw_id for raw_id, in db.query(CleanedDataRecord.raw_data_id)
-                .filter(CleanedDataRecord.clean_job_id == job.id)
-                .filter(CleanedDataRecord.raw_data_id.in_(append_ids))
-                .all()
-            }
-            new_results = []
-            for raw_id in append_ids:
-                if raw_id in already_matched or raw_id not in cleaned_raw_ids:
-                    continue
-                result = MatchResult(
-                    clean_job_id=job.id,
-                    raw_data_id=raw_id,
-                    match_status="pending",
-                    matched_by="auto",
-                )
-                db.add(result)
-                new_results.append(result)
-            db.flush()
-
-            for result in new_results:
-                run_match_for_result(db, result.id, commit=False)
-            db.flush()
-
-            matched_ids = [
-                result_id for result_id, in db.query(MatchResult.id)
-                .filter(MatchResult.clean_job_id == job.id)
-                .filter(MatchResult.raw_data_id.in_(append_ids))
-                .filter(MatchResult.match_status.in_(["matched", "url_matched"]))
-                .all()
-            ]
-            if matched_ids:
-                run_attribute_matching(db, matched_ids, commit=False)
-                try:
-                    audit_price(db, matched_ids, commit=False)
-                except Exception:
-                    logger.exception("Price audit failed after supplement clean_job_id=%s", job.id)
-
-        job.row_in = db.query(CleanJobItemRecord).filter(CleanJobItemRecord.clean_job_id == job.id).count()
-        job.row_out = db.query(CleanedDataRecord).filter(CleanedDataRecord.clean_job_id == job.id).count()
-        job.row_filtered = db.query(FilteredItem).filter(FilteredItem.clean_job_id == job.id).count()
-        if job.row_duplicated is not None:
-            job.row_duplicated = db.query(CleanDuplicateRecord).filter_by(clean_job_id=job.id).count()
-        if job.status in ("done", "published"):
-            job.status = "reviewing"
         job.updated_at = datetime.utcnow()
-        db.commit()
+        # Publish the original file before committing its durable references.
+        # Rename/commit failures roll back upload, membership and queue together.
         shutil.move(str(temp_path), str(final_path))
+        db.commit()
     except HTTPException:
         db.rollback()
         temp_path.unlink(missing_ok=True)
+        final_path.unlink(missing_ok=True)
         raise
     except Exception as exc:
         db.rollback()
         temp_path.unlink(missing_ok=True)
+        final_path.unlink(missing_ok=True)
         logger.exception("Supplement clean task failed job_id=%s", job_id)
         raise HTTPException(status_code=500, detail=f"补充数据失败: {exc}") from exc
 
@@ -1253,7 +1190,9 @@ def supplement_clean_task(
             "total_rows": total_rows,
             "inserted_rows": inserted_rows,
             "duplicate_rows": skipped_rows,
-            "appended_items": len(append_ids),
+            "appended_items": append_count,
+            "match_status": "queued" if settings.CLEAN_BACKGROUND_ENABLED else "done",
+            "status": job.status,
             "matched_count": counts.get("matched", 0) + counts.get("url_matched", 0) + counts.get("confirmed", 0),
             "pending_count": counts.get("pending", 0) + counts.get("text_only", 0) + counts.get("disputed", 0),
             "row_in": job.row_in,

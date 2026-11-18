@@ -559,6 +559,8 @@ export const retryCleanTask = (id: number) => api.post<CleanJobItem>(`/clean/tas
 
 export interface SupplementCleanTaskResult {
   job_id: number
+  match_status?: 'queued' | 'done'
+  status?: string
   file_id: number | null
   total_rows: number
   inserted_rows: number

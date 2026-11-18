@@ -442,6 +442,53 @@ def _run_clean_and_match_for_job(db: Session, job: CleanJobRecord, commit: bool 
     )
 
 
+def _run_incremental_clean_and_match_for_job(
+    db: Session, job: CleanJobRecord, *, snapshot_id_range, expected_count: int, stage_progress_cb=None,
+) -> None:
+    """Append atomically. The worker commits these outputs together with run=done.
+
+    Bounds are job-scoped snapshot IDs, not a file/batch fallback. Existing
+    snapshot IDs precede this range because the API locks the job before append.
+    """
+    start, end = snapshot_id_range
+    if not start or not end or start > end or expected_count <= 0:
+        raise ValueError("追加数据范围为空或不完整，无法执行")
+    scope = (
+        CleanJobItemRecord.clean_job_id == job.id,
+        CleanJobItemRecord.id.between(start, end),
+    )
+    actual_count = db.query(CleanJobItemRecord.id).join(
+        RawDataRecord, RawDataRecord.id == CleanJobItemRecord.raw_data_id,
+    ).filter(*scope).count()
+    if actual_count != expected_count:
+        raise ValueError("追加数据范围已变化，请检查原始数据；未扩大清洗范围")
+    raw_ids = select(CleanJobItemRecord.raw_data_id).where(*scope)
+    # A successful append commits run=done with its outputs. A failed or killed
+    # attempt rolls back all outputs; never clear old results to repair a scope.
+    for model in (CleanedDataRecord, FilteredItem, MatchResult):
+        if db.query(model.id).filter(model.clean_job_id == job.id, model.raw_data_id.in_(raw_ids)).first():
+            raise ValueError("追加范围已存在处理结果，请检查任务，不能重复写入")
+    job.status, job.progress_stage, job.error_msg = "cleaning", "清洗中", None
+    run_clean(
+        db, job.id, job.file_ids or [], job.rules or {},
+        dispatch_category_code=job.dispatch_category_code or job.category_code,
+        commit=False, raw_data_ids=raw_ids, update_job_counts=False,
+        **({"progress_cb": lambda done: stage_progress_cb("清洗中", done, expected_count)} if stage_progress_cb else {}),
+    )
+    job.status, job.progress_stage = "matching", "型号匹配中"
+    run_match(
+        db, job.id, commit=False, raw_data_ids=raw_ids, strict_audit=True,
+        **({"stage_progress_cb": stage_progress_cb,
+            "progress_cb": lambda done, total, matched: stage_progress_cb("型号匹配中", done, total)} if stage_progress_cb else {}),
+    )
+    db.flush()
+    job.row_in = db.query(CleanJobItemRecord).filter_by(clean_job_id=job.id).count()
+    job.row_out = db.query(CleanedDataRecord).filter_by(clean_job_id=job.id).count()
+    job.row_filtered = db.query(FilteredItem).filter_by(clean_job_id=job.id).count()
+    job.status, job.progress_stage = "reviewing", "处理完成"
+    db.flush()
+
+
 def _manual_review_snapshot(db: Session, clean_job_id: int) -> dict[int, dict]:
     rows = (
         db.query(MatchResult)
@@ -754,6 +801,8 @@ def upsert_monthly_clean_task(
                                          platform=payload.platform, month=payload.month)
             if existing:
                 ensure_clean_job_idle(db, existing.id, allow_failed=True)
+            incremental = bool(settings.CLEAN_BACKGROUND_ENABLED and existing and existing.status != "archived"
+                               and not payload.force_reclean and not payload.force_rebuild)
             if payload.force_rebuild:
                 existing = _find_monthly_job(
                     db,
@@ -763,7 +812,7 @@ def upsert_monthly_clean_task(
                 )
                 if existing and _has_reviewed_or_published_state(db, existing.id):
                     _reset_clean_job_downstream(db, existing.id)
-            job, snapshot_count, action, _new_snapshot_ids = upsert_monthly_task_snapshot(
+            job, snapshot_count, action, new_snapshot_ids = upsert_monthly_task_snapshot(
                 db,
                 category_code=payload.category_code,
                 platform=payload.platform,
@@ -772,10 +821,17 @@ def upsert_monthly_clean_task(
                 force_reclean=payload.force_reclean,
                 force_rebuild=payload.force_rebuild,
             )
+            if not new_snapshot_ids and action == "appended" and not payload.force_reclean and not payload.force_rebuild:
+                db.commit()
+                return {"job": job, "snapshot_count": 0, "action": action, "match_status": "unchanged"}
             # 快照先提交：避免「快照 + 清洗 + 匹配」挤在一个长事务里，导致其它
             # 请求在 filtered_items / cleaned_data 上长时间等锁（1205）。
             if settings.CLEAN_BACKGROUND_ENABLED:
-                enqueue_clean_job(db, job)
+                if incremental:
+                    enqueue_clean_job(db, job, mode="incremental", snapshot_start_id=min(new_snapshot_ids),
+                                      snapshot_end_id=max(new_snapshot_ids), input_count=len(new_snapshot_ids))
+                else:
+                    enqueue_clean_job(db, job)
             db.commit()
             db.refresh(job)
             if settings.CLEAN_BACKGROUND_ENABLED:
@@ -826,12 +882,14 @@ def get_clean_job_progress(
         CleanJobRecord.id, CleanJobRecord.status, CleanJobRecord.progress_stage,
         CleanJobRecord.error_msg, CleanTaskRun.stage, CleanTaskRun.processed,
         CleanTaskRun.total, CleanTaskRun.state, CleanJobRecord.updated_at,
+        CleanTaskRun.mode, CleanTaskRun.input_count,
     ).outerjoin(CleanTaskRun, CleanTaskRun.clean_job_id == CleanJobRecord.id).filter(CleanJobRecord.id.in_(job_ids))
     query = _filter_clean_job_visible_categories(query, db, current_user)
     return [dict(id=job_id, status=status, progress_stage=stage or job_stage,
                  progress_processed=processed or 0, progress_total=total or 0,
-                 error_msg=error_msg, can_retry=state == "failed" and status == "failed", updated_at=updated_at)
-            for job_id, status, job_stage, error_msg, stage, processed, total, state, updated_at in query.all()]
+                 error_msg=error_msg, can_retry=state == "failed" and status == "failed", updated_at=format_beijing_datetime(updated_at),
+                 execution_mode=mode or "full", execution_input_count=input_count or 0)
+            for job_id, status, job_stage, error_msg, stage, processed, total, state, updated_at, mode, input_count in query.all()]
 
 
 @router.post("/tasks/{job_id}/retry", response_model=CleanJobOut)
@@ -857,7 +915,8 @@ def retry_clean_task(
     ).filter(MatchResult.clean_job_id == job_id, MatchResultExtraValue.source == "manual").first()
     if manual or manual_fields or db.query(PublishJob.id).filter_by(clean_job_id=job_id).first():
         raise HTTPException(409, "任务已有人工处理或发布记录，不能直接重试")
-    enqueue_clean_job(db, job)
+    enqueue_clean_job(db, job, mode=run.mode, snapshot_start_id=run.snapshot_start_id,
+                      snapshot_end_id=run.snapshot_end_id, input_count=run.input_count)
     db.commit()
     db.refresh(job)
     invalidate_clean_pool_cache()
@@ -1422,10 +1481,17 @@ def list_clean_jobs(
         for job_id, status, count in rows:
             counts_by_job.setdefault(job_id, {})[status] = count
 
-    return [
-        _clean_job_to_dict(db, job, counts_by_job.get(job.id, {}), category_names)
-        for job in jobs
-    ]
+    runs = {run.clean_job_id: run for run in db.query(CleanTaskRun).filter(CleanTaskRun.clean_job_id.in_(job_ids)).all()} if job_ids else {}
+    result = []
+    for job in jobs:
+        row = _clean_job_to_dict(db, job, counts_by_job.get(job.id, {}), category_names)
+        run = runs.get(job.id)
+        if run:
+            row.update(execution_mode=run.mode, execution_input_count=run.input_count,
+                       progress_stage=run.stage, progress_processed=run.processed, progress_total=run.total,
+                       can_retry=run.state == "failed" and job.status == "failed")
+        result.append(row)
+    return result
 
 
 @router.delete("/jobs/{job_id}")

@@ -222,6 +222,10 @@ class CleanTaskRun(Base):
     processed = Column(Integer, nullable=False, default=0)
     total = Column(Integer, nullable=False, default=0)
     worker_token = Column(String(36), nullable=True)
+    mode = Column(String(20), nullable=False, default="full", server_default="full")
+    snapshot_start_id = Column(Integer, nullable=True)
+    snapshot_end_id = Column(Integer, nullable=True)
+    input_count = Column(Integer, nullable=False, default=0, server_default="0")
     # Preserve FIFO ordering when a retry and a new submission share a second.
     queued_at = Column(DateTime().with_variant(MySQLDateTime(fsp=6), "mysql"), nullable=False, default=datetime.utcnow)
     started_at = Column(DateTime, nullable=True)

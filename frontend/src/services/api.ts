@@ -435,6 +435,8 @@ export interface CleanJobItem {
   progress_stage?: string | null
   progress_processed?: number
   progress_total?: number
+  execution_mode?: 'full' | 'incremental'
+  execution_input_count?: number
   error_msg?: string | null
   can_retry?: boolean
   pending_count?: number | null
@@ -542,7 +544,7 @@ export const upsertMonthlyCleanTask = (payload: UpsertMonthlyCleanTaskPayload) =
 export const createCleanTask = (payload: CreateCleanTaskPayload) =>
   api.post<CreateCleanTaskResponse>('/clean/tasks', payload)
 
-export type CleanJobProgress = Pick<CleanJobItem, 'id' | 'status' | 'progress_stage' | 'progress_processed' | 'progress_total' | 'error_msg' | 'can_retry' | 'updated_at'>
+export type CleanJobProgress = Pick<CleanJobItem, 'id' | 'status' | 'progress_stage' | 'progress_processed' | 'progress_total' | 'execution_mode' | 'execution_input_count' | 'error_msg' | 'can_retry' | 'updated_at'>
 
 export const getCleanJobProgress = async (ids: number[]): Promise<CleanJobProgress[]> => {
   const requests = []

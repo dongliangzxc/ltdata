@@ -12,7 +12,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import cached_property
 
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 from app.models.schemas import (
     RawDataRecord, CleanedDataRecord, CleanJobRecord,
@@ -446,7 +446,7 @@ def _iter_clean_record_batches(
     file_ids: list[int],
     dispatch_batch_id: int | None,
     dispatch_category_code: str | None,
-    raw_data_ids: list[int] | None,
+    raw_data_ids: list[int] | Select | None,
 ) -> Iterator[list[RawDataRecord]]:
     query = (
         db.query(CleanJobItemRecord.id, RawDataRecord)
@@ -502,8 +502,9 @@ def run_clean(
     dispatch_batch_id: int | None = None,
     dispatch_category_code: str | None = None,
     commit: bool = True,
-    raw_data_ids: list[int] | None = None,
+    raw_data_ids: list[int] | Select | None = None,
     progress_cb=None,
+    update_job_counts: bool = True,
 ) -> int:
     """分批清洗，所有批次共用去重集合和事务，返回本次写入的行数。
 
@@ -648,7 +649,7 @@ def run_clean(
 
     write_start = time.perf_counter()
     job = db.query(CleanJobRecord).filter(CleanJobRecord.id == clean_job_id).first()
-    if job:
+    if job and update_job_counts:
         job.row_in = row_in
         job.row_out = row_out
         job.row_filtered = row_filtered

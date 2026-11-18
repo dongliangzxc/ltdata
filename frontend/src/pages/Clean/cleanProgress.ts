@@ -24,7 +24,8 @@ export function finishedCleanJobIds(jobs: CleanJobItem[], progress: CleanJobProg
 
 export function formatCleanProgress(row: CleanJobItem): string {
   const stage = row.progress_stage || (row.status === 'queued' ? '排队中' : '处理中')
-  return (row.progress_total ?? 0) > 0
+  const prefix = row.execution_mode === 'incremental' ? `本次追加 ${row.execution_input_count ?? 0} 条 · ` : ''
+  return prefix + ((row.progress_total ?? 0) > 0
     ? `${stage}：${row.progress_processed ?? 0} / ${row.progress_total} 条`
-    : stage
+    : stage)
 }

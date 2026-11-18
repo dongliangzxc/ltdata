@@ -26,6 +26,8 @@ assert.equal(merged[1].row_out, 100, 'progress must retain task statistics')
 assert.deepEqual([...finishedCleanJobIds(jobs, [stale, current])], [2])
 assert.equal(formatCleanProgress({ status: 'cleaning', progress_stage: '清洗中', progress_processed: 12000, progress_total: 32946 }), '清洗中：12000 / 32946 条')
 assert.equal(formatCleanProgress({ status: 'queued', progress_total: 0 }), '排队中')
+assert.equal(formatCleanProgress({ status: 'cleaning', execution_mode: 'incremental', execution_input_count: 100, progress_stage: '清洗中', progress_processed: 50, progress_total: 100 }), '本次追加 100 条 · 清洗中：50 / 100 条')
+assert.equal(formatCleanProgress({ status: 'matching', execution_mode: 'incremental', execution_input_count: 100, progress_stage: '型号匹配中', progress_processed: 40, progress_total: 95 }), '本次追加 100 条 · 型号匹配中：40 / 95 条')
 
 const page = fs.readFileSync(path.join(__dirname, 'index.tsx'), 'utf8')
 assert.match(page, /getCleanJobProgress\(progressIds\)/, 'poll a lightweight endpoint')

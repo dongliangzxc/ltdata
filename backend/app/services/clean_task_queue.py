@@ -53,7 +53,8 @@ def ensure_clean_job_idle(db: Session, job_id: int, *, allow_failed: bool = Fals
     return lock_idle_clean_jobs(db, [job_id], allow_failed=allow_failed)[0]
 
 
-def enqueue_clean_job(db: Session, job: CleanJobRecord) -> CleanTaskRun:
+def enqueue_clean_job(db: Session, job: CleanJobRecord, *, mode="full",
+                      snapshot_start_id=None, snapshot_end_id=None, input_count=None) -> CleanTaskRun:
     """Caller commits snapshot and queue atomically. No in-memory task handles."""
     run = db.query(CleanTaskRun).filter_by(clean_job_id=job.id).with_for_update().first()
     if run is not None and run.state in {"queued", "running"}:
@@ -61,8 +62,18 @@ def enqueue_clean_job(db: Session, job: CleanJobRecord) -> CleanTaskRun:
     if run is None:
         run = CleanTaskRun(clean_job_id=job.id)
         db.add(run)
+    if mode not in {"full", "incremental"}:
+        raise ValueError("未知清洗执行方式")
+    if mode == "incremental" and (
+        not snapshot_start_id or not snapshot_end_id or snapshot_start_id > snapshot_end_id or not input_count
+    ):
+        raise ValueError("追加数据范围为空或不完整，不能执行")
+    run.mode = mode
+    run.snapshot_start_id = snapshot_start_id if mode == "incremental" else None
+    run.snapshot_end_id = snapshot_end_id if mode == "incremental" else None
+    run.input_count = input_count if mode == "incremental" else (job.row_in or 0)
     run.state, run.stage = "queued", "排队中"
-    run.processed, run.total = 0, job.row_in or 0
+    run.processed, run.total = 0, run.input_count
     run.queued_at = datetime.utcnow()
     run.started_at = run.finished_at = run.worker_token = None
     job.status, job.progress, job.progress_stage, job.error_msg = "queued", 0, "排队中", None
@@ -218,18 +229,28 @@ def execute_next_run(db: Session, *, executor=None, progress_factory=CleanProgre
         db.rollback()
         return False
     job = db.get(CleanJobRecord, run.clean_job_id)
+    job_was_queued = job is not None and job.status == "queued"
     token = str(uuid.uuid4())
     run.state, run.stage, run.worker_token, run.started_at = "running", "准备清洗", token, datetime.utcnow()
     run_id, job_id = run.id, run.clean_job_id
+    if job_was_queued and run.mode == "incremental":
+        # Publish the start before the append's single output transaction.
+        job.status, job.progress_stage = "cleaning", "准备清洗"
     db.commit()
     progress = progress_factory(db, run_id, token)
     try:
-        if job is None or job.status != "queued":
+        if not job_was_queued:
             raise RuntimeError("任务状态异常，未开始执行")
         if executor is None:
-            from app.api.clean import _run_clean_and_match_for_job
-            executor = _run_clean_and_match_for_job
-        executor(db, job, stage_progress_cb=progress)
+            from app.api.clean import _run_clean_and_match_for_job, _run_incremental_clean_and_match_for_job
+            executor = _run_incremental_clean_and_match_for_job if run.mode == "incremental" else _run_clean_and_match_for_job
+        if run.mode == "incremental":
+            executor(db, job, stage_progress_cb=progress,
+                     snapshot_id_range=(run.snapshot_start_id, run.snapshot_end_id), expected_count=run.input_count)
+        elif run.mode == "full":
+            executor(db, job, stage_progress_cb=progress)
+        else:
+            raise RuntimeError("未知清洗执行方式，请检查任务")
         run = db.query(CleanTaskRun).filter_by(id=run_id, worker_token=token, state="running").populate_existing().first()
         if run is None:
             raise LostCleanOwnership("任务执行权已失效")

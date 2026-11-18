@@ -57,7 +57,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from sqlalchemy import and_, func, or_
+from sqlalchemy import Select, and_, func, or_
 from sqlalchemy.orm import Session
 from app.services.rawdata_cache import cached_value
 
@@ -665,11 +665,17 @@ def _match_text_stages(
 
 
 def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = True,
-              stage_progress_cb=None, strict_audit: bool = False) -> dict:
+              stage_progress_cb=None, strict_audit: bool = False,
+              raw_data_ids: list[int] | Select | None = None) -> dict:
     """
     progress_cb(processed: int, total: int, matched: int) — 每批次调用一次
     """
     _t0 = time.perf_counter()
+    result_scope = [MatchResult.clean_job_id == clean_job_id]
+    cleaned_scope = [CleanedDataRecord.clean_job_id == clean_job_id]
+    if raw_data_ids is not None:
+        result_scope.append(MatchResult.raw_data_id.in_(raw_data_ids))
+        cleaned_scope.append(CleanedDataRecord.raw_data_id.in_(raw_data_ids))
     # ── 删除旧结果（支持重跑）────────────────────────────────────
     # ``ignored`` is a task-local manual decision.  Matching is deliberately
     # rebuildable, so retain the decision by raw_data_id before deleting the
@@ -698,7 +704,7 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
             MatchResult.prev_reviewed_at,
         )
         .filter(
-            MatchResult.clean_job_id == clean_job_id,
+            *result_scope,
             MatchResult.match_status == "ignored",
         )
         .all()
@@ -706,7 +712,7 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
 
     old_mr_ids = [
         r.id for r in db.query(MatchResult.id)
-        .filter(MatchResult.clean_job_id == clean_job_id)
+        .filter(*result_scope)
         .all()
     ]
     # 重跑匹配会删除旧 match_results，人工填写的扩展字段值按 raw_data_id 暂存后恢复，
@@ -742,7 +748,7 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
         db.query(MatchResultExtraValue).filter(
             MatchResultExtraValue.match_result_id.in_(old_mr_ids)
         ).delete(synchronize_session=False)
-    db.query(MatchResult).filter(MatchResult.clean_job_id == clean_job_id).delete(
+    db.query(MatchResult).filter(*result_scope).delete(
         synchronize_session=False
     )
     _t1 = time.perf_counter()
@@ -755,13 +761,17 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
     # ── 加载清洗数据 ──────────────────────────────────────────────
     cleaned_rows = (
         db.query(CleanedDataRecord)
-        .filter(CleanedDataRecord.clean_job_id == clean_job_id)
+        .filter(*cleaned_scope)
         .all()
     )
     # 与 S0 使用同一次 URL 解析结果；不能用原始 platform/item_id 替代链接键。
     url_infos = [extract_item_id(row.item_url) if row.item_url else None for row in cleaned_rows]
     if stage_progress_cb:
         stage_progress_cb("型号匹配中", 0, len(cleaned_rows))
+    if raw_data_ids is not None and not cleaned_rows:
+        if progress_cb:
+            progress_cb(0, 0, 0)
+        return {"total": 0, "matched": 0, "ignored": 0, "pending": 0}
     _t2 = time.perf_counter()
     ctx = _load_match_context(db, job_category_code, (
         key for row, key in zip(cleaned_rows, url_infos)
@@ -1021,7 +1031,7 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
         mr_by_raw: dict[int, int] = {
             r.raw_data_id: r.id
             for r in db.query(MatchResult.raw_data_id, MatchResult.id)
-            .filter(MatchResult.clean_job_id == clean_job_id)
+            .filter(*result_scope)
             .all()
         }
         candidate_records = []
@@ -1059,7 +1069,7 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
         new_mr_by_raw = {
             raw_id: mr_id
             for raw_id, mr_id in db.query(MatchResult.raw_data_id, MatchResult.id)
-            .filter(MatchResult.clean_job_id == clean_job_id)
+            .filter(*result_scope)
             .all()
         }
         restored = []
@@ -1085,7 +1095,7 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
     matched_result_ids = [
         r.id for r in db.query(MatchResult)
         .filter(
-            MatchResult.clean_job_id == clean_job_id,
+            *result_scope,
             MatchResult.match_status.in_(["matched", "url_matched"]),
         )
         .all()

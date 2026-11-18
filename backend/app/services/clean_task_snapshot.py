@@ -701,6 +701,8 @@ def upsert_monthly_task_snapshot(
             raise ValueError(f"任务状态为 {job.status}，不能追加数据")
         if has_downstream:
             raise ValueError("任务已有人工处理或发布记录，不能直接追加数据")
+        if job.status != "archived" and rules is not None and (job.rules or {"dedup": True}) != (rules or {"dedup": True}):
+            raise ValueError("清洗配置已变化，请使用重新清洗，不能在追加时修改旧任务配置")
 
     if reset_snapshot:
         db.query(CleanJobItemRecord).filter(
@@ -719,6 +721,8 @@ def upsert_monthly_task_snapshot(
         .all()
     )
     if not rows:
+        if job is not None and not reset_snapshot:
+            return job, 0, action, []
         raise ValueError("该任务范围没有可清洗的数据")
 
     file_ids = sorted({raw.file_id for _, raw in rows if raw.file_id is not None})

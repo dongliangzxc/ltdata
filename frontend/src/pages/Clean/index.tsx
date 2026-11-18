@@ -576,7 +576,7 @@ export default function CleanPage() {
           category_code: row.category_code,
           platform: row.platform!,
           month: row.month,
-          rules: { dedup: true },
+          rules: action === 'appended' ? undefined : { dedup: true },
           force_reclean: action === 'recleaned',
           force_rebuild: action === 'rebuild',
         })
@@ -588,7 +588,15 @@ export default function CleanPage() {
               : action === 'appended' || response.data.action === 'appended'
                 ? '已追加到清洗任务'
                 : '已创建清洗任务'
-        message.success(response.data.match_status === 'queued' ? '已加入清洗队列，可在下方查看进度' : successText)
+        if (response.data.match_status === 'unchanged') {
+          message.info('没有新增数据，无需追加清洗')
+        } else {
+          message.success(response.data.match_status === 'queued'
+            ? response.data.action === 'appended' && action !== 'recleaned' && action !== 'rebuild'
+              ? `本次新增 ${response.data.snapshot_count} 条，已加入清洗队列`
+              : '已加入清洗队列，可在下方查看进度'
+            : successText)
+        }
         refreshMonthlyPool()
         refreshJobs()
       } finally {
@@ -650,24 +658,27 @@ export default function CleanPage() {
     setBatchUpserting(true)
     let successCount = 0
     let failedCount = 0
+    let unchangedCount = 0
 
     try {
       for (const row of rows) {
         try {
-          await upsertMonthlyCleanTask({
+          const response = await upsertMonthlyCleanTask({
             category_code: row.category_code,
             platform: row.platform!,
             month: row.month,
-            rules: { dedup: true },
+            rules: getQueueAction(row).action === 'appended' ? undefined : { dedup: true },
           })
-          successCount += 1
+          if (response.data.match_status === 'unchanged') unchangedCount += 1
+          else successCount += 1
         } catch {
           failedCount += 1
         }
       }
 
       if (failedCount === 0) {
-        message.success(`已提交 ${successCount} 个清洗任务，可在下方查看进度`)
+        if (successCount > 0) message.success(`已提交 ${successCount} 个清洗任务，可在下方查看进度${unchangedCount ? `；${unchangedCount} 个无新增数据` : ''}`)
+        else message.info('没有新增数据，无需追加清洗')
       } else if (successCount > 0) {
         message.warning(`已创建/追加 ${successCount} 个清洗任务，${failedCount} 个失败`)
       } else {

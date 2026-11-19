@@ -462,7 +462,7 @@ export default function MatchPage() {
     if (!transferModalOpen) return
     doSearchCleanTasks(transferKeyword)
   }, [transferCategoryFilter, transferPlatformFilter, transferMonthFilter])
-  const preciseMatchedCount = summary?.precise_matched ?? summary?.url_matched ?? 0
+  const preciseMatchedCount = summaryView?.precise_matched ?? summaryView?.url_matched ?? 0
   const otherAutoMatchedCount = summaryView ? Math.max(summaryView.matched - Math.max(preciseMatchedCount - (summaryView.url_matched ?? 0), 0), 0) : 0
   const readyCount = summaryView ? (summaryView.url_matched ?? 0) + summaryView.matched + summaryView.confirmed : 0
 

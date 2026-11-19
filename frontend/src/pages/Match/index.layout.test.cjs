@@ -224,3 +224,4 @@ assert.equal(source.indexOf('const reviewedColumns = ['), -1, 'Match page should
 // 品牌筛选后展示筛选范围的全部销量
 assert.notEqual(source.indexOf('title="全部销量"'), -1, 'summary panel should show total sales quantity')
 assert.notEqual(source.indexOf('summaryView?.total_sales_qty'), -1, 'total sales quantity should come from filtered summary')
+assert.match(source, /const preciseMatchedCount = summaryView\?\.precise_matched/, 'precise matched count should follow filtered summary')

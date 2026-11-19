@@ -91,6 +91,7 @@ type MatchSummary = {
   unidentified_brand?: number
   invalid_model?: number
   ignored?: number
+  total_sales_qty?: number
 }
 
 type PendingItem = {
@@ -1815,6 +1816,13 @@ export default function MatchPage() {
                 ) : 0}
                 suffix="%"
                 valueStyle={{ color: '#3f8600' }}
+              />
+            </Col>
+            <Col span={3}>
+              <Statistic
+                title="全部销量"
+                value={summaryView?.total_sales_qty ?? 0}
+                valueStyle={{ color: '#fa8c16' }}
               />
             </Col>
           </Row>

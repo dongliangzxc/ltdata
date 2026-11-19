@@ -220,3 +220,7 @@ assert.notEqual(viewMatchResultsButtonIndex, -1,
 assert.equal(source.indexOf("import { buildMatchResultsColumns } from '../MatchResults/columns'"), -1, 'Match page should not import reviewed table columns after hiding the table')
 assert.equal(source.indexOf('buildMatchResultsColumns({'), -1, 'Match page should not build reviewed columns after hiding the table')
 assert.equal(source.indexOf('const reviewedColumns = ['), -1, 'Match page should not keep a local reviewedColumns array')
+
+// 品牌筛选后展示筛选范围的全部销量
+assert.notEqual(source.indexOf('title="全部销量"'), -1, 'summary panel should show total sales quantity')
+assert.notEqual(source.indexOf('summaryView?.total_sales_qty'), -1, 'total sales quantity should come from filtered summary')

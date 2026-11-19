@@ -545,8 +545,10 @@ def get_match_summary(
                 ),
                 else_=0,
             )).label("invalid_model"),
+            func.coalesce(func.sum(RawDataRecord.sales_qty), 0).label("total_sales_qty"),
         )
         .join(filtered_ids, MatchResult.id == filtered_ids.c.id)
+        .outerjoin(RawDataRecord, RawDataRecord.id == MatchResult.raw_data_id)
         .one()
     )
 
@@ -571,6 +573,7 @@ def get_match_summary(
         unidentified_brand=count_value("unidentified_brand"),
         missing_attrs=count_value("missing_attrs"),
         invalid_model=count_value("invalid_model"),
+        total_sales_qty=count_value("total_sales_qty"),
     )
 
 

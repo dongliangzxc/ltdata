@@ -1407,6 +1407,7 @@ class MatchSummary(BaseModel):
     unidentified_brand: int = 0
     missing_attrs: int = 0
     invalid_model: int = 0
+    total_sales_qty: int = 0
 
 
 # ─────────────────────────── 发布任务 ───────────────────────────

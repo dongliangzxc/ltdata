@@ -1391,8 +1391,8 @@ def test_summary_respects_filters(db, match_client):
     job = CleanJobRecord(file_ids=[upload.id], status="reviewing")
     db.add(job)
     db.flush()
-    for name, price in [("小米A", 800), ("小米B", 2000), ("大疆C", 3000)]:
-        rd = RawDataRecord(file_id=upload.id, platform="jd", item_id=f"sku-{name}", item_name=name, price=price)
+    for name, price, sales_qty in [("小米A", 800, 10), ("小米B", 2000, 20), ("大疆C", 3000, 30)]:
+        rd = RawDataRecord(file_id=upload.id, platform="jd", item_id=f"sku-{name}", item_name=name, price=price, sales_qty=sales_qty)
         db.add(rd)
         db.flush()
         db.add(MatchResult(
@@ -1405,14 +1405,17 @@ def test_summary_respects_filters(db, match_client):
     assert resp.status_code == 200
     assert resp.json()["total"] == 3
     assert resp.json()["matched"] == 3
+    assert resp.json()["total_sales_qty"] == 60
 
     resp = match_client.get(f"/api/match/{job.id}/summary", params={"price_min": 1000})
     assert resp.status_code == 200
     assert resp.json()["total"] == 2
+    assert resp.json()["total_sales_qty"] == 50
 
     resp = match_client.get(f"/api/match/{job.id}/summary", params={"keyword": "小米"})
     assert resp.status_code == 200
     assert resp.json()["total"] == 2
+    assert resp.json()["total_sales_qty"] == 30
 
 
 def test_pending_search_by_item_name_default_preserves_previous_behavior(db, match_client):
@@ -1930,3 +1933,48 @@ def test_confirm_match_hides_invisible_clean_job_category(db, match_client):
     assert resp.status_code == 404
     assert resp.json()["detail"] == "匹配记录不存在"
     assert db.get(MatchResult, headphone_match.id).match_status == "pending"
+
+
+def test_summary_total_sales_qty_respects_brand_code_filter(db, match_client):
+    from app.models.schemas import (
+        BrandRecord, CleanJobRecord, MatchResult, RawDataRecord, UploadFileRecord,
+    )
+
+    db.add_all([
+        BrandRecord(brand_code="RAYNEO", brand_name="雷鸟"),
+        BrandRecord(brand_code="DJI", brand_name="大疆"),
+    ])
+    ray = ModelRecord(brand_code="RAYNEO", model_code="R1", category_code="power_bank")
+    dji = ModelRecord(brand_code="DJI", model_code="D1", category_code="power_bank")
+    db.add_all([ray, dji])
+    upload = UploadFileRecord(filename="brand-sum.xlsx", status="done")
+    db.add(upload)
+    db.flush()
+    job = CleanJobRecord(file_ids=[upload.id], status="reviewing", category_code="power_bank")
+    db.add(job)
+    db.flush()
+    for name, model, sales_qty in [
+        ("雷鸟充电宝A", ray, 11),
+        ("雷鸟充电宝B", ray, 13),
+        ("大疆充电宝C", dji, 29),
+    ]:
+        rd = RawDataRecord(
+            file_id=upload.id, platform="jd", item_id=f"brand-{name}",
+            item_name=name, sales_qty=sales_qty,
+        )
+        db.add(rd)
+        db.flush()
+        db.add(MatchResult(
+            clean_job_id=job.id, raw_data_id=rd.id, model_id=model.id,
+            match_status="matched", matched_by="auto", match_source="s1",
+        ))
+    db.commit()
+
+    resp = match_client.get(
+        f"/api/match/{job.id}/summary",
+        params={"keyword": "雷鸟", "search_by": "brand_code"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 2
+    assert resp.json()["total_sales_qty"] == 24

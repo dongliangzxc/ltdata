@@ -957,14 +957,33 @@ SUPPLEMENT_REQUIRED_FIELDS = {"item_id", "item_name", "sales_qty", "sales_amount
 def download_supplement_template(current_user: User = Depends(get_current_user)):
     """补充上传专用示例：首张表可直接解析，第二张表说明字段和任务归属。"""
     from openpyxl import Workbook
+    from openpyxl.comments import Comment
     from openpyxl.styles import Alignment, Font, PatternFill
 
+    fields = [
+        ["item_id", "商品ID", "是", "商品在平台上的唯一编号，不是型号。按文本填写，保留前导零和完整长数字。"],
+        ["item_name", "商品名称", "是", "填写商品标题，例如某品牌10000mAh移动电源。"],
+        ["sales_qty", "销量", "是", "本次数据周期内销售的件数，例如10。填写整数，不带单位。"],
+        ["sales_amount", "销售额", "是", "本次数据周期内的总销售金额，例如10件共1290。填写纯数字；海外数据填写任务国家对应币种的原币金额。"],
+        ["price", "单价", "是", "单件商品的价格，例如129。填写纯数字，不带货币符号；币种同销售额。"],
+        ["brand_raw", "原始品牌", "否", "商品原始品牌名称。建议填写，便于品牌识别；没有可留空。"],
+        ["shop_name", "店铺名称", "否", "销售该商品的店铺名称。建议填写；没有可留空。"],
+        ["item_url", "商品链接", "否", "商品详情页的完整网址。建议填写真实链接，便于历史库和映射库匹配；没有可留空。"],
+    ]
     workbook = Workbook()
     data = workbook.active
     data.title = "补充数据"
-    data.append(["item_id", "item_name", "sales_qty", "sales_amount", "price", "brand_raw", "shop_name", "item_url"])
+    data.append([field[0] for field in fields])
     data.append(["EXAMPLE-001", "示例商品A（请替换）", 10, 1290, 129, "示例品牌", "示例店铺", "https://example.com/items/EXAMPLE-001"])
     data.append(["EXAMPLE-002", "示例商品B（请替换）", 5, 995, 199, "示例品牌", "示例店铺", "https://example.com/items/EXAMPLE-002"])
+    for index, (_, label, required, description) in enumerate(fields, start=1):
+        requirement = "必填" if required == "是" else "选填"
+        comment = Comment(
+            f"{label}（{requirement}）\n{description}\n示例：{data.cell(2, index).value}",
+            "洛图数据平台",
+        )
+        comment.width, comment.height = 360, 130
+        data.cell(1, index).comment = comment
     for row in data.iter_rows(min_row=2):
         row[0].number_format = "@"
         row[2].number_format = "0"
@@ -976,15 +995,8 @@ def download_supplement_template(current_user: User = Depends(get_current_user))
     notes = workbook.create_sheet("填写说明")
     notes.append(["表头（保持不变）", "中文含义", "是否必填", "填写要求"])
     for values in [
-        ["item_id", "商品ID", "是", "按文本填写，保留前导零和完整长数字。"],
-        ["item_name", "商品名称", "是", "填写商品标题。"],
-        ["sales_qty", "销量", "是", "填写整数，不带单位。"],
-        ["sales_amount", "销售额", "是", "填写数字；海外数据填写任务国家对应币种的原币金额。"],
-        ["price", "单价", "是", "填写数字，不带货币符号；币种同销售额。"],
-        ["brand_raw", "原始品牌", "否", "建议填写，便于品牌识别。"],
-        ["shop_name", "店铺名称", "否", "建议填写商品所属店铺。"],
-        ["item_url", "商品链接", "否", "建议填写完整真实链接，便于历史库和映射库匹配。"],
-        ["使用方法", "", "", "删除或替换首张表的两行示例数据，保留第一行英文表头；每行填写一个商品。"],
+        *fields,
+        ["使用方法", "", "", "鼠标悬停首张表的英文表头可查看中文注释；删除或替换两行示例数据，保留第一行表头，每行填写一个商品。"],
         ["任务范围", "", "", "无需填写品类、平台、月份；系统统一使用点击「补充数据」所在任务的范围。"],
         ["国家与币种", "", "", "当前弹窗不选择国家；优先沿用任务唯一国家，否则尝试从文件名识别，仍无法识别时按中国处理。"],
         ["重复处理", "", "", "同一国家、平台、月份、商品ID的重复行会跳过，不覆盖已有数据；只清洗匹配新增行。"],

@@ -232,6 +232,24 @@ def test_supplement_template_download_contains_fillable_examples_and_instruction
     assert any(row[0] == '使用方法' and '替换' in row[3] for row in notes)
 
 
+def test_supplement_template_has_chinese_comments_on_every_header(client):
+    response = client.get('/api/clean/supplement-template')
+    assert response.status_code == 200
+    workbook = load_workbook(io.BytesIO(response.content))
+    data = workbook['补充数据']
+    descriptions = {row[0]: row for row in workbook['填写说明'].iter_rows(min_row=2, max_row=9, values_only=True)}
+    for index, header in enumerate(data[1], start=1):
+        _, label, required, description = descriptions[header.value]
+        assert header.comment is not None, f'{header.value} must explain its meaning without switching sheets'
+        assert label in header.comment.text
+        assert ('必填' if required == '是' else '选填') in header.comment.text
+        assert description in header.comment.text
+        assert f'示例：{data.cell(2, index).value}' in header.comment.text
+        assert header.comment.author == '洛图数据平台'
+    assert '总销售金额' in data['D1'].comment.text
+    assert '单件商品' in data['E1'].comment.text
+
+
 def test_downloaded_supplement_template_uploads_and_cleans_without_saved_mapping(client):
     with client.Session() as session:
         job_id, _, _ = _seed_task(session)

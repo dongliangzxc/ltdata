@@ -18,6 +18,7 @@ from app.core.auth_deps import get_current_user
 from app.models.database import get_db
 from app.models.schemas import BrandCategory, BrandRecord, Category, ItemUrlMapping, ModelRecord
 from app.services import catalog_import_lock as locks, url_mapping_importer as importer
+from app.services import model_import_batches
 
 
 @pytest.fixture
@@ -86,7 +87,7 @@ def test_model_import_failure_rolls_back_and_does_not_block_url_import(db, clien
         session.flush()
         raise OperationalError("INSERT INTO models", {}, pymysql.err.OperationalError(1205, "locked"))
 
-    monkeypatch.setattr(models_api, "_ensure_import_brand", fail_brand)
+    monkeypatch.setattr(model_import_batches, "upsert_model_import_brands", fail_brand)
     response = client.post("/api/models/confirm", json=payload())
     assert response.status_code == 409, response.text
     assert db.query(BrandRecord).count() == 0

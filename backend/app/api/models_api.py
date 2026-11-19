@@ -6,7 +6,6 @@
 import io
 import os
 import math
-import unicodedata
 from urllib.parse import quote
 import pandas as pd
 from pathlib import Path
@@ -28,6 +27,10 @@ from app.models.schemas import (
 )
 from app.services.import_helper import save_tmp_file, read_columns, find_best_template, col_fingerprint
 from app.services.catalog_import_lock import catalog_import_slot
+from app.services.model_import_batches import (
+    db_collation_key as _db_collation_key, model_unique_key as _model_unique_key,
+    save_model_import_rows, replace_model_import_specs,
+)
 
 router = APIRouter(prefix="/api/models", tags=["models"])
 
@@ -212,14 +215,13 @@ def models_confirm(
     models_inserted = 0
     models_updated = 0
     errors = []
-    # 同一批次内已新增但未 flush 的型号（autoflush 关闭时查询看不到），按唯一键去重
-    pending_models: dict[tuple, ModelRecord] = {}
+    model_rows = []
+    category_checked = False
     # 本次导入所选品类已配置的扩展字段（如 {'series'}），用于决定是否写入扩展字段值
     configured_extra_keys = _configured_extra_field_keys(db, _canonical_category_code(db, payload.category_code))
     required_extra_keys = _required_extra_field_keys(db, _canonical_category_code(db, payload.category_code))
 
-    for i, row in enumerate(df.itertuples(index=False), start=2):
-        row_dict = row._asdict()
+    for i, row_dict in enumerate(df.to_dict(orient="records"), start=2):
 
         brand_code = _normalize_code(_clean_val(row_dict.get("brand_code")))
         model_code = _normalize_code(_clean_val(row_dict.get("model_code")))
@@ -229,7 +231,9 @@ def models_confirm(
 
         # 品类一律以第一步「选择品类」的所选品类为准，Excel 品类列的值不参与判定
         category_code = payload.category_code
-        _ensure_model_category_visible(db, current_user, category_code)
+        if not category_checked:
+            _ensure_model_category_visible(db, current_user, category_code)
+            category_checked = True
 
         optional_fields = {
             k: str(_clean_val(row_dict.get(k)) or "").strip() or None
@@ -241,20 +245,6 @@ def models_confirm(
         if "series" in required_extra_keys and not series:
             errors.append(f"Row {i}: 品类「{category_code}」必填字段「产品系列」为空，已跳过")
             continue
-        model_key = _model_unique_key(brand_code, model_code, category_code, series)
-        existing = pending_models.get(model_key)
-        if existing is None:
-            existing = (
-                db.query(ModelRecord)
-                .filter(
-                    ModelRecord.brand_code == brand_code,
-                    ModelRecord.model_code == model_code,
-                    ModelRecord.category_code == category_code,
-                    ModelRecord.series == series,
-                )
-                .first()
-            )
-        _ensure_import_brand(db, brand_code, optional_fields.get("brand_name"))
         int_fields = {}
         for k in ["launch_year", "launch_month", "launch_week"]:
             v = _clean_val(row_dict.get(k))
@@ -268,46 +258,13 @@ def models_confirm(
         except (ValueError, TypeError):
             launch_price = None
 
-        if existing:
-            for attr, val in {**optional_fields, **int_fields, "launch_price": launch_price, "category_code": category_code, "series": series}.items():
-                if val is not None:
-                    setattr(existing, attr, val)
-            models_updated += 1
-        else:
-            new_model = ModelRecord(
-                brand_code=brand_code,
-                model_code=model_code,
-                category_code=category_code,
-                **optional_fields,
-                **int_fields,
-                launch_price=launch_price,
-                series=series,
-            )
-            db.add(new_model)
-            pending_models[model_key] = new_model
-            models_inserted += 1
+        model_rows.append(dict(
+            brand_code=brand_code, model_code=model_code, category_code=category_code,
+            **optional_fields, **int_fields, launch_price=launch_price, series=series,
+        ))
 
     specs_inserted = 0
-    if models_inserted > 0 or models_updated > 0:
-        db.flush()
-
-        # 型号定位：系列品类同一「品牌+型号」下会有多条记录（仅产品系列不同），
-        # 所以规格表必须带上产品系列，按「品牌码+型号码+品类+产品系列」精确匹配。
-        # 键统一按数据库排序规则折叠：规格表与型号表的全半角/括号/大小写写法常不一致
-        # （如 `Ｍ108`/`M108`、`V7（2.0版）`/`V7(2.0版）`），且型号表内同款变体已去重、
-        # 只保留先出现的那种写法，不折叠会导致规格挂不上型号。
-        models_by_full_key: dict[tuple, int] = {}
-        models_by_key: dict[tuple, list[int]] = {}
-        for record in db.query(ModelRecord).all():
-            key_brand = _db_collation_key(record.brand_code)
-            key_model = _db_collation_key(record.model_code)
-            key_category = _db_collation_key(record.category_code)
-            key_series = _db_collation_key(record.series or "")
-            models_by_full_key[(key_brand, key_model, key_category, key_series)] = record.id
-            models_by_key.setdefault(
-                (key_brand, key_model, key_category), []
-            ).append(record.id)
-
+    if model_rows:
         if not df_spec.empty:
             df_spec.columns = [str(c).strip() for c in df_spec.columns]
             df_spec = df_spec.dropna(axis=1, how="all")
@@ -330,69 +287,72 @@ def models_confirm(
                 for col in ["brand_code", "model_code"]:
                     df_spec[col] = df_spec[col].replace("不需要填写", None).ffill()
 
-                series_required = "series" in required_extra_keys
-                affected_model_ids = set()
-                spec_rows = []
-                for offset, (_, spec_row) in enumerate(df_spec.iterrows()):
-                    row_no = offset + 2
-                    brand_code = _clean_val(spec_row.get("brand_code"))
-                    model_code = _clean_val(spec_row.get("model_code"))
-                    spec_name = _clean_val(spec_row.get("spec_name"))
-                    if not brand_code or not model_code or not spec_name:
-                        continue
-                    brand_key = str(brand_code)
-                    model_key_code = str(model_code)
-                    series_val = _clean_val(spec_row.get("series"))
-                    series = str(series_val).strip() if series_val is not None else None
-                    if series_required and not series:
-                        errors.append(
-                            f"型号规格 行 {row_no}: 品类「{payload.category_code}」必填字段「产品系列」为空，规格未导入"
-                        )
-                        continue
-                    model_id = models_by_full_key.get(
+        spec_pairs = set()
+        if "brand_code" in df_spec.columns and "model_code" in df_spec.columns:
+            spec_pairs = {(str(brand).strip(), str(model).strip()) for brand, model in
+                          zip(df_spec["brand_code"], df_spec["model_code"])
+                          if _clean_val(brand) and _clean_val(model)}
+        models_inserted, models_updated, models_by_full_key, models_by_key = save_model_import_rows(
+            db, payload.category_code, model_rows, spec_pairs,
+        )
+        if "brand_code" in df_spec.columns and "model_code" in df_spec.columns:
+            series_required = "series" in required_extra_keys
+            affected_model_ids = set()
+            spec_rows = []
+            for offset, spec_row in enumerate(df_spec.to_dict(orient="records")):
+                row_no = offset + 2
+                brand_code = _clean_val(spec_row.get("brand_code"))
+                model_code = _clean_val(spec_row.get("model_code"))
+                spec_name = _clean_val(spec_row.get("spec_name"))
+                if not brand_code or not model_code or not spec_name:
+                    continue
+                brand_key = str(brand_code)
+                model_key_code = str(model_code)
+                series_val = _clean_val(spec_row.get("series"))
+                series = str(series_val).strip() if series_val is not None else None
+                if series_required and not series:
+                    errors.append(
+                        f"型号规格 行 {row_no}: 品类「{payload.category_code}」必填字段「产品系列」为空，规格未导入"
+                    )
+                    continue
+                model_id = models_by_full_key.get(
+                    (
+                        _db_collation_key(brand_key),
+                        _db_collation_key(model_key_code),
+                        _db_collation_key(payload.category_code),
+                        _db_collation_key(series or ""),
+                    )
+                )
+                if model_id is None and not series_required:
+                    candidates = models_by_key.get(
                         (
                             _db_collation_key(brand_key),
                             _db_collation_key(model_key_code),
                             _db_collation_key(payload.category_code),
-                            _db_collation_key(series or ""),
-                        )
+                        ),
+                        [],
                     )
-                    if model_id is None and not series_required:
-                        candidates = models_by_key.get(
-                            (
-                                _db_collation_key(brand_key),
-                                _db_collation_key(model_key_code),
-                                _db_collation_key(payload.category_code),
-                            ),
-                            [],
-                        )
-                        if len(candidates) == 1:
-                            model_id = candidates[0]
-                        elif len(candidates) > 1:
-                            errors.append(
-                                f"型号规格 行 {row_no}: 「{brand_key} {model_key_code}」在品类「{payload.category_code}」下有多条产品系列，请在规格表填「产品系列」"
-                            )
-                            continue
-                    if model_id is None:
-                        suffix = f"（产品系列：{series}）" if series else ""
+                    if len(candidates) == 1:
+                        model_id = candidates[0]
+                    elif len(candidates) > 1:
                         errors.append(
-                            f"型号规格 行 {row_no}: 找不到对应型号「{brand_key} {model_key_code}」{suffix}"
+                            f"型号规格 行 {row_no}: 「{brand_key} {model_key_code}」在品类「{payload.category_code}」下有多条产品系列，请在规格表填「产品系列」"
                         )
                         continue
-                    affected_model_ids.add(model_id)
-                    spec_rows.append({
-                        "model_id": model_id,
-                        "spec_name": str(spec_name).strip(),
-                        "spec_value": str(_clean_val(spec_row.get("spec_value")) or "") or None,
-                    })
+                if model_id is None:
+                    suffix = f"（产品系列：{series}）" if series else ""
+                    errors.append(
+                        f"型号规格 行 {row_no}: 找不到对应型号「{brand_key} {model_key_code}」{suffix}"
+                    )
+                    continue
+                affected_model_ids.add(model_id)
+                spec_rows.append({
+                    "model_id": model_id,
+                    "spec_name": str(spec_name).strip(),
+                    "spec_value": str(_clean_val(spec_row.get("spec_value")) or "") or None,
+                })
 
-                if affected_model_ids:
-                    db.query(ModelSpec).filter(
-                        ModelSpec.model_id.in_(affected_model_ids)
-                    ).delete(synchronize_session=False)
-                for spec in spec_rows:
-                    db.add(ModelSpec(**spec))
-                    specs_inserted += 1
+            specs_inserted = replace_model_import_specs(db, affected_model_ids, spec_rows)
 
         db.commit()
 
@@ -422,40 +382,6 @@ def models_confirm(
 
 def _normalize_code(value: str | None) -> str:
     return (value or "").strip()
-
-
-def _db_collation_key(value: str | None) -> str:
-    """近似 MySQL `utf8mb4_0900_ai_ci` 的比较语义（大小写 / 全半角 / 音标不敏感）。
-
-    生产库唯一索引（models.uq_model、brands.brand_code）按该排序规则判定重复，而
-    Python 的 `str.lower()` 只处理大小写：例如型号码 `Ｍ108`（全角 Ｍ）与 `M108`
-    在库中相等，但 Python 视为不同，配合关闭的 autoflush 会造成同批次内重复插入、
-    flush 时撞唯一键（Duplicate entry '铁将军-smart_lock--M108'）。此处把待插入
-    记录的去重键对齐排序规则，避免该冲突。
-    """
-    text = unicodedata.normalize("NFKC", (value or "").strip()).casefold()
-    text = unicodedata.normalize("NFKD", text)
-    return "".join(ch for ch in text if not unicodedata.combining(ch))
-
-
-def _model_unique_key(
-    brand_code: str | None,
-    model_code: str | None,
-    category_code: str | None,
-    series: str | None = None,
-) -> tuple:
-    """与 MySQL utf8mb4_0900_ai_ci 唯一索引（models.uq_model）对齐的去重键。
-
-    数据库唯一索引大小写/全半角/音标不敏感，同一批次内 `z8h`/`Z8H`、`Ｍ108`/`M108`
-    均属同一型号；这里统一按排序规则折叠，避免 autoflush 关闭时未 flush 的记录
-    查不到而重复插入。系列品类（智能平板/学习平板）的唯一键额外包含 series。
-    """
-    return (
-        _db_collation_key(brand_code),
-        _db_collation_key(model_code),
-        _db_collation_key(category_code),
-        _db_collation_key(series),
-    )
 
 
 def _normalize_optional_text(value: str | None) -> str | None:

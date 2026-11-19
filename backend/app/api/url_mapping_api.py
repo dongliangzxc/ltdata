@@ -20,11 +20,12 @@ from app.core.permissions import visible_category_codes
 from app.models.database import get_db
 from app.models.schemas import (
     ItemUrlMapping, ItemUrlMappingIn, ItemUrlMappingOut,
-    ModelRecord, BrandRecord, BrandCategory, CategoryExtraField,
+    ModelRecord, CategoryExtraField,
     PaginatedResponse, Category, User,
 )
 from app.utils.url_utils import extract_item_id
 from app.services.import_helper import save_tmp_file, read_columns, find_best_template, col_fingerprint
+from app.services.url_mapping_importer import ImportModelLookup, upsert_url_import_rows
 
 router = APIRouter(prefix="/api/url-mappings", tags=["url-mappings"])
 
@@ -93,142 +94,6 @@ def _category_has_series(db: Session, category_code: str | None) -> bool:
         CategoryExtraField.category_code == category_code,
         CategoryExtraField.field_key == "series",
     ).first() is not None
-
-
-def _get_or_create_url_import_model(
-    db: Session,
-    *,
-    brand_code: str,
-    model_code: str,
-    category_code: str | None,
-    series: str | None = None,
-) -> ModelRecord | None:
-    """型号匹配不到时自动创建型号记录（复用品牌主数据，品牌自动挂到所选品类）。
-
-    返回创建的型号；品牌为空/占位或缺少所选品类时返回 None（无法创建）。
-    """
-    if _is_unusable_brand_code(brand_code):
-        return None
-    if not category_code or not model_code or model_code in ("-", "—", "--", "未知"):
-        return None
-    # 品牌主数据不存在时补建（品牌码即品牌名兜底）
-    brand = db.query(BrandRecord).filter(BrandRecord.brand_code == brand_code).first()
-    if not brand:
-        db.add(BrandRecord(brand_code=brand_code, brand_name=brand_code))
-        db.flush()
-
-    # 品牌挂到所选品类（品牌可归属多品类）
-    if not db.query(BrandCategory).filter_by(brand_code=brand_code, category_code=category_code).first():
-        db.add(BrandCategory(brand_code=brand_code, category_code=category_code))
-
-    existing_query = db.query(ModelRecord).filter(
-        ModelRecord.brand_code == brand_code,
-        ModelRecord.model_code == model_code,
-        ModelRecord.category_code == category_code,
-    )
-    if series is not None:
-        existing_query = existing_query.filter(ModelRecord.series == series)
-    existing = existing_query.first()
-    if existing:
-        return existing
-
-    model = ModelRecord(
-        brand_code=brand_code,
-        model_code=model_code,
-        model_name=model_code,
-        category_code=category_code,
-        series=series,
-        brand_name=brand.brand_name if brand else brand_code,
-        status="active",
-    )
-    db.add(model)
-    db.flush()
-    return model
-
-
-_SERIES_MODEL_CODE_PLACEHOLDERS = ("", "—", "--", "未知")
-
-
-def _series_model_code(model_code: str) -> str:
-    """系列品类里型号码允许为占位（如 vrar 的 '-'），空/其它占位统一存 '-'。"""
-    return model_code if model_code not in _SERIES_MODEL_CODE_PLACEHOLDERS else "-"
-
-
-def _resolve_series_model(
-    db: Session,
-    *,
-    brand_code: str,
-    model_code: str,
-    category_code: str | None,
-    series: str,
-) -> ModelRecord | None:
-    """系列品类定位型号：品牌 + 产品系列（型号码可为占位 '-'）。
-
-    按精确度依次尝试：品类+型号码+系列 → 品类+系列 → 型号码+系列 → 系列。
-    """
-    code = _series_model_code(model_code)
-    attempts = [
-        [ModelRecord.brand_code == brand_code, ModelRecord.series == series,
-         ModelRecord.model_code == code, ModelRecord.category_code == category_code] if category_code else None,
-        [ModelRecord.brand_code == brand_code, ModelRecord.series == series,
-         ModelRecord.category_code == category_code] if category_code else None,
-        [ModelRecord.brand_code == brand_code, ModelRecord.series == series, ModelRecord.model_code == code],
-        [ModelRecord.brand_code == brand_code, ModelRecord.series == series],
-    ]
-    for filters in attempts:
-        if not filters:
-            continue
-        model = db.query(ModelRecord).filter(*filters).first()
-        if model:
-            return model
-    return None
-
-
-def _get_or_create_series_url_import_model(
-    db: Session,
-    *,
-    brand_code: str,
-    model_code: str,
-    category_code: str | None,
-    series: str,
-) -> ModelRecord | None:
-    """系列品类型号匹配不到时自动创建（保留占位型号码 + 产品系列）。"""
-    if _is_unusable_brand_code(brand_code) or not category_code or not series:
-        return None
-    code = _series_model_code(model_code)
-    brand = db.query(BrandRecord).filter(BrandRecord.brand_code == brand_code).first()
-    if not brand:
-        db.add(BrandRecord(brand_code=brand_code, brand_name=brand_code))
-        db.flush()
-    if not db.query(BrandCategory).filter_by(brand_code=brand_code, category_code=category_code).first():
-        db.add(BrandCategory(brand_code=brand_code, category_code=category_code))
-    existing = db.query(ModelRecord).filter(
-        ModelRecord.brand_code == brand_code,
-        ModelRecord.model_code == code,
-        ModelRecord.category_code == category_code,
-        ModelRecord.series == series,
-    ).first()
-    if existing:
-        return existing
-    model = ModelRecord(
-        brand_code=brand_code,
-        model_code=code,
-        model_name=code,
-        category_code=category_code,
-        series=series,
-        brand_name=brand.brand_name if brand else brand_code,
-        status="active",
-    )
-    db.add(model)
-    db.flush()
-    return model
-
-
-def _is_unusable_brand_code(value: str | None) -> bool:
-    text = (value or "").strip()
-    if not text:
-        return True
-    return text.upper() in {"-", "—", "--", "UNKNOWN", "未知"}
 
 
 def _legacy_headphone_category(m: ItemUrlMapping) -> tuple[str | None, str | None]:
@@ -333,8 +198,6 @@ def url_mapping_confirm(
     current_user: User = Depends(get_current_user),
 ):
     """P10: Step 2 — parse file with mapping, upsert item_url_mappings."""
-    from app.models.schemas import ItemUrlMapping, ModelRecord as ModelORM
-
     _ensure_url_mapping_category_visible(db, current_user, payload.category_code)
 
     tmp_dir = Path(UPLOAD_DIR) / "tmp"
@@ -370,133 +233,71 @@ def url_mapping_confirm(
     skipped = 0
     errors = []
     warnings = []
-    payload_fields = getattr(payload, "model_fields_set", getattr(payload, "__fields_set__", set()))
-    seen_keys: dict[tuple[str, str], ItemUrlMapping] = {}
-
-    for i, row in enumerate(df.itertuples(index=False), start=2):
-        row_dict = row._asdict()
-
-        platform_raw = _clean_cell(row_dict.get("platform"))
-        item_url = _clean_cell(row_dict.get("item_url"))
-        brand_code = _clean_cell(row_dict.get("brand_code"))
-        model_code = _clean_cell(row_dict.get("model_code"))
-        series_value = _clean_cell(row_dict.get("series")) or None
-
-        if not platform_raw or not item_url or not brand_code:
+    payload_fields = payload.model_fields_set
+    # Parse/validate once before touching the database; use dict records so
+    # unmapped Chinese headers cannot rename standard fields in itertuples().
+    rows = []
+    for i, row_dict in enumerate(df.to_dict(orient="records"), start=2):
+        row = {key: _clean_cell(row_dict.get(key)) for key in
+               ("platform", "item_url", "brand_code", "model_code", "series")}
+        if not row["platform"] or not row["item_url"] or not row["brand_code"]:
             errors.append(f"Row {i}: missing required field")
             continue
-
-        # Normalize platform: try map lookup (handles Chinese/uppercase), fallback to lowercase
-        platform = _PLATFORM_MAP.get(platform_raw.upper(), platform_raw.lower())
-
-        # Extract item_id from URL
-        url_info = extract_item_id(item_url)
+        url_info = extract_item_id(row["item_url"])
         if not url_info:
-            errors.append(f"Row {i}: cannot extract item_id from URL '{item_url}'")
+            errors.append(f"Row {i}: cannot extract item_id from URL '{row['item_url']}'")
             continue
-        url_platform, item_id = url_info
+        row["platform"], row["item_id"] = url_info
+        row["price"] = row_dict.get("price")
+        row["row_number"] = i
+        rows.append(row)
 
-        # Lookup model — 系列品类按「品牌+产品系列」定位（型号码允许占位，如 vrar 的 '-'）；其余品类按品牌+型号码
-        is_series_category = _category_has_series(db, payload.category_code)
-
+    is_series_category = _category_has_series(db, payload.category_code)
+    model_lookup = ImportModelLookup(db, rows, payload.category_code, is_series_category).create_missing(rows)
+    resolved_models = {}
+    mapping_rows = []
+    for row in rows:
+        i = row["row_number"]
+        brand_code, model_code = row["brand_code"], row["model_code"]
+        series_value = row["series"] or None
+        item_url, url_platform, item_id = row["item_url"], row["platform"], row["item_id"]
         model = None
-        if is_series_category and series_value:
-            model = _resolve_series_model(
-                db, brand_code=brand_code, model_code=model_code,
-                category_code=payload.category_code, series=series_value,
-            )
-            if not model:
-                model = _get_or_create_series_url_import_model(
-                    db, brand_code=brand_code, model_code=model_code,
-                    category_code=payload.category_code, series=series_value,
-                )
-                if model is None:
-                    errors.append(f"Row {i}: model ({brand_code}, {series_value}) not found")
-                    continue
+        model_key = (brand_code, model_code, series_value if is_series_category else None)
+        needs_model = (is_series_category and series_value) or model_code not in ("", "-", "—", "--", "未知")
+        if needs_model:
+            if model_key not in resolved_models:
+                model = model_lookup.find(brand_code, model_code, series_value)
+                resolved_models[model_key] = model
+            model = resolved_models[model_key]
+            if model is None:
+                errors.append(f"Row {i}: model ({brand_code}, {series_value or model_code}) not found")
+                continue
             if model.category_code and payload.category_code and model.category_code != payload.category_code:
-                warnings.append(
-                    f"Row {i}: 型号归属品类（{model.category_code}）与所选品类（{payload.category_code}）不一致，已按型号原品类挂接"
-                )
-        elif model_code not in ("", "-", "—", "--", "未知"):
-            if payload.category_code:
-                model = (
-                    db.query(ModelORM)
-                    .filter(
-                        ModelORM.brand_code == brand_code,
-                        ModelORM.model_code == model_code,
-                        ModelORM.category_code == payload.category_code,
+                if len(warnings) < 20:
+                    warnings.append(
+                        f"Row {i}: 型号归属品类（{model.category_code}）与所选品类（{payload.category_code}）不一致，已按型号原品类挂接"
                     )
-                    .first()
-                )
-            if not model:
-                model = (
-                    db.query(ModelORM)
-                    .filter(ModelORM.brand_code == brand_code, ModelORM.model_code == model_code)
-                    .first()
-                )
-            if not model:
-                model = _get_or_create_url_import_model(
-                    db, brand_code=brand_code, model_code=model_code,
-                    category_code=payload.category_code,
-                )
-                if model is None:
-                    errors.append(f"Row {i}: model ({brand_code}, {model_code}) not found")
-                    continue
-            # Category mismatch warning (non-blocking)
-            if model.category_code and payload.category_code and model.category_code != payload.category_code:
-                warnings.append(
-                    f"Row {i}: 型号归属品类（{model.category_code}）与所选品类（{payload.category_code}）不一致，已按型号原品类挂接"
-                )
-        else:
-            model = None
 
-        price_raw = row_dict.get("price")
+        price_raw = row.get("price")
         try:
             price = float(str(price_raw).strip()) if price_raw and str(price_raw).strip() not in ("", "nan", "None") else None
         except (ValueError, TypeError):
             price = None
 
-        key = (url_platform, item_id)
-        existing = seen_keys.get(key)
-        if existing is None:
-            existing = (
-                db.query(ItemUrlMapping)
-                .filter(ItemUrlMapping.platform == url_platform, ItemUrlMapping.item_id == item_id)
-                .first()
-            )
-        if existing:
-            existing.model_id = model.id if model else None
-            existing.brand_code = brand_code
-            if payload.category_code:
-                existing.category_code = payload.category_code
-            if price is not None:
-                existing.price = price
-            existing.source = 'url_import'
-            if "data_year" in payload_fields:
-                existing.data_year = payload.data_year
-            if "data_month" in payload_fields:
-                existing.data_month = payload.data_month
-            seen_keys[key] = existing
-            updated += 1
-        else:
-            new_mapping = ItemUrlMapping(
-                platform=url_platform,
-                item_id=item_id,
-                item_url=item_url,
-                brand_code=brand_code,
-                category_code=payload.category_code,
-                model_id=model.id if model else None,
-                price=price,
-                source='url_import',
-                data_year=payload.data_year,
-                data_month=payload.data_month,
-            )
-            db.add(new_mapping)
-            seen_keys[key] = new_mapping
-            inserted += 1
+        mapping_rows.append(dict(
+            platform=url_platform, item_id=item_id, item_url=item_url,
+            brand_code=brand_code, category_code=payload.category_code,
+            model_id=model.id if model else None, price=price,
+            source="url_import", data_year=payload.data_year, data_month=payload.data_month,
+        ))
 
-    if inserted > 0 or updated > 0:
-        db.commit()
+    try:
+        inserted, updated = upsert_url_import_rows(db, mapping_rows, payload_fields)
+        if inserted > 0 or updated > 0:
+            db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
     if payload.save_template_name and (inserted + updated) > 0:
         from app.models.schemas import ColumnTemplate

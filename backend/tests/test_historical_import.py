@@ -942,8 +942,8 @@ def test_import_auto_creates_unknown_model(db):
 
 
 def test_import_uses_brand_name_as_brand_code_for_ambiguous_model_code(db):
-    target = _seed_model(db, model_code="SAME-CODE", model_name="Model A", brand_code="BRAND-A")
-    _seed_model(db, model_code="SAME-CODE", model_name="Model B", brand_code="BRAND-B")
+    target = _seed_model(db, model_code="SAME-CODE", model_name="Model A", brand_code="BRAND-A", category_code="router")
+    _seed_model(db, model_code="SAME-CODE", model_name="Model B", brand_code="BRAND-B", category_code="router")
     client = _client(db)
     content = _history_excel([{
         "年": 2026,
@@ -1595,8 +1595,8 @@ def test_headers_counts_under_branded_missing_model_without_auto_create_candidat
 
 def test_headers_uses_brand_name_as_brand_code_for_ambiguous_model_code(db, tmp_path, monkeypatch):
     monkeypatch.setattr("app.api.historical_api.settings.UPLOAD_DIR", str(tmp_path))
-    _seed_model(db, model_code="SAME-CODE", model_name="Model A", brand_code="BRAND-A")
-    _seed_model(db, model_code="SAME-CODE", model_name="Model B", brand_code="BRAND-B")
+    _seed_model(db, model_code="SAME-CODE", model_name="Model A", brand_code="BRAND-A", category_code="router")
+    _seed_model(db, model_code="SAME-CODE", model_name="Model B", brand_code="BRAND-B", category_code="router")
     db.add(Category(code="router", name="路由器"))
     db.commit()
     client = _client(db)
@@ -1623,8 +1623,8 @@ def test_headers_uses_brand_name_as_brand_code_for_ambiguous_model_code(db, tmp_
 
 def test_headers_uses_brand_name_as_brand_code_for_ambiguous_model_name(db, tmp_path, monkeypatch):
     monkeypatch.setattr("app.api.historical_api.settings.UPLOAD_DIR", str(tmp_path))
-    _seed_model(db, model_code="MODEL-A", model_name="Shared Name", brand_code="BRAND-A")
-    _seed_model(db, model_code="MODEL-B", model_name="Shared Name", brand_code="BRAND-B")
+    _seed_model(db, model_code="MODEL-A", model_name="Shared Name", brand_code="BRAND-A", category_code="router")
+    _seed_model(db, model_code="MODEL-B", model_name="Shared Name", brand_code="BRAND-B", category_code="router")
     db.add(Category(code="router", name="路由器"))
     db.commit()
     client = _client(db)
@@ -2199,3 +2199,33 @@ def test_create_historical_export_job_enqueues_background_thread(db, monkeypatch
     job = db.query(HistoricalExportJob).one()
     assert job.status == "pending"
     assert job.category_codes is None
+
+
+def test_headers_does_not_reuse_model_from_other_category(db, tmp_path, monkeypatch):
+    """同品牌同型号若只存在于其它品类，本品类不直接复用，应按新品类型号自动创建。"""
+    monkeypatch.setattr("app.api.historical_api.settings.UPLOAD_DIR", str(tmp_path))
+    _seed_model(db, model_code="CROSS-1", model_name="Cross", brand_code="BRAND-A", category_code="headphone")
+    db.add(Category(code="router", name="路由器"))
+    db.commit()
+    client = _client(db)
+    content = _history_excel([{
+        "年度": 2025,
+        "月度": "2025.12",
+        "平台": "天猫",
+        "商品名称": "跨品类型号商品",
+        "商品网址": "https://detail.tmall.com/item.htm?id=1006960105599",
+        "品牌": "BRAND-A",
+        "型号码": "CROSS-1",
+    }])
+
+    resp = client.post(
+        "/api/historical/headers",
+        files={"file": ("路由器数据库202501-202604.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert resp.status_code == 200
+    stats = resp.json()["stats"]
+    assert stats["missing_model_rows"] == 1
+    assert stats["auto_create_model_count"] == 1
+    assert db.query(ModelRecord).filter(ModelRecord.category_code == "headphone").count() == 1
+    assert db.query(ModelRecord).filter(ModelRecord.category_code == "router").count() == 0

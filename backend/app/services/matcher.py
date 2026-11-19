@@ -297,6 +297,20 @@ def _apply_history_period(query, year: int | None, month_num: int | None, week: 
     return query.filter(HistoricalMapping.week.is_(None)).order_by(HistoricalMapping.updated_at.desc(), HistoricalMapping.id.desc())
 
 
+def _history_category_scope(query, category_code: str | None):
+    """历史记录按品类隔离：只接受本任务品类或无品类标注的记录。
+
+    历史库早期导入未限制品类，出现过移动电源商品关联到 smartwatch 型号的情况；
+    查找时排除明确属于其它品类的记录，避免跨品类误命中。
+    """
+    if not category_code:
+        return query
+    return query.filter(or_(
+        HistoricalMapping.category_code == category_code,
+        HistoricalMapping.category_code.is_(None),
+    ))
+
+
 def _history_lookup(db: Session, row: CleanedDataRecord, ctx: MatchContext | None = None) -> "HistoricalMapping | _HistoryHit | None":
     row_platform = (row.platform or "").lower()
     parsed = extract_item_id(row.item_url) if row.item_url else None
@@ -337,6 +351,7 @@ def _history_lookup(db: Session, row: CleanedDataRecord, ctx: MatchContext | Non
                 q = q.filter(HistoricalMapping.item_url == value)
             else:
                 q = q.filter(HistoricalMapping.item_name_norm == value)
+            q = _history_category_scope(q, ctx.job_category_code if ctx else None)
             hit = _apply_history_period(q, year, month_num, week).first()
             if hit:
                 return hit
@@ -444,6 +459,7 @@ def _build_history_index(db: Session, ctx: MatchContext, rows: list) -> None:
             and_(HistoricalMapping.year == y, HistoricalMapping.month_num == m)
             for y, m in periods
         ))
+    query = _history_category_scope(query, ctx.job_category_code)
 
     ctx.hist_item_id = {}
     ctx.hist_item_url = {}

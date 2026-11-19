@@ -557,7 +557,7 @@ def _load_preview_models(db: Session, model_code_values: set[str | None], model_
     models_by_code_unbranded = {}
     if all_codes:
         for model in db.query(ModelRecord).filter(ModelRecord.model_code.in_(all_codes)).all():
-            models_by_code[(model.brand_code, model.model_code)] = model
+            models_by_code.setdefault((model.brand_code, model.model_code), []).append(model)
             models_by_code_unbranded.setdefault(model.model_code, []).append(model)
 
     models_by_name = {}
@@ -607,10 +607,10 @@ def _load_series_models(
 def _calculate_preview_stats_for_rows(
     rows: Iterable[dict],
     *,
-    models_by_code: dict[tuple[str, str], ModelRecord],
+    models_by_code: dict[tuple[str, str], list[ModelRecord]],
     models_by_code_unbranded: dict[str, list[ModelRecord]],
     models_by_name: dict[str, list[ModelRecord]],
-    ambiguous_model_codes: set[str],
+    ambiguous_model_codes: set[tuple[str, str]],
     series_codes: Optional[set[str]] = None,
     models_by_series: Optional[dict[tuple[str, str, str, str], ModelRecord]] = None,
 ) -> dict:
@@ -680,15 +680,29 @@ def _calculate_preview_stats_for_rows(
     }
 
 
+def _filter_models_for_category(models, category_code: Optional[str]) -> list[ModelRecord]:
+    """型号按品类隔离；未给品类时保留原有跨品类查找行为。
+
+    历史遗留的 ``category_code`` 为空型号视作未归类，仍允许参与匹配；
+    明确属于其它品类的型号不再跨品类复用。
+    """
+    if not category_code:
+        return list(models)
+    return [
+        m for m in models
+        if not (m.category_code or "") or (m.category_code or "") == category_code
+    ]
+
+
 def _resolve_model(
     *,
     model_code_raw: Optional[str],
     model_text: Optional[str],
     brand_code_raw: Optional[str],
-    models_by_code: dict[tuple[str, str], ModelRecord],
+    models_by_code: dict[tuple[str, str], list[ModelRecord]],
     models_by_code_unbranded: dict[str, list[ModelRecord]],
     models_by_name: dict[str, list[ModelRecord]],
-    ambiguous_model_codes: Optional[set[str]] = None,
+    ambiguous_model_codes: Optional[set[tuple[str, str]]] = None,
     model_type_raw: Optional[str] = None,
     category_code: Optional[str] = None,
     series_codes: Optional[set[str]] = None,
@@ -720,38 +734,55 @@ def _resolve_model(
         return None, None
 
     if model_code_raw:
-        if not brand_code_raw and model_code_raw in ambiguous_model_codes:
+        ambiguous_key = (category_code or "", model_code_raw)
+        if not brand_code_raw and ambiguous_key in ambiguous_model_codes:
             return None, f"型号码「{model_code_raw}」匹配到多个品牌，请填写品牌码"
         if brand_code_raw:
-            model = models_by_code.get((brand_code_raw, model_code_raw))
-            if model:
-                return model, None
+            candidates = _filter_models_for_category(
+                models_by_code.get((brand_code_raw, model_code_raw), []), category_code,
+            )
+            if len(candidates) == 1:
+                return candidates[0], None
+            if len(candidates) > 1:
+                return None, f"型号码「{model_code_raw}」匹配到多个型号"
         else:
-            models_by_code_list = models_by_code_unbranded.get(model_code_raw, [])
-            if len(models_by_code_list) == 1:
-                return models_by_code_list[0], None
-            if len(models_by_code_list) > 1:
+            candidates = _filter_models_for_category(
+                models_by_code_unbranded.get(model_code_raw, []), category_code,
+            )
+            brands = {m.brand_code for m in candidates}
+            if len(brands) == 1:
+                return candidates[0], None
+            if len(brands) > 1:
                 return None, f"型号码「{model_code_raw}」匹配到多个品牌，请填写品牌码"
         return None, f"型号码「{model_code_raw}」在型号库中不存在"
 
     if not model_text:
         return None, None
 
-    if not brand_code_raw and model_text in ambiguous_model_codes:
+    if not brand_code_raw and (category_code or "", model_text) in ambiguous_model_codes:
         return None, f"型号码「{model_text}」匹配到多个品牌，请填写品牌码"
 
     if brand_code_raw:
-        model_by_code = models_by_code.get((brand_code_raw, model_text))
-        if model_by_code:
-            return model_by_code, None
+        candidates = _filter_models_for_category(
+            models_by_code.get((brand_code_raw, model_text), []), category_code,
+        )
+        if len(candidates) == 1:
+            return candidates[0], None
+        if len(candidates) > 1:
+            return None, f"型号码「{model_text}」匹配到多个型号"
     else:
-        models_by_code_list = models_by_code_unbranded.get(model_text, [])
-        if len(models_by_code_list) == 1:
-            return models_by_code_list[0], None
-        if len(models_by_code_list) > 1:
+        candidates = _filter_models_for_category(
+            models_by_code_unbranded.get(model_text, []), category_code,
+        )
+        brands = {m.brand_code for m in candidates}
+        if len(brands) == 1:
+            return candidates[0], None
+        if len(brands) > 1:
             return None, f"型号码「{model_text}」匹配到多个品牌，请填写品牌码"
 
-    models_by_name_list = models_by_name.get(model_text, [])
+    models_by_name_list = _filter_models_for_category(
+        models_by_name.get(model_text, []), category_code,
+    )
     if len(models_by_name_list) == 1:
         if not brand_code_raw or models_by_name_list[0].brand_code == brand_code_raw:
             return models_by_name_list[0], None
@@ -949,10 +980,10 @@ def _get_or_create_model(
     brand_code_raw: Optional[str],
     brand_raw: Optional[str],
     category_code: Optional[str],
-    models_by_code: dict[tuple[str, str], ModelRecord],
+    models_by_code: dict[tuple[str, str], list[ModelRecord]],
     models_by_code_unbranded: dict[str, list[ModelRecord]],
     models_by_name: dict[str, list[ModelRecord]],
-    ambiguous_model_codes: Optional[set[str]] = None,
+    ambiguous_model_codes: Optional[set[tuple[str, str]]] = None,
     model_type_raw: Optional[str] = None,
     series_codes: Optional[set[str]] = None,
     models_by_series: Optional[dict[tuple[str, str, str, str], ModelRecord]] = None,
@@ -998,11 +1029,13 @@ def _get_or_create_model(
         ModelRecord.brand_code == values["brand_code"],
         ModelRecord.model_code == values["model_code"],
     )
+    if category_code:
+        existing_query = existing_query.filter(ModelRecord.category_code == category_code)
     if is_series_category:
         existing_query = existing_query.filter(ModelRecord.series == series_value)
     existing = existing_query.first()
     if existing:
-        models_by_code[(existing.brand_code, existing.model_code)] = existing
+        models_by_code.setdefault((existing.brand_code, existing.model_code), []).append(existing)
         if existing not in models_by_code_unbranded.setdefault(existing.model_code, []):
             models_by_code_unbranded[existing.model_code].append(existing)
         if existing.model_name and existing not in models_by_name.setdefault(existing.model_name, []):
@@ -1014,7 +1047,7 @@ def _get_or_create_model(
     new_model = ModelRecord(**values)
     db.add(new_model)
     db.flush()
-    models_by_code[(new_model.brand_code, new_model.model_code)] = new_model
+    models_by_code.setdefault((new_model.brand_code, new_model.model_code), []).append(new_model)
     models_by_code_unbranded.setdefault(new_model.model_code, []).append(new_model)
     models_by_name.setdefault(new_model.model_name, []).append(new_model)
     if is_series_category:
@@ -1130,7 +1163,7 @@ def _preload_models(db: Session, df: pd.DataFrame):
     models_by_code_unbranded = {}
     if all_codes:
         for model in db.query(ModelRecord).filter(ModelRecord.model_code.in_(all_codes)).all():
-            models_by_code[(model.brand_code, model.model_code)] = model
+            models_by_code.setdefault((model.brand_code, model.model_code), []).append(model)
             models_by_code_unbranded.setdefault(model.model_code, []).append(model)
 
     models_by_name = {}
@@ -1141,12 +1174,13 @@ def _preload_models(db: Session, df: pd.DataFrame):
     return models_by_code, models_by_code_unbranded, models_by_name
 
 
-def _ambiguous_model_codes_from_rows(rows: Iterable[dict], models_by_code_unbranded: dict[str, list[ModelRecord]]) -> set[str]:
-    brands_by_code = {
-        model_code: {model.brand_code for model in models}
-        for model_code, models in models_by_code_unbranded.items()
-    }
+def _ambiguous_model_codes_from_rows(rows: Iterable[dict], models_by_code_unbranded: dict[str, list[ModelRecord]]) -> set[tuple[str, str]]:
+    brands_by_key: dict[tuple[str, str], set[str]] = {}
+    for model_code, models in models_by_code_unbranded.items():
+        for model in models:
+            brands_by_key.setdefault(((model.category_code or ""), model_code), set()).add(model.brand_code)
     for row in rows:
+        category_code = _clean_value(_get(row, "品类码")) or ""
         brand_code_raw = _clean_value(_get(row, "品牌码"))
         brand_raw = _clean_value(_get(row, "品牌"))
         brand_code = _effective_brand_code(brand_code_raw, brand_raw)
@@ -1154,11 +1188,11 @@ def _ambiguous_model_codes_from_rows(rows: Iterable[dict], models_by_code_unbran
             continue
         for model_code in {_clean_value(_get(row, "型号码")), _clean_value(_get(row, "型号"))}:
             if model_code:
-                brands_by_code.setdefault(model_code, set()).add(brand_code)
-    return {model_code for model_code, brands in brands_by_code.items() if len(brands) > 1}
+                brands_by_key.setdefault((category_code, model_code), set()).add(brand_code)
+    return {key for key, brands in brands_by_key.items() if len(brands) > 1}
 
 
-def _ambiguous_model_codes_from_batch(df: pd.DataFrame, models_by_code_unbranded: dict[str, list[ModelRecord]]) -> set[str]:
+def _ambiguous_model_codes_from_batch(df: pd.DataFrame, models_by_code_unbranded: dict[str, list[ModelRecord]]) -> set[tuple[str, str]]:
     return _ambiguous_model_codes_from_rows((raw_row.to_dict() for _, raw_row in df.iterrows()), models_by_code_unbranded)
 
 
@@ -1274,10 +1308,10 @@ def _import_historical_rows(
     rows: Iterable[dict],
     import_batch: str,
     *,
-    models_by_code: dict[tuple[str, str], ModelRecord],
+    models_by_code: dict[tuple[str, str], list[ModelRecord]],
     models_by_code_unbranded: dict[str, list[ModelRecord]],
     models_by_name: dict[str, list[ModelRecord]],
-    ambiguous_model_codes: set[str],
+    ambiguous_model_codes: set[tuple[str, str]],
     series_codes: Optional[set[str]] = None,
     models_by_series: Optional[dict[tuple[str, str, str, str], ModelRecord]] = None,
     progress_cb: Optional[Callable[[int], None]] = None,

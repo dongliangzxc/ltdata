@@ -717,3 +717,65 @@ def test_s0_skips_url_mapping_to_out_of_category_brand_only_model(db):
     assert result is not None
     assert result.match_status == "pending", f"期望 pending，实际 {result.match_status}"
     assert result.model_id is None
+
+
+def _seed_history_row(db, *, item_id, model_id, category_code, month="2026-10", platform="jd"):
+    from app.models.schemas import HistoricalMapping
+
+    year, month_num = (int(part) for part in month.split("-"))
+    history = HistoricalMapping(
+        platform=platform,
+        item_id=item_id,
+        item_url=f"https://item.jd.com/{item_id}.html",
+        item_name="充电宝",
+        item_name_norm="充电宝",
+        year=year,
+        month_num=month_num,
+        month=month,
+        category_code=category_code,
+        model_id=model_id,
+        match_key_type="item_id",
+        raw_payload={},
+    )
+    db.add(history)
+    db.flush()
+    return history
+
+
+def test_s0_history_skips_other_category_records(db):
+    """历史记录明确属于其他品类时不参与本任务的 S0.2 命中。"""
+    model = _seed(db, brand_code="ANKER", model_code="A1", category_name="power_bank")
+    clean_job_id = _seed_clean_row_with_url(
+        db, brand_raw="ANKER", item_name="充电宝",
+        item_id="H1", item_url="https://item.jd.com/H1.html",
+        platform="jd", month=202610, category_code="power_bank",
+    )
+    _seed_history_row(db, item_id="H1", model_id=model.id, category_code="smartwatch")
+    db.commit()
+
+    run_match(db, clean_job_id)
+
+    result = db.query(MatchResult).filter(MatchResult.clean_job_id == clean_job_id).first()
+    assert result is not None
+    assert result.match_status == "pending", f"期望 pending，实际 {result.match_status}"
+    assert result.model_id is None
+
+
+def test_s0_history_allows_records_without_category(db):
+    """历史记录未标注品类时仍按原有逻辑参与命中，避免误伤早期导入数据。"""
+    model = _seed(db, brand_code="ANKER", model_code="A1", category_name="power_bank")
+    clean_job_id = _seed_clean_row_with_url(
+        db, brand_raw="ANKER", item_name="充电宝",
+        item_id="H2", item_url="https://item.jd.com/H2.html",
+        platform="jd", month=202610, category_code="power_bank",
+    )
+    _seed_history_row(db, item_id="H2", model_id=model.id, category_code=None)
+    db.commit()
+
+    run_match(db, clean_job_id)
+
+    result = db.query(MatchResult).filter(MatchResult.clean_job_id == clean_job_id).first()
+    assert result is not None
+    assert result.match_status == "matched", f"期望 matched，实际 {result.match_status}"
+    assert result.model_id == model.id
+    assert result.match_source == "historical"

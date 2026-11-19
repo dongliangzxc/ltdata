@@ -3,7 +3,7 @@ import {
   Alert, Button, Col, Divider, Form, Image as AntImage, Input, InputNumber,
   Modal, Row, Select, Typography,
 } from 'antd'
-import { PlusOutlined } from '@ant-design/icons'
+import { PlusOutlined, ZoomInOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import {
   createModel,
@@ -80,6 +80,7 @@ export default function CreateModelModal({
   const [brandsLoading, setBrandsLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [brandModalOpen, setBrandModalOpen] = useState(false)
+  const [previewVisible, setPreviewVisible] = useState(false)
   const hasProductPreview = Boolean(productImage)
 
   const { data: extraFieldsData } = useRequest(() => listModelExtraFields().then(r => r.data))
@@ -351,9 +352,28 @@ export default function CreateModelModal({
                     background: '#fafafa',
                     border: '1px solid #f0f0f0',
                     borderRadius: 8,
+                    cursor: 'zoom-in',
                   }}
-                  preview={{ mask: '点击放大' }}
+                  preview={{
+                    mask: '点击放大',
+                    visible: previewVisible,
+                    onVisibleChange: setPreviewVisible,
+                  }}
                 />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 6 }}>
+                  <Button
+                    type="link"
+                    size="small"
+                    style={{ padding: 0 }}
+                    icon={<ZoomInOutlined />}
+                    onClick={() => setPreviewVisible(true)}
+                  >
+                    放大查看
+                  </Button>
+                  <a href={productImage ?? undefined} target="_blank" rel="noreferrer">
+                    新窗口打开原图
+                  </a>
+                </div>
                 {productName && (
                   <Text strong style={{ display: 'block', marginTop: 10 }}>{productName}</Text>
                 )}

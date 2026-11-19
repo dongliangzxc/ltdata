@@ -231,6 +231,7 @@ def url_mapping_confirm(
     inserted = 0
     updated = 0
     skipped = 0
+    duplicates = 0
     errors = []
     warnings = []
     payload_fields = payload.model_fields_set
@@ -292,7 +293,7 @@ def url_mapping_confirm(
         ))
 
     try:
-        inserted, updated = upsert_url_import_rows(db, mapping_rows, payload_fields)
+        inserted, updated, duplicates = upsert_url_import_rows(db, mapping_rows, payload_fields)
         if inserted > 0 or updated > 0:
             db.commit()
     except Exception:
@@ -314,7 +315,7 @@ def url_mapping_confirm(
         except Exception:
             db.rollback()
 
-    return {"inserted": inserted, "updated": updated, "skipped": skipped, "errors": errors, "warnings": warnings[:20]}
+    return {"inserted": inserted, "updated": updated, "duplicates": duplicates, "skipped": skipped, "errors": errors, "warnings": warnings[:20]}
 
 
 @router.post("/import")

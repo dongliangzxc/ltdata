@@ -38,9 +38,9 @@ def row(item_id="100058161923", **extra):
 def test_duplicate_retry_preserves_price_and_omitted_dimensions(db, confirm):
     rows = [row(), {**row(), "price": "198"}, {**row(), "price": None}]
     first = confirm(rows, data_year=2026, data_month=10)
-    assert (first["inserted"], first["updated"], first["errors"]) == (1, 2, [])
+    assert (first["inserted"], first["updated"], first["duplicates"], first["errors"]) == (1, 0, 2, [])
     second = confirm([{**row(), "price": None, "brand_code": "乔安"}])
-    assert (second["inserted"], second["updated"]) == (0, 1)
+    assert (second["inserted"], second["updated"], second["duplicates"]) == (0, 1, 0)
     db.expire_all()
     saved = db.query(ItemUrlMapping).one()
     assert saved.brand_code == "乔安"
@@ -93,7 +93,7 @@ def test_large_series_import_uses_bounded_reads_and_writes(db, confirm, monkeypa
         result = confirm(rows + rows[:50])
     finally:
         event.remove(db.get_bind(), "before_cursor_execute", capture)
-    assert (result["inserted"], result["updated"], result["errors"]) == (1050, 50, [])
+    assert (result["inserted"], result["updated"], result["duplicates"], result["errors"]) == (1050, 0, 50, [])
     assert db.query(ModelRecord).count() == 250
     assert db.query(BrandRecord).count() == db.query(BrandCategory).count() == 1
     assert db.query(ItemUrlMapping).count() == 1050
@@ -165,7 +165,7 @@ def test_empty_category_does_not_clear_existing_mapping_category(db):
     db.commit()
     values = dict(platform="jd", item_id="1", item_url="url", brand_code="小米", model_id=None,
                   category_code="", price=None, source="url_import", data_year=None, data_month=None)
-    assert importer.upsert_url_import_rows(db, [values], set()) == (0, 1)
+    assert importer.upsert_url_import_rows(db, [values], set()) == (0, 1, 0)
     db.commit()
     db.expire_all()
     assert db.query(ItemUrlMapping).one().category_code == "camera"
@@ -180,7 +180,32 @@ def test_mysql_collation_deduplicates_case_and_accent_variants():
     )
     values = dict(platform="jd", item_id="SKU-café", item_url="url", brand_code="小米", model_id=None,
                   category_code="camera", price=99, source="url_import", data_year=None, data_month=None)
-    assert importer.upsert_url_import_rows(fake, [values, {**values, "item_id": "sku-CAFE", "price": None}], set()) == (1, 1)
+    assert importer.upsert_url_import_rows(fake, [values, {**values, "item_id": "sku-CAFE", "price": None}], set()) == (1, 0, 1)
     parameters = statements[0].compile(dialect=mysql.dialect()).params
     assert parameters["item_id_m0"] == "sku-CAFE" and parameters["price_m0"] == 99
     assert "item_id_m1" not in parameters
+
+
+def test_import_counts_reconcile_new_existing_duplicates_and_invalid_rows(db, confirm):
+    db.add(ItemUrlMapping(platform="jd", item_id="1", price=99, category_code="camera"))
+    db.commit()
+    rows = [
+        row("1"), {**row("1"), "price": "198"},
+        row("2"), {**row("2"), "item_url": "https://item.jd.com/2.html?from=share"},
+        {**row("2"), "item_url": "https://detail.tmall.com/item.htm?id=2"},
+        {**row("2"), "item_url": "https://detail.tmall.com/item.htm?id=2&from=share"},
+        {**row("3"), "item_url": None},
+    ]
+    first = confirm(rows)
+    assert (first["inserted"], first["updated"], first["duplicates"], len(first["errors"])) == (2, 1, 3, 1)
+    assert first["inserted"] + first["updated"] + first["duplicates"] + len(first["errors"]) == len(rows)
+    assert db.query(ItemUrlMapping).count() == 3
+    second = confirm(rows)
+    assert (second["inserted"], second["updated"], second["duplicates"], len(second["errors"])) == (0, 3, 3, 1)
+    assert db.query(ItemUrlMapping).count() == 3
+
+
+def test_empty_import_returns_zero_for_all_three_counts(confirm):
+    result = confirm([])
+    assert (result["inserted"], result["updated"], result["duplicates"]) == (0, 0, 0)
+    assert result["errors"] == []

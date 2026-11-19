@@ -349,7 +349,8 @@ export default function ImportMappingModal({
                 {typeof result.models_inserted === 'number' && <Text>新增型号：{result.models_inserted} 条</Text>}
                 {typeof result.models_updated === 'number' && <Text>更新型号：{result.models_updated} 条</Text>}
                 {typeof result.specs_inserted === 'number' && <Text>导入规格：{result.specs_inserted} 条</Text>}
-                {typeof result.updated === 'number' && <Text>更新：{result.updated} 条</Text>}
+                {typeof result.updated === 'number' && <Text>{_module === 'url' ? '实际更新' : '更新'}：{result.updated} 条{_module === 'url' && '（去重后的已有链接）'}</Text>}
+                {typeof result.duplicates === 'number' && <Text>文件内去重：{result.duplicates} 条</Text>}
                 {typeof result.skipped === 'number' && <Text>跳过：{result.skipped} 条</Text>}
                 {warnings.length > 0 && <Text type="secondary">提示：{warnings.length} 条</Text>}
                 {errors.length > 0 && <Text type="warning">异常：{errors.length} 条</Text>}

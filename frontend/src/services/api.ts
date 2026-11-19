@@ -2305,7 +2305,7 @@ export const confirmUrlMappingImport = (payload: {
   ignore_columns: string[]
   category_code: string
   save_template_name?: string
-}) => api.post<{ inserted: number; updated: number; skipped: number; errors: string[] }>(
+}) => api.post<{ inserted: number; updated: number; duplicates: number; skipped: number; errors: string[] }>(
   '/url-mappings/confirm', payload
 )
 

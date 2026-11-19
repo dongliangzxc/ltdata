@@ -144,9 +144,14 @@ def upsert_url_import_rows(db, rows, payload_fields):
 
     The unique constraint resolves conflicts at write time, including another
     transaction inserting a URL after our count query. Never commit here.
+
+    Returns ``(inserted, updated, duplicates)``. ``updated`` only counts unique
+    (platform, item_id) keys that already existed; rows duplicated inside the
+    same file are reported separately so the UI does not show an inflated
+    update count.
     """
     if not rows:
-        return 0, 0
+        return 0, 0, 0
     table = ItemUrlMapping.__table__
     unique_rows = {}
     duplicate_count = 0
@@ -161,7 +166,7 @@ def upsert_url_import_rows(db, rows, payload_fields):
             row["item_url"] = previous["item_url"]
         unique_rows[key] = row
 
-    inserted, updated = 0, duplicate_count
+    inserted, updated, duplicates = 0, 0, duplicate_count
     values = list(unique_rows.values())
     dialect = db.get_bind().dialect.name
     insert = mysql_insert if dialect == "mysql" else sqlite_insert
@@ -190,4 +195,4 @@ def upsert_url_import_rows(db, rows, payload_fields):
         else:
             stmt = stmt.on_conflict_do_update(index_elements=["platform", "item_id"], set_=updates)
         db.execute(stmt)
-    return inserted, updated
+    return inserted, updated, duplicates

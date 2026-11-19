@@ -227,7 +227,7 @@ def test_supplement_template_download_contains_fillable_examples_and_instruction
     assert data['C2'].data_type == data['D2'].data_type == data['E2'].data_type == 'n'
     assert data.freeze_panes == 'A2'
     notes = list(workbook['填写说明'].values)
-    assert {row[0] for row in notes if row[2] == '是'} == clean.SUPPLEMENT_REQUIRED_FIELDS
+    assert {row[0] for row in notes if row[2] == '是'} == {'item_id', 'item_name', 'sales_qty', 'price'}
     assert any(row[0] == '任务范围' and '品类、平台、月份' in row[3] for row in notes)
     assert any(row[0] == '使用方法' and '替换' in row[3] for row in notes)
 
@@ -247,10 +247,14 @@ def test_supplement_template_has_chinese_comments_on_every_header(client):
         assert f'示例：{data.cell(2, index).value}' in header.comment.text
         assert header.comment.author == '洛图数据平台'
     assert '总销售金额' in data['D1'].comment.text
+    assert '选填' in data['D1'].comment.text
+    assert '保留此列' in data['D1'].comment.text
+    assert '不自动按销量×单价补算' in data['D1'].comment.text
     assert '单件商品' in data['E1'].comment.text
 
 
-def test_downloaded_supplement_template_uploads_and_cleans_without_saved_mapping(client):
+@pytest.mark.parametrize('blank_sales_amount', [False, True])
+def test_downloaded_supplement_template_uploads_and_cleans_without_saved_mapping(client, blank_sales_amount):
     with client.Session() as session:
         job_id, _, _ = _seed_task(session)
         # A similar saved mapping must not corrupt the standard example fields.
@@ -263,9 +267,17 @@ def test_downloaded_supplement_template_uploads_and_cleans_without_saved_mapping
         session.commit()
         old = _outputs(session, job_id)
     template = client.get('/api/clean/supplement-template')
+    content = template.content
+    if blank_sales_amount:
+        workbook = load_workbook(io.BytesIO(content))
+        workbook['补充数据']['D2'] = None
+        workbook['补充数据']['D3'] = None
+        buffer = io.BytesIO()
+        workbook.save(buffer)
+        content = buffer.getvalue()
     response = client.post(
         f'/api/clean/tasks/{job_id}/supplement',
-        files={'file': ('补充数据上传示例.xlsx', template.content, template.headers['content-type'])},
+        files={'file': ('补充数据上传示例.xlsx', content, template.headers['content-type'])},
     )
     assert response.status_code == 200, response.text
     result = response.json()['data']
@@ -278,10 +290,19 @@ def test_downloaded_supplement_template_uploads_and_cleans_without_saved_mapping
             ('EXAMPLE-001', 202609, 'jd', 'laptop'), ('EXAMPLE-002', 202609, 'jd', 'laptop'),
         ]
         assert float(rows[0].price) == 129 and rows[0].sales_qty == 10
+        if blank_sales_amount:
+            assert all(row.sales_amount is None for row in rows)
         assert rows[0].brand_raw == '示例品牌' and rows[0].shop_name == '示例店铺'
         assert rows[0].item_url == 'https://example.com/items/EXAMPLE-001'
         assert queue.execute_next_run(session)
         assert session.get(CleanJobRecord, job_id).status == 'reviewing'
+        if blank_sales_amount:
+            cleaned = session.query(CleanedDataRecord).filter(
+                CleanedDataRecord.clean_job_id == job_id,
+                CleanedDataRecord.raw_data_id.in_([row.id for row in rows]),
+            ).all()
+            assert len(cleaned) == 2
+            assert all(row.sales_amount is None and row.corrected_sales_amount is None and row.calc_price is None for row in cleaned)
         assert session.query(MatchResult).filter_by(clean_job_id=job_id).count() == 3
         for key, previous in old.items():
             assert _outputs(session, job_id)[key][:len(previous)] == previous

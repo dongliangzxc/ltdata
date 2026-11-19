@@ -26,6 +26,7 @@ from app.models.schemas import (
 from app.utils.url_utils import extract_item_id
 from app.services.import_helper import save_tmp_file, read_columns, find_best_template, col_fingerprint
 from app.services.url_mapping_importer import ImportModelLookup, upsert_url_import_rows
+from app.services.catalog_import_lock import catalog_import_slot
 
 router = APIRouter(prefix="/api/url-mappings", tags=["url-mappings"])
 
@@ -191,7 +192,7 @@ async def url_mapping_headers(
     }
 
 
-@router.post("/confirm")
+@router.post("/confirm", dependencies=[Depends(catalog_import_slot)])
 def url_mapping_confirm(
     payload: UrlMappingConfirmPayload,
     db: Session = Depends(get_db),
@@ -318,7 +319,7 @@ def url_mapping_confirm(
     return {"inserted": inserted, "updated": updated, "duplicates": duplicates, "skipped": skipped, "errors": errors, "warnings": warnings[:20]}
 
 
-@router.post("/import")
+@router.post("/import", dependencies=[Depends(catalog_import_slot)])
 def import_url_mappings(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),

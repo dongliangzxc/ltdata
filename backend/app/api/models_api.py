@@ -27,6 +27,7 @@ from app.models.schemas import (
     PaginatedResponse, Category, User,
 )
 from app.services.import_helper import save_tmp_file, read_columns, find_best_template, col_fingerprint
+from app.services.catalog_import_lock import catalog_import_slot
 
 router = APIRouter(prefix="/api/models", tags=["models"])
 
@@ -167,7 +168,7 @@ async def models_headers(
     }
 
 
-@router.post("/confirm")
+@router.post("/confirm", dependencies=[Depends(catalog_import_slot)])
 def models_confirm(
     payload: ModelsConfirmPayload,
     db: Session = Depends(get_db),
@@ -668,7 +669,7 @@ async def preview_models(file: UploadFile = File(...)):
     return _parse_models_file(content)
 
 
-@router.post("/import", response_model=dict)
+@router.post("/import", response_model=dict, dependencies=[Depends(catalog_import_slot)])
 async def import_models(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),

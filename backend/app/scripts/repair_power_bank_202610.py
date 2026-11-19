@@ -69,12 +69,38 @@ def _model_indexes(db, category_code: str):
     return valid, by_code, by_name
 
 
+_PENDING_IDENTITY_VALUES = {"待补", "待补型号"}
+
+
+def _is_pending_identity_value(value: str | None) -> bool:
+    return (value or "").strip().upper() in _PENDING_IDENTITY_VALUES
+
+
+def _brand_level_empty_models(valid_models: list[ModelRecord]) -> dict[str, ModelRecord]:
+    """品牌+品类下只有一条 active 型号且型号码为空时，可作为该品牌的无型号兜底。
+
+    若该品牌还有其它真实型号，则不猜，避免把不同商品都归到同一条空型号。
+    """
+    grouped: dict[str, list[ModelRecord]] = defaultdict(list)
+    for model in valid_models:
+        grouped[(model.brand_code or "").strip()].append(model)
+    return {
+        brand: models[0]
+        for brand, models in grouped.items()
+        if len(models) == 1 and not (models[0].model_code or "").strip()
+    }
+
+
 def _resolve_history_model(history: HistoricalMapping, by_code, by_name) -> tuple[ModelRecord | None, str]:
     brand = _effective_brand_code(history.brand_code_raw, history.brand_raw)
     if _is_unknown_brand(brand):
         return None, "missing_brand"
     model_code = _usable_identity_value(history.model_code_raw) or _usable_identity_value(history.model_code)
     model_name = _usable_identity_value(history.model_text)
+    if _is_pending_identity_value(model_code):
+        model_code = None
+    if _is_pending_identity_value(model_name):
+        model_name = None
     key = model_code or model_name
     if not key:
         return None, "missing_model_identity"
@@ -92,6 +118,7 @@ def _resolve_history_model(history: HistoricalMapping, by_code, by_name) -> tupl
 def plan_history_links(db, *, category_code: str, month: str, limit: int | None = None):
     valid_models, by_code, by_name = _model_indexes(db, category_code)
     valid_ids = {model.id for model in valid_models}
+    brand_level_models = _brand_level_empty_models(valid_models)
     rows = (
         db.query(HistoricalMapping)
         .filter(
@@ -112,6 +139,12 @@ def plan_history_links(db, *, category_code: str, month: str, limit: int | None 
             reasons["already_linked"] += 1
             continue
         model, reason = _resolve_history_model(history, by_code, by_name)
+        if model is None and reason == "missing_model_identity":
+            brand = (_effective_brand_code(history.brand_code_raw, history.brand_raw) or "").strip()
+            fallback = brand_level_models.get(brand)
+            if fallback is not None:
+                model = fallback
+                reason = "brand_level_empty_model"
         reasons[reason] += 1
         if model is None:
             continue

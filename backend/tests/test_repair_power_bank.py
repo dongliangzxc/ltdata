@@ -137,3 +137,30 @@ def test_plan_history_links_by_model_name_when_code_is_empty(db):
     plan = plan_history_links(db, category_code="power_bank", month="2026-10")
 
     assert plan["links"] == {history.id: model.id}
+
+
+def test_plan_history_links_falls_back_to_brand_level_empty_model(db):
+    model = _model(db, brand="图欧索", code=None, name="无型号")
+    empty_history = _history(db, brand="图欧索")
+    pending_history = _history(db, brand="图欧索", code="待补", name="待补")
+    db.commit()
+
+    plan = plan_history_links(db, category_code="power_bank", month="2026-10")
+
+    assert plan["links"] == {
+        empty_history.id: model.id,
+        pending_history.id: model.id,
+    }
+    assert plan["reasons"]["brand_level_empty_model"] == 2
+
+
+def test_plan_history_links_skips_brand_fallback_when_brand_has_other_models(db):
+    _model(db, brand="图欧索", code=None, name="无型号")
+    _model(db, brand="图欧索", code="A1")
+    history = _history(db, brand="图欧索")
+    db.commit()
+
+    plan = plan_history_links(db, category_code="power_bank", month="2026-10")
+
+    assert plan["links"] == {}
+    assert plan["reasons"]["missing_model_identity"] == 1

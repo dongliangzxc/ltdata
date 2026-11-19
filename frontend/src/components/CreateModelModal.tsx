@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Alert, Button, Col, Divider, Form, Input, InputNumber,
+  Alert, Button, Col, Divider, Form, Image as AntImage, Input, InputNumber,
   Modal, Row, Select, Typography,
 } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
@@ -50,6 +50,10 @@ type CreateModelModalProps = {
   categoryOptions?: CategoryOption[]
   metadataSpecs?: MatchMetadataSpec[]
   brandSuggestion?: string | null
+  productImage?: string | null
+  productName?: string | null
+  productBrand?: string | null
+  productUrl?: string | null
 }
 
 const trimOrNull = (value?: string | null) => {
@@ -66,12 +70,17 @@ export default function CreateModelModal({
   categoryOptions = [],
   metadataSpecs = [],
   brandSuggestion,
+  productImage,
+  productName,
+  productBrand,
+  productUrl,
 }: CreateModelModalProps) {
   const [form] = Form.useForm<CreateModelFormValues>()
   const [brands, setBrands] = useState<BrandItem[]>([])
   const [brandsLoading, setBrandsLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [brandModalOpen, setBrandModalOpen] = useState(false)
+  const hasProductPreview = Boolean(productImage)
 
   const { data: extraFieldsData } = useRequest(() => listModelExtraFields().then(r => r.data))
   const extraFieldsByCategory = useMemo(() => {
@@ -172,10 +181,13 @@ export default function CreateModelModal({
         onCancel={() => { form.resetFields(); onCancel() }}
         okText="创建"
         cancelText="取消"
-        width={720}
+        width={hasProductPreview ? 960 : 720}
+        maskClosable={false}
         destroyOnClose
       >
-        <Form form={form} layout="vertical" style={{ marginTop: 8 }}>
+        <Row gutter={24} wrap={false} align="top">
+          <Col flex="auto" style={{ minWidth: 0 }}>
+            <Form form={form} layout="vertical" style={{ marginTop: 8 }}>
           <Divider orientation="left" plain style={{ fontSize: 13, color: '#666' }}>品牌信息</Divider>
           {brandSuggestion && (
             <Alert
@@ -322,7 +334,43 @@ export default function CreateModelModal({
           </Row>
           <Form.Item label="网址" name="url"><Input placeholder="https://..." /></Form.Item>
           <Form.Item label="操作人" name="operator"><Input placeholder="操作者" /></Form.Item>
-        </Form>
+            </Form>
+          </Col>
+          {hasProductPreview && (
+            <Col flex="0 0 300px">
+              <div style={{ position: 'sticky', top: 0, paddingTop: 8 }}>
+                <Text type="secondary" style={{ fontSize: 12 }}>商品图片</Text>
+                <AntImage
+                  src={productImage ?? undefined}
+                  width="100%"
+                  style={{
+                    display: 'block',
+                    marginTop: 6,
+                    maxHeight: 360,
+                    objectFit: 'contain',
+                    background: '#fafafa',
+                    border: '1px solid #f0f0f0',
+                    borderRadius: 8,
+                  }}
+                  preview={{ mask: '点击放大' }}
+                />
+                {productName && (
+                  <Text strong style={{ display: 'block', marginTop: 10 }}>{productName}</Text>
+                )}
+                {productBrand && (
+                  <Text type="secondary" style={{ display: 'block', marginTop: 4, fontSize: 12 }}>
+                    原始品牌：{productBrand}
+                  </Text>
+                )}
+                {productUrl && (
+                  <a href={productUrl} target="_blank" rel="noreferrer" style={{ display: 'inline-block', marginTop: 6 }}>
+                    打开商品链接
+                  </a>
+                )}
+              </div>
+            </Col>
+          )}
+        </Row>
       </Modal>
 
       <CreateBrandModal

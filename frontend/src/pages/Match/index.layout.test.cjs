@@ -225,3 +225,6 @@ assert.equal(source.indexOf('const reviewedColumns = ['), -1, 'Match page should
 assert.notEqual(source.indexOf('title="全部销量"'), -1, 'summary panel should show total sales quantity')
 assert.notEqual(source.indexOf('summaryView?.total_sales_qty'), -1, 'total sales quantity should come from filtered summary')
 assert.match(source, /const preciseMatchedCount = summaryView\?\.precise_matched/, 'precise matched count should follow filtered summary')
+
+// 新建型号时展示当前商品图片，避免关闭弹窗查看
+assert.match(source, /productImage=\{createModelContext === 'batch' \? null : reviewDetail\?\.item_image \?\? null\}/, 'create model modal should receive current item image')

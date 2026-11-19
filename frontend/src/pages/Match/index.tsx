@@ -2745,6 +2745,10 @@ export default function MatchPage() {
         defaultCategoryName={createModelContext === 'batch' ? null : reviewDetail?.category_name ?? null}
         metadataSpecs={createModelContext === 'batch' ? [] : reviewDetail?.metadata_specs ?? []}
         brandSuggestion={createModelContext === 'batch' ? null : reviewDetail?.brand_raw ?? null}
+        productImage={createModelContext === 'batch' ? null : reviewDetail?.item_image ?? null}
+        productName={createModelContext === 'batch' ? null : reviewDetail?.item_name ?? null}
+        productBrand={createModelContext === 'batch' ? null : reviewDetail?.brand_raw ?? null}
+        productUrl={createModelContext === 'batch' ? null : reviewDetail?.item_url ?? null}
       />
 
       <ProgressModal

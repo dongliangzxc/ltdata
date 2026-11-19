@@ -3,6 +3,7 @@ import io
 from pathlib import Path
 
 import pytest
+from openpyxl import load_workbook
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -206,6 +207,76 @@ def _submit(client, job_id, template_id, rows='new-1,新增数据,2,200,100,2026
     return client.post(f'/api/clean/tasks/{job_id}/supplement',
         files={'file': ('supplement.csv', content.encode('utf-8'), 'text/csv')},
         data={'template_id': str(template_id)})
+
+
+def test_supplement_template_download_contains_fillable_examples_and_instructions(client):
+    from urllib.parse import unquote
+
+    response = client.get('/api/clean/supplement-template')
+    assert response.status_code == 200
+    assert 'spreadsheetml.sheet' in response.headers['content-type']
+    assert '补充数据上传示例.xlsx' in unquote(response.headers['content-disposition'])
+    workbook = load_workbook(io.BytesIO(response.content))
+    assert workbook.sheetnames == ['补充数据', '填写说明']
+    data = workbook.worksheets[0]
+    assert list(next(data.values)) == [
+        'item_id', 'item_name', 'sales_qty', 'sales_amount', 'price', 'brand_raw', 'shop_name', 'item_url',
+    ]
+    assert data.max_row == 3
+    assert data['A2'].data_type == 's' and data['A2'].number_format == '@'
+    assert data['C2'].data_type == data['D2'].data_type == data['E2'].data_type == 'n'
+    assert data.freeze_panes == 'A2'
+    notes = list(workbook['填写说明'].values)
+    assert {row[0] for row in notes if row[2] == '是'} == clean.SUPPLEMENT_REQUIRED_FIELDS
+    assert any(row[0] == '任务范围' and '品类、平台、月份' in row[3] for row in notes)
+    assert any(row[0] == '使用方法' and '替换' in row[3] for row in notes)
+
+
+def test_downloaded_supplement_template_uploads_and_cleans_without_saved_mapping(client):
+    with client.Session() as session:
+        job_id, _, _ = _seed_task(session)
+        # A similar saved mapping must not corrupt the standard example fields.
+        headers = ['item_id', 'item_name', 'sales_qty', 'sales_amount', 'price', 'brand_raw', 'shop_name', 'item_url']
+        from app.services.import_helper import col_fingerprint
+        session.add(ColumnTemplate(
+            name='旧标准列模板', module='sales', col_fingerprint=col_fingerprint(headers),
+            mapping={header: '__ext__' for header in headers}, ignore_columns=[], is_builtin=0,
+        ))
+        session.commit()
+        old = _outputs(session, job_id)
+    template = client.get('/api/clean/supplement-template')
+    response = client.post(
+        f'/api/clean/tasks/{job_id}/supplement',
+        files={'file': ('补充数据上传示例.xlsx', template.content, template.headers['content-type'])},
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()['data']
+    assert result['inserted_rows'] == result['appended_items'] == 2
+    assert result['duplicate_rows'] == 0
+    assert result['match_status'] == 'queued'
+    with client.Session() as session:
+        rows = session.query(RawDataRecord).filter_by(file_id=result['file_id']).order_by(RawDataRecord.id).all()
+        assert [(row.item_id, row.month, row.platform, row.source_category_code) for row in rows] == [
+            ('EXAMPLE-001', 202609, 'jd', 'laptop'), ('EXAMPLE-002', 202609, 'jd', 'laptop'),
+        ]
+        assert float(rows[0].price) == 129 and rows[0].sales_qty == 10
+        assert rows[0].brand_raw == '示例品牌' and rows[0].shop_name == '示例店铺'
+        assert rows[0].item_url == 'https://example.com/items/EXAMPLE-001'
+        assert queue.execute_next_run(session)
+        assert session.get(CleanJobRecord, job_id).status == 'reviewing'
+        assert session.query(MatchResult).filter_by(clean_job_id=job_id).count() == 3
+        for key, previous in old.items():
+            assert _outputs(session, job_id)[key][:len(previous)] == previous
+
+
+def test_supplement_template_requires_authentication(client):
+    from fastapi import HTTPException
+
+    def unauthenticated():
+        raise HTTPException(401, '请先登录')
+
+    client.app.dependency_overrides[get_current_user] = unauthenticated
+    assert client.get('/api/clean/supplement-template').status_code == 401
 
 
 def _outputs(session, job_id):

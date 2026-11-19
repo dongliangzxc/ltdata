@@ -6,7 +6,7 @@ import {
 } from 'antd'
 import type { UploadFile } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { EyeOutlined, AimOutlined, CheckCircleFilled, DeleteOutlined, LineChartOutlined, FileSearchOutlined, TagsOutlined, InboxOutlined } from '@ant-design/icons'
+import { EyeOutlined, AimOutlined, CheckCircleFilled, DeleteOutlined, LineChartOutlined, FileSearchOutlined, TagsOutlined, InboxOutlined, UploadOutlined, DownloadOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
@@ -18,6 +18,7 @@ import {
   upsertMonthlyCleanTask,
   listExchangeRateOptions,
   supplementCleanTask,
+  downloadSupplementTemplate,
   getCleanJobProgress,
   retryCleanTask,
 } from '../../services/api'
@@ -31,6 +32,8 @@ import { finishedCleanJobIds, formatCleanProgress, mergeCleanProgress, processin
 import { formatCleanAccounting, formatDuplicateBasis } from './cleanAccounting'
 import { FilterReason } from './FilterReason'
 import { supplementFeedback } from './supplementFeedback'
+import { monthlySupplementTarget } from './supplementTarget'
+import type { SupplementTarget } from './supplementTarget'
 
 const { Text } = Typography
 
@@ -264,6 +267,7 @@ const getQueueAction = (row: CleanMonthlyPoolItem) => {
 
 const monthlyQueueColumns = (
   onUpsert: (row: CleanMonthlyPoolItem) => void,
+  onSupplement: (target: SupplementTarget) => void,
   upsertingRowKey: string | null,
   operationDisabled: boolean,
 ): ColumnsType<CleanMonthlyPoolItem> => [
@@ -288,22 +292,34 @@ const monthlyQueueColumns = (
     render: formatNumber,
   },
   {
-    title: '操作', width: 120, fixed: 'right',
+    title: '操作', width: 240, fixed: 'right',
     render: (_: unknown, row) => {
       const action = getQueueAction(row)
       const rowKey = getMonthlyQueueRowKey(row)
       const isCurrentRowUpserting = upsertingRowKey === rowKey
+      const supplementTarget = monthlySupplementTarget(row)
       return (
-        <Button
-          type="primary"
-          size="small"
-          title={action.action === 'recleaned' ? '按最新分发结果重新清洗，会移出旧批次命中数据' : undefined}
-          disabled={action.disabled || operationDisabled || (!!upsertingRowKey && !isCurrentRowUpserting)}
-          loading={isCurrentRowUpserting}
-          onClick={() => onUpsert(row)}
-        >
-          {action.label}
-        </Button>
+        <Space size={8}>
+          <Button
+            type="primary"
+            size="small"
+            title={action.action === 'recleaned' ? '按最新分发结果重新清洗，会移出旧批次命中数据' : undefined}
+            disabled={action.disabled || operationDisabled || (!!upsertingRowKey && !isCurrentRowUpserting)}
+            loading={isCurrentRowUpserting}
+            onClick={() => onUpsert(row)}
+          >
+            {action.label}
+          </Button>
+          <Button
+            size="small"
+            icon={<UploadOutlined />}
+            title={supplementTarget ? '上传新增数据，追加到本行已有任务' : '请先完成本行清洗任务，失败任务请先重试'}
+            disabled={!supplementTarget || operationDisabled || !!upsertingRowKey}
+            onClick={() => supplementTarget && onSupplement(supplementTarget)}
+          >
+            补充数据
+          </Button>
+        </Space>
       )
     },
   },
@@ -499,10 +515,11 @@ export default function CleanPage() {
   const [upsertingRowKey, setUpsertingRowKey] = useState<string | null>(null)
   const [selectedMonthlyRowKeys, setSelectedMonthlyRowKeys] = useState<Key[]>([])
   const [batchUpserting, setBatchUpserting] = useState(false)
-  const [supplementJob, setSupplementJob] = useState<CleanJobItem | null>(null)
+  const [supplementJob, setSupplementJob] = useState<SupplementTarget | null>(null)
   const [supplementFile, setSupplementFile] = useState<File | null>(null)
   const [supplementFileList, setSupplementFileList] = useState<UploadFile[]>([])
   const [supplementing, setSupplementing] = useState(false)
+  const [downloadingSupplementTemplate, setDownloadingSupplementTemplate] = useState(false)
   const [supplementResult, setSupplementResult] = useState<SupplementCleanTaskResult | null>(null)
 
   const requestParams = useMemo(() => cleanParams(filters), [filters])
@@ -642,6 +659,32 @@ export default function CleanPage() {
     setSupplementFile(null)
     setSupplementFileList([])
     setSupplementResult(null)
+  }
+
+  const openSupplement = (target: SupplementTarget) => {
+    setSupplementFile(null)
+    setSupplementFileList([])
+    setSupplementResult(null)
+    setSupplementJob(target)
+  }
+
+  const handleDownloadSupplementTemplate = async () => {
+    setDownloadingSupplementTemplate(true)
+    try {
+      const response = await downloadSupplementTemplate()
+      const url = URL.createObjectURL(response.data)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = '补充数据上传示例.xlsx'
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+    } catch {
+      // 错误信息由请求拦截器统一提示，可再次点击下载
+    } finally {
+      setDownloadingSupplementTemplate(false)
+    }
   }
 
   const handleSupplement = async () => {
@@ -817,7 +860,7 @@ export default function CleanPage() {
         ) : (
           <Table
             dataSource={monthlyPool}
-            columns={monthlyQueueColumns(handleUpsertMonthlyTask, upsertingRowKey, batchUpserting)}
+            columns={monthlyQueueColumns(handleUpsertMonthlyTask, openSupplement, upsertingRowKey, batchUpserting || supplementing)}
             rowKey={getMonthlyQueueRowKey}
             rowSelection={monthlyRowSelection}
             size="small"
@@ -887,7 +930,7 @@ export default function CleanPage() {
 
       <Modal
         title={supplementJob
-          ? `补充数据 · ${supplementJob.task_name || supplementJob.scope_desc || `任务 #${supplementJob.id}`}`
+          ? `补充数据 · ${supplementJob.task_name || `任务 #${supplementJob.id}`}`
           : '补充数据'}
         open={!!supplementJob}
         onCancel={closeSupplement}
@@ -907,6 +950,16 @@ export default function CleanPage() {
               message="只补充新增数据"
               description={`任务范围：${supplementJob.category_code || '-'} / ${formatPlatform(supplementJob.platform)} / ${supplementJob.month ?? '-'}。文件上传、校验和入库后提交后台队列，只清洗/匹配新增行（使用当前历史库、映射库和规则），保留已有处理结果。`}
             />
+            <Space align="start">
+              <Button
+                icon={<DownloadOutlined />}
+                loading={downloadingSupplementTemplate}
+                onClick={handleDownloadSupplementTemplate}
+              >
+                下载示例
+              </Button>
+              <Text type="secondary">含两行示例和字段说明；替换示例数据、保留表头后即可上传。品类、平台、月份沿用当前任务。</Text>
+            </Space>
             <Upload.Dragger
               accept=".xlsx,.xls,.csv"
               maxCount={1}
@@ -925,7 +978,7 @@ export default function CleanPage() {
             >
               <p className="ant-upload-drag-icon"><InboxOutlined /></p>
               <p className="ant-upload-text">点击或拖拽文件到这里</p>
-              <p className="ant-upload-hint">支持 .xlsx / .xls / .csv；列名需与原始上传模板一致，系统会自动套用模板</p>
+              <p className="ant-upload-hint">支持 .xlsx / .xls / .csv；可下载示例填写，或沿用系统已有的上传列模板</p>
             </Upload.Dragger>
             {supplementResult && (
               <>

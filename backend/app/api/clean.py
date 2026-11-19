@@ -1,4 +1,5 @@
 from datetime import datetime
+from io import BytesIO
 import logging
 import re
 import shutil
@@ -9,7 +10,9 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import Response
 from sqlalchemy import String, and_, case, func, literal, or_, select
 from sqlalchemy.orm import Session, aliased
 from pydantic import BaseModel
@@ -950,6 +953,67 @@ def retry_clean_task(
 SUPPLEMENT_REQUIRED_FIELDS = {"item_id", "item_name", "sales_qty", "sales_amount", "price"}
 
 
+@router.get("/supplement-template")
+def download_supplement_template(current_user: User = Depends(get_current_user)):
+    """补充上传专用示例：首张表可直接解析，第二张表说明字段和任务归属。"""
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    workbook = Workbook()
+    data = workbook.active
+    data.title = "补充数据"
+    data.append(["item_id", "item_name", "sales_qty", "sales_amount", "price", "brand_raw", "shop_name", "item_url"])
+    data.append(["EXAMPLE-001", "示例商品A（请替换）", 10, 1290, 129, "示例品牌", "示例店铺", "https://example.com/items/EXAMPLE-001"])
+    data.append(["EXAMPLE-002", "示例商品B（请替换）", 5, 995, 199, "示例品牌", "示例店铺", "https://example.com/items/EXAMPLE-002"])
+    for row in data.iter_rows(min_row=2):
+        row[0].number_format = "@"
+        row[2].number_format = "0"
+        row[3].number_format = row[4].number_format = "0.00"
+    for column, width in zip("ABCDEFGH", [24, 36, 16, 18, 16, 22, 26, 58]):
+        data.column_dimensions[column].width = width
+    data.auto_filter.ref = data.dimensions
+
+    notes = workbook.create_sheet("填写说明")
+    notes.append(["表头（保持不变）", "中文含义", "是否必填", "填写要求"])
+    for values in [
+        ["item_id", "商品ID", "是", "按文本填写，保留前导零和完整长数字。"],
+        ["item_name", "商品名称", "是", "填写商品标题。"],
+        ["sales_qty", "销量", "是", "填写整数，不带单位。"],
+        ["sales_amount", "销售额", "是", "填写数字；海外数据填写任务国家对应币种的原币金额。"],
+        ["price", "单价", "是", "填写数字，不带货币符号；币种同销售额。"],
+        ["brand_raw", "原始品牌", "否", "建议填写，便于品牌识别。"],
+        ["shop_name", "店铺名称", "否", "建议填写商品所属店铺。"],
+        ["item_url", "商品链接", "否", "建议填写完整真实链接，便于历史库和映射库匹配。"],
+        ["使用方法", "", "", "删除或替换首张表的两行示例数据，保留第一行英文表头；每行填写一个商品。"],
+        ["任务范围", "", "", "无需填写品类、平台、月份；系统统一使用点击「补充数据」所在任务的范围。"],
+        ["国家与币种", "", "", "当前弹窗不选择国家；优先沿用任务唯一国家，否则尝试从文件名识别，仍无法识别时按中国处理。"],
+        ["重复处理", "", "", "同一国家、平台、月份、商品ID的重复行会跳过，不覆盖已有数据；只清洗匹配新增行。"],
+        ["提交后", "", "", "文件接收后进入后台队列，可在任务列表查看进度；处理失败请重试，无需重复上传。"],
+    ]:
+        notes.append(values)
+    for column, width in zip("ABCD", [26, 18, 14, 90]):
+        notes.column_dimensions[column].width = width
+    for row in notes.iter_rows(min_row=2):
+        notes.row_dimensions[row[0].row].height = 44
+        for cell in row:
+            cell.alignment = Alignment(vertical="center", wrap_text=True)
+    for sheet in workbook:
+        sheet.freeze_panes = "A2"
+        sheet.row_dimensions[1].height = 28
+        for cell in sheet[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="1677FF")
+            cell.alignment = Alignment(vertical="center")
+    buffer = BytesIO()
+    workbook.save(buffer)
+    filename = quote("补充数据上传示例.xlsx")
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
+    )
+
+
 def _int_scope_list(values) -> list[int]:
     parsed: list[int] = []
     if not isinstance(values, list):
@@ -971,13 +1035,18 @@ def _resolve_supplement_mapping(db: Session, columns: list, template_id: int | N
             raise HTTPException(status_code=404, detail="列映射模板不存在")
         return dict(template.mapping or {}), list(template.ignore_columns or [])
 
+    standard_fields = set(REQUIRED_FIELDS) | {
+        "brand_raw", "brand", "shop_name", "item_url", "ref_price", "item_image", "week",
+    }
+    # The downloadable example must work even when a saved, similar template
+    # remaps standard columns. Explicit template_id above remains authoritative.
+    if SUPPLEMENT_REQUIRED_FIELDS.issubset(columns):
+        return {column: column for column in columns if column in standard_fields}, []
+
     best_template, score = _find_best_template(columns, db)
     if best_template and score >= 60:
         return dict(best_template.mapping or {}), list(best_template.ignore_columns or [])
 
-    standard_fields = set(REQUIRED_FIELDS) | {
-        "brand_raw", "brand", "shop_name", "item_url", "ref_price", "item_image", "week",
-    }
     return {column: column for column in columns if column in standard_fields}, []
 
 

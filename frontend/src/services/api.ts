@@ -557,6 +557,9 @@ export const getCleanJobProgress = async (ids: number[]): Promise<CleanJobProgre
 
 export const retryCleanTask = (id: number) => api.post<CleanJobItem>(`/clean/tasks/${id}/retry`)
 
+export const downloadSupplementTemplate = () =>
+  api.get<Blob>('/clean/supplement-template', { responseType: 'blob' })
+
 export interface SupplementCleanTaskResult {
   job_id: number
   match_status?: 'queued' | 'done'

@@ -32,7 +32,7 @@ import { finishedCleanJobIds, formatCleanProgress, mergeCleanProgress, processin
 import { formatCleanAccounting, formatDuplicateBasis } from './cleanAccounting'
 import { FilterReason } from './FilterReason'
 import { supplementFeedback } from './supplementFeedback'
-import { monthlySupplementTarget } from './supplementTarget'
+import { jobSupplementTarget, monthlySupplementTarget } from './supplementTarget'
 import type { SupplementTarget } from './supplementTarget'
 
 const { Text } = Typography
@@ -150,6 +150,8 @@ const jobColumns = (
   view: CleanJobListView,
   onMatched: (id: number) => void,
   onRetry: (id: number) => void,
+  onSupplement: (target: SupplementTarget) => void,
+  supplementing: boolean,
 ): ColumnsType<CleanJobItem> => [
   {
     title: '任务名称', dataIndex: 'task_name', width: 180,
@@ -212,9 +214,22 @@ const jobColumns = (
     render: (v?: string | null) => v || '-',
   },
   {
-    title: '操作', width: 520, fixed: 'right',
+    title: '操作', width: 640, fixed: 'right',
     render: (_: unknown, row) => (
       <Space size={4}>
+        {view === 'active' && (
+          <Button
+            type="link"
+            icon={<UploadOutlined />}
+            size="small"
+            disabled={supplementing || !jobSupplementTarget(row)}
+            title={jobSupplementTarget(row) ? '上传新增数据到此任务，保留已有处理结果' : '请先完成或重试任务；任务需具备品类、平台和单个月份'}
+            onClick={() => {
+              const target = jobSupplementTarget(row)
+              if (target) onSupplement(target)
+            }}
+          >补充数据</Button>
+        )}
         {view === 'active' && (
           <Button type="link" icon={<AimOutlined />} size="small" disabled={processingStatuses.has(row.status) || row.status === 'failed'} onClick={() => onEnter(row.id)}>进入处理</Button>
         )}
@@ -858,16 +873,19 @@ export default function CleanPage() {
         {!hasCategory ? (
           <Alert type="info" showIcon message="请先选择品类，再查看待入清洗队列" />
         ) : (
-          <Table
-            dataSource={monthlyPool}
-            columns={monthlyQueueColumns(handleUpsertMonthlyTask, openSupplement, upsertingRowKey, batchUpserting || supplementing)}
-            rowKey={getMonthlyQueueRowKey}
-            rowSelection={monthlyRowSelection}
-            size="small"
-            loading={monthlyPoolLoading}
-            scroll={{ x: 900 }}
-            pagination={{ pageSize: 10 }}
-          />
+          <>
+            <Text type="secondary">已有清洗任务补充新数据，可直接使用下方任务列表中的「补充数据」，无需重新创建或强制重建任务。</Text>
+            <Table
+              dataSource={monthlyPool}
+              columns={monthlyQueueColumns(handleUpsertMonthlyTask, openSupplement, upsertingRowKey, batchUpserting || supplementing)}
+              rowKey={getMonthlyQueueRowKey}
+              rowSelection={monthlyRowSelection}
+              size="small"
+              loading={monthlyPoolLoading}
+              scroll={{ x: 900 }}
+              pagination={{ pageSize: 10 }}
+            />
+          </>
         )}
       </Card>
 
@@ -917,6 +935,8 @@ export default function CleanPage() {
                   refreshJobs()
                   refreshMonthlyPool()
                 },
+                openSupplement,
+                supplementing,
               )}
               rowKey="id"
               size="small"

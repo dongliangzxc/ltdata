@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Alert, Button, Col, Divider, Form, Image as AntImage, Input, InputNumber,
+  Alert, Button, Col, Divider, Form, Input, InputNumber,
   Modal, Row, Select, Typography,
 } from 'antd'
-import { PlusOutlined, ZoomInOutlined } from '@ant-design/icons'
+import { PlusOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import {
   createModel,
@@ -17,6 +17,7 @@ import {
   type ModelSpecPayload,
 } from '../services/api'
 import CreateBrandModal from './CreateBrandModal'
+import HoverZoomImage from './HoverZoomImage'
 
 const { Text } = Typography
 
@@ -80,7 +81,6 @@ export default function CreateModelModal({
   const [brandsLoading, setBrandsLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [brandModalOpen, setBrandModalOpen] = useState(false)
-  const [previewVisible, setPreviewVisible] = useState(false)
   const hasProductPreview = Boolean(productImage)
 
   const { data: extraFieldsData } = useRequest(() => listModelExtraFields().then(r => r.data))
@@ -341,39 +341,15 @@ export default function CreateModelModal({
             <Col flex="0 0 300px">
               <div style={{ position: 'sticky', top: 0, paddingTop: 8 }}>
                 <Text type="secondary" style={{ fontSize: 12 }}>商品图片</Text>
-                <AntImage
-                  src={productImage ?? undefined}
-                  width="100%"
-                  style={{
-                    display: 'block',
-                    marginTop: 6,
-                    maxHeight: 360,
-                    objectFit: 'contain',
-                    background: '#fafafa',
-                    border: '1px solid #f0f0f0',
-                    borderRadius: 8,
-                    cursor: 'zoom-in',
-                  }}
-                  preview={{
-                    mask: '点击放大',
-                    visible: previewVisible,
-                    onVisibleChange: setPreviewVisible,
-                  }}
-                />
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 6 }}>
-                  <Button
-                    type="link"
-                    size="small"
-                    style={{ padding: 0 }}
-                    icon={<ZoomInOutlined />}
-                    onClick={() => setPreviewVisible(true)}
-                  >
-                    放大查看
-                  </Button>
-                  <a href={productImage ?? undefined} target="_blank" rel="noreferrer">
-                    新窗口打开原图
-                  </a>
+                <div style={{ display: 'flex', justifyContent: 'center', marginTop: 6 }}>
+                  <HoverZoomImage src={productImage ?? ''} width={280} height={280} zoomSize={420} />
                 </div>
+                <Text type="secondary" style={{ display: 'block', marginTop: 6, fontSize: 12 }}>
+                  悬停图片可局部放大，点击可查看大图
+                </Text>
+                <a href={productImage ?? undefined} target="_blank" rel="noreferrer" style={{ display: 'inline-block', marginTop: 4 }}>
+                  新窗口打开原图
+                </a>
                 {productName && (
                   <Text strong style={{ display: 'block', marginTop: 10 }}>{productName}</Text>
                 )}

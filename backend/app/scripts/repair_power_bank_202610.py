@@ -37,7 +37,11 @@ from app.models.schemas import (
     MatchResult,
     ModelRecord,
 )
-from app.services.matcher import _is_valid_model, run_match
+from app.services.matcher import (
+    _is_generic_brand_code,
+    _is_pending_placeholder_model,
+    run_match,
+)
 
 
 def _model_indexes(db, category_code: str):
@@ -48,7 +52,11 @@ def _model_indexes(db, category_code: str):
     )
     valid = [
         model for model in models
-        if (model.status or "active") == "active" and _is_valid_model(model)
+        if (
+            (model.status or "active") == "active"
+            and not _is_generic_brand_code(model.brand_code)
+            and not _is_pending_placeholder_model(model)
+        )
     ]
     by_code: dict[tuple[str, str], list[ModelRecord]] = defaultdict(list)
     by_name: dict[tuple[str, str], list[ModelRecord]] = defaultdict(list)

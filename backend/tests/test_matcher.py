@@ -779,3 +779,77 @@ def test_s0_history_allows_records_without_category(db):
     assert result.match_status == "matched", f"期望 matched，实际 {result.match_status}"
     assert result.model_id == model.id
     assert result.match_source == "historical"
+
+
+def test_history_hit_without_model_falls_through_to_later_stages(db):
+    """历史命中但没有可用型号时，应继续走 S0.5/S1-S4，而不是直接 pending。"""
+    from app.models.schemas import MatchRule
+
+    model = _seed(db, brand_code="ANKER", model_code="A1", category_name="power_bank")
+    db.add(MatchRule(keyword="充电宝", match_type="contains", model_id=model.id, priority=1, is_active=1))
+    clean_job_id = _seed_clean_row_with_url(
+        db, brand_raw="ANKER", item_name="ANKER 充电宝",
+        item_id="H3", item_url="https://item.jd.com/H3.html",
+        platform="jd", month=202610, category_code="power_bank",
+    )
+    _seed_history_row(db, item_id="H3", model_id=None, category_code="power_bank")
+    db.commit()
+
+    run_match(db, clean_job_id)
+
+    result = db.query(MatchResult).filter(MatchResult.clean_job_id == clean_job_id).first()
+    assert result is not None
+    assert result.match_status == "matched"
+    assert result.model_id == model.id
+    assert result.match_source == "s0.5"
+
+
+def test_history_allows_active_model_with_empty_model_code(db):
+    """历史记录关联到空型号码的真实型号时，应能算历史命中。"""
+    model = ModelRecord(
+        brand_code="ANKER", brand_name="ANKER",
+        model_code=None, model_name="A1287",
+        category_code="power_bank", status="active",
+    )
+    db.add(model)
+    db.flush()
+    clean_job_id = _seed_clean_row_with_url(
+        db, brand_raw="ANKER", item_name="ANKER 充电宝",
+        item_id="H4", item_url="https://item.jd.com/H4.html",
+        platform="jd", month=202610, category_code="power_bank",
+    )
+    _seed_history_row(db, item_id="H4", model_id=model.id, category_code="power_bank")
+    db.commit()
+
+    run_match(db, clean_job_id)
+
+    result = db.query(MatchResult).filter(MatchResult.clean_job_id == clean_job_id).first()
+    assert result is not None
+    assert result.match_status == "matched"
+    assert result.model_id == model.id
+    assert result.match_source == "historical"
+
+
+def test_history_does_not_match_pending_placeholder_model(db):
+    """「待补型号」占位记录不能被算成历史匹配。"""
+    model = ModelRecord(
+        brand_code="ANKER", brand_name="ANKER",
+        model_code="待补型号-power_bank", model_name="待补型号",
+        category_code="power_bank", status="active",
+    )
+    db.add(model)
+    db.flush()
+    clean_job_id = _seed_clean_row_with_url(
+        db, brand_raw="ANKER", item_name="ANKER 充电宝",
+        item_id="H5", item_url="https://item.jd.com/H5.html",
+        platform="jd", month=202610, category_code="power_bank",
+    )
+    _seed_history_row(db, item_id="H5", model_id=model.id, category_code="power_bank")
+    db.commit()
+
+    run_match(db, clean_job_id)
+
+    result = db.query(MatchResult).filter(MatchResult.clean_job_id == clean_job_id).first()
+    assert result is not None
+    assert result.match_status == "pending"
+    assert result.model_id is None

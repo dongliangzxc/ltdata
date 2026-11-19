@@ -179,9 +179,10 @@ def test_s02_prefers_item_id_month_fallback_before_item_url_week_hit(db):
     assert mr.model_id == model_id
 
 
-def test_s02_blank_model_history_goes_pending_and_skips_text_matching(db):
-    decoy_model = ModelRecord(brand_code="FAKE", model_code="XM1000X", model_name="XM1000X", category_code="headphone")
-    db.add(decoy_model)
+def test_s02_blank_model_history_falls_through_to_text_matching(db):
+    """历史命中但无型号时应继续后续匹配；若标题能唯一命中型号则正常匹配。"""
+    text_model = ModelRecord(brand_code="SONY", model_code="XM1000X", model_name="XM1000X", category_code="headphone")
+    db.add(text_model)
     db.flush()
     job_id, _ = _seed(
         db,
@@ -205,10 +206,10 @@ def test_s02_blank_model_history_goes_pending_and_skips_text_matching(db):
     run_match(db, job_id)
 
     mr = db.query(MatchResult).filter(MatchResult.clean_job_id == job_id).first()
-    assert mr.match_status == "pending"
-    assert mr.match_source == "historical"
-    assert mr.model_id is None
-    assert mr.brand_identified == 1
+    # 有 URL 但不在 URL 映射库时，文本命中会落到 text_only 等待复核
+    assert mr.match_status == "text_only"
+    assert mr.model_id == text_model.id
+    assert mr.match_source != "historical"
 
 
 def test_s02_no_match_when_not_in_table(db):

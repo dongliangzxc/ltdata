@@ -100,6 +100,9 @@ class MatchContext:
     exclusion_url_keys: set = field(default_factory=set)
     exclusion_name_keys: set = field(default_factory=set)
     url_reusable_model_ids: set = field(default_factory=set)
+    # 历史库可复用型号：允许型号码为空的真实型号（历史库/人工确认可能只落到品牌级），
+    # 但排除「待补」「待补型号」这类占位型号，避免把待补记录算成已匹配。
+    history_reusable_model_ids: set = field(default_factory=set)
     # 历史库内存索引（run_match 预载，消除 _history_lookup 逐行 N+1 查询）：
     # None 表示未加载，_history_lookup 回退逐条查库。键为 (平台小写, 键值)。
     hist_item_id: dict | None = None
@@ -170,6 +173,16 @@ def _load_match_context(
         m.id
         for m in model_rows
         if m.status == "active" and not _is_generic_brand_code(m.brand_code)
+    }
+    # 历史命中允许复用空型号码的真实型号（品牌级型号），但排除待补占位型号。
+    ctx.history_reusable_model_ids = {
+        m.id
+        for m in model_rows
+        if (
+            m.status == "active"
+            and not _is_generic_brand_code(m.brand_code)
+            and not _is_pending_placeholder_model(m)
+        )
     }
 
     ctx.url_map, ctx.url_brand_map = _build_url_maps(db, ctx.url_reusable_model_ids, url_keys)
@@ -256,6 +269,22 @@ _GENERIC_BRAND_CODES = {
 def _is_generic_brand_code(s: str | None) -> bool:
     """品牌占位/通用品牌（不可作为自动复用型号）。"""
     return _is_placeholder_code(s) or _norm(s) in _GENERIC_BRAND_CODES
+
+
+_PENDING_MODEL_NAMES = {"待补", "待补型号"}
+
+
+def _is_pending_placeholder_model(m: ModelRecord) -> bool:
+    """历史导入生成的「待补」型号不是真实型号，不能算已匹配。"""
+    code = _norm(m.model_code)
+    name = _norm(m.model_name)
+    dash_only = bool(code) and set(code) == {"-"}
+    return (
+        dash_only
+        or name in _PENDING_MODEL_NAMES
+        or code in _PENDING_MODEL_NAMES
+        or code.startswith("待补型号-")
+    )
 
 
 def _is_valid_model(m: ModelRecord) -> bool:
@@ -922,29 +951,34 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
         _t_stage = time.perf_counter()
         hist_hit = _history_lookup(db, row, ctx)
         if hist_hit:
-            historical_model_id = hist_hit.model_id if hist_hit.model_id in valid_model_ids else None
-            historical_status = "matched" if historical_model_id else "pending"
-            results.append(MatchResult(
-                clean_job_id=clean_job_id,
-                raw_data_id=row.raw_data_id,
-                model_id=historical_model_id,
-                match_status=historical_status,
-                matched_by="auto",
-                match_source="historical",
-                brand_identified=1,
-            ))
+            historical_model_id = (
+                hist_hit.model_id
+                if hist_hit.model_id in ctx.history_reusable_model_ids
+                else None
+            )
             if historical_model_id:
+                results.append(MatchResult(
+                    clean_job_id=clean_job_id,
+                    raw_data_id=row.raw_data_id,
+                    model_id=historical_model_id,
+                    match_status="matched",
+                    matched_by="auto",
+                    match_source="historical",
+                    brand_identified=1,
+                ))
                 matched_count += 1
-            if len(results) >= BATCH:
-                db.bulk_save_objects(results)
-                if commit:
-                    db.commit()
-                else:
-                    db.flush()
-                if progress_cb:
-                    progress_cb(i + 1, total, matched_count)
-                results = []
-            continue  # 跳过 S0.5 / S1-S4
+                if len(results) >= BATCH:
+                    db.bulk_save_objects(results)
+                    if commit:
+                        db.commit()
+                    else:
+                        db.flush()
+                    if progress_cb:
+                        progress_cb(i + 1, total, matched_count)
+                    results = []
+                _acc("hist", _t_stage)
+                continue  # 历史命中且型号可用，跳过 S0.5 / S1-S4
+            # 历史命中但没有可用型号时不能直接判待处理，继续走后续匹配。
         _acc("hist", _t_stage)
 
         # ── S0.5: 显式规则匹配 ─────────────────────────────────────
@@ -1216,15 +1250,21 @@ def run_match_for_result(
     # ── S0.2: 历史库精确匹配 ─────────────────────────────────
     hist_hit = _history_lookup(db, raw, ctx)
     if hist_hit:
-        historical_model_id = hist_hit.model_id if hist_hit.model_id in ctx.valid_model_ids else None
-        mr.model_id = historical_model_id
-        mr.match_status = "matched" if historical_model_id else "pending"
-        mr.matched_by = "auto"
-        mr.match_source = "historical"
-        mr.brand_identified = 1
-        if commit:
-            db.commit()
-        return mr
+        historical_model_id = (
+            hist_hit.model_id
+            if hist_hit.model_id in ctx.history_reusable_model_ids
+            else None
+        )
+        if historical_model_id:
+            mr.model_id = historical_model_id
+            mr.match_status = "matched"
+            mr.matched_by = "auto"
+            mr.match_source = "historical"
+            mr.brand_identified = 1
+            if commit:
+                db.commit()
+            return mr
+        # 历史命中但无可用型号：继续走 S0.5 / S1-S4，而不是直接 pending。
 
     # ── S0.5: 显式规则匹配 ───────────────────────────────────
     s05_model_id: int | None = None

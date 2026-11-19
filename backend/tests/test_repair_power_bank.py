@@ -122,3 +122,18 @@ def test_plan_rebuild_only_targets_pending_text_only_and_skips_published(db):
     assert plan["by_job"][job.id] == [101, 102]
     assert plan["rows"] == 2
     assert plan["skipped_published"] == 1
+
+
+def test_plan_history_links_by_model_name_when_code_is_empty(db):
+    model = ModelRecord(
+        brand_code="ANKER", model_code=None, model_name="A1287",
+        brand_name="ANKER", category_code="power_bank", status="active",
+    )
+    db.add(model)
+    db.flush()
+    history = _history(db, brand="ANKER", code=None, name="A1287")
+    db.commit()
+
+    plan = plan_history_links(db, category_code="power_bank", month="2026-10")
+
+    assert plan["links"] == {history.id: model.id}

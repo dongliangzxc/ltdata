@@ -1,419 +1,132 @@
-import { Anchor, Typography, Tag, Alert, Divider, Row, Col, Card, Steps } from 'antd'
-import {
-  UploadOutlined, DatabaseOutlined, ProfileOutlined, AppstoreAddOutlined,
-  ClearOutlined, AimOutlined, FundOutlined, ExportOutlined, QuestionCircleOutlined,
-  LinkOutlined, FilterOutlined, HistoryOutlined, TagsOutlined,
-} from '@ant-design/icons'
+import { useMemo, useState } from 'react'
+import { Alert, Button, Empty, Input, Select, Typography } from 'antd'
+import { ArrowDownOutlined, DownloadOutlined, PrinterOutlined, SearchOutlined } from '@ant-design/icons'
+import content from './content.json'
+import { renderManualMarkdown, searchSections } from './manualTools.mjs'
+import type { ManualBlock, ManualDocument } from './types'
+import './manual.css'
 
-const { Title, Paragraph, Text } = Typography
+const manual = content as ManualDocument
+const { Title, Paragraph } = Typography
 
-const S = ({ children }: { children: React.ReactNode }) => (
-  <Text strong>{children}</Text>
-)
+function Block({ block }: { block: ManualBlock }) {
+  switch (block.type) {
+    case 'paragraph': return <p>{block.text}</p>
+    case 'heading': return <h3>{block.text}</h3>
+    case 'steps': return <ol className="manual-steps">{block.items.map((item, i) => <li key={i}>{item}</li>)}</ol>
+    case 'list': return <ul className="manual-list">{block.items.map((item, i) => <li key={i}>{item}</li>)}</ul>
+    case 'table': return (
+      <div className="manual-table-scroll" tabIndex={0} role="region" aria-label={block.headers.join('、')}>
+        <table>
+          <thead><tr>{block.headers.map(header => <th scope="col" key={header}>{header}</th>)}</tr></thead>
+          <tbody>{block.rows.map((row, i) => <tr key={i}>{row.map((cell, j) => <td key={j}>{cell}</td>)}</tr>)}</tbody>
+        </table>
+      </div>
+    )
+    case 'note': return (
+      <Alert type={block.tone} showIcon message={block.title} description={block.text} className="manual-note" />
+    )
+  }
+}
+
+function downloadManual() {
+  const url = URL.createObjectURL(new Blob([renderManualMarkdown(manual)], { type: 'text/markdown;charset=utf-8' }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `洛图数据平台使用手册_${manual.updatedAt}.md`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
 
 export default function ManualPage() {
+  const [query, setQuery] = useState('')
+  const sections = useMemo(() => searchSections(manual.sections, query), [query])
+  const groups = [...new Set(sections.map(section => section.group))]
+
   return (
-    <Row gutter={24} style={{ minHeight: '100%' }}>
-      {/* 右侧锚点导航 */}
-      <Col flex="180px" style={{ position: 'sticky', top: 24, alignSelf: 'flex-start' }}>
-        <Anchor
-          offsetTop={24}
-          items={[
-            { key: 'flow',        href: '#flow',        title: '整体流程' },
-            { key: 'upload',      href: '#upload',      title: '数据上传' },
-            { key: 'rawdata',     href: '#rawdata',     title: '原始数据' },
-            { key: 'categories', href: '#categories', title: '品类管理' },
-            { key: 'metadata',    href: '#metadata',    title: '属性管理' },
-            { key: 'models',      href: '#models',      title: '型号管理' },
-            { key: 'url-mapping', href: '#url-mapping', title: 'URL映射管理' },
-            { key: 'historical',  href: '#historical',  title: '历史库' },
-            { key: 'clean',       href: '#clean',       title: '清洗任务' },
-            { key: 'rules',       href: '#rules',       title: '规则管理' },
-            { key: 'match',       href: '#match',       title: '清洗任务详情' },
-            { key: 'workbench',   href: '#workbench',   title: '查询工作台' },
-            { key: 'export',      href: '#export',      title: '数据导出' },
-            { key: 'faq',         href: '#faq',         title: '常见问题' },
-          ]}
+    <div className="manual-page" id="manual-top">
+      <header className="manual-cover">
+        <div className="manual-edition">使用指南 <span>/</span> {manual.version}</div>
+        <Title level={2}>把一批数据，处理清楚。</Title>
+        <Paragraph>{manual.intro}</Paragraph>
+        <div className="manual-cover-footer">
+          <span>更新于 {manual.updatedAt} · {manual.audience}</span>
+          <div className="manual-actions">
+            <Button icon={<DownloadOutlined />} onClick={downloadManual}>下载完整手册</Button>
+            <Button icon={<PrinterOutlined />} onClick={() => window.print()}>打印当前内容</Button>
+          </div>
+        </div>
+      </header>
+
+      <div className="manual-quick-links" aria-label="常用操作指南">
+        {manual.quickLinks.map((link, index) => (
+          <a key={link.target} href={`#${link.target}`} onClick={() => setQuery('')}>
+            <span className="manual-quick-number">0{index + 1}</span>
+            <span><strong>{link.title}</strong><small>{link.description}</small></span>
+            <ArrowDownOutlined />
+          </a>
+        ))}
+      </div>
+
+      <div className="manual-search-bar">
+        <Input
+          prefix={<SearchOutlined />}
+          placeholder="搜索步骤、字段或问题，如：产品系列、补充数据、去重"
+          aria-label="搜索使用手册"
+          value={query}
+          onChange={event => setQuery(event.target.value)}
+          allowClear
+          size="large"
         />
-      </Col>
+        <span role="status" aria-live="polite">{query.trim() ? `找到 ${sections.length} 个章节` : `共 ${manual.sections.length} 个章节`}</span>
+        <Select
+          className="manual-chapter-select"
+          aria-label="跳转手册章节"
+          placeholder="跳转到章节"
+          options={sections.map(section => ({ value: section.id, label: section.title }))}
+          onSelect={id => { window.location.hash = id }}
+        />
+      </div>
 
-      {/* 主内容区 */}
-      <Col flex="auto" style={{ maxWidth: 860 }}>
-        <Typography>
-          <Title level={2}>洛图数据处理平台 · 使用手册</Title>
-          <Paragraph type="secondary">适用对象：运营、数据分析等业务人员 &nbsp;|&nbsp; 版本：规则引擎三期</Paragraph>
+      <div className="manual-body">
+        <aside className="manual-sidebar">
+          <nav aria-label="使用手册目录">
+            {groups.map(group => (
+              <div className="manual-nav-group" key={group}>
+                <div className="manual-nav-heading">{group}</div>
+                {sections.filter(section => section.group === group).map(section => (
+                  <a href={`#${section.id}`} key={section.id} title={section.title}>
+                    <span>{String(manual.sections.indexOf(section) + 1).padStart(2, '0')}</span>
+                    {section.title.split('：')[0]}
+                  </a>
+                ))}
+              </div>
+            ))}
+          </nav>
+          <a className="manual-back-top" href="#manual-top">回到顶部 ↑</a>
+        </aside>
 
-          {/* ── 整体流程 ── */}
-          <Title level={3} id="flow">整体工作流程</Title>
-          <Alert
-            type="info"
-            showIcon
-            style={{ marginBottom: 16 }}
-            message="建议按以下顺序操作，首次使用需先完成「准备工作」"
-          />
-          <Row gutter={16} style={{ marginBottom: 16 }}>
-            <Col span={12}>
-              <Card size="small" title="准备工作（一次性）" style={{ background: '#fafafa' }}>
-                <Paragraph style={{ margin: 0 }}>
-                  <Tag color="purple">1</Tag> 在「属性管理」导入规格字段定义<br />
-                  <Tag color="purple">2</Tag> 在「型号管理」导入品牌型号数据<br />
-                  <Tag color="purple">3</Tag> 在「规则管理」配置干扰词、品牌写法、匹配规则<br />
-                  <Tag color="purple">4</Tag>（可选）在「URL映射管理」配置精确URL→型号映射<br />
-                  <Tag color="purple">5</Tag>（可选）在「历史库」导入历史确认对照表
-                </Paragraph>
-              </Card>
-            </Col>
-            <Col span={12}>
-              <Card size="small" title="每批数据处理流程" style={{ background: '#fafafa' }}>
-                <Steps
-                  direction="vertical"
-                  size="small"
-                  style={{ marginTop: 4 }}
-                  items={[
-                    { title: '数据上传', icon: <UploadOutlined /> },
-                    { title: '数据分发入池', icon: <DatabaseOutlined /> },
-                    { title: '创建/追加清洗任务', icon: <ClearOutlined /> },
-                    { title: '清洗任务详情', icon: <AimOutlined /> },
-                    { title: '发布 → 查询工作台 / 导出', icon: <ExportOutlined /> },
-                  ]}
-                />
-              </Card>
-            </Col>
-          </Row>
-          <Card size="small" title="匹配阶段优先级（自动，无需手动干预）" style={{ marginBottom: 16 }}>
-            <Paragraph style={{ margin: 0 }}>
-              <Tag color="blue">S0</Tag> URL精确映射 &nbsp;→&nbsp;
-              <Tag color="purple">S0.2</Tag> 历史库精确匹配 &nbsp;→&nbsp;
-              <Tag color="cyan">S0.5</Tag> 显式关键词规则 &nbsp;→&nbsp;
-              <Tag color="green">S1-S4</Tag> 算法匹配 &nbsp;→&nbsp;
-              <Tag color="orange">待确认</Tag> 人工处理
-            </Paragraph>
-          </Card>
-
-          <Divider />
-
-          {/* ── 数据上传 ── */}
-          <Title level={3} id="upload"><UploadOutlined /> 数据上传</Title>
-          <Paragraph>
-            将原始销售数据 Excel（<Text code>.xlsx / .xls</Text>）拖拽到上传区域或点击选择文件。
-            系统自动识别平台（京东 / 天猫 / 淘宝 / 苏宁 / 亚马逊 / 虾皮）和月份范围，上传成功后展示前 50 行预览。
-          </Paragraph>
-          <Paragraph>
-            <S>文件名命名</S>：系统可以从文件名识别月份、平台、国家和品类，推荐使用：
-            <br />
-            <Text code>YYYYMM_平台_国家_品类.xlsx</Text>，例如 <Text code>202609_amazon_US_运动相机.xlsx</Text>
-            <br />
-            带描述时使用：<Text code>YYYYMM_平台_国家_[品类]_描述.xlsx</Text>，例如 <Text code>202609_amazon_US_[运动相机]_Fryers.xlsx</Text>
-            <br />
-            国家必须是「国家与汇率」中已启用的国家；识别失败时仍可在列映射中手动指定。
-          </Paragraph>
-          <Paragraph>
-            <S>上传历史</S>：页面下方列出所有已上传文件，支持删除（删除后对应原始数据一并移除）。
-          </Paragraph>
-          <Alert type="warning" showIcon style={{ marginBottom: 16 }}
-            message="同一商品（相同 item_id）同月份同平台已存在时自动跳过，不会重复入库。" />
-
-          <Divider />
-
-          {/* ── 原始数据 ── */}
-          <Title level={3} id="rawdata"><DatabaseOutlined /> 原始数据查看</Title>
-          <Paragraph>
-            用于浏览和核查已上传数据。支持按平台、月份、品牌、关键词筛选，仅供查阅，不做任何修改。
-          </Paragraph>
-
-          <Divider />
-
-          {/* ── 品类管理 ── */}
-          <Title level={3} id="categories"><TagsOutlined /> 品类管理</Title>
-          <Paragraph>
-            品类库是系统的受控品类词表，型号管理、属性管理、属性规则均通过品类码与品类库关联。
-            <S>唯一键：品类码</S>，品类码一旦创建不可修改（避免破坏关联关系）。
-          </Paragraph>
-          <Paragraph>
-            <S>新增品类</S>：点「新增品类」，填写品类码（小写字母/数字/下划线，如 <Text code>soundbar</Text>）
-            和品类名称（如「回音壁」）。<br />
-            <S>修改名称</S>：点「改名」可修改显示名称，品类码不变。<br />
-            <S>删除品类</S>：若品类下已有型号或属性规格，系统将拒绝删除（返回提示），需先清理关联数据。
-          </Paragraph>
-          <Alert type="info" showIcon style={{ marginBottom: 16 }}
-            message="型号 Excel 导入时「品类码」列须为已在品类管理中配置的品类码，否则该行将被跳过并记录错误。" />
-
-          <Divider />
-
-          {/* ── 属性管理 ── */}
-          <Title level={3} id="metadata"><ProfileOutlined /> 属性管理</Title>
-          <Paragraph>
-            属性定义商品规格字段（如声道数、输出功率），决定最终导出 Excel 中有哪些规格列。
-            <S>唯一键：品类码 + 规格名称</S>，重复导入自动更新，不产生重复记录。
-          </Paragraph>
-          <Title level={5}>Excel 批量导入（推荐）</Title>
-          <Paragraph>
-            点击「Excel 导入」→ 系统解析文件并弹出<S>预览确认窗口</S>，展示行数统计、错误/警告列表、前 10 条预览。
-            确认无误后点「确认导入」正式写入；点「取消」不产生任何修改。
-          </Paragraph>
-          <Alert type="info" showIcon style={{ marginBottom: 8 }}
-            message={<span>Excel 格式要求：Sheet 名称必须为「属性」，必须包含列：<Text code>规格名称</Text>、<Text code>规格类型</Text>（数值型/文本型/布尔型）</span>} />
-          <Paragraph>
-            其他可选列：品类码、规格值（逗号分隔可选项）、必填、单选、保留几位小数。
-          </Paragraph>
-
-          <Divider />
-
-          {/* ── 型号管理 ── */}
-          <Title level={3} id="models"><AppstoreAddOutlined /> 型号管理</Title>
-          <Paragraph>
-            型号库是匹配的核心数据源，存放所有在管型号及其规格参数。
-            <S>唯一键：品牌码 + 型号码</S>，重复导入自动更新。
-          </Paragraph>
-          <Title level={5}>Excel 批量导入（推荐）</Title>
-          <Paragraph>
-            流程同属性：上传 → 预览确认 → 导入。Excel 需包含两个 Sheet：
-          </Paragraph>
-          <Paragraph>
-            <Tag>Sheet「型号」</Tag>必须包含：<Text code>品牌码</Text>（或「品牌」）、<Text code>型号码</Text>（或「型号」）；
-            可选：品类、品牌名称、型号名称、上市年、上市月、上市周、上市价格、网址。
-          </Paragraph>
-          <Paragraph>
-            <Tag>Sheet「型号规格」</Tag>必须包含：品牌码、型号码、<Text code>规格名称</Text>、规格值。
-          </Paragraph>
-          <Paragraph>
-            <S>展开规格明细</S>：点击列表每行左侧「▶」可查看该型号的规格参数。
-          </Paragraph>
-
-          <Divider />
-
-          {/* ── URL映射管理 ── */}
-          <Title level={3} id="url-mapping"><LinkOutlined /> URL映射管理（S0 精确映射）</Title>
-          <Paragraph>
-            针对"已知某个电商URL固定对应某型号"的场景，配置后匹配阶段优先命中，准确率 100%，不走算法。
-          </Paragraph>
-          <Title level={5}>使用场景</Title>
-          <Paragraph>
-            例如京东商品 <Text code>item_id=12345678</Text> 始终是 SONY HT-A7000，配置一条映射后，
-            后续所有包含该 item_id 的数据无论宝贝名称如何变化，均自动匹配到指定型号。
-          </Paragraph>
-          <Title level={5}>操作方式</Title>
-          <Paragraph>
-            ① <S>手动新增</S>：点「新增」，填写平台、商品ID、型号（搜索选择）、参考价（可选）；<br />
-            ② <S>Excel 批量导入</S>：文件需包含列 <Text code>platform</Text>、<Text code>item_id</Text>、<Text code>model_code</Text>，可选 <Text code>price</Text>；<br />
-            ③ <S>编辑/删除</S>：已有映射支持行内编辑和单条删除。
-          </Paragraph>
-          <Alert type="info" showIcon style={{ marginBottom: 16 }}
-            message="platform 字段大小写不敏感，导入时自动转为小写（jd/tmall/taobao/suning/amazon/shopee）。" />
-
-          <Divider />
-
-          {/* ── 历史库 ── */}
-          <Title level={3} id="historical"><HistoryOutlined /> 历史库（S0.2 历史精确匹配）</Title>
-          <Paragraph>
-            历史库用于将过去人工确认过的「商品→型号」对照关系导入系统，后续遇到相同平台+商品ID时自动命中，
-            无需重复人工确认。优先级仅次于 URL映射（S0），高于所有算法。
-          </Paragraph>
-          <Title level={5}>Tab 1：导入历史对照表</Title>
-          <Paragraph>
-            <S>Excel 格式</S>（每行一条映射关系）：
-          </Paragraph>
-          <Paragraph>
-            <Tag>platform</Tag> 平台，jd/tmall/taobao/suning/amazon/shopee（自动转小写）<br />
-            <Tag>item_id</Tag> 商品 ID（与原始数据一致）<br />
-            <Tag>model_code</Tag> 型号编码（必须存在于型号库中，否则该行报错跳过）
-          </Paragraph>
-          <Paragraph>
-            拖拽或点击上传 Excel → 系统解析后显示导入结果：成功 N 条、失败 M 条（含失败行号和原因）。
-            已导入的批次列表显示在下方，支持<S>整批删除</S>（撤销本次导入）。
-          </Paragraph>
-          <Alert type="info" showIcon style={{ marginBottom: 8 }}
-            message={<span><S>重复导入（upsert）</S>：同一平台+商品ID 再次导入时，型号映射更新为最新批次，不产生重复记录。</span>} />
-          <Alert type="warning" showIcon style={{ marginBottom: 16 }}
-            message="注意：若商品 X 在批次A中导入，后来在批次B中以不同型号再次导入，则删除批次B时，商品 X 的映射将一并被删除（因已被批次B覆盖）。" />
-          <Title level={5}>Tab 2：映射管理</Title>
-          <Paragraph>
-            可按平台、导入批次筛选所有历史映射，支持单条删除。
-          </Paragraph>
-
-          <Divider />
-
-          {/* ── 清洗任务 ── */}
-          <Title level={3} id="clean"><ClearOutlined /> 清洗任务</Title>
-          <Paragraph>
-            对原始数据进行标准化处理，生成供后续匹配使用的干净数据集。清洗会自动应用「规则管理」中配置的干扰词过滤和品牌写法标准化。
-          </Paragraph>
-          <Paragraph>
-            <S>操作步骤</S>：上传文件 → 执行数据分发 → 进入「清洗任务」页查看待入清洗队列。分发页只负责入池，不创建清洗任务。
-          </Paragraph>
-          <Paragraph>
-            <S>待入清洗队列</S>：按品类、平台、月份聚合展示尚未进入清洗任务的数据。若该范围没有任务，点「创建任务」；若已有任务，点「追加到任务」。系统会自动完成清洗和匹配。
-          </Paragraph>
-          <Paragraph>
-            <Tag color="blue">去重</Tag> 同一商品（相同 item_id）在同月份同店铺只保留第一条，避免重复计算。
-          </Paragraph>
-          <Alert type="info" showIcon style={{ marginBottom: 16 }}
-            message="清洗结果独立保存，不影响原始数据。清洗任务创建或追加后会自动完成清洗和匹配，可进入清洗任务详情处理待确认条目。" />
-
-          <Divider />
-
-          {/* ── 规则管理 ── */}
-          <Title level={3} id="rules"><FilterOutlined /> 规则管理（规则引擎）</Title>
-          <Paragraph>
-            规则管理提供 5 类配置，在清洗和匹配阶段自动生效，无需对每批数据手动操作。
-          </Paragraph>
-
-          <Title level={5}>Tab 1：干扰词库</Title>
-          <Paragraph>
-            配置需要从商品名称中过滤掉的干扰词（如"【秒杀】""官方旗舰店"等）。
-            清洗时自动去除，减少噪声对后续匹配的干扰。支持指定匹配字段（商品名称/店铺名称/两者）。
-          </Paragraph>
-
-          <Title level={5}>Tab 2：品牌写法库</Title>
-          <Paragraph>
-            将各种品牌别名/拼写变体映射到统一的品牌码。例如：「索尼」「SONY官方」→ <Text code>SONY</Text>。
-            支持 Excel 批量导入（列：<Text code>alias_name</Text>、<Text code>brand_code</Text>）。
-          </Paragraph>
-
-          <Title level={5}>Tab 3：匹配规则（S0.5 显式规则）</Title>
-          <Paragraph>
-            针对"商品名称包含某关键词时固定对应某型号"的规则。优先于算法，仅次于 URL映射和历史库。
-            <br />配置字段：关键词、匹配方式（包含/精确/开头/结尾）、目标型号、优先级（数值越大越先匹配）。
-          </Paragraph>
-          <Alert type="info" showIcon style={{ marginBottom: 8 }}
-            message="匹配规则按优先级从高到低逐条执行，命中第一条即停止，不继续匹配后续规则。" />
-
-          <Title level={5}>Tab 4：过滤存档</Title>
-          <Paragraph>
-            清洗时被干扰词过滤掉的条目会存入此处。若某条目被误过滤，可在此恢复（恢复后重新运行清洗即可）。
-          </Paragraph>
-
-          <Title level={5}>Tab 5：属性规则</Title>
-          <Paragraph>
-            配置「商品名称包含关键词时自动标注属性值」的规则。例如：商品名含"5.1声道"→ 标注属性 声道数=5.1。
-            支持全局规则（适用所有品类）和品类级规则。
-            <br />配置字段：关键词、匹配方式、属性名、属性值、品类（可空=全局）、优先级。
-          </Paragraph>
-          <Paragraph>
-            属性规则在每批匹配完成后自动执行，匹配结果可在「清洗任务详情」中查看。
-          </Paragraph>
-
-          <Divider />
-
-          {/* ── 清洗任务详情 ── */}
-          <Title level={3} id="match"><AimOutlined /> 清洗任务详情</Title>
-          <Paragraph>
-            将清洗后数据与型号库自动匹配，识别每条销售记录对应的品牌型号。
-          </Paragraph>
-          <Title level={5}>第一步：处理任务待办</Title>
-          <Paragraph>
-            进入清洗任务详情后处理未识别品牌、URL 映射待确认、待确认和争议复核。任务创建后会自动完成清洗和匹配，不需要手动执行匹配。
-          </Paragraph>
-          <Title level={5}>匹配复核规则说明（简洁版）</Title>
-          <Paragraph>
-            清洗任务详情页按以下顺序展示 8 个复核队列，每个队列代表一种处理状态：
-          </Paragraph>
-          <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 16 }}>
-            <thead>
-              <tr>
-                <th style={{ textAlign: 'left', borderBottom: '1px solid #eee', padding: '8px 6px' }}>队列</th>
-                <th style={{ textAlign: 'left', borderBottom: '1px solid #eee', padding: '8px 6px' }}>是干嘛的</th>
-                <th style={{ textAlign: 'left', borderBottom: '1px solid #eee', padding: '8px 6px' }}>例子</th>
-                <th style={{ textAlign: 'left', borderBottom: '1px solid #eee', padding: '8px 6px' }}>处理方式</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr><td style={{ padding: '8px 6px' }}><S>未识别品牌</S></td><td>有品牌线索，但系统还没确认到具体型号。</td><td>康佳电视显示「康佳（KONKA）」，但当前型号是「未知」。</td><td>看链接和标题，确认型号后选择或新建型号；不确定就暂存争议。</td></tr>
-              <tr><td style={{ padding: '8px 6px' }}><S>URL映射待确认</S></td><td>标题匹配到型号，但链接还没确认过。</td><td>同一商品链接第一次出现，系统没有 URL 映射记录。</td><td>打开链接核对；正确就确认，错误就重选型号或排除。</td></tr>
-              <tr><td style={{ padding: '8px 6px' }}><S>待确认</S></td><td>系统有线索，但不能确定最终型号。</td><td>品牌能识别，但标题型号不清楚，或候选型号有多个。</td><td>查看标题、链接和候选型号；能判断就确认，不能判断就暂存争议。</td></tr>
-              <tr><td style={{ padding: '8px 6px' }}><S>争议复核</S></td><td>人工看过但暂时判断不了。</td><td>标题、图片、详情页不一致，或疑似套装/组合装。</td><td>写清争议原因；后续确认后再改为确认或排除。</td></tr>
-              <tr><td style={{ padding: '8px 6px' }}><S>已匹配</S></td><td>系统已自动匹配到型号。</td><td>URL 映射、历史库、规则或算法已命中型号。</td><td>一般不用处理；发现错误时重新选择型号。</td></tr>
-              <tr><td style={{ padding: '8px 6px' }}><S>已人工确认</S></td><td>人工已经指定过型号。</td><td>分析师从待确认、未识别品牌等队列确认过。</td><td>一般不用处理；发现错误时重新选择型号。</td></tr>
-              <tr><td style={{ padding: '8px 6px' }}><S>已排除</S></td><td>人工确认不参与本次入库或分析。</td><td>非目标品类、无效商品、明显不属于当前任务。</td><td>一般不用处理；误排除时撤销后重新处理。</td></tr>
-              <tr><td style={{ padding: '8px 6px' }}><S>干扰项过滤</S></td><td>清洗阶段被规则过滤掉，不属于匹配结果。</td><td>命中低价、赠品、配件、无关关键词等规则。</td><td>检查过滤是否合理；误过滤就调整规则并重新清洗。</td></tr>
-            </tbody>
-          </table>
-          <Paragraph>
-            处理时记住三句话：能确认型号就选择或新建型号后确认；暂时判断不了就暂存争议并写清原因；不属于本次分析范围就排除。
-          </Paragraph>
-          <Title level={5}>下一步：发布到分析库</Title>
-          <Paragraph>
-            匹配完成后，点「发布到分析库」将已匹配数据写入分析数据库，发布后可在「查询工作台」查询。
-          </Paragraph>
-
-          <Divider />
-
-          {/* ── 查询工作台 ── */}
-          <Title level={3} id="workbench"><FundOutlined /> 查询工作台</Title>
-          <Alert type="warning" showIcon style={{ marginBottom: 12 }}
-            message="前提：已完成匹配并点击「发布到分析库」" />
-          <Paragraph>
-            对已发布数据进行多维度查询。支持按月份、平台、品牌、型号、品类、关键词筛选。
-            设置条件后点「查询」，点「导出 Excel」可将当前筛选结果全量导出（不限页数）。
-          </Paragraph>
-
-          <Divider />
-
-          {/* ── 数据导出 ── */}
-          <Title level={3} id="export"><ExportOutlined /> 数据导出</Title>
-          <Paragraph>
-            将匹配结果导出为含规格参数的 Excel 报告（按品类分 Sheet）。
-          </Paragraph>
-          <Paragraph>
-            <S>操作步骤</S>：选择清洗任务 → 填写文件名前缀（如「Soundbar 7-8月已处理」）→ 点「提交导出任务」。
-            任务立即提交，<S>无需等待</S>，在下方「导出历史」列表中查看进度，完成后点「下载」。
-          </Paragraph>
-          <Paragraph>
-            <Tag color="default">排队中</Tag>&ensp;
-            <Tag color="processing">生成中</Tag>&ensp;
-            <Tag color="success">已完成 → 可下载</Tag>&ensp;
-            <Tag color="error">失败 → 悬浮查看原因</Tag>
-          </Paragraph>
-          <Alert type="info" showIcon style={{ marginBottom: 16 }}
-            message={<span>导出文件结构：每个品类一个 Sheet，列包含平台、月份、销量、销售额、品牌、型号，以及「属性管理」中定义的所有规格列；待确认商品单独放在「待确认」Sheet。</span>} />
-
-          <Divider />
-
-          {/* ── 常见问题 ── */}
-          <Title level={3} id="faq"><QuestionCircleOutlined /> 常见问题</Title>
-
-          <Title level={5}>Q：上传后数据量和文件行数不一样？</Title>
-          <Paragraph>
-            系统会跳过表头、合计行等无效行，并自动跳过重复记录（同 item_id + 月份 + 平台已存在的）。以页面提示的「写入条数」为准。
-          </Paragraph>
-
-          <Title level={5}>Q：清洗任务匹配率很低怎么办？</Title>
-          <Paragraph>
-            常见原因：① <S>型号库缺少对应品类数据</S>——前往「型号管理」补充；② <S>品牌名称不统一</S>——在「规则管理」→「品牌写法库」补充写法映射；③ <S>商品名称噪声多</S>——在「规则管理」→「干扰词库」添加干扰词后重新创建清洗任务；④ 部分数据本身不属于目标品类，可在「清洗任务详情」中选「排除」。
-          </Paragraph>
-
-          <Title level={5}>Q：历史数据怎么导入系统？</Title>
-          <Paragraph>
-            分两步：① 原始历史数据通过「数据上传」正常上传（与新数据流程相同）；② 历史确认对照表（商品→型号）通过「历史库」→「导入历史对照表」导入，系统会在匹配阶段自动命中。
-          </Paragraph>
-
-          <Title level={5}>Q：Excel 导入时提示格式错误？</Title>
-          <Paragraph>
-            预览弹窗中「错误」折叠面板会精确指出哪一行有问题。常见原因：
-            缺少必要列名；属性 Sheet 名不是「属性」；型号 Sheet 名不是「型号」/「型号规格」。
-          </Paragraph>
-
-          <Title level={5}>Q：导出的 Excel 规格列全是空的？</Title>
-          <Paragraph>
-            检查「属性管理」中是否已导入规格定义。规格列名称来自属性，若属性为空则导出文件没有规格列。
-          </Paragraph>
-
-          <Title level={5}>Q：发布后查询工作台看不到数据？</Title>
-          <Paragraph>
-            确认：① 清洗任务已有可发布数据；② 在「清洗任务详情」页面点击了「发布到分析库」并成功；③ 回到查询工作台后点「查询」按钮（首次进入不会自动加载）。
-          </Paragraph>
-
-          <Title level={5}>Q：导出任务一直显示「排队中」？</Title>
-          <Paragraph>
-            点右上角「刷新」手动刷新状态。若长时间无响应，请联系管理员检查服务状态。
-          </Paragraph>
-
-          <Title level={5}>Q：匹配规则和历史库都有同一个商品，哪个优先？</Title>
-          <Paragraph>
-            优先级从高到低：<Tag color="blue">URL映射（S0）</Tag> &gt; <Tag color="purple">历史库（S0.2）</Tag> &gt; <Tag color="cyan">匹配规则（S0.5）</Tag> &gt; <Tag color="green">算法（S1-S4）</Tag>。URL映射配置后优先级最高，不会被其他规则覆盖。
-          </Paragraph>
-        </Typography>
-      </Col>
-    </Row>
+        <main className="manual-chapters" aria-label="使用手册正文">
+          {sections.length === 0 && (
+            <div className="manual-empty">
+              <Empty description="没有找到相关章节，试试更短的关键词" />
+              <Button onClick={() => setQuery('')}>清空搜索，查看完整手册</Button>
+            </div>
+          )}
+          {sections.map(section => (
+            <section className="manual-chapter" id={section.id} key={section.id} aria-labelledby={`${section.id}-title`}>
+              <div className="manual-chapter-label">{String(manual.sections.indexOf(section) + 1).padStart(2, '0')} <span>{section.group}</span></div>
+              <h2 id={`${section.id}-title`}>{section.title}</h2>
+              <p className="manual-summary">{section.summary}</p>
+              {section.entry && <div className="manual-entry"><strong>入口</strong><span>{section.entry}</span></div>}
+              <div className="manual-chapter-content">{section.blocks.map((block, index) => <Block block={block} key={index} />)}</div>
+            </section>
+          ))}
+        </main>
+      </div>
+      <footer className="manual-footer">洛图数据处理平台 · {manual.version} · 具体权限和可操作范围以当前页面为准</footer>
+    </div>
   )
 }

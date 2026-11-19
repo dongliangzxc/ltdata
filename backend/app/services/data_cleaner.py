@@ -24,8 +24,8 @@ from app.services.rawdata_cache import cached_value
 logger = logging.getLogger(__name__)
 
 
-# 规则表进程内缓存：品牌别名/干扰链接是几十万行的重表，每个任务都全量重查会打满
-# RDS（实测并发任务时单次 brand_aliases 查询 5-25s）。规则变更少，TTL 兜底 + 写入时
+# 规则表进程内缓存：品牌别名是重表，干扰链接只读取当前品类，减少重复读取。
+# RDS 曾出现单次 brand_aliases 查询 5-25s；规则变更少，TTL 兜底 + 写入时
 # 显式失效（invalidate_rawdata_cache）。
 _RULES_CACHE_TTL = 300.0
 _CLEAN_BATCH_SIZE = 1000
@@ -67,22 +67,29 @@ def _load_intervention_rules_uncached(db: Session, category_code: str) -> list[d
     ]
 
 
-def _load_interference_links(db: Session) -> dict[str, dict[str, str]]:
-    """返回 {品类码: {链接(小写去空格): 原文}}，按品类严格隔离。"""
+def _load_interference_links(db: Session, category_code: str | None = None) -> dict[str, dict[str, str]]:
+    """仅加载并缓存当前品类的链接；无品类时不读取链接库。"""
+    if not category_code:
+        return {}
     return cached_value(
-        "clean_rules", ("interference_links",), _RULES_CACHE_TTL,
-        lambda: _load_interference_links_uncached(db),
+        "clean_rules", ("interference_links", category_code), _RULES_CACHE_TTL,
+        lambda: _load_interference_links_uncached(db, category_code),
     )
 
 
-def _load_interference_links_uncached(db: Session) -> dict[str, dict[str, str]]:
+def _load_interference_links_uncached(db: Session, category_code: str) -> dict[str, dict[str, str]]:
     result: dict[str, dict[str, str]] = {}
-    for row in db.query(InterferenceLink).all():
-        normalized = (row.url or "").casefold().strip()
+    rows = (
+        db.query(InterferenceLink.category_code, InterferenceLink.url)
+        .filter(InterferenceLink.category_code == category_code)
+        .order_by(InterferenceLink.id)
+    )
+    for row_category, url in rows:
+        normalized = (url or "").casefold().strip()
         if not normalized:
             continue
-        bucket = result.setdefault(row.category_code, {})
-        bucket[normalized] = row.url
+        bucket = result.setdefault(row_category, {})
+        bucket[normalized] = url
     return result
 
 
@@ -521,7 +528,7 @@ def run_clean(
     ]
     brand_alias_map = _load_brand_alias_map(db)
     interference_link_index = _build_interference_link_index(
-        _load_interference_links(db), dispatch_category_code,
+        _load_interference_links(db, dispatch_category_code), dispatch_category_code,
     )
     _t1 = time.perf_counter()
 

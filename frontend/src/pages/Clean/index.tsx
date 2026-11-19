@@ -32,7 +32,7 @@ import { finishedCleanJobIds, formatCleanProgress, mergeCleanProgress, processin
 import { formatCleanAccounting, formatDuplicateBasis } from './cleanAccounting'
 import { FilterReason } from './FilterReason'
 import { supplementFeedback } from './supplementFeedback'
-import { jobSupplementTarget, monthlySupplementTarget } from './supplementTarget'
+import { jobSupplementTarget } from './supplementTarget'
 import type { SupplementTarget } from './supplementTarget'
 
 const { Text } = Typography
@@ -282,7 +282,6 @@ const getQueueAction = (row: CleanMonthlyPoolItem) => {
 
 const monthlyQueueColumns = (
   onUpsert: (row: CleanMonthlyPoolItem) => void,
-  onSupplement: (target: SupplementTarget) => void,
   upsertingRowKey: string | null,
   operationDisabled: boolean,
 ): ColumnsType<CleanMonthlyPoolItem> => [
@@ -307,34 +306,22 @@ const monthlyQueueColumns = (
     render: formatNumber,
   },
   {
-    title: '操作', width: 240, fixed: 'right',
+    title: '操作', width: 120, fixed: 'right',
     render: (_: unknown, row) => {
       const action = getQueueAction(row)
       const rowKey = getMonthlyQueueRowKey(row)
       const isCurrentRowUpserting = upsertingRowKey === rowKey
-      const supplementTarget = monthlySupplementTarget(row)
       return (
-        <Space size={8}>
-          <Button
-            type="primary"
-            size="small"
-            title={action.action === 'recleaned' ? '按最新分发结果重新清洗，会移出旧批次命中数据' : undefined}
-            disabled={action.disabled || operationDisabled || (!!upsertingRowKey && !isCurrentRowUpserting)}
-            loading={isCurrentRowUpserting}
-            onClick={() => onUpsert(row)}
-          >
-            {action.label}
-          </Button>
-          <Button
-            size="small"
-            icon={<UploadOutlined />}
-            title={supplementTarget ? '上传新增数据，追加到本行已有任务' : '请先完成本行清洗任务，失败任务请先重试'}
-            disabled={!supplementTarget || operationDisabled || !!upsertingRowKey}
-            onClick={() => supplementTarget && onSupplement(supplementTarget)}
-          >
-            补充数据
-          </Button>
-        </Space>
+        <Button
+          type="primary"
+          size="small"
+          title={action.action === 'recleaned' ? '按最新分发结果重新清洗，会移出旧批次命中数据' : undefined}
+          disabled={action.disabled || operationDisabled || (!!upsertingRowKey && !isCurrentRowUpserting)}
+          loading={isCurrentRowUpserting}
+          onClick={() => onUpsert(row)}
+        >
+          {action.label}
+        </Button>
       )
     },
   },
@@ -877,7 +864,7 @@ export default function CleanPage() {
             <Text type="secondary">已有清洗任务补充新数据，可直接使用下方任务列表中的「补充数据」，无需重新创建或强制重建任务。</Text>
             <Table
               dataSource={monthlyPool}
-              columns={monthlyQueueColumns(handleUpsertMonthlyTask, openSupplement, upsertingRowKey, batchUpserting || supplementing)}
+              columns={monthlyQueueColumns(handleUpsertMonthlyTask, upsertingRowKey, batchUpserting || supplementing)}
               rowKey={getMonthlyQueueRowKey}
               rowSelection={monthlyRowSelection}
               size="small"

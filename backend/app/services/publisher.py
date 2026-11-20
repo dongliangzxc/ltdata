@@ -11,9 +11,40 @@ publisher.py — 将已匹配/已确认数据发布到 luotu_analytics 分析库
 
 from datetime import datetime
 from sqlalchemy.orm import Session
-from sqlalchemy import text
-from app.models.analytics_db import AnalyticsBase, analytics_engine, PublishedItemSpec
+from sqlalchemy import text, tuple_
+from sqlalchemy.dialects.mysql import insert as mysql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from app.models.analytics_db import AnalyticsBase, analytics_engine, PublishedItem, PublishedItemSpec
+from app.models.schemas import ModelSpec, MatchResultAttr
 from app.services.correction_engine import apply_correction_rules
+
+PUBLISH_BATCH_SIZE = 1000
+
+
+def _chunks(rows):
+    for start in range(0, len(rows), PUBLISH_BATCH_SIZE):
+        yield rows[start:start + PUBLISH_BATCH_SIZE]
+
+
+def _upsert_published_items(db, items):
+    """Use bounded multi-value writes; the caller commits the whole publication."""
+    mysql = db.get_bind().dialect.name == "mysql"
+    for batch in _chunks(items):
+        stmt = (mysql_insert if mysql else sqlite_insert)(PublishedItem.__table__).values(batch)
+        incoming = stmt.inserted if mysql else stmt.excluded
+        # Keep the existing duplicate-publication field/overwrite policy.
+        fields = (
+            "publish_job_id", "clean_job_id", "match_result_id", "item_name", "item_image",
+            "item_url", "ref_price", "shop_name", "sales_qty", "sales_amount", "price",
+            "brand_code", "brand_name", "model_code", "model_name", "category_name",
+            "category_lv0", "calc_price", "corrected_sales_qty", "corrected_sales_amount", "published_at",
+        )
+        updates = {name: getattr(incoming, name) for name in fields}
+        stmt = stmt.on_duplicate_key_update(**updates) if mysql else stmt.on_conflict_do_update(
+            index_elements=["platform", "item_id", "month"], set_=updates,
+        )
+        db.execute(stmt)
+
 
 def _ensure_analytics_tables():
     """确保分析库表已创建（首次运行）"""
@@ -26,21 +57,13 @@ def _count_unique_published_items(items: list[dict]) -> int:
 
 def delete_published_data(analytics_db: Session, clean_job_id: int) -> None:
     """删除指定清洗任务在分析库中的已发布数据（含属性表）。"""
-    old_ids_sql = text(
-        "SELECT id FROM published_items WHERE clean_job_id = :cjid"
-    )
-    old_ids = [r[0] for r in analytics_db.execute(old_ids_sql, {"cjid": clean_job_id}).fetchall()]
+    old_ids = [row.id for row in analytics_db.query(PublishedItem.id).filter_by(clean_job_id=clean_job_id)]
+    for batch in _chunks(old_ids):
+        analytics_db.query(PublishedItemSpec).filter(
+            PublishedItemSpec.published_item_id.in_(batch),
+        ).delete(synchronize_session=False)
     if old_ids:
-        placeholders = ",".join([f":oid{i}" for i in range(len(old_ids))])
-        bind_params = {f"oid{i}": oid for i, oid in enumerate(old_ids)}
-        analytics_db.execute(
-            text(f"DELETE FROM published_item_specs WHERE published_item_id IN ({placeholders})"),
-            bind_params
-        )
-        analytics_db.execute(
-            text("DELETE FROM published_items WHERE clean_job_id = :cjid"),
-            {"cjid": clean_job_id}
-        )
+        analytics_db.query(PublishedItem).filter_by(clean_job_id=clean_job_id).delete(synchronize_session=False)
 
 
 def _build_published_item_params(r, clean_job_id: int, published_at: datetime) -> dict:
@@ -160,88 +183,29 @@ def run_publish(luotu_db: Session, analytics_db: Session, clean_job_id: int) -> 
     if not rows:
         return {"published_count": 0, "skipped_pending_count": skipped_pending_count}
 
-    # 2. 批量查 model_specs
-    model_ids = list({r["model_id"] for r in rows})
+    # 2. Read specifications/attributes with bounded IN lists.
     specs_map: dict[int, dict[str, str]] = {}
-    if model_ids:
-        placeholders = ",".join([f":id{i}" for i in range(len(model_ids))])
-        specs_sql = text(f"SELECT model_id, spec_name, spec_value FROM model_specs WHERE model_id IN ({placeholders})")
-        bind_params = {f"id{i}": mid for i, mid in enumerate(model_ids)}
-        spec_rows = luotu_db.execute(specs_sql, bind_params).mappings().all()
-        for sr in spec_rows:
-            specs_map.setdefault(sr["model_id"], {})[sr["spec_name"]] = sr["spec_value"]
+    for batch in _chunks(list({r["model_id"] for r in rows})):
+        for sr in luotu_db.query(ModelSpec.model_id, ModelSpec.spec_name, ModelSpec.spec_value).filter(
+            ModelSpec.model_id.in_(batch),
+        ):
+            specs_map.setdefault(sr.model_id, {})[sr.spec_name] = sr.spec_value
 
-    # 2b. 批量查 match_result_attrs（按条目维度的属性，优先级高于 model_specs）
-    match_result_ids = [r["match_result_id"] for r in rows]
-    attrs_map: dict[int, dict[str, str]] = {}  # match_result_id → {attr_name: attr_value}
-    if match_result_ids:
-        placeholders = ",".join([f":mrid{i}" for i in range(len(match_result_ids))])
-        attrs_sql = text(
-            f"SELECT match_result_id, attr_name, attr_value FROM match_result_attrs "
-            f"WHERE match_result_id IN ({placeholders})"
-        )
-        bind_params = {f"mrid{i}": mrid for i, mrid in enumerate(match_result_ids)}
-        attr_rows = luotu_db.execute(attrs_sql, bind_params).mappings().all()
-        for ar in attr_rows:
-            attrs_map.setdefault(ar["match_result_id"], {})[ar["attr_name"]] = ar["attr_value"]
+    attrs_map: dict[int, dict[str, str]] = {}
+    for batch in _chunks([r["match_result_id"] for r in rows]):
+        for ar in luotu_db.query(MatchResultAttr.match_result_id, MatchResultAttr.attr_name, MatchResultAttr.attr_value).filter(
+            MatchResultAttr.match_result_id.in_(batch),
+        ):
+            attrs_map.setdefault(ar.match_result_id, {})[ar.attr_name] = ar.attr_value
 
     # 3. 先删除同 clean_job_id 的旧发布数据（支持重复发布）
     delete_published_data(analytics_db, clean_job_id)
 
-    # 4. 批量写入 published_items，使用 upsert（ON DUPLICATE KEY UPDATE）
-    #    uq_published_item: UNIQUE(platform, item_id, month)
-    upsert_sql = text("""
-        INSERT INTO published_items
-            (publish_job_id, clean_job_id, match_result_id, platform, month,
-             category_lv0,
-             category_lv1, category_lv2, category_lv3, category_lv4, category_lv5,
-             item_id, item_name, item_image, item_url, ref_price, shop_name,
-             sales_qty, sales_amount, price,
-             brand_code, brand_name, model_code, model_name, category_name,
-             calc_price, corrected_sales_qty, corrected_sales_amount,
-             published_at)
-        VALUES
-            (:publish_job_id, :clean_job_id, :match_result_id, :platform, :month,
-             :category_lv0,
-             :category_lv1, :category_lv2, :category_lv3, :category_lv4, :category_lv5,
-             :item_id, :item_name, :item_image, :item_url, :ref_price, :shop_name,
-             :sales_qty, :sales_amount, :price,
-             :brand_code, :brand_name, :model_code, :model_name, :category_name,
-             :calc_price, :corrected_sales_qty, :corrected_sales_amount,
-             :published_at)
-        ON DUPLICATE KEY UPDATE
-            publish_job_id         = VALUES(publish_job_id),
-            clean_job_id           = VALUES(clean_job_id),
-            match_result_id        = VALUES(match_result_id),
-            item_name              = VALUES(item_name),
-            item_image             = VALUES(item_image),
-            item_url               = VALUES(item_url),
-            ref_price              = VALUES(ref_price),
-            shop_name              = VALUES(shop_name),
-            sales_qty              = VALUES(sales_qty),
-            sales_amount           = VALUES(sales_amount),
-            price                  = VALUES(price),
-            brand_code             = VALUES(brand_code),
-            brand_name             = VALUES(brand_name),
-            model_code             = VALUES(model_code),
-            model_name             = VALUES(model_name),
-            category_name          = VALUES(category_name),
-            category_lv0           = VALUES(category_lv0),
-            calc_price             = VALUES(calc_price),
-            corrected_sales_qty    = VALUES(corrected_sales_qty),
-            corrected_sales_amount = VALUES(corrected_sales_amount),
-            published_at           = VALUES(published_at)
-    """)
-
-    items_to_insert = []
-    for r in rows:
-        items_to_insert.append(
-            _build_published_item_params(r, clean_job_id, datetime.utcnow())
-        )
-
-    for item_dict in items_to_insert:
-        analytics_db.execute(upsert_sql, item_dict)
-    analytics_db.flush()
+    # 4. Write all item batches in the same transaction.
+    items_to_insert = [
+        _build_published_item_params(r, clean_job_id, datetime.utcnow()) for r in rows
+    ]
+    _upsert_published_items(analytics_db, items_to_insert)
 
     # 5. 写入 published_item_specs
     #    upsert 后无法直接拿到 id，通过 (platform, item_id, month) 查回
@@ -256,41 +220,34 @@ def run_publish(luotu_db: Session, analytics_db: Session, clean_job_id: int) -> 
             (r["platform"], r["item_id"], r["month"]): r["match_result_id"]
             for r in rows
         }
-        # 查回刚插入/更新的 published_item id
-        placeholders = ",".join(
-            f"(:p{i}, :ii{i}, :m{i})" for i in range(len(items_to_insert))
-        )
-        bind = {}
-        for i, d in enumerate(items_to_insert):
-            bind[f"p{i}"] = d["platform"]
-            bind[f"ii{i}"] = d["item_id"]
-            bind[f"m{i}"] = d["month"]
-        id_rows = analytics_db.execute(
-            text(f"SELECT id, platform, item_id, month FROM published_items "
-                 f"WHERE (platform, item_id, month) IN ({placeholders})"),
-            bind,
-        ).fetchall()
-
+        # Query back IDs in bounded batches, once per persisted item even when
+        # input keys repeat or the database collation merges different spellings.
+        keys = list(dict.fromkeys((d["platform"], d["item_id"], d["month"]) for d in items_to_insert))
+        seen_pub_ids = set()
         specs_to_insert = []
-        for pub_id, platform, item_id, month in id_rows:
-            model_id = key_to_model.get((platform, item_id, month))
-            match_result_id = key_to_match_result.get((platform, item_id, month))
-            if model_id is None:
-                continue
-
-            # model_specs 作为基础，match_result_attrs 覆盖（条目级属性优先）
-            merged: dict[str, str] = dict(specs_map.get(model_id, {}))
-            merged.update(attrs_map.get(match_result_id, {}))
-
-            for spec_name, spec_value in merged.items():
-                specs_to_insert.append(PublishedItemSpec(
-                    published_item_id=pub_id,
-                    spec_name=spec_name,
-                    spec_value=spec_value,
-                ))
-
+        for batch in _chunks(keys):
+            id_rows = analytics_db.query(
+                PublishedItem.id, PublishedItem.platform, PublishedItem.item_id, PublishedItem.month,
+            ).filter(tuple_(PublishedItem.platform, PublishedItem.item_id, PublishedItem.month).in_(batch)).all()
+            for pub_id, platform, item_id, month in id_rows:
+                if pub_id in seen_pub_ids:
+                    continue
+                seen_pub_ids.add(pub_id)
+                model_id = key_to_model.get((platform, item_id, month))
+                match_result_id = key_to_match_result.get((platform, item_id, month))
+                if model_id is None:
+                    continue
+                merged = dict(specs_map.get(model_id, {}))
+                merged.update(attrs_map.get(match_result_id, {}))
+                for spec_name, spec_value in merged.items():
+                    specs_to_insert.append(dict(
+                        published_item_id=pub_id, spec_name=spec_name, spec_value=spec_value,
+                    ))
+                    if len(specs_to_insert) >= PUBLISH_BATCH_SIZE:
+                        analytics_db.execute(PublishedItemSpec.__table__.insert(), specs_to_insert)
+                        specs_to_insert = []
         if specs_to_insert:
-            analytics_db.add_all(specs_to_insert)
+            analytics_db.execute(PublishedItemSpec.__table__.insert(), specs_to_insert)
 
     analytics_db.commit()
     return {

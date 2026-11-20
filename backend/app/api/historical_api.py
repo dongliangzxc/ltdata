@@ -1957,9 +1957,9 @@ def download_historical_template():
 
 
 @router.post("/import")
-async def import_historical_mappings(file: UploadFile = File(...), db: Session = Depends(get_db)):
+def import_historical_mappings(file: UploadFile = File(...), db: Session = Depends(get_db)):
     _validate_excel_file(file)
-    _, save_path, safe_filename = await save_tmp_file(file, settings.UPLOAD_DIR)
+    _, save_path, safe_filename = save_tmp_file(file, settings.UPLOAD_DIR)
     try:
         xls = pd.ExcelFile(save_path)
         sheet_name, columns, mapping = _detect_sheet_and_mapping(xls)
@@ -1982,9 +1982,9 @@ async def import_historical_mappings(file: UploadFile = File(...), db: Session =
 
 
 @router.post("/headers")
-async def historical_headers(file: UploadFile = File(...), db: Session = Depends(get_db)):
+def historical_headers(file: UploadFile = File(...), db: Session = Depends(get_db)):
     _validate_excel_file(file)
-    temp_file_id, save_path, safe_filename = await save_tmp_file(file, settings.UPLOAD_DIR)
+    temp_file_id, save_path, safe_filename = save_tmp_file(file, settings.UPLOAD_DIR)
     try:
         xls = pd.ExcelFile(save_path)
         sheet_name, columns, mapping = _detect_sheet_and_mapping(xls)

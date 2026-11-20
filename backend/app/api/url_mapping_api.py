@@ -170,12 +170,12 @@ def download_url_mapping_template():
 
 
 @router.post("/headers")
-async def url_mapping_headers(
+def url_mapping_headers(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
     """P10: Step 1 — read columns, suggest mapping template."""
-    temp_file_id, save_path, filename = await save_tmp_file(file, UPLOAD_DIR)
+    temp_file_id, save_path, filename = save_tmp_file(file, UPLOAD_DIR)
     columns = read_columns(save_path)
     best_tmpl, score = find_best_template(columns, "url", db)
     return {

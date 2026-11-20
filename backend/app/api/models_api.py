@@ -137,12 +137,12 @@ class ModelsConfirmPayload(BaseModel):
 
 
 @router.post("/headers")
-async def models_headers(
+def models_headers(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
     """P10: Step 1 — read columns from model sheet, suggest template."""
-    temp_file_id, save_path, filename = await save_tmp_file(file, UPLOAD_DIR)
+    temp_file_id, save_path, filename = save_tmp_file(file, UPLOAD_DIR)
     columns = read_columns(save_path)
     # 兼容旧版模板（不含「产品系列」列）：核心列一致即视为内置模板
     if columns == _MODEL_TEMPLATE_HEADERS or columns == _MODEL_TEMPLATE_HEADERS[:-1]:
@@ -587,16 +587,16 @@ def _parse_models_file(content: bytes) -> dict:
 
 
 @router.post("/preview", response_model=dict)
-async def preview_models(file: UploadFile = File(...)):
+def preview_models(file: UploadFile = File(...)):
     """解析 Excel 并返回预览数据，不写入数据库"""
     if not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="只支持 .xlsx / .xls 格式文件")
-    content = await file.read()
+    content = file.file.read()
     return _parse_models_file(content)
 
 
 @router.post("/import", response_model=dict, dependencies=[Depends(catalog_import_slot)])
-async def import_models(
+def import_models(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -609,7 +609,7 @@ async def import_models(
     if not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="只支持 .xlsx / .xls 格式文件")
 
-    content = await file.read()
+    content = file.file.read()
 
     try:
         df_model = pd.read_excel(io.BytesIO(content), sheet_name="型号", dtype=str)

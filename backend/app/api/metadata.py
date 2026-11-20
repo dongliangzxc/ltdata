@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy.dialects.mysql import insert as mysql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy import func
 from app.core.auth_deps import get_current_user
 from app.core.permissions import visible_category_codes
@@ -104,6 +105,8 @@ def _canonicalize_category_codes(df: pd.DataFrame, db: Session | None) -> pd.Dat
     if db is None or "category_code" not in df.columns:
         return df
 
+    resolved = {}
+
     def normalize(value):
         value = _clean_val(value)
         if value is None:
@@ -111,7 +114,9 @@ def _canonicalize_category_codes(df: pd.DataFrame, db: Session | None) -> pd.Dat
         text = str(value).strip()
         if not text or text == "不需要填写":
             return None
-        return _match_category_code(db, text)
+        if text not in resolved:
+            resolved[text] = _match_category_code(db, text)
+        return resolved[text]
 
     df = df.copy()
     df["category_code"] = df["category_code"].map(normalize).ffill().fillna("")
@@ -181,7 +186,7 @@ def _parse_metadata_file(content: bytes, db: Session | None = None) -> dict:
 
 
 @router.post("/preview", response_model=dict)
-async def preview_metadata(
+def preview_metadata(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -189,14 +194,14 @@ async def preview_metadata(
     """解析 Excel 并返回预览数据，不写入数据库"""
     if not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="只支持 .xlsx / .xls 格式文件")
-    content = await file.read()
+    content = file.file.read()
     result = _parse_metadata_file(content, db)
     _ensure_metadata_rows_visible(db, current_user, result["preview"])
     return result
 
 
 @router.post("/import", response_model=dict)
-async def import_metadata(
+def import_metadata(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -209,7 +214,7 @@ async def import_metadata(
     if not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="只支持 .xlsx / .xls 格式文件")
 
-    content = await file.read()
+    content = file.file.read()
     df = _canonicalize_category_codes(_normalize_metadata_columns(_read_metadata_excel(content, db)), db)
 
     for col in ["spec_name", "spec_type"]:
@@ -268,22 +273,25 @@ async def import_metadata(
 
     _ensure_metadata_rows_visible(db, current_user, rows_to_upsert)
 
-    upserted = 0
-    for row in rows_to_upsert:
-        stmt = mysql_insert(MetadataSpec).values(**row)
-        stmt = stmt.on_duplicate_key_update(
-            spec_type=stmt.inserted.spec_type,
-            spec_values=stmt.inserted.spec_values,
-            required=stmt.inserted.required,
-            decimal_places=stmt.inserted.decimal_places,
-            single_select=stmt.inserted.single_select,
+    mysql = db.get_bind().dialect.name == "mysql"
+    for start in range(0, len(rows_to_upsert), 300):
+        stmt = (mysql_insert if mysql else sqlite_insert)(MetadataSpec).values(rows_to_upsert[start:start + 300])
+        incoming = stmt.inserted if mysql else stmt.excluded
+        updates = dict(
+            spec_type=incoming.spec_type,
+            spec_values=incoming.spec_values,
+            required=incoming.required,
+            decimal_places=incoming.decimal_places,
+            single_select=incoming.single_select,
             updated_at=func.now(),
         )
+        stmt = stmt.on_duplicate_key_update(**updates) if mysql else stmt.on_conflict_do_update(
+            index_elements=["category_code", "spec_name"], set_=updates,
+        )
         db.execute(stmt)
-        upserted += 1
 
     db.commit()
-    return {"imported": len(rows_to_upsert), "upserted": upserted}
+    return {"imported": len(rows_to_upsert), "upserted": len(rows_to_upsert)}
 
 
 @router.get("/template")

@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 from app.core.config import settings
 from app.core.permissions import is_admin_only_path, required_permission_for_path, user_has_permission
 from app.core.security import verify_token, hash_password
@@ -71,12 +72,8 @@ app.add_middleware(
 )
 
 
-@app.middleware("http")
-async def auth_middleware(request: Request, call_next):
-    path = request.url.path
-    if path in _SKIP_AUTH or path.startswith(_SKIP_AUTH_PREFIXES):
-        return await call_next(request)
-    token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+def _authorize_request(path: str, token: str):
+    """Keep the complete synchronous database session in one worker thread."""
     username = verify_token(token) if token else None
     if not username:
         return JSONResponse(status_code=401, content={"code": 401, "message": "未登录或登录已过期"})
@@ -93,6 +90,17 @@ async def auth_middleware(request: Request, call_next):
             return JSONResponse(status_code=403, content={"code": 403, "message": "无权限访问该功能"})
     finally:
         db.close()
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    path = request.url.path
+    if path in _SKIP_AUTH or path.startswith(_SKIP_AUTH_PREFIXES):
+        return await call_next(request)
+    token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    rejection = await run_in_threadpool(_authorize_request, path, token)
+    if rejection is not None:
+        return rejection
     return await call_next(request)
 
 

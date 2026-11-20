@@ -1519,70 +1519,14 @@ def _candidate_is_valid(mr: MatchResult, model: Optional[ModelRecord]) -> bool:
     return True
 
 
-def _existing_url_mapping_conflict(
-    db: Session, rd: RawDataRecord, model: ModelRecord
-) -> Optional[ModelRecord]:
-    """若同 platform+item_id 已有映射且指向不同型号，返回冲突的 ModelRecord。"""
-    if not rd or not rd.platform or not rd.item_id:
-        return None
-    existing = (
-        db.query(ItemUrlMapping)
-        .filter_by(platform=rd.platform, item_id=rd.item_id)
-        .first()
-    )
-    if not existing or existing.model_id == model.id:
-        return None
-    return db.query(ModelRecord).filter(ModelRecord.id == existing.model_id).first()
-
-
 def _run_batch_confirm(
     db: Session, clean_job_id: int, targets: list[MatchResult], selected_model: ModelRecord
 ) -> dict:
-    """对给定 targets 逐条独立提交确认到 selected_model；返回统一响应结构。"""
-    success = 0
-    failures: list[dict] = []
-    ok_ids: list[int] = []
-
-    for mr in targets:
-        rd = db.query(RawDataRecord).filter(RawDataRecord.id == mr.raw_data_id).first()
-        item_name = rd.item_name if rd else None
-        try:
-            if mr.match_status not in _BATCH_ALLOWED_STATUSES:
-                failures.append({"id": mr.id, "item_name": item_name, "reason": "状态已变更"})
-                continue
-            model = selected_model
-            if not _candidate_is_valid(mr, model):
-                failures.append({"id": mr.id, "item_name": item_name, "reason": "目标型号无效"})
-                continue
-            conflict = _existing_url_mapping_conflict(db, rd, model)
-            if conflict is not None:
-                failures.append({
-                    "id": mr.id, "item_name": item_name,
-                    "reason": f"URL 映射冲突：指向 [{conflict.brand_code or '-'}] {conflict.model_code or '-'}",
-                })
-                continue
-            # 条件更新保证并发安全
-            updated = (
-                db.query(MatchResult)
-                .filter(
-                    MatchResult.id == mr.id,
-                    MatchResult.match_status.in_(list(_BATCH_ALLOWED_STATUSES)),
-                )
-                .update({MatchResult.match_status: mr.match_status}, synchronize_session=False)
-            )
-            if updated == 0:
-                failures.append({"id": mr.id, "item_name": item_name, "reason": "状态已变更"})
-                db.rollback()
-                continue
-            _snapshot_prev_state(mr)
-            confirm_single_review(db, mr, model)
-            db.commit()
-            success += 1
-            ok_ids.append(mr.id)
-        except Exception:
-            logger.exception("batch confirm failed for mr_id=%s", mr.id)
-            db.rollback()
-            failures.append({"id": mr.id, "item_name": item_name, "reason": "系统错误"})
+    """按用户所选型号覆盖链接映射，失败批次拆分隔离并逐条反馈。"""
+    from app.services.batch_review_confirm import confirm_review_batches
+    ok_ids, failures = confirm_review_batches(
+        db, clean_job_id, [mr.id for mr in targets], selected_model.id,
+    )
 
     if ok_ids:
         try:
@@ -1598,7 +1542,7 @@ def _run_batch_confirm(
             db.rollback()
 
     return {
-        "success": success,
+        "success": len(ok_ids),
         "failed": len(failures),
         "failures": failures,
     }

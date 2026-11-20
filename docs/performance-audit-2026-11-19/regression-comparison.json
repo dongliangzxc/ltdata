@@ -1,0 +1,367 @@
+{
+  "baseline": {
+    "revision": "c21ee54",
+    "passed": 1091,
+    "failed": 80,
+    "errors": 6,
+    "skipped": 1,
+    "xpassed": 2
+  },
+  "candidate": {
+    "passed": 1114,
+    "failed": 79,
+    "errors": 6,
+    "skipped": 1,
+    "xpassed": 2
+  },
+  "new_tests_passed": 22,
+  "new_failures": [],
+  "changed_failure_types": [],
+  "resolved_failures": [
+    "tests.test_disable::test_publisher_excludes_disabled"
+  ],
+  "remaining_failures_and_errors": {
+    "tests.test_aliases::test_import_aliases_from_excel": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_async_jobs::test_wb_export_returns_job_id": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_async_jobs::test_wb_export_rejects_when_exports_are_busy": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_auth_api::test_login_returns_user_profile": {
+      "kind": "error",
+      "type": null
+    },
+    "tests.test_auth_api::test_disabled_user_cannot_login": {
+      "kind": "error",
+      "type": null
+    },
+    "tests.test_auth_api::test_normal_user_can_access_granted_directory_api": {
+      "kind": "error",
+      "type": null
+    },
+    "tests.test_auth_api::test_normal_user_cannot_access_ungranted_directory_api": {
+      "kind": "error",
+      "type": null
+    },
+    "tests.test_auth_api::test_normal_user_cannot_access_user_management": {
+      "kind": "error",
+      "type": null
+    },
+    "tests.test_auth_api::test_missing_token_returns_401": {
+      "kind": "error",
+      "type": null
+    },
+    "tests.test_auth_downloads::test_dispatch_export_download_skips_auth_like_other_downloads": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_auth_downloads::test_upload_download_job_file_download_skips_auth": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_brands_api_permissions::test_list_brands_only_returns_brands_with_visible_model_categories": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_category_hierarchy::test_tree_returns_nested_children": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_category_hierarchy::test_tree_root_nodes_only_at_top": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_category_hierarchy::test_flat_list_includes_parent_code": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_category_hierarchy::test_create_category_with_parent_code": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_category_hierarchy::test_update_category_parent_and_sort": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_category_hierarchy::test_update_category_clears_parent_code": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_category_hierarchy::test_update_category_rejects_indirect_cycle": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_category_hierarchy::test_delete_category_blocked_by_children": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_category_hierarchy::test_create_category_rejects_nonexistent_parent": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_clean_api::test_search_clean_tasks_filters_by_category_permissions": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_clean_tasks_search::test_clean_tasks_search_by_task_name": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_clean_tasks_search::test_clean_tasks_search_excludes_current_and_archived": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_clean_tasks_search::test_clean_tasks_search_filters_by_category_platform_and_month": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_clean_tasks_search::test_clean_tasks_search_by_category_name": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_clean_tasks_search::test_clean_tasks_search_by_platform": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_disable::test_disable_and_enable_single": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_disable::test_avg_price_disable": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_disable::test_list_disabled": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_disable::test_summary_includes_disabled_count": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_dispatch_api::test_dispatch_export_jobs_are_scoped_to_visible_categories": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_fast_delete::test_delete_file_returns_200": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_fast_delete::test_delete_file_not_found": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_fast_delete::test_delete_executes_batch_sql": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_fast_delete::test_delete_removes_raw_data_rows": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_fast_delete::test_delete_rejects_file_with_downstream_raw_data_reference[clean_job_items-<lambda>]": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_fast_delete::test_delete_rejects_file_with_downstream_raw_data_reference[cleaned_data-<lambda>]": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_fast_delete::test_delete_rejects_file_with_downstream_raw_data_reference[filtered_items-<lambda>]": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_fast_delete::test_delete_nullifies_dispatch_batch_file_id": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_legacy_historical_metadata::test_import_legacy_metadata_uses_detected_mapping_for_model_aliases": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_match_api::test_batch_confirm_requires_model_id": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_match_api::test_batch_confirm_uses_selected_model_for_all_rows": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_match_api::test_batch_confirm_selected_model_preserves_url_mapping_conflict": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_match_api::test_match_summary_counts_disputed": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_match_api::test_pending_endpoint_sorts_by_updated_at": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_match_api::test_pending_queue_deduplicates_dispatch_items_for_same_raw_data": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_metadata_import::test_preview_metadata_uses_sheet_name_as_category_code": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_metadata_import::test_preview_metadata_matches_sheet_name_to_category_name": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_metadata_import::test_preview_metadata_matches_sheet_name_to_category_code_case_insensitively": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_metadata_import::test_preview_metadata_matches_sheet_name_with_category_suffix": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_metadata_import::test_preview_metadata_rejects_unknown_sheet_category": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_metadata_import::test_preview_metadata_canonicalizes_category_code_case": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_models_api_permissions::test_create_model_auto_hangs_brand_to_category": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_models_import_p10::test_models_confirm_uses_selected_category_when_excel_category_mismatches": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_models_status_operator::test_create_model_status_defaults_to_active": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_models_status_operator::test_create_model_with_status_and_operator": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_models_status_operator::test_update_model_changes_status_and_operator": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_models_status_operator::test_list_models_filter_by_status": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_models_status_operator::test_create_model_rejects_missing_brand": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_models_status_operator::test_create_model_rejects_all_hyphen_placeholder_brand_even_if_seeded": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_models_status_operator::test_import_models_skips_all_hyphen_placeholder_brand": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_models_status_operator::test_models_confirm_skips_all_hyphen_placeholder_brand": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_models_status_operator::test_create_model_snapshots_brand_name_from_brand": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_models_status_operator::test_delete_model_preserves_mappings_and_clears_model_reference": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_price_auditor::test_run_match_triggers_price_audit_for_auto_matched_result": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_price_auditor::test_run_match_keeps_persisted_results_when_price_audit_fails": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_template_downloads::test_metadata_template_download_returns_existing_excel_file": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_template_downloads::test_metadata_template_can_be_previewed_for_import": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_template_downloads::test_models_template_download_returns_two_sheet_workbook": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_template_downloads::test_historical_template_download_returns_workbook_with_standard_headers": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_url_mapping_source::test_list_url_mappings_uses_headphone_category_for_legacy_domestic_rows": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_url_mappings_import_p10::test_url_headers_returns_columns": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_url_mappings_import_p10::test_url_headers_requires_file": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_url_mappings_import_p10::test_url_confirm_inserts_mapping": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_url_mappings_import_p10::test_url_confirm_missing_required": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_url_mappings_import_p10::test_url_confirm_model_not_found": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_url_matching::test_create_url_mapping": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_url_matching::test_list_url_mappings": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_url_matching::test_update_url_mapping": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_url_matching::test_delete_url_mapping": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_url_matching::test_create_url_mapping_conflict": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_url_matching::test_update_url_mapping_not_found": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_url_matching::test_summary_includes_url_matched_and_text_only": {
+      "kind": "failure",
+      "type": null
+    },
+    "tests.test_url_matching::test_list_text_only": {
+      "kind": "failure",
+      "type": null
+    }
+  },
+  "frontend_test_files": 42,
+  "frontend_build_and_type_check": "passed"
+}

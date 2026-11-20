@@ -1,0 +1,110 @@
+{
+  "environment": "isolated SQLite; production autoflush=False and expire_on_commit=True",
+  "batch_confirm_10": {
+    "sql_calls": 10,
+    "select": 6,
+    "update": 2,
+    "insert": 1,
+    "delete": 1,
+    "commits": 2,
+    "elapsed_seconds": 0.0081,
+    "success": 10
+  },
+  "batch_ignore_10": {
+    "sql_calls": 11,
+    "select": 10,
+    "update": 1,
+    "commits": 1,
+    "elapsed_seconds": 0.0028,
+    "success": 10
+  },
+  "batch_exclude_10": {
+    "sql_calls": 32,
+    "select": 21,
+    "insert": 10,
+    "update": 1,
+    "commits": 1,
+    "elapsed_seconds": 0.0053,
+    "success": 10
+  },
+  "batch_confirm_100": {
+    "sql_calls": 10,
+    "select": 6,
+    "update": 2,
+    "insert": 1,
+    "delete": 1,
+    "commits": 2,
+    "elapsed_seconds": 0.0114,
+    "success": 100
+  },
+  "batch_ignore_100": {
+    "sql_calls": 101,
+    "select": 100,
+    "update": 1,
+    "commits": 1,
+    "elapsed_seconds": 0.0146,
+    "success": 100
+  },
+  "batch_exclude_100": {
+    "sql_calls": 302,
+    "select": 201,
+    "insert": 100,
+    "update": 1,
+    "commits": 1,
+    "elapsed_seconds": 0.031,
+    "success": 100
+  },
+  "batch_confirm_500": {
+    "sql_calls": 38,
+    "select": 22,
+    "update": 6,
+    "insert": 5,
+    "delete": 5,
+    "commits": 6,
+    "elapsed_seconds": 0.0474,
+    "success": 500
+  },
+  "batch_ignore_500": {
+    "sql_calls": 501,
+    "select": 500,
+    "update": 1,
+    "commits": 1,
+    "elapsed_seconds": 0.0687,
+    "success": 500
+  },
+  "batch_exclude_500": {
+    "sql_calls": 1502,
+    "select": 1001,
+    "insert": 500,
+    "update": 1,
+    "commits": 1,
+    "elapsed_seconds": 0.1462,
+    "success": 500
+  },
+  "attribute_matching_1000": {
+    "sql_calls": 1003,
+    "select": 3,
+    "insert": 1000,
+    "attribute_insert_calls": 1000,
+    "commits": 1,
+    "matched_attrs": 1000,
+    "items_processed": 1000,
+    "elapsed_seconds": 0.0484
+  },
+  "metadata_preview_1000": {
+    "sql_calls": 2,
+    "select": 2,
+    "category_selects": 2,
+    "valid_rows": 1000,
+    "elapsed_seconds": 0.0413,
+    "max_10ms_heartbeat_interval_seconds": 0.0208
+  },
+  "metadata_preview_10000": {
+    "sql_calls": 2,
+    "select": 2,
+    "category_selects": 2,
+    "valid_rows": 10000,
+    "elapsed_seconds": 0.3612,
+    "max_10ms_heartbeat_interval_seconds": 0.0519
+  }
+}

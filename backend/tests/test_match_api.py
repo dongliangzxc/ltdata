@@ -229,7 +229,7 @@ def test_batch_confirm_uses_selected_model_for_all_rows(match_client, db, monkey
     assert second.match_status == "confirmed"
 
 
-def test_batch_confirm_selected_model_preserves_url_mapping_conflict(match_client, db, monkeypatch):
+def test_batch_confirm_selected_model_overwrites_existing_url_mapping(match_client, db, monkeypatch):
     monkeypatch.setattr("app.api.match_api.audit_price", lambda *_args, **_kwargs: None)
     job, _candidate_model, selected_model, match = _seed_batch_confirm_rows(db, item_id="conflict-1")
     conflict_model = ModelRecord(
@@ -249,15 +249,20 @@ def test_batch_confirm_selected_model_preserves_url_mapping_conflict(match_clien
     db.commit()
 
     response = match_client.post(
-        f"/{job.id}/batch-confirm",
+        f"/api/match/{job.id}/batch-confirm",
         json={"mode": "ids", "ids": [match.id], "model_id": selected_model.id},
     )
 
     assert response.status_code == 200
     body = response.json()
-    assert body["success"] == 0
-    assert body["failed"] == 1
-    assert "URL 映射冲突" in body["failures"][0]["reason"]
+    assert body["success"] == 1
+    assert body["failed"] == 0
+    assert body["failures"] == []
+    db.expire_all()
+    mapping = db.query(ItemUrlMapping).filter_by(platform="jd", item_id="conflict-1").one()
+    assert mapping.model_id == selected_model.id
+    assert mapping.brand_code == selected_model.brand_code
+    assert mapping.category_code == selected_model.category_code
 
 
 def test_confirm_match_overwrites_existing_url_mapping_and_marks_manual(db):
@@ -1622,7 +1627,7 @@ def test_batch_confirm_ids_mode_confirms_valid_and_reports_invalid(db, match_cli
     assert db.query(MatchResult).get(mr_wrong_status.id).match_status == "confirmed"  # 未变
 
 
-def test_batch_confirm_ids_mode_flags_invalid_candidate_and_url_mapping_conflict(db, match_client):
+def test_batch_confirm_ids_mode_only_rejects_invalid_rows_and_updates_existing_mapping(db, match_client):
     from app.models.schemas import (
         MatchResult, MatchResultCandidate, ModelRecord, RawDataRecord,
         ItemUrlMapping, CleanJobRecord, UploadFileRecord,
@@ -1674,11 +1679,13 @@ def test_batch_confirm_ids_mode_flags_invalid_candidate_and_url_mapping_conflict
     body = resp.json()
     failures_by_id = {f["id"]: f["reason"] for f in body["failures"]}
     assert failures_by_id[mr_unident.id] == "目标型号无效"
-    assert "URL 映射冲突" in failures_by_id[mr_conflict.id]
-    assert body["success"] == 1
-    assert body["failed"] == 2
+    assert mr_conflict.id not in failures_by_id
+    assert body["success"] == 2
+    assert body["failed"] == 1
     db.expire_all()
     assert db.query(MatchResult).get(mr_invalid.id).model_id == good_model.id
+    assert db.query(MatchResult).get(mr_conflict.id).model_id == good_model.id
+    assert db.query(ItemUrlMapping).filter_by(platform="jd", item_id="C3").one().model_id == good_model.id
 
 
 def test_batch_confirm_rejects_empty_ids(db, match_client):

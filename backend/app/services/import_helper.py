@@ -72,7 +72,7 @@ def find_best_template(columns: list[str], module: str, db: Session):
     return best, round(best_score * 100)
 
 
-async def save_tmp_file(
+def save_tmp_file(
     file: UploadFile, upload_dir: str
 ) -> tuple[str, Path, str]:
     """

@@ -2658,7 +2658,7 @@ export default function MatchPage() {
         open={batchConfirmModalOpen}
         title={`将确认 ${batchConfirmProcessCount} 条到所选型号`}
         width={560}
-        okText="确认"
+        okText="确认并更新映射"
         cancelText="取消"
         confirmLoading={batchConfirming}
         onOk={submitBatchConfirm}
@@ -2668,7 +2668,8 @@ export default function MatchPage() {
           <Alert
             type="warning"
             showIcon
-            message="一键确认会将本次范围内的记录统一确认到下方选择的型号，不再直接确认为候选型号。"
+            message="本次记录将统一确认到下方选择的型号，已有的商品链接映射也会按所选型号更新。"
+            description="后续清洗会使用更新后的映射；其他任务中已有的确认结果不会自动修改。"
           />
           <div style={{ whiteSpace: 'pre-wrap' }}>
             <div>当前候选型号分布：</div>

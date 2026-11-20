@@ -612,7 +612,7 @@ def create_brand_alias(body: BrandAliasIn, db: Session = Depends(get_db)):
 
 
 @router.post("/brand-aliases/import")
-async def import_brand_aliases(file: UploadFile = File(...), db: Session = Depends(get_db)):
+def import_brand_aliases(file: UploadFile = File(...), db: Session = Depends(get_db)):
     """Excel 批量导入，需两列：alias_name / brand_code"""
     try:
         df = pd.read_excel(file.file, dtype=str)
@@ -1073,12 +1073,12 @@ def delete_attr_rule(
 # ─── P10: Attr-Rules Import ──────────────────────────────────────────────────
 
 @router.post("/attr-rules/headers")
-async def attr_rules_headers(
+def attr_rules_headers(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
     """Step 1: save temp file, read columns, suggest mapping template."""
-    temp_file_id, save_path, filename = await save_tmp_file(file, UPLOAD_DIR)
+    temp_file_id, save_path, filename = save_tmp_file(file, UPLOAD_DIR)
     columns = read_columns(save_path)
     best_tmpl, score = find_best_template(columns, "attr", db)
     return {

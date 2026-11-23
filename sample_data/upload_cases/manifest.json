@@ -1,0 +1,368 @@
+{
+  "synthetic": true,
+  "cases": [
+    {
+      "file": "normal/jd.xlsx",
+      "rows": 3,
+      "mapping": {
+        "平台": "platform",
+        "月": "month",
+        "宝贝ID": "item_id",
+        "宝贝名称": "item_name",
+        "销量": "sales_qty",
+        "销售额": "sales_amount",
+        "价格": "price"
+      },
+      "ignore_columns": [],
+      "inserted": 3
+    },
+    {
+      "file": "normal/tmall_utf8.csv",
+      "rows": 2,
+      "mapping": {
+        "平台": "platform",
+        "月": "month",
+        "宝贝ID": "item_id",
+        "宝贝名称": "item_name",
+        "销量": "sales_qty",
+        "销售额": "sales_amount",
+        "价格": "price"
+      },
+      "ignore_columns": [],
+      "inserted": 2
+    },
+    {
+      "file": "normal/taobao_gbk.csv",
+      "rows": 2,
+      "mapping": {
+        "平台": "platform",
+        "月": "month",
+        "宝贝ID": "item_id",
+        "宝贝名称": "item_name",
+        "销量": "sales_qty",
+        "销售额": "sales_amount",
+        "价格": "price"
+      },
+      "ignore_columns": [],
+      "inserted": 2
+    },
+    {
+      "file": "normal/202610_amazon_US_filename.xlsx",
+      "rows": 2,
+      "mapping": {
+        "ASIN": "item_id",
+        "产品名称": "item_name",
+        "销量": "sales_qty",
+        "销额": "sales_amount",
+        "价格": "price"
+      },
+      "ignore_columns": [],
+      "inserted": 2,
+      "country_code": "US"
+    },
+    {
+      "file": "normal/shopee.csv",
+      "rows": 2,
+      "mapping": {
+        "platform": "platform",
+        "month": "month",
+        "item_id": "item_id",
+        "item_name": "item_name",
+        "sales_qty": "sales_qty",
+        "sales_amount": "sales_amount",
+        "price": "price"
+      },
+      "ignore_columns": [],
+      "inserted": 2,
+      "country_code": "SG"
+    },
+    {
+      "file": "normal/custom_columns.csv",
+      "rows": 2,
+      "mapping": {
+        "渠道": "platform",
+        "统计月份": "month",
+        "商品编号": "item_id",
+        "商品标题": "item_name",
+        "售出件数": "sales_qty",
+        "成交金额": "sales_amount",
+        "成交单价": "price",
+        "颜色": "__ext__"
+      },
+      "ignore_columns": [
+        "内部备注"
+      ],
+      "inserted": 2
+    },
+    {
+      "file": "normal/quoted_multiline.csv",
+      "rows": 2,
+      "mapping": {
+        "platform": "platform",
+        "month": "month",
+        "item_id": "item_id",
+        "item_name": "item_name",
+        "sales_qty": "sales_qty",
+        "sales_amount": "sales_amount",
+        "price": "price"
+      },
+      "ignore_columns": [],
+      "inserted": 2
+    },
+    {
+      "file": "dedup/in_file.csv",
+      "rows": 4,
+      "mapping": {
+        "platform": "platform",
+        "month": "month",
+        "item_id": "item_id",
+        "item_name": "item_name",
+        "sales_qty": "sales_qty",
+        "sales_amount": "sales_amount",
+        "price": "price"
+      },
+      "ignore_columns": [],
+      "inserted": 3,
+      "skipped": 1
+    },
+    {
+      "file": "dedup/cross_chunk_5002.csv",
+      "rows": 5002,
+      "mapping": {
+        "platform": "platform",
+        "month": "month",
+        "item_id": "item_id",
+        "item_name": "item_name",
+        "sales_qty": "sales_qty",
+        "sales_amount": "sales_amount",
+        "price": "price"
+      },
+      "ignore_columns": [],
+      "inserted": 5001,
+      "skipped": 1
+    },
+    {
+      "file": "dedup/reimport_a.csv",
+      "rows": 2,
+      "mapping": {
+        "platform": "platform",
+        "month": "month",
+        "item_id": "item_id",
+        "item_name": "item_name",
+        "sales_qty": "sales_qty",
+        "sales_amount": "sales_amount",
+        "price": "price"
+      },
+      "ignore_columns": [],
+      "inserted": 2
+    },
+    {
+      "file": "dedup/reimport_b.csv",
+      "rows": 2,
+      "mapping": {
+        "platform": "platform",
+        "month": "month",
+        "item_id": "item_id",
+        "item_name": "item_name",
+        "sales_qty": "sales_qty",
+        "sales_amount": "sales_amount",
+        "price": "price"
+      },
+      "ignore_columns": [],
+      "inserted": 1,
+      "skipped": 1,
+      "after": "dedup/reimport_a.csv"
+    },
+    {
+      "file": "same_name/a/data.csv",
+      "rows": 1,
+      "mapping": {
+        "platform": "platform",
+        "month": "month",
+        "item_id": "item_id",
+        "item_name": "item_name",
+        "sales_qty": "sales_qty",
+        "sales_amount": "sales_amount",
+        "price": "price"
+      },
+      "ignore_columns": [],
+      "inserted": 1
+    },
+    {
+      "file": "same_name/b/data.csv",
+      "rows": 1,
+      "mapping": {
+        "platform": "platform",
+        "month": "month",
+        "item_id": "item_id",
+        "item_name": "item_name",
+        "sales_qty": "sales_qty",
+        "sales_amount": "sales_amount",
+        "price": "price"
+      },
+      "ignore_columns": [],
+      "inserted": 1,
+      "preserves_originals": true
+    },
+    {
+      "file": "invalid/missing_price.csv",
+      "rows": 1,
+      "mapping": {
+        "platform": "platform",
+        "month": "month",
+        "item_id": "item_id",
+        "item_name": "item_name",
+        "sales_qty": "sales_qty",
+        "sales_amount": "sales_amount"
+      },
+      "ignore_columns": [],
+      "confirm_status": 422
+    },
+    {
+      "file": "invalid/missing_values.csv",
+      "rows": 3,
+      "mapping": {
+        "platform": "platform",
+        "month": "month",
+        "item_id": "item_id",
+        "item_name": "item_name",
+        "sales_qty": "sales_qty",
+        "sales_amount": "sales_amount",
+        "price": "price"
+      },
+      "ignore_columns": [],
+      "warnings_expected": 3,
+      "job_status": "done"
+    },
+    {
+      "file": "invalid/bad_numbers.csv",
+      "rows": 2,
+      "mapping": {
+        "platform": "platform",
+        "month": "month",
+        "item_id": "item_id",
+        "item_name": "item_name",
+        "sales_qty": "sales_qty",
+        "sales_amount": "sales_amount",
+        "price": "price"
+      },
+      "ignore_columns": [],
+      "warnings_expected": 3,
+      "job_status": "done"
+    },
+    {
+      "file": "invalid/fractional_qty.csv",
+      "rows": 1,
+      "mapping": {
+        "platform": "platform",
+        "month": "month",
+        "item_id": "item_id",
+        "item_name": "item_name",
+        "sales_qty": "sales_qty",
+        "sales_amount": "sales_amount",
+        "price": "price"
+      },
+      "ignore_columns": [],
+      "warnings_expected": 1,
+      "job_status": "done"
+    },
+    {
+      "file": "invalid/invalid_month.csv",
+      "rows": 2,
+      "mapping": {
+        "platform": "platform",
+        "month": "month",
+        "item_id": "item_id",
+        "item_name": "item_name",
+        "sales_qty": "sales_qty",
+        "sales_amount": "sales_amount",
+        "price": "price"
+      },
+      "ignore_columns": [],
+      "warnings_expected": 2,
+      "job_status": "done"
+    },
+    {
+      "file": "invalid/empty.xlsx",
+      "rows": 0,
+      "mapping": {
+        "platform": "platform",
+        "month": "month",
+        "item_id": "item_id",
+        "item_name": "item_name",
+        "sales_qty": "sales_qty",
+        "sales_amount": "sales_amount",
+        "price": "price"
+      },
+      "ignore_columns": [],
+      "known_issue": "空表被标记成功"
+    },
+    {
+      "file": "invalid/duplicate_target.csv",
+      "rows": 1,
+      "mapping": {
+        "platform": "platform",
+        "month": "month",
+        "item_id": "item_id",
+        "item_name": "item_name",
+        "sales_qty": "sales_qty",
+        "sales_amount": "sales_amount",
+        "price": "price",
+        "second_qty": "sales_qty"
+      },
+      "ignore_columns": [],
+      "known_issue": "重复映射未在提交阶段拦截"
+    },
+    {
+      "file": "invalid/corrupt.xlsx",
+      "headers_status": 422
+    },
+    {
+      "file": "invalid/uppercase.CSV",
+      "rows": 1,
+      "mapping": {
+        "platform": "platform",
+        "month": "month",
+        "item_id": "item_id",
+        "item_name": "item_name",
+        "sales_qty": "sales_qty",
+        "sales_amount": "sales_amount",
+        "price": "price"
+      },
+      "ignore_columns": [],
+      "known_issue": "大写扩展名被拒绝"
+    },
+    {
+      "file": "filename_conflict/202611_amazon_US_conflict.csv",
+      "rows": 1,
+      "mapping": {
+        "platform": "platform",
+        "month": "month",
+        "item_id": "item_id",
+        "item_name": "item_name",
+        "sales_qty": "sales_qty",
+        "sales_amount": "sales_amount",
+        "price": "price"
+      },
+      "ignore_columns": [],
+      "country_code": "US",
+      "known_issue": "文件名覆盖表内月份及平台且无冲突提示"
+    },
+    {
+      "file": "invalid/multiple_sheets.xlsx",
+      "rows": 1,
+      "mapping": {
+        "platform": "platform",
+        "month": "month",
+        "item_id": "item_id",
+        "item_name": "item_name",
+        "sales_qty": "sales_qty",
+        "sales_amount": "sales_amount",
+        "price": "price"
+      },
+      "ignore_columns": [],
+      "inserted": 1,
+      "limitation": "目前只读取一个工作表，第二张不入库"
+    }
+  ]
+}

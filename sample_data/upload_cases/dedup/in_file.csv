@@ -1,0 +1,5 @@
+﻿platform,month,item_id,item_name,sales_qty,sales_amount,price
+jd,202610,UPLOAD-TEST-DUP-A,上传测试商品 DUP-A,10,990,99
+jd,202610,UPLOAD-TEST-DUP-A,上传测试商品 DUP-A,10,990,99
+jd,202610,UPLOAD-TEST-DUP-B,上传测试商品 DUP-B,10,990,99
+jd,202611,UPLOAD-TEST-DUP-A,上传测试商品 DUP-A,10,990,99

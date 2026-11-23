@@ -263,6 +263,7 @@ def test_audit_migration_preserves_existing_unknown_history_and_indexes(tmp_path
     with engine.begin() as conn:
         conn.execute(text('CREATE TABLE clean_jobs(id INTEGER PRIMARY KEY)'))
         conn.execute(text('CREATE TABLE raw_data(id INTEGER PRIMARY KEY)'))
+        conn.execute(text('CREATE TABLE upload_files(id INTEGER PRIMARY KEY, filename VARCHAR(255) NOT NULL)'))
         conn.execute(text('INSERT INTO clean_jobs(id) VALUES(7)'))
     monkeypatch.setattr(settings,'DATABASE_URL',url)
     config=Config(); config.set_main_option('script_location',str(Path(__file__).resolve().parents[1]/'alembic'))

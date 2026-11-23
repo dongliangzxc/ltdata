@@ -1,0 +1,17 @@
+{
+  "backend/app/api/upload.py": "843653da6684a4718e8de3e69a1be7dfc310b024dd399736a438c6a56724688e",
+  "backend/app/models/schemas.py": "d68fb179b7f16f3dfddae65e955361da648d919ea59794217f8ff1bbd11fa72a",
+  "backend/app/services/excel_parser.py": "5ce76eeefb3778fc33d8e8e1c00e3ed5a88265c641d273f9eae71b12dd95031d",
+  "frontend/src/pages/Upload/index.tsx": "3001f894c53f9d6a4357d9c39b7bac01b135c97ecb01ba7e0a04aa0bad6acf1c",
+  "frontend/src/services/api.ts": "a986cd6b30f15d941b20a2ecd734354e84b97bad115b03fed3cb8a0c62ad93eb",
+  "backend/alembic/versions/p79a1b2c3d4e5_upload_stored_filename.py": "790c449258444cf5d0ea207e5239070a70f04546a46c59e797b0963718d5b89f",
+  "backend/app/services/upload_validation.py": "0389527742a9a3711c7df43a643e6565f44793fe4b6ba9112d70510f708526aa",
+  "backend/tests/test_upload_cases.py": "fd2c852f598d229eddec7ea7e0b46a97b527d34eebefd271b770558bb66207ba",
+  "backend/tests/test_upload_storage_migration.py": "b9c6f68eb26f57001e4a7cd8bbd50675a497fa0e2f7bc37489cf805da69e9093",
+  "backend/tests/test_upload_validation.py": "dfb7040f364737386aac050849c1086a64d4431466c327ef7216f29149bb736e",
+  "frontend/src/pages/Upload/UploadWarnings.tsx": "3173a42473084dd97dbe1cffe02f2e5d530f1681a8d25c1aa77dfc3e97c13c61",
+  "frontend/src/pages/Upload/index.warnings.test.cjs": "d919262c14699418fb8689757b2281009dad9a68bbdeb7fb7cbf27eb29df25b9",
+  "backend/tests/test_clean_duplicate_audit.py": "901b374ba978dcb9290f61412d592266f7d560354e883fbc916e9abb407fdce9",
+  "backend/tests/test_clean_task_queue.py": "40bbe095d52f29828cfaacd860a4c1c168e1bc37e3fe1b7a8aedfb5194f6edd3",
+  "backend/tests/test_incremental_clean_task.py": "ae89c0a8203e00d4588b46d360b05f46001d298ab018f3f08304c41dc9cbcc9c"
+}

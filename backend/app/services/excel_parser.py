@@ -156,8 +156,17 @@ def _detect_csv_encoding(file_path: Path) -> str:
 # ─── 分块读取 ─────────────────────────────────────────────────
 
 
-def _iter_dataframe_chunks(file_path: str | Path, chunk_size: int = DEFAULT_CHUNK_SIZE) -> Iterator[pd.DataFrame]:
-    """按行分块读取 CSV/XLSX/XLS，返回 DataFrame 块。"""
+def iter_source_chunks(
+    file_path: str | Path,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+    *,
+    preserve_values: bool = False,
+) -> Iterator[pd.DataFrame]:
+    """Read source chunks indexed by row number (header is row 1).
+
+    CSV row numbers count records, including a quoted multiline field as one
+    record. Validation preserves literal values such as NA for useful warnings.
+    """
     fp = Path(file_path)
     suffix = fp.suffix.lower()
 
@@ -168,9 +177,15 @@ def _iter_dataframe_chunks(file_path: str | Path, chunk_size: int = DEFAULT_CHUN
             dtype=str,
             encoding=encoding,
             chunksize=chunk_size,
+            keep_default_na=not preserve_values,
+            skip_blank_lines=not preserve_values,
         )
         for df in reader:
             df.columns = [str(c).strip() for c in df.columns]
+            df.index = df.index + 2
+            if preserve_values:
+                empty_rows = df.fillna("").apply(lambda col: col.str.strip().eq("")).all(axis=1)
+                df = df.loc[~empty_rows]
             yield df
         return
 
@@ -187,26 +202,30 @@ def _iter_dataframe_chunks(file_path: str | Path, chunk_size: int = DEFAULT_CHUN
             columns = _dedupe_columns(list(header))
             width = len(columns)
             batch: list[list] = []
+            source_rows: list[int] = []
 
-            for row in rows:
+            for row_number, row in enumerate(rows, start=2):
                 values = list(row[:width])
                 if len(values) < width:
                     values.extend([None] * (width - len(values)))
                 if all(v is None or (isinstance(v, str) and not v.strip()) for v in values):
                     continue
                 batch.append([_stringify_cell(v) for v in values])
+                source_rows.append(row_number)
                 if len(batch) >= chunk_size:
-                    yield pd.DataFrame(batch, columns=columns, dtype=object)
+                    yield pd.DataFrame(batch, columns=columns, index=source_rows, dtype=object)
                     batch = []
+                    source_rows = []
             if batch:
-                yield pd.DataFrame(batch, columns=columns, dtype=object)
+                yield pd.DataFrame(batch, columns=columns, index=source_rows, dtype=object)
         finally:
             workbook.close()
         return
 
     # .xls：pandas 全量读取，按块切分（文件本身最多 65536 行）
-    df = pd.read_excel(fp, sheet_name=0, dtype=str)
+    df = pd.read_excel(fp, sheet_name=0, dtype=str, keep_default_na=not preserve_values)
     df.columns = [str(c).strip() for c in df.columns]
+    df.index = df.index + 2
     for start in range(0, len(df), chunk_size):
         yield df.iloc[start:start + chunk_size].copy()
 
@@ -288,7 +307,7 @@ def iter_raw_chunks(
     rename_map: dict = {}
     first_platform_seen = False
 
-    for df in _iter_dataframe_chunks(file_path, chunk_size):
+    for df in iter_source_chunks(file_path, chunk_size):
         if first_chunk:
             platform_label = detect_platform(list(df.columns))
             col_map = JD_COLUMN_MAP if platform_label == "JD" else TM_TB_COLUMN_MAP
@@ -326,6 +345,19 @@ def parse_raw_excel(file_path: str | Path) -> tuple[list[dict], str, str]:
 # ─── mapping 解析 ─────────────────────────────────────────────
 
 
+def upload_numeric_values(values: pd.Series, field: str) -> pd.Series:
+    """Coerce unrepresentable upload numbers to NULL without guessing a value."""
+    numeric = pd.to_numeric(values, errors="coerce")
+    valid = numeric.notna() & numeric.abs().lt(float("inf"))
+    if field in {"sales_qty", "month"}:
+        valid &= numeric.mod(1).eq(0) & numeric.between(-2147483648, 2147483647)
+    elif field in {"price", "ref_price", "sales_amount"}:
+        limit = 10 ** (12 if field == "sales_amount" else 10)
+        # NUMERIC columns have two decimal places; leave room for rounding.
+        valid &= numeric.abs().round(2).lt(limit)
+    return numeric.where(valid)
+
+
 def _prepare_mapped_columns(df: pd.DataFrame, mapping: dict, ignore_columns: list):
     ignore_set = set(ignore_columns)
     std_rename: dict = {}
@@ -345,6 +377,7 @@ def _normalize_mapped_df(
     df: pd.DataFrame,
     mapping: dict,
     ignore_columns: list,
+    tolerate_invalid_numbers: bool = False,
 ) -> tuple[list[dict], Optional[str], list[int]]:
     std_rename, ext_cols = _prepare_mapped_columns(df, mapping, ignore_columns)
 
@@ -357,13 +390,27 @@ def _normalize_mapped_df(
         if field not in df_std.columns:
             df_std[field] = None
 
+    if tolerate_invalid_numbers:
+        df_std = df_std.replace(r"^\s*$", None, regex=True)
+
     for num_col in ["sales_qty"]:
-        df_std[num_col] = pd.to_numeric(df_std[num_col], errors="coerce").astype("Int64")
+        values = (
+            upload_numeric_values(df_std[num_col], num_col)
+            if tolerate_invalid_numbers else pd.to_numeric(df_std[num_col], errors="coerce")
+        )
+        df_std[num_col] = values.astype("Int64")
     for float_col in ["ref_price", "sales_amount", "price"]:
-        df_std[float_col] = pd.to_numeric(df_std[float_col], errors="coerce")
+        df_std[float_col] = (
+            upload_numeric_values(df_std[float_col], float_col)
+            if tolerate_invalid_numbers else pd.to_numeric(df_std[float_col], errors="coerce")
+        )
     for str_col in ["item_id", "platform", "brand_raw", "brand_std", "model_std", "shop_name"]:
         df_std[str_col] = df_std[str_col].where(df_std[str_col].notna(), None)
-    df_std["month"] = pd.to_numeric(df_std["month"], errors="coerce").astype("Int64")
+    month_values = (
+        upload_numeric_values(df_std["month"], "month")
+        if tolerate_invalid_numbers else pd.to_numeric(df_std["month"], errors="coerce")
+    )
+    df_std["month"] = month_values.astype("Int64")
 
     first_platform = None
     if df_std["platform"].notna().any():
@@ -415,13 +462,17 @@ def iter_mapped_chunks(
     mapping: dict,
     ignore_columns: list,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
+    *,
+    tolerate_invalid_numbers: bool = False,
 ) -> Iterator[tuple[list[dict], str, list[int]]]:
     """流式解析 mapping 上传：逐块返回 (records, platform, months)。"""
     platform_label = "UNKNOWN"
     label_locked = False
 
-    for df in _iter_dataframe_chunks(file_path, chunk_size):
-        records, first_platform, months = _normalize_mapped_df(df, mapping, ignore_columns)
+    for df in iter_source_chunks(file_path, chunk_size, preserve_values=tolerate_invalid_numbers):
+        records, first_platform, months = _normalize_mapped_df(
+            df, mapping, ignore_columns, tolerate_invalid_numbers=tolerate_invalid_numbers
+        )
         if not label_locked and first_platform is not None:
             first_str = str(first_platform).lower()
             for kw, std in _PLATFORM_NORM.items():

@@ -10,7 +10,7 @@ import {
 } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import {
-  getUploadHeaders, confirmUpload, downloadUploadSample,
+  getUploadHeaders, confirmUpload, validateUpload, downloadUploadSample,
   listUploadFiles, deleteUploadFile, downloadUploadBatch, deleteUploadBatch,
   createUploadDownloadJob, listUploadDownloadJobs, getUploadDownloadJobUrl,
   listUploadTemplates,
@@ -22,8 +22,10 @@ import {
   type CountryOption,
   type UploadFileItem,
   type UploadFilenameHints,
+  type UploadValidationReport,
 } from '../../services/api'
 import ProgressModal from '../../components/ProgressModal'
+import { reviewUploadWarnings } from './UploadWarnings'
 
 const { Text } = Typography
 const { Option } = Select
@@ -456,7 +458,7 @@ function MappingCard({
   }
 
   const handleConfirm = async () => {
-    if (pollRef.current) return
+    if (pollRef.current || confirming) return
     if (!allRequiredMapped) {
       message.warning('还有必填字段未完成映射')
       return
@@ -465,9 +467,8 @@ function MappingCard({
     setUploadProgress(0)
     setUploadError('')
     setCurrentJob(null)
-    setUploadProgressVisible(true)
     try {
-      const res = await confirmUpload({
+      const payload = {
         temp_file_id,
         mapping,
         ignore_columns: [...ignoreSet],
@@ -475,7 +476,14 @@ function MappingCard({
         template_id: selectedTemplateId,
         country_code: countryCode,
         data_year: dataYear,
-      })
+      }
+      const report = (await validateUpload(payload)).data
+      if (!await reviewUploadWarnings([report])) {
+        setConfirming(false)
+        return
+      }
+      setUploadProgressVisible(true)
+      const res = await confirmUpload(payload)
       const { job_id } = res.data as { job_id: number }
 
       let pollFailCount = 0
@@ -587,6 +595,7 @@ function MappingCard({
 
   return (
     <>
+      <Spin spinning={confirming && !uploadProgressVisible} tip="正在检查数据…">
       <Card
         title={
           <Space>
@@ -656,6 +665,7 @@ function MappingCard({
           </div>
         </div>
       </Card>
+      </Spin>
       <ProgressModal
         visible={uploadProgressVisible}
         title="正在处理文件..."
@@ -988,6 +998,7 @@ export default function UploadPage() {
   }
 
   const handleBatchConfirm = async () => {
+    if (batchConfirming) return
     const readyFiles = pendingFiles.filter(item => item.status === 'ready' && item.headersResult)
     if (readyFiles.length === 0) {
       message.warning('没有可批量入库的文件')
@@ -998,6 +1009,16 @@ export default function UploadPage() {
       message.warning(`请先为 ${missingCountry.length} 个文件选择国家`)
       return
     }
+    const plans = readyFiles.map(item => {
+      const headers = item.headersResult!
+      const selectedTemplate = item.templateOverride ?? templates.find(template => template.id === item.templateId)
+      let auto = buildAutoMapping(headers, selectedTemplate)
+      if (auto.missing.length > 0 && selectedTemplate && headers.suggested_template) {
+        const fallback = buildAutoMapping(headers, null)
+        if (fallback.missing.length === 0) auto = fallback
+      }
+      return { item, headers, selectedTemplate, auto }
+    })
     const items: BatchConfirmItem[] = readyFiles.map(item => ({
       uid: item.uid,
       filename: item.filename,
@@ -1007,20 +1028,25 @@ export default function UploadPage() {
     }))
     const batchKey = `batch-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
     setBatchItems(items)
-    setBatchModalOpen(true)
     setBatchConfirming(true)
     let successCount = 0
     let failedCount = 0
 
     try {
-      for (const item of readyFiles) {
-        const headers = item.headersResult!
-        const selectedTemplate = item.templateOverride ?? templates.find(template => template.id === item.templateId)
-        let auto = buildAutoMapping(headers, selectedTemplate)
-        if (auto.missing.length > 0 && selectedTemplate && headers.suggested_template) {
-          const fallback = buildAutoMapping(headers, null)
-          if (fallback.missing.length === 0) auto = fallback
-        }
+      const reports: UploadValidationReport[] = []
+      for (const [index, plan] of plans.entries()) {
+        if (plan.auto.missing.length > 0) continue
+        message.loading({ key: 'upload-validation', content: `正在检查文件数据（${index + 1}/${plans.length}）…`, duration: 0 })
+        reports.push((await validateUpload({
+          temp_file_id: plan.headers.temp_file_id,
+          mapping: plan.auto.mapping,
+          ignore_columns: plan.auto.ignoreColumns,
+        })).data)
+      }
+      message.destroy('upload-validation')
+      if (!await reviewUploadWarnings(reports)) return
+      setBatchModalOpen(true)
+      for (const { item, headers, selectedTemplate, auto } of plans) {
         if (auto.missing.length > 0) {
           failedCount += 1
           updateBatchItem(item.uid, {
@@ -1061,7 +1087,12 @@ export default function UploadPage() {
           })
         }
       }
+    } catch {
+      // Request errors are displayed by the API interceptor. Keep files ready
+      // for retry when the read-only data check could not finish.
+      return
     } finally {
+      message.destroy('upload-validation')
       setBatchConfirming(false)
       runFilesQuery({ data_region: filterRegion, data_year: filterYear })
       refreshTemplates()
@@ -1261,7 +1292,7 @@ export default function UploadPage() {
             multiple
             beforeUpload={handleAddFile}
             showUploadList={false}
-            disabled={uploadingCount > 0}
+            disabled={uploadingCount > 0 || batchConfirming}
           >
             <p className="ant-upload-drag-icon">
               {uploadingCount > 0 ? <Spin /> : <InboxOutlined />}
@@ -1295,6 +1326,7 @@ export default function UploadPage() {
       )}
 
       {step === 'upload' && pendingFiles.length > 0 && (
+        <Spin spinning={batchConfirming && !batchModalOpen} tip="正在检查文件数据…">
         <Card
           title="待处理文件"
           size="small"
@@ -1469,6 +1501,7 @@ export default function UploadPage() {
             ]}
           />
         </Card>
+        </Spin>
       )}
 
       {uploadJobs.length > 0 && (

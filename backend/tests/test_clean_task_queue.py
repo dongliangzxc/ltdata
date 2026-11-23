@@ -461,6 +461,7 @@ def test_queue_schema_upgrades_from_current_production_and_downgrades_without_lo
     with bind.begin() as conn:
         conn.execute(text("CREATE TABLE clean_jobs (id INTEGER PRIMARY KEY)"))
         conn.execute(text("INSERT INTO clean_jobs (id) VALUES (7)"))
+        conn.execute(text("CREATE TABLE upload_files (id INTEGER PRIMARY KEY, filename VARCHAR(255) NOT NULL)"))
     monkeypatch.setattr(settings, "DATABASE_URL", url)
     config = Config()
     config.set_main_option("script_location", str(Path(__file__).resolve().parents[1] / "alembic"))

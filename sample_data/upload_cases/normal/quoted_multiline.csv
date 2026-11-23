@@ -1,0 +1,4 @@
+﻿platform,month,item_id,item_name,sales_qty,sales_amount,price
+jd,202610,UPLOAD-TEST-TEXT-001,"测试标题, 含""引号""
+第二行",10,990,99
+jd,202610,000001234567890123456789,上传测试商品 LONG-ID,0,0,0

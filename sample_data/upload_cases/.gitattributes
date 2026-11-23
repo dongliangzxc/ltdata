@@ -1,0 +1,4 @@
+# Preserve intentional BOM, GBK encoding and CRLF line endings byte-for-byte.
+*.csv binary
+*.CSV binary
+*.xlsx binary

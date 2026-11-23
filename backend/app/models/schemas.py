@@ -19,6 +19,7 @@ class UploadFileRecord(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     filename = Column(String(255), nullable=False)
+    stored_filename = Column(String(255), nullable=True, comment='原件存储名；空值兼容旧版按原文件名保存')
     platform = Column(String(50))           # JD / TM / TB
     month_range = Column(String(20))        # e.g. "202507-202509"
     row_count = Column(Integer, default=0)

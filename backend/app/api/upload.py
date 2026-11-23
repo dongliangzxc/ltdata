@@ -33,6 +33,7 @@ from app.core.config import settings
 from app.services.currency_service import get_country
 from app.services.rawdata_cache import invalidate_rawdata_cache
 from app.services.filename_metadata import parse_filename_metadata
+from app.services.upload_validation import inspect_upload_values
 from app.services.import_helper import (
     col_fingerprint as _ih_col_fingerprint,
     read_columns as _ih_read_columns,
@@ -148,6 +149,20 @@ DOMESTIC_UPLOAD_PLATFORMS = {
 router = APIRouter(prefix="/api/upload", tags=["upload"])
 
 
+def _new_upload_storage_path(filename: str) -> tuple[str, Path]:
+    """Keep originals isolated from display names and legacy uploads."""
+    stored_filename = f"{uuid.uuid4().hex}{Path(filename).suffix}"
+    directory = Path(settings.UPLOAD_DIR) / "originals"
+    directory.mkdir(parents=True, exist_ok=True)
+    return stored_filename, directory / stored_filename
+
+
+def _upload_file_path(record: UploadFileRecord) -> Path:
+    if record.stored_filename:
+        return Path(settings.UPLOAD_DIR) / "originals" / Path(record.stored_filename).name
+    return Path(settings.UPLOAD_DIR) / Path(record.filename).name
+
+
 def _upload_download_job_out(job: UploadDownloadJob) -> dict:
     download_url = None
     if job.status == "done" and job.download_token:
@@ -184,8 +199,7 @@ def _run_upload_download_job(job_id: int) -> None:
             db.commit()
             return
 
-        safe_filename = Path(record.filename).name
-        file_path = Path(settings.UPLOAD_DIR) / safe_filename
+        file_path = _upload_file_path(record)
         if not file_path.exists() or not file_path.is_file():
             job.status = "error"
             job.progress = 100
@@ -331,13 +345,13 @@ def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="只支持 .xlsx / .xls / .csv 格式文件")
 
     # 保存文件
-    safe_filename = Path(file.filename).name  # strips any directory components
-    save_path = Path(settings.UPLOAD_DIR) / safe_filename
-    with open(save_path, "wb") as f:
+    stored_filename, save_path = _new_upload_storage_path(file.filename)
+    with open(save_path, "xb") as f:
         shutil.copyfileobj(file.file, f)
 
     file_record = UploadFileRecord(
         filename=file.filename,
+        stored_filename=stored_filename,
         platform=None,
         month_range=None,
         row_count=0,
@@ -471,8 +485,7 @@ def download_upload_file(file_id: int, db: Session = Depends(get_db)):
     if record is None:
         raise HTTPException(status_code=404, detail="上传记录不存在")
 
-    safe_filename = Path(record.filename).name
-    file_path = Path(settings.UPLOAD_DIR) / safe_filename
+    file_path = _upload_file_path(record)
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="原始上传文件不存在，无法下载")
 
@@ -534,8 +547,10 @@ def download_upload_download_job_file(job_id: int, db: Session = Depends(get_db)
     if job.status != "done" or not job.download_token:
         raise HTTPException(status_code=409, detail="下载任务尚未完成")
 
-    safe_filename = Path(job.filename).name
-    file_path = Path(settings.UPLOAD_DIR) / safe_filename
+    record = db.query(UploadFileRecord).filter(UploadFileRecord.id == job.file_id).first()
+    if record is None:
+        raise HTTPException(status_code=404, detail="上传记录不存在")
+    file_path = _upload_file_path(record)
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="原始上传文件不存在，无法下载")
     return FileResponse(file_path, filename=job.filename)
@@ -559,7 +574,7 @@ def download_upload_batch(batch_key: str, db: Session = Depends(get_db)):
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         for record in records:
             safe_filename = Path(record.filename).name
-            file_path = Path(settings.UPLOAD_DIR) / safe_filename
+            file_path = _upload_file_path(record)
             if not file_path.exists() or not file_path.is_file():
                 continue
             archive_name = safe_filename
@@ -739,8 +754,10 @@ def _run_upload_confirm_thread(
         total_planned = count_data_rows(tmp_path)
 
         # 2. 创建 upload_files 记录（同一事务，失败会回滚）
+        stored_filename, final_path = _new_upload_storage_path(original_filename)
         file_record = UploadFileRecord(
             filename=original_filename,
+            stored_filename=stored_filename,
             platform=None,
             month_range=None,
             row_count=0,
@@ -775,7 +792,7 @@ def _run_upload_confirm_thread(
         months: set[int] = set()
 
         for chunk_records, chunk_platform, chunk_months in iter_mapped_chunks(
-            tmp_path, mapping, ignore_columns
+            tmp_path, mapping, ignore_columns, tolerate_invalid_numbers=True
         ):
             if _is_upload_job_cancelled(job_id):
                 db.rollback()
@@ -865,7 +882,6 @@ def _run_upload_confirm_thread(
         db.refresh(file_record)
 
         # 5. 移动临时文件
-        final_path = Path(settings.UPLOAD_DIR) / original_filename
         shutil.move(str(tmp_path), str(final_path))
         _update_upload_job_progress(
             db,
@@ -1069,6 +1085,32 @@ def upload_headers(
         "match_score": score,
         "filename_hints": filename_hints,
     }
+
+
+@router.post("/validate")
+def validate_upload(payload: dict, db: Session = Depends(get_db)):
+    """Read-only warnings after column mapping; users may still confirm import."""
+    temp_file_id = payload.get("temp_file_id", "")
+    try:
+        uuid.UUID(temp_file_id)
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(status_code=400, detail="临时文件标识无效，请重新上传")
+    matches = list((Path(settings.UPLOAD_DIR) / "tmp").glob(f"{temp_file_id}_*"))
+    if not matches:
+        raise HTTPException(status_code=404, detail="临时文件不存在或已过期，请重新上传")
+    tmp_path = matches[0]
+    original_filename = tmp_path.name[len(temp_file_id) + 1:]
+    hints = parse_filename_metadata(original_filename, db)
+    # Release the metadata read connection while scanning a large source file.
+    db.rollback()
+    try:
+        result = inspect_upload_values(
+            tmp_path, payload.get("mapping", {}), payload.get("ignore_columns", []),
+            filename_month=hints.month, filename_platform=hints.platform,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"无法检查文件数据：{exc}")
+    return {"filename": original_filename, **result}
 
 
 @router.post("/confirm", status_code=202)

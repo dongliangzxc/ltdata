@@ -2155,10 +2155,26 @@ export const getUploadHeaders = (formData: FormData) =>
     filename_hints?: UploadFilenameHints
   }>('/upload/headers', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
 
-export const confirmUpload = (payload: {
+export interface UploadValidationPayload {
   temp_file_id: string
   mapping: Record<string, string>
   ignore_columns: string[]
+}
+
+export interface UploadValidationReport {
+  filename: string
+  total_rows: number
+  affected_rows: number
+  issue_count: number
+  counts: { missing_required: number; invalid_number: number; invalid_month: number }
+  samples: Array<{ row: number; field: string; column: string | null; value: string | null; message: string }>
+  truncated: boolean
+}
+
+export const validateUpload = (payload: UploadValidationPayload) =>
+  api.post<UploadValidationReport>('/upload/validate', payload)
+
+export const confirmUpload = (payload: UploadValidationPayload & {
   save_template_name?: string
   template_id?: number
   data_region?: string

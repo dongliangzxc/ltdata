@@ -1,0 +1,4 @@
+﻿platform,month,item_id,item_name,sales_qty,sales_amount,price
+jd,202610,,上传测试商品 BLANK-ID,10,990,99
+jd,202610,UPLOAD-TEST-BLANK-NAME,,10,990,99
+jd,202610,UPLOAD-TEST-BLANK-PRICE,上传测试商品 BLANK-PRICE,10,990,

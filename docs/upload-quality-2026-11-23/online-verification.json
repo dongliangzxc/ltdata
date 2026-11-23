@@ -1,0 +1,40 @@
+{
+  "health": "ok",
+  "migration": "p79a1b2c3d4e5",
+  "authenticated_reads": "passed",
+  "quality_warning_counts": {
+    "missing_required": 2,
+    "invalid_number": 3,
+    "invalid_month": 1
+  },
+  "quality_rows": 4,
+  "clean_data_warning_count": 0,
+  "frontend_asset": "/assets/index-CuwYxQAb.js",
+  "warning_buttons_in_public_asset": true,
+  "business_confirm_requests_executed": 0,
+  "isolated_same_name_storage": "passed",
+  "legacy_storage_compatibility": "passed",
+  "test_records_written": 0,
+  "code_sha256": {
+    "api/upload.py": "843653da6684a4718e8de3e69a1be7dfc310b024dd399736a438c6a56724688e",
+    "models/schemas.py": "d68fb179b7f16f3dfddae65e955361da648d919ea59794217f8ff1bbd11fa72a",
+    "services/excel_parser.py": "5ce76eeefb3778fc33d8e8e1c00e3ed5a88265c641d273f9eae71b12dd95031d",
+    "services/upload_validation.py": "0389527742a9a3711c7df43a643e6565f44793fe4b6ba9112d70510f708526aa"
+  },
+  "synthetic_temp_files_removed": 2,
+  "synthetic_originals_removed": 3,
+  "business_commit": "dff3013",
+  "public_frontend": {
+    "url": "https://data.runtotech.com/assets/index-CuwYxQAb.js",
+    "status": 200,
+    "asset_sha256": "ad6f94800c3ea6aeda5c255011aa0e9982808935244a44024ec1e3f1f6f2b96a",
+    "warning_labels_present": true
+  },
+  "backend_and_worker_same_image": "sha256:6edf03a0fc6dfd0d42289a96a7379b135566382307e53e656d8e34a082e8f78b",
+  "container_restarts": {
+    "backend": 0,
+    "clean-worker": 0,
+    "frontend": 0
+  },
+  "original_test_source_hashes_match": true
+}

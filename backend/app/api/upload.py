@@ -1176,6 +1176,17 @@ def upload_confirm(payload: dict, db: Session = Depends(get_db)):
             detail=f"以下必填字段未映射：{', '.join(sorted(missing))}"
         )
 
+    # Older open pages may submit directly without calling /validate. Keep
+    # quality warnings optional, but require a review before importing them.
+    if payload.get("quality_reviewed") is not True:
+        report = validate_upload(payload, db)
+        if report["issue_count"]:
+            raise HTTPException(
+                status_code=409,
+                detail=(f"发现 {report['affected_rows']} 行共 {report['issue_count']} 处数据问题，"
+                        "尚未确认。请重新打开上传页面，查看提示后选择“仍然上传”即可继续。"),
+            )
+
     # 创建 job 记录
     job = UploadConfirmJob(
         status="pending",

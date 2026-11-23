@@ -20,7 +20,7 @@ from sqlalchemy.pool import StaticPool
 from app.api import upload as upload_api
 from app.core.config import settings
 from app.models.database import Base, get_db
-from app.models.schemas import Country, RawDataRecord, UploadFileRecord
+from app.models.schemas import Country, RawDataRecord, UploadFileRecord, UploadConfirmJob
 from app.services.excel_parser import parse_with_mapping
 
 
@@ -93,6 +93,8 @@ def prepare_case(harness, filename, **overrides):
         "temp_file_id": response.json()["temp_file_id"],
         "mapping": case["mapping"], "ignore_columns": case["ignore_columns"],
         "country_code": case.get("country_code", "CN"),
+        # Import tests represent a user who has accepted the quality review.
+        "quality_reviewed": True,
         **overrides,
     }
     return payload
@@ -204,6 +206,46 @@ def test_fractional_quantity_can_be_confirmed_after_warning(harness):
     with harness.sessions() as session:
         assert session.query(RawDataRecord).one().sales_qty is None
         assert session.query(UploadFileRecord).count() == 1
+
+
+@pytest.mark.parametrize("ack", [None, False, "true", 1])
+def test_direct_confirm_cannot_silently_import_warnings(harness, ack):
+    payload = prepare_case(harness, "invalid/missing_values.csv", quality_reviewed=ack)
+    response = harness.client.post("/api/upload/confirm", json=payload)
+    assert response.status_code == 409, response.text
+    assert "3 行共 3 处" in response.json()["detail"]
+    assert "仍然上传" in response.json()["detail"]
+    assert not harness.queued
+    with harness.sessions() as session:
+        assert session.query(UploadConfirmJob).count() == 0
+        assert session.query(UploadFileRecord).count() == 0
+        assert session.query(RawDataRecord).count() == 0
+    # The same temporary file remains available for review and confirmation.
+    report = harness.client.post("/api/upload/validate", json=payload)
+    assert report.status_code == 200
+    assert report.json()["issue_count"] == 3
+    payload["quality_reviewed"] = True
+    job = finish_upload(harness, harness.client.post("/api/upload/confirm", json=payload))
+    assert job["status"] == "done", job
+    assert job["inserted"] == 3
+
+
+def test_direct_clean_confirm_remains_compatible_without_review_flag(harness):
+    payload = prepare_case(harness, "normal/quoted_multiline.csv")
+    payload.pop("quality_reviewed")
+    job = finish_upload(harness, harness.client.post("/api/upload/confirm", json=payload))
+    assert job["status"] == "done", job
+    assert job["inserted"] == 2
+
+
+def test_reviewed_confirm_does_not_scan_large_files_twice(harness, monkeypatch):
+    payload, report = inspect_case(harness, "invalid/bad_numbers.csv")
+    assert report["issue_count"] == 3
+    def unexpected_scan(*args, **kwargs):
+        raise AssertionError("A reviewed file must not be scanned twice")
+    monkeypatch.setattr(upload_api, "inspect_upload_values", unexpected_scan)
+    job = finish_upload(harness, harness.client.post("/api/upload/confirm", json=payload))
+    assert job["status"] == "done", job
 
 
 def test_later_chunk_failure_rolls_back_earlier_rows(harness, monkeypatch):

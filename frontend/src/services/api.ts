@@ -2175,6 +2175,7 @@ export const validateUpload = (payload: UploadValidationPayload) =>
   api.post<UploadValidationReport>('/upload/validate', payload)
 
 export const confirmUpload = (payload: UploadValidationPayload & {
+  quality_reviewed?: boolean
   save_template_name?: string
   template_id?: number
   data_region?: string

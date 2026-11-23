@@ -483,7 +483,7 @@ function MappingCard({
         return
       }
       setUploadProgressVisible(true)
-      const res = await confirmUpload(payload)
+      const res = await confirmUpload({ ...payload, quality_reviewed: true })
       const { job_id } = res.data as { job_id: number }
 
       let pollFailCount = 0
@@ -1059,6 +1059,7 @@ export default function UploadPage() {
         updateBatchItem(item.uid, { status: 'running', progress: 0, message: '正在提交' })
         try {
           const res = await confirmUpload({
+            quality_reviewed: true,
             temp_file_id: headers.temp_file_id,
             mapping: auto.mapping,
             ignore_columns: auto.ignoreColumns,

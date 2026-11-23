@@ -262,6 +262,7 @@ def test_upload_confirm_returns_job_id(db, monkeypatch, tmp_path):
         "/api/upload/confirm",
         json={
             "temp_file_id": fake_id,
+            "quality_reviewed": True,  # Fixture uses fake bytes; quality review is covered separately.
             "mapping": {
                 "col_item_id":   "item_id",
                 "col_month":     "month",
@@ -503,6 +504,7 @@ def test_upload_confirm_requires_country_for_overseas(db, monkeypatch, tmp_path)
         "/api/upload/confirm",
         json={
             "temp_file_id": fake_id,
+            "quality_reviewed": True,  # Fixture uses fake bytes; quality review is covered separately.
             "data_region": "overseas",
             "mapping": {
                 "col_item_id": "item_id", "col_month": "month", "col_platform": "platform",
@@ -551,6 +553,7 @@ def test_upload_confirm_passes_country_to_background_job(db, monkeypatch, tmp_pa
         "/api/upload/confirm",
         json={
             "temp_file_id": fake_id,
+            "quality_reviewed": True,  # Fixture uses fake bytes; quality review is covered separately.
             "country_code": "us",
             "batch_key": "batch-test-001",
             "mapping": {
@@ -601,6 +604,7 @@ def test_upload_confirm_accepts_missing_month_platform_when_filename_infers_them
         "/api/upload/confirm",
         json={
             "temp_file_id": fake_id,
+            "quality_reviewed": True,  # Fixture uses fake bytes; quality review is covered separately.
             "mapping": {
                 "ASIN": "item_id", "产品名称": "item_name",
                 "销量": "sales_qty", "销额": "sales_amount", "价格": "price",
@@ -636,6 +640,7 @@ def test_upload_confirm_rejects_missing_month_platform_without_filename_hints(db
         "/api/upload/confirm",
         json={
             "temp_file_id": fake_id,
+            "quality_reviewed": True,  # Fixture uses fake bytes; quality review is covered separately.
             "mapping": {
                 "ASIN": "item_id", "产品名称": "item_name",
                 "销量": "sales_qty", "销额": "sales_amount", "价格": "price",

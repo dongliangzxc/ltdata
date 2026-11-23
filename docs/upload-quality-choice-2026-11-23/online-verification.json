@@ -1,0 +1,23 @@
+{
+  "business_commit": "c4db5ff",
+  "https_redirect_fix": "f4ff1c7",
+  "direct_unreviewed_confirm": 409,
+  "structured_warning_code": "upload_quality_review_required",
+  "warning_rows": 5,
+  "warning_count": 7,
+  "server_warning_choice_supported": true,
+  "fresh_entry": "/upload/review",
+  "legacy_redirect_location": "/upload/review?version=choice",
+  "relative_redirect_preserves_https": true,
+  "frontend_asset": "/assets/index-5h2yuHP2.js",
+  "frontend_sha256": "e89db6ac606fa3b5ede2bbb8ab625ac2fb0ea7f86f0a4feda391e9c0e30422c5",
+  "matches_local_ui_verified_build": true,
+  "backend_sha256": "90f1cdd7b50f9f4cbf61023a4eb92a3e1f8548a71715763cb52692cb6ff882d3",
+  "nginx_config_sha256": "1042d462a04278baf70fffaba2abde9364359d2f1b44df14f80ae9f5ec2c2680",
+  "test_jobs_written": 0,
+  "test_file_records_written": 0,
+  "temporary_files_cleaned": true,
+  "local_fault_injection_cancel_jobs": 0,
+  "local_fault_injection_accepted_rows": 6,
+  "container_restarts": 0
+}

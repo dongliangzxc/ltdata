@@ -1079,6 +1079,10 @@ export default function UploadPage() {
           updateBatchItem(item.uid, { status: 'done', progress: 100, message: '已完成' })
           setPendingFiles(prev => prev.filter(file => file.uid !== item.uid))
         } catch (error) {
+          if ((error as { code?: string })?.code === 'ERR_CANCELED') {
+            updateBatchItem(item.uid, { status: 'pending', progress: 0, message: '已返回检查，可重新确认' })
+            return
+          }
           failedCount += 1
           const detail = (error as { response?: { data?: { detail?: string; message?: string } } })?.response?.data
           updateBatchItem(item.uid, {
@@ -1288,6 +1292,13 @@ export default function UploadPage() {
       {/* Step 1: Upload zone */}
       {step === 'upload' && (
         <Card>
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="入库前检查已开启"
+            description="发现空值、异常数字或月份时，会先展示问题；选择“仍然上传”可继续，选择“返回检查”不会入库。"
+          />
           <Dragger
             accept=".xlsx,.xls,.csv"
             multiple

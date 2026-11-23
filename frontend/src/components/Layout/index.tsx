@@ -161,7 +161,7 @@ export default function AppLayout({ children }: Props) {
         <Menu
           theme="dark"
           mode="inline"
-          selectedKeys={[location.pathname]}
+          selectedKeys={[location.pathname === '/upload/review' ? '/upload' : location.pathname]}
           items={filteredMenuItems}
           onClick={({ key }) => navigate(key)}
         />
@@ -176,7 +176,7 @@ export default function AppLayout({ children }: Props) {
           justifyContent: 'space-between',
         }}>
           <Title level={4} style={{ margin: 0, color: '#1677ff' }}>
-            {pageTitles.get(location.pathname) ?? '洛图数据处理平台'}
+            {pageTitles.get(location.pathname === '/upload/review' ? '/upload' : location.pathname) ?? '洛图数据处理平台'}
           </Title>
           <Dropdown
             menu={{

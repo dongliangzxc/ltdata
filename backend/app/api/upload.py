@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import quote
 from typing import Optional
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Query
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, JSONResponse
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 from app.models.database import get_db
@@ -1181,10 +1181,14 @@ def upload_confirm(payload: dict, db: Session = Depends(get_db)):
     if payload.get("quality_reviewed") is not True:
         report = validate_upload(payload, db)
         if report["issue_count"]:
-            raise HTTPException(
+            return JSONResponse(
                 status_code=409,
-                detail=(f"发现 {report['affected_rows']} 行共 {report['issue_count']} 处数据问题，"
-                        "尚未确认。请重新打开上传页面，查看提示后选择“仍然上传”即可继续。"),
+                content={
+                    "code": "upload_quality_review_required",
+                    "detail": (f"发现 {report['affected_rows']} 行共 {report['issue_count']} 处数据问题，"
+                               "请选择“返回检查”或“仍然上传”。"),
+                    "report": report,
+                },
             )
 
     # 创建 job 记录

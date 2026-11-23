@@ -50,6 +50,7 @@ export default function App() {
           <Route element={<AppLayout><Outlet /></AppLayout>}>
             <Route path="/" element={<DefaultRedirect />} />
             <Route path="/upload" element={<ProtectedPage><UploadPage /></ProtectedPage>} />
+            <Route path="/upload/review" element={<ProtectedPage><UploadPage /></ProtectedPage>} />
             <Route path="/rawdata" element={<ProtectedPage><DataListPage /></ProtectedPage>} />
             <Route path="/clean" element={<ProtectedPage><CleanPage /></ProtectedPage>} />
             <Route path="/brand-clean" element={<ProtectedPage><BrandCleanPage /></ProtectedPage>} />

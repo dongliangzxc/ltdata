@@ -17,7 +17,19 @@ api.interceptors.request.use(config => {
 
 api.interceptors.response.use(
   (res) => res,
-  (err) => {
+  async (err) => {
+    if (err.response?.status === 409 && err.response.data?.code === 'upload_quality_review_required'
+      && err.config?.url === '/upload/confirm') {
+      const payload = typeof err.config.data === 'string' ? JSON.parse(err.config.data) : err.config.data
+      if (err.config._uploadQualityRetried !== true) {
+        const { reviewUploadWarnings } = await import('../pages/Upload/UploadWarnings')
+        if (!await reviewUploadWarnings([err.response.data.report])) {
+          throw new axios.CanceledError('已返回检查')
+        }
+        const retryConfig = { ...err.config, _uploadQualityRetried: true, data: { ...payload, quality_reviewed: true } }
+        return api.request(retryConfig)
+      }
+    }
     if (err.response?.status === 401) {
       localStorage.removeItem('token')
       localStorage.removeItem('username')

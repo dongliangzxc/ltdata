@@ -64,6 +64,7 @@ export function reviewUploadWarnings(reports: UploadValidationReport[]): Promise
     Modal.confirm({
       title: warnings.length === 1 ? '发现数据问题，是否继续上传？' : `${warnings.length} 个文件存在数据问题，是否继续上传？`,
       width: 820,
+      style: { top: 24 },
       content: <UploadWarningDetails reports={warnings} />,
       okText: '仍然上传',
       cancelText: '返回检查',

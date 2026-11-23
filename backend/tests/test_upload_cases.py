@@ -215,6 +215,9 @@ def test_direct_confirm_cannot_silently_import_warnings(harness, ack):
     assert response.status_code == 409, response.text
     assert "3 行共 3 处" in response.json()["detail"]
     assert "仍然上传" in response.json()["detail"]
+    assert response.json()["code"] == "upload_quality_review_required"
+    assert response.json()["report"]["issue_count"] == 3
+    assert response.json()["report"]["filename"] == "missing_values.csv"
     assert not harness.queued
     with harness.sessions() as session:
         assert session.query(UploadConfirmJob).count() == 0

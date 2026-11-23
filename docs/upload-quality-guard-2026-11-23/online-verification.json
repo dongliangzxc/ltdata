@@ -1,0 +1,17 @@
+{
+  "business_commit": "301f4b1",
+  "direct_unreviewed_confirm": 409,
+  "warning_rows": 5,
+  "warning_count": 7,
+  "reviewed_confirm_reaches_job_creation": true,
+  "test_jobs_written": 0,
+  "test_file_records_written": 0,
+  "temporary_files_cleaned": true,
+  "frontend_asset": "/assets/index-BfhmFJoP.js",
+  "frontend_sha256": "a0c236995fa06e0a90f1ec8fdcbbc93c47731577e144c463ea23f2180368627a",
+  "matches_local_ui_verified_build": true,
+  "cache_control": "no-cache",
+  "backend_sha256": "7a341724440d58e312247773d5d51468d9300742cb65f45f58a63cf915e18706",
+  "container_restarts": 0,
+  "migration": "p79a1b2c3d4e5"
+}

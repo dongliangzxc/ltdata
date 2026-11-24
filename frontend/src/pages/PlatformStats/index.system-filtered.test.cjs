@@ -100,3 +100,15 @@ delete progress.system_filtered
 progress.categories.forEach(row => { delete row.system_filtered })
 assert.equal(statistic(render(), '系统过滤'), 0)
 assert.equal(nodes(render(), node => node.type === 'Table')[0].props.dataSource[0].system_filtered, 0)
+
+// A transferred source item is handled there, while its model review continues elsewhere.
+progress.transferred_out = 2
+progress.categories.forEach(row => { row.transferred_out = 1 })
+assert.equal(statistic(render(), '已转出'), 2)
+const transferredTable = nodes(render(), node => node.type === 'Table')[0].props
+assert.equal(transferredTable.dataSource[0].transferred_out, 2)
+assert.equal(transferredTable.columns.find(col => col.dataIndex === 'transferred_out').render(1), '1')
+selectedPlatform = 'jd'
+assert.equal(nodes(render(), node => node.type === 'Table')[0].props.dataSource[0].transferred_out, 1)
+delete progress.transferred_out
+assert.equal(statistic(render(), '已转出'), 0, 'rolling deployment remains compatible with the prior API')

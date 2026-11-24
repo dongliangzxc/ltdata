@@ -115,6 +115,7 @@ export interface PlatformStatsProgressCategory {
   confirmed: number
   excluded_ignored: number
   system_filtered: number
+  transferred_out?: number
   pending: number
   published: number
   last_processed_at: string | null
@@ -135,6 +136,7 @@ export interface PlatformStatsProgressMonth {
   confirmed: number
   excluded_ignored: number
   system_filtered: number
+  transferred_out?: number
   pending: number
   task_no_result: number
   published: number
@@ -155,6 +157,7 @@ export interface PlatformStatsProgress {
   confirmed: number
   excluded_ignored: number
   system_filtered: number
+  transferred_out?: number
   pending: number
   task_no_result: number
   published: number

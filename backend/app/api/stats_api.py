@@ -33,6 +33,7 @@ from app.models.schemas import (
 )
 from app.utils.time_utils import format_beijing_datetime
 from app.services.dispatch_scope import latest_done_batch_subquery
+from app.services.clean_task_completion import transferred_out_items
 
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
@@ -454,6 +455,7 @@ def _progress_stats(db: Session) -> dict:
             "confirmed": 0,
             "excluded_ignored": 0,
             "system_filtered": 0,
+            "transferred_out": 0,
             "pending": 0,
             "published": 0,
             "last_processed_at": None,
@@ -492,6 +494,39 @@ def _progress_stats(db: Session) -> dict:
     for month, code, platform, published in published_rows:
         bucket(month, code, platform)["published"] = _int(published)
 
+    # A transfer moves the result to its destination while preserving the source
+    # snapshot. It is a completed source decision, not a missing match to rerun.
+    transferred = transferred_out_items(db)
+    transfer_rows = (
+        db.query(RawDataRecord.month, DispatchItem.category_code, func.lower(RawDataRecord.platform),
+                 func.count(func.distinct(DispatchItem.raw_data_id)), func.max(transferred.c.transferred_at))
+        .select_from(transferred)
+        .join(CleanJobRecord, and_(CleanJobRecord.id == transferred.c.job_id,
+                                  CleanJobRecord.status != ARCHIVED_STATUS))
+        .join(CleanJobItemRecord, and_(CleanJobItemRecord.clean_job_id == transferred.c.job_id,
+                                      CleanJobItemRecord.raw_data_id == transferred.c.raw_data_id))
+        .join(RawDataRecord, RawDataRecord.id == transferred.c.raw_data_id)
+        .join(DispatchItem, and_(DispatchItem.raw_data_id == transferred.c.raw_data_id,
+                                DispatchItem.category_code == CleanJobItemRecord.category_code))
+        .join(latest_batches, latest_batches.c.batch_id == DispatchItem.batch_id)
+        .join(Category, Category.code == DispatchItem.category_code)
+        .outerjoin(MatchResult, and_(MatchResult.clean_job_id == transferred.c.job_id,
+                                    MatchResult.raw_data_id == transferred.c.raw_data_id))
+        .outerjoin(FilteredItem, and_(FilteredItem.clean_job_id == transferred.c.job_id,
+                                     FilteredItem.raw_data_id == transferred.c.raw_data_id,
+                                     FilteredItem.is_recovered == 0))
+        .filter(RawDataRecord.month.isnot(None), MatchResult.id.is_(None), FilteredItem.id.is_(None))
+        .group_by(RawDataRecord.month, DispatchItem.category_code, func.lower(RawDataRecord.platform))
+        .all()
+    )
+    for month, code, platform, count, transferred_at in transfer_rows:
+        item = bucket(month, code, platform)
+        item['transferred_out'] = _int(count)
+        item['processed'] += _int(count)
+        time_value = format_beijing_datetime(transferred_at)
+        if time_value and (not item['last_processed_at'] or time_value > item['last_processed_at']):
+            item['last_processed_at'] = time_value
+
     categories = sorted(
         rows.values(),
         key=lambda item: (item["month"], item["dispatched"], item["processed"]),
@@ -521,11 +556,12 @@ def _progress_stats(db: Session) -> dict:
             "confirmed": 0,
             "excluded_ignored": 0,
             "system_filtered": 0,
+            "transferred_out": 0,
             "pending": 0,
             "published": 0,
         })
         for key in ("dispatched", "task_created", "task_count", "processed", "matched",
-                    "url_matched", "auto_matched", "confirmed", "excluded_ignored", "system_filtered",
+                    "url_matched", "auto_matched", "confirmed", "excluded_ignored", "system_filtered", "transferred_out",
                     "pending", "published"):
             acc["dispatchable" if key == "dispatched" else key] += item[key]
 
@@ -559,6 +595,7 @@ def _progress_stats(db: Session) -> dict:
         "confirmed": total("confirmed"),
         "excluded_ignored": total("excluded_ignored"),
         "system_filtered": total("system_filtered"),
+        "transferred_out": total("transferred_out"),
         "pending": total("pending"),
         "task_no_result": total("task_no_result"),
         "published": total("published"),

@@ -163,6 +163,11 @@ const progressColumns: ColumnsType<ProgressRow> = [
     render: (v: number | undefined) => (v ?? 0).toLocaleString(),
   },
   {
+    title: '已转出', dataIndex: 'transferred_out', width: 100,
+    sorter: (a, b) => (a.transferred_out ?? 0) - (b.transferred_out ?? 0),
+    render: (v: number | undefined) => (v ?? 0).toLocaleString(),
+  },
+  {
     title: '已发布', dataIndex: 'published', width: 100,
     sorter: (a, b) => a.published - b.published,
     render: (v: number) => v.toLocaleString(),
@@ -384,6 +389,7 @@ export default function PlatformStatsPage() {
       existing.confirmed += row.confirmed
       existing.excluded_ignored += row.excluded_ignored
       existing.system_filtered = (existing.system_filtered ?? 0) + (row.system_filtered ?? 0)
+      existing.transferred_out = (existing.transferred_out ?? 0) + (row.transferred_out ?? 0)
       existing.pending += row.pending
       existing.published += row.published
       if (row.last_processed_at && (!existing.last_processed_at || row.last_processed_at > existing.last_processed_at)) {
@@ -438,6 +444,7 @@ export default function PlatformStatsPage() {
           confirmed: 0,
           excluded_ignored: 0,
           system_filtered: 0,
+          transferred_out: 0,
           pending: 0,
           task_no_result: 0,
           published: 0,
@@ -524,12 +531,13 @@ export default function PlatformStatsPage() {
         <Row gutter={16} style={{ marginTop: 8 }}>
           <Col flex="1"><Statistic title="已排除 / 忽略" value={overview.excluded_ignored} /></Col>
           <Col flex="1"><Statistic title="系统过滤" value={overview.system_filtered ?? 0} /></Col>
+          <Col flex="1"><Statistic title="已转出" value={overview.transferred_out ?? 0} /></Col>
           <Col flex="1"><Statistic title="当前待处理" value={overview.pending} valueStyle={{ color: '#d48806' }} /></Col>
           <Col flex="1"><Statistic title="已入任务未出结果" value={overview.task_no_result} valueStyle={{ color: '#d48806' }} /></Col>
           <Col flex="1"><Statistic title="未清理" value={overview.not_processed} valueStyle={{ color: '#d48806' }} /></Col>
         </Row>
         <Text type="secondary" style={{ display: 'block', marginTop: 12 }}>
-          对账关系：值得分发 = 已入任务条数 + 未入任务条数 = 已清理 + 未清理；已入任务条数 = 已清理 + 当前待处理 + 已入任务未出结果；已清理 = 自动匹配 + 人工确认 + 已排除 / 忽略 + 系统过滤。
+          对账关系：值得分发 = 已入任务条数 + 未入任务条数 = 已清理 + 未清理；已入任务条数 = 已清理 + 当前待处理 + 已入任务未出结果；已清理 = 自动匹配 + 人工确认 + 已排除 / 忽略 + 系统过滤 + 已转出。已转出表示已移交其他任务，后续在目标任务继续处理。
         </Text>
         <Text type="secondary" style={{ display: 'block', marginTop: 4 }}>
           已发布到分析库：{overview.published.toLocaleString()} 行（任务级发布行数，不参与上方条目对账）。

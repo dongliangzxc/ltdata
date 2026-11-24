@@ -7,7 +7,7 @@ from app.api import clean
 from app.core.config import settings
 from app.models.schemas import (
     CleanDuplicateRecord, CleanedDataRecord, CleanJobItemRecord, CleanJobRecord,
-    CleanTaskRun, FilteredItem, MatchResult, MatchResultAttr, MatchResultExtraValue, PublishJob,
+    CleanTaskRun, FilteredItem, MatchResult, MatchResultAttr, MatchResultExtraValue, MatchTransferLog, PublishJob,
 )
 from app.services import clean_task_queue as queue, matcher
 from tests.test_clean_task_queue import _client, _pending, _submit, _assert_original_results_unchanged
@@ -132,3 +132,67 @@ def test_completion_is_scoped_permission_checked_and_busy_tasks_are_blocked(db):
     assert client.post(f'/api/clean/tasks/{job_id}/completion').status_code == 200
     assert client.post(f'/api/clean/tasks/{job_id}/completion').status_code == 409
     _assert_original_results_unchanged(db,before)
+
+
+def _transfer_gap(db):
+    client, job_id, gap_raw, before = _gap(db)
+    target = CleanJobRecord(category_code='bt_speaker',platform='jd',status='reviewing',source_scope={'months':[202603]})
+    db.add(target)
+    db.flush()
+    result = MatchResult(clean_job_id=target.id,raw_data_id=gap_raw,match_status='text_only')
+    db.add(result)
+    db.flush()
+    departure = MatchTransferLog(match_result_id=result.id,raw_data_id=gap_raw,from_clean_job_id=job_id,
+                                 to_clean_job_id=target.id,transferred_at=datetime(2026,11,23,1,57,13))
+    db.add(departure)
+    db.commit()
+    return client,job_id,gap_raw,before,target,result
+
+
+@pytest.mark.parametrize('target_result_retained',[True,False])
+def test_transferred_item_is_never_recreated_in_source_task(db,target_result_retained):
+    client,job_id,gap_raw,before,target,result = _transfer_gap(db)
+    if not target_result_retained:
+        db.delete(result)
+        db.commit()
+    path=f'/api/clean/tasks/{job_id}/completion'
+    assert client.get(path).json()['missing_results']==0
+    assert client.post(path).json()['match_status']=='unchanged'
+    assert not queue.execute_next_run(db)
+    assert db.query(MatchResult).filter_by(clean_job_id=job_id,raw_data_id=gap_raw).count()==0
+    _assert_original_results_unchanged(db,before)
+
+
+def test_statistics_count_transfer_as_source_completion_without_inflating_matches(db):
+    from app.api.stats_api import _progress_stats
+    client,job_id,gap_raw,before,target,result = _transfer_gap(db)
+    db.query(MatchResult).filter_by(clean_job_id=job_id).update({'updated_at':datetime(2026,11,1)})
+    db.commit()
+    progress=_progress_stats(db)
+    source=next(x for x in progress['categories'] if x['category_code']=='projector')
+    month=progress['months'][0]
+    assert source['dispatched']==source['processed']==2
+    assert source['matched']==1 and source['transferred_out']==1
+    assert source['pending']==0
+    assert source['last_processed_at']==source['completed_at']=='2026-11-23 09:57:13'
+    for row in [month,progress]:
+        assert row['transferred_out']==1
+        assert row['task_no_result']==0
+        assert row['processed']==row['matched']+row['excluded_ignored']+row['system_filtered']+row['transferred_out']
+
+
+def test_transfer_return_and_subsequent_departure_follow_latest_ownership(db):
+    from app.api.stats_api import _progress_stats
+    from app.services.clean_task_completion import missing_match_raw_ids
+    client,job_id,gap_raw,before,target,result = _transfer_gap(db)
+    returned=MatchTransferLog(match_result_id=result.id,raw_data_id=gap_raw,
+                             from_clean_job_id=target.id,to_clean_job_id=job_id)
+    db.add(returned)
+    db.delete(result)  # A genuine gap after returning belongs to the source again.
+    db.commit()
+    assert missing_match_raw_ids(db,job_id).count()==1
+    assert _progress_stats(db)['transferred_out']==0
+    db.add(MatchTransferLog(match_result_id=123,raw_data_id=gap_raw,from_clean_job_id=job_id,to_clean_job_id=target.id))
+    db.commit()
+    assert missing_match_raw_ids(db,job_id).count()==0
+    assert _progress_stats(db)['transferred_out']==1

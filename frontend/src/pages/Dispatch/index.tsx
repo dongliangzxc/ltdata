@@ -183,6 +183,8 @@ const groupDispatchFiles = (files: UploadFile[]): DispatchFileRow[] => {
 
 // ─── Tab 1: 分发管理 ──────────────────────────────────────────
 function DispatchManagementTab({ onRulesChanged, visibleCategories }: { onRulesChanged: () => void; visibleCategories: CategoryOption[] }) {
+  const { user } = useAuth()
+  const hasCategoryRestriction = user?.is_admin !== 1 && (user?.category_permissions?.length ?? 0) > 0
   const [runningKeys, setRunningKeys] = useState<Set<string>>(new Set())
   const [statsVisible, setStatsVisible] = useState(false)
   const [statsData, setStatsData] = useState<DispatchBatchStatsResponse | null>(null)
@@ -386,10 +388,12 @@ function DispatchManagementTab({ onRulesChanged, visibleCategories }: { onRulesC
       >
         {statsData && (
           <>
-            <Descriptions size="small" column={3} style={{ marginBottom: 12 }}>
-              <Descriptions.Item label="总行数">{statsData.total_rows}</Descriptions.Item>
-              <Descriptions.Item label="分发结果数">{statsData.dispatched_rows}</Descriptions.Item>
-              <Descriptions.Item label="未命中">
+            <Descriptions size="small" column={hasCategoryRestriction ? 2 : 3} style={{ marginBottom: 12 }}>
+              <Descriptions.Item label="总行数（整批）">{statsData.total_rows}</Descriptions.Item>
+              <Descriptions.Item label={hasCategoryRestriction ? '分发结果数（可见品类）' : '分发结果数（全部品类）'}>
+                {statsData.dispatched_rows}
+              </Descriptions.Item>
+              <Descriptions.Item label="未命中（整批）">
                 {statsData.unmatched_rows && statsData.unmatched_rows > 0 ? (
                   <Button type="link" size="small" style={{ padding: 0 }} onClick={openUnmatchedModal}>
                     {statsData.unmatched_rows} 条
@@ -398,12 +402,32 @@ function DispatchManagementTab({ onRulesChanged, visibleCategories }: { onRulesC
                   `${statsData.unmatched_rows ?? 0} 条`
                 )}
               </Descriptions.Item>
+              {hasCategoryRestriction && statsData.other_category_rows != null && (
+                <Descriptions.Item label="仅命中无权限品类">
+                  {statsData.other_category_rows} 条
+                </Descriptions.Item>
+              )}
             </Descriptions>
+            {hasCategoryRestriction && (
+              <Alert
+                type="warning"
+                showIcon
+                style={{ marginBottom: 12 }}
+                message="当前账号仅可查看已授权品类的分发结果"
+                description={[
+                  '总行数和未命中数为整批数据统计，分发结果数及下方明细仅包含您有权限查看的品类。',
+                  (statsData.other_category_rows ?? 0) > 0
+                    ? `另有 ${statsData.other_category_rows} 条原始数据仅分发到无权限品类（按原始行去重），详情已隐藏。这些数据已命中规则，不计入“未命中”。`
+                    : '“未命中”指整批中未命中任何分发规则的原始数据，不包含已分发但无权限查看的数据。',
+                  '如需查看其他品类，请联系管理员开通相应品类权限。',
+                ].join('')}
+              />
+            )}
             <Alert
               type="info"
               showIcon
               style={{ marginBottom: 12 }}
-              message="同一原始行可分发到多个类目；分发结果数可能大于总行数。同一类目命中多条规则时只记录优先级最高的规则。规则内容为当前配置，修改规则后需重新分发才会改变命中结果。"
+              message="同一原始行可分发到多个品类；分发结果数按品类分别计数，可能大于原始行数，不能直接与未命中数相加核对总行数。同一品类命中多条规则时只记录优先级最高的规则。规则内容为当前配置，修改规则后需重新分发才会改变命中结果。"
             />
             <Alert
               type="info"
@@ -416,6 +440,7 @@ function DispatchManagementTab({ onRulesChanged, visibleCategories }: { onRulesC
               rowKey={row => row.category_code || 'unknown'}
               dataSource={visibleStatsCategories}
               pagination={false}
+              locale={{ emptyText: hasCategoryRestriction ? '当前账号有权限的品类暂无分发结果；其他品类结果可能因权限限制未展示。' : '该批次暂无分发结果' }}
               expandable={{
                 rowExpandable: category => visibleStatsRules.some(rule => rule.category_code === category.category_code),
                 expandedRowRender: category => (

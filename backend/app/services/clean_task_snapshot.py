@@ -430,9 +430,8 @@ def get_monthly_clean_pool(
         row_month = int(row.month)
         pending_count = row.dispatched_count - row.queued_count
         job = jobs_by_scope.get((row.category_code, normalized_platform, row_month))
-        if job is not None and job.id in active_downstream_ids:
-            # 已有人工/发布结果的活跃任务仍按原逻辑不在待入队列表展示；
-            # 无下游结果的任务展示出来，便于追加或「重新清洗」同步最新分发。
+        if job is not None and job.id in active_downstream_ids and pending_count == 0:
+            # 已有处理结果且没有新增条目时隐藏；有新增分发时仍展示追加入口。
             continue
         if job is None:
             archived_job = _archived_job_with_downstream(row.category_code, row.platform, row_month)
@@ -464,7 +463,7 @@ def get_monthly_clean_pool(
             "existing_job_id": job.id if job else None,
             "existing_job_name": job.task_name if job else None,
             "existing_job_status": job.status if job else None,
-            "has_reviewed_or_published": False,
+            "has_reviewed_or_published": job is not None and job.id in active_downstream_ids,
         })
     return result
 
@@ -668,12 +667,14 @@ def upsert_monthly_task_snapshot(
     rules: dict | None,
     force_reclean: bool = False,
     force_rebuild: bool = False,
+    incremental_append: bool = False,
 ):
     """创建/追加/重建月度任务快照。
 
     取数口径为每个文件最新已完成分发批次。`force_reclean` 在任务没有人工确认/
     发布记录时按最新分发范围重建快照，可移出重新分发后不再命中的旧行；
-    `force_rebuild` 允许清除已有下游结果后重建。
+    `force_rebuild` 允许清除已有下游结果后重建。调用方保证只执行新增快照范围时，
+    可通过 `incremental_append` 追加到已有人工/发布结果的任务；旧同步全量执行仍禁止。
     """
     normalized_platform = normalize_platform(platform)
     job = _find_monthly_job(
@@ -699,7 +700,7 @@ def upsert_monthly_task_snapshot(
     if job and not force_rebuild and not force_reclean:
         if job.status not in APPENDABLE_TASK_STATUSES and job.status != "archived":
             raise ValueError(f"任务状态为 {job.status}，不能追加数据")
-        if has_downstream:
+        if has_downstream and not incremental_append:
             raise ValueError("任务已有人工处理或发布记录，不能直接追加数据")
         if job.status != "archived" and rules is not None and (job.rules or {"dedup": True}) != (rules or {"dedup": True}):
             raise ValueError("清洗配置已变化，请使用重新清洗，不能在追加时修改旧任务配置")

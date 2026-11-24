@@ -837,6 +837,7 @@ def upsert_monthly_clean_task(
                 rules=payload.rules,
                 force_reclean=payload.force_reclean,
                 force_rebuild=payload.force_rebuild,
+                incremental_append=incremental,
             )
             if not new_snapshot_ids and action == "appended" and not payload.force_reclean and not payload.force_rebuild:
                 db.commit()

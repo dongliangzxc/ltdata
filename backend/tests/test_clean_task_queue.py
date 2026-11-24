@@ -23,6 +23,7 @@ from app.models.schemas import (
     CleanTaskRun, DispatchBatch, DispatchItem, ItemUrlMapping, MatchResult,
     MatchResultAttr, ModelRecord, RawDataRecord, UploadFileRecord,
     MatchResultExtraValue,
+    PublishJob,
 )
 from app.services import clean_task_queue as queue
 
@@ -132,6 +133,96 @@ def test_real_worker_cleans_matches_and_finishes_after_http_request_is_gone(db):
     assert db.query(CleanedDataRecord).one().raw_data_id == raw_id
     assert db.query(MatchResult).one().match_status == "pending"
     assert not queue.execute_next_run(db)
+
+
+def _reviewed_job_with_new_dispatch(db, status="reviewing"):
+    old_raw_id = _pending(db)
+    client = _client(db)
+    job_id = _submit(client)
+    assert queue.execute_next_run(db)
+    model = ModelRecord(brand_code="TEST", model_code="OLD", category_code="headphone")
+    db.add(model)
+    db.flush()
+    result = db.query(MatchResult).one()
+    result.model_id, result.match_status, result.matched_by = model.id, "confirmed", "manual"
+    result.review_note, result.sales_coefficient = "保留原确认", 0.8
+    attr = MatchResultAttr(match_result_id=result.id, attr_name="类型", attr_value="耳机")
+    extra = MatchResultExtraValue(match_result_id=result.id, field_key="智能", field_value="是", source="manual")
+    publication = PublishJob(clean_job_id=job_id, status="done", published_count=1)
+    db.add_all([attr, extra, publication])
+    db.get(CleanJobRecord, job_id).status = status
+    db.commit()
+    records = [result, attr, extra, publication, db.query(CleanedDataRecord).one()]
+    before = [(type(obj), obj.id, {col.name: getattr(obj, col.name) for col in obj.__table__.columns})
+              for obj in records]
+    new_raw_id = _pending(db, item_id="456")
+    return client, job_id, old_raw_id, new_raw_id, before
+
+
+def _assert_original_results_unchanged(db, before):
+    db.expire_all()
+    for model, record_id, values in before:
+        current = db.get(model, record_id)
+        assert current is not None
+        assert {col.name: getattr(current, col.name) for col in current.__table__.columns} == values
+
+
+@pytest.mark.parametrize("status", ["reviewing", "done", "published"])
+def test_reviewed_monthly_task_exposes_append_and_worker_preserves_original_results(db, status):
+    client, job_id, old_id, new_id, before = _reviewed_job_with_new_dispatch(db, status)
+    pool = client.get("/api/clean/pool/monthly?category_code=headphone&platform=jd&month=202603")
+    assert pool.status_code == 200
+    row = pool.json()[0]
+    assert (row["existing_job_id"], row["pending_count"], row["queued_count"],
+            row["has_reviewed_or_published"]) == (job_id, 1, 1, True)
+
+    response = client.post("/api/clean/tasks/upsert-monthly", json={
+        "category_code": "headphone", "platform": "jd", "month": 202603,
+    })
+    assert response.status_code == 200, response.text
+    assert response.json()["action"] == "appended"
+    assert response.json()["match_status"] == "queued"
+    assert response.json()["snapshot_count"] == 1
+    run = db.query(CleanTaskRun).one()
+    assert (run.mode, run.input_count) == ("incremental", 1)
+    queued_ids = [r[0] for r in db.query(CleanJobItemRecord.raw_data_id).filter(
+        CleanJobItemRecord.clean_job_id == job_id,
+        CleanJobItemRecord.id.between(run.snapshot_start_id, run.snapshot_end_id),
+    )]
+    assert queued_ids == [new_id]
+    _assert_original_results_unchanged(db, before)
+    assert queue.execute_next_run(db)
+    _assert_original_results_unchanged(db, before)
+    assert db.query(MatchResult).filter_by(clean_job_id=job_id).count() == 2
+    assert db.query(MatchResult).filter_by(clean_job_id=job_id, raw_data_id=old_id).one().match_status == "confirmed"
+    assert db.query(MatchResult).filter_by(clean_job_id=job_id, raw_data_id=new_id).count() == 1
+    assert client.get("/api/clean/pool/monthly?category_code=headphone&platform=jd&month=202603").json() == []
+
+    # Repeating the append neither reruns old rows nor creates another queue run.
+    again = client.post("/api/clean/tasks/upsert-monthly", json={
+        "category_code": "headphone", "platform": "jd", "month": 202603,
+    })
+    assert again.status_code == 200, again.text
+    assert (again.json()["snapshot_count"], again.json()["match_status"]) == (0, "unchanged")
+    assert db.query(CleanTaskRun).one().state == "done"
+    _assert_original_results_unchanged(db, before)
+
+
+def test_reviewed_monthly_append_failure_can_retry_without_overwriting_old_results(db, monkeypatch):
+    client, job_id, old_id, new_id, before = _reviewed_job_with_new_dispatch(db)
+    _submit(client)
+    with monkeypatch.context() as patch:
+        def fail(*args, **kwargs):
+            raise RuntimeError("模拟新增匹配失败")
+        patch.setattr(clean, "run_match", fail)
+        assert queue.execute_next_run(db)
+    assert db.get(CleanJobRecord, job_id).status == "failed"
+    _assert_original_results_unchanged(db, before)
+    assert db.query(CleanedDataRecord).filter_by(clean_job_id=job_id, raw_data_id=new_id).count() == 0
+    assert client.post(f"/api/clean/tasks/{job_id}/retry").status_code == 200
+    assert queue.execute_next_run(db)
+    _assert_original_results_unchanged(db, before)
+    assert db.query(MatchResult).filter_by(clean_job_id=job_id).count() == 2
 
 
 def test_fifo_retry_and_failure_do_not_delete_task_or_block_next_job(db):

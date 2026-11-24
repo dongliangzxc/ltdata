@@ -315,7 +315,9 @@ const monthlyQueueColumns = (
         <Button
           type="primary"
           size="small"
-          title={action.action === 'recleaned' ? '按最新分发结果重新清洗，会移出旧批次命中数据' : undefined}
+          title={action.action === 'recleaned'
+            ? '按最新分发结果重新清洗，会移出旧批次命中数据'
+            : action.action === 'appended' ? '只处理待入队的新增数据，保留原有人工处理和发布结果' : undefined}
           disabled={action.disabled || operationDisabled || (!!upsertingRowKey && !isCurrentRowUpserting)}
           loading={isCurrentRowUpserting}
           onClick={() => onUpsert(row)}
@@ -809,6 +811,12 @@ export default function CleanPage() {
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <Card title="待入清洗队列">
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="重新分发后有新增数据，可在这里追加到原任务。只处理新增条目，原有人工处理和发布结果保留。"
+        />
         <Row gutter={16} style={{ marginBottom: 16 }}>
           <Col span={6}>
             <Select

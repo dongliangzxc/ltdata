@@ -261,19 +261,38 @@ def test_append_cannot_change_config_and_explicit_reclean_stays_full(db):
 
 
 @pytest.mark.parametrize('kind',['review','extra','attrs','published'])
-def test_append_keeps_existing_manual_and_publish_restrictions(db,kind):
-    client,job_id,_=_base(db)
+def test_reviewed_append_preserves_results_but_reclean_still_requires_rebuild(db,kind):
+    client,job_id,old_raw=_base(db)
     result=db.query(MatchResult).filter_by(clean_job_id=job_id).one()
     if kind=='review': result.match_status='confirmed'; result.matched_by='manual'
     elif kind=='extra': db.add(MatchResultExtraValue(match_result_id=result.id,field_key='智能',field_value='是',source='manual'))
     elif kind=='attrs': db.add(MatchResultAttr(match_result_id=result.id,attr_name='连接',attr_value='蓝牙'))
     else: db.add(PublishJob(clean_job_id=job_id,status='done'))
     db.commit(); before=_outputs(db,job_id)
-    _add(db,[('2000','新增')])
-    response=client.post('/api/clean/tasks/upsert-monthly',json={'category_code':'headphone','platform':'jd','month':202603})
+    protected = {m: [tuple(getattr(r,c.name) for c in m.__table__.columns) for r in db.query(m).order_by(m.id)]
+                 for m in (MatchResultAttr, MatchResultExtraValue, PublishJob)}
+    new_raw=_add(db,[('2000','新增')])[0]
+    response=client.post('/api/clean/tasks/upsert-monthly',json={
+        'category_code':'headphone','platform':'jd','month':202603,'force_reclean':True,
+    })
     assert response.status_code==400,response.text
     assert _outputs(db,job_id)==before
     assert db.query(CleanTaskRun).filter_by(clean_job_id=job_id).one().state=='done'
+    response=client.post('/api/clean/tasks/upsert-monthly',json={
+        'category_code':'headphone','platform':'jd','month':202603,
+    })
+    assert response.status_code==200,response.text
+    assert response.json()['snapshot_count']==1
+    run=db.query(CleanTaskRun).filter_by(clean_job_id=job_id).one()
+    assert (run.mode,run.input_count,run.state)==('incremental',1,'queued')
+    assert _outputs(db,job_id)==before
+    assert queue.execute_next_run(db)
+    db.expire_all()
+    assert _outputs(db,job_id,old_raw)==before
+    assert db.query(MatchResult).filter_by(clean_job_id=job_id,raw_data_id=new_raw).count()==1
+    for model,records in protected.items():
+        assert [tuple(getattr(r,c.name) for c in model.__table__.columns)
+                for r in db.query(model).order_by(model.id)]==records
 
 
 def test_scoped_batch_match_preserves_old_manual_attributes_candidates_and_extra_fields(db,monkeypatch):

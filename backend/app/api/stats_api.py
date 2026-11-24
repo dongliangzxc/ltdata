@@ -318,11 +318,12 @@ def _normalize_platform(value: str | None) -> str:
 
 
 def _progress_join(query, latest_batches):
-    """把最新分发条目、清洗快照与匹配结果串起来。"""
+    """只统计仍存在的品类，保留已删除品类的历史分发记录。"""
     return (
         query
         .select_from(DispatchItem)
         .join(latest_batches, DispatchItem.batch_id == latest_batches.c.batch_id)
+        .join(Category, Category.code == DispatchItem.category_code)
         .join(RawDataRecord, RawDataRecord.id == DispatchItem.raw_data_id)
         .outerjoin(
             CleanJobItemRecord,
@@ -410,6 +411,7 @@ def _progress_stats(db: Session) -> dict:
         )
         .select_from(job_publish)
         .join(CleanJobRecord, CleanJobRecord.id == job_publish.c.clean_job_id)
+        .join(Category, Category.code == category_code)
         .join(job_month, job_month.c.clean_job_id == job_publish.c.clean_job_id)
         .filter(CleanJobRecord.status != ARCHIVED_STATUS)
         .group_by(job_month.c.month, category_code, func.lower(CleanJobRecord.platform))

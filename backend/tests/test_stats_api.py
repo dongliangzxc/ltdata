@@ -268,6 +268,77 @@ def test_progress_stats_uses_latest_done_batch(client, session_factory):
     assert by_category[(202608, "camera", "jd")]["processed"] == 0
 
 
+def test_progress_excludes_deleted_category_without_deleting_history(client, session_factory):
+    db = session_factory()
+    upload = UploadFileRecord(filename="deleted-category.xlsx", status="done", row_count=5)
+    kept = Category(code="headphone", name="耳机")
+    deleted = Category(code="77", name="已删除品类")
+    db.add_all([upload, kept, deleted])
+    db.flush()
+    raw = [
+        RawDataRecord(file_id=upload.id, item_id=str(i), platform=platform, month=month)
+        for i, (month, platform) in enumerate([
+            (202610, "jd"), (202610, "tmall"), (202609, "jd"),
+            (202608, "jd"), (202610, "jd"),
+        ])
+    ]
+    db.add_all(raw)
+    db.flush()
+    batch = DispatchBatch(file_id=upload.id, status="done")
+    kept_job = CleanJobRecord(status="reviewing", category_code="headphone", platform="jd")
+    deleted_job = CleanJobRecord(status="reviewing", category_code="77", platform="jd")
+    # A legacy job may identify its category only through dispatch_category_code.
+    published_only_job = CleanJobRecord(status="published", dispatch_category_code="77", platform="jd")
+    db.add_all([batch, kept_job, deleted_job, published_only_job])
+    db.flush()
+    for index, code in [(0, "headphone"), (0, "77"), (1, "77"), (2, "77"), (4, "headphone")]:
+        db.add(DispatchItem(batch_id=batch.id, raw_data_id=raw[index].id, category_code=code))
+    for job, index, code in [
+        (kept_job, 0, "headphone"), (deleted_job, 0, "77"),
+        (deleted_job, 1, "77"), (published_only_job, 3, "77"),
+    ]:
+        db.add(CleanJobItemRecord(clean_job_id=job.id, raw_data_id=raw[index].id, category_code=code))
+    db.add_all([
+        MatchResult(clean_job_id=kept_job.id, raw_data_id=raw[0].id, match_status="url_matched"),
+        MatchResult(clean_job_id=deleted_job.id, raw_data_id=raw[0].id, match_status="url_matched"),
+        MatchResult(clean_job_id=deleted_job.id, raw_data_id=raw[1].id, match_status="pending"),
+        PublishJob(clean_job_id=kept_job.id, status="done", published_count=1),
+        PublishJob(clean_job_id=deleted_job.id, status="done", published_count=2),
+        PublishJob(clean_job_id=published_only_job.id, status="done", published_count=7),
+    ])
+    db.commit()
+
+    before = client.get("/api/stats/progress").json()["data"]["progress"]
+    assert before["dispatchable"] == 5
+    assert before["published"] == 10
+    db.delete(deleted)
+    db.commit()
+
+    # Both stats endpoints must drop the deleted category, including publication-only
+    # rows, without dropping the same raw item from the surviving category.
+    for endpoint in ("/api/stats/progress", "/api/stats/overview"):
+        progress = client.get(endpoint).json()["data"]["progress"]
+        assert progress["dispatchable"] == 2
+        assert progress["task_created"] == 1
+        assert progress["task_count"] == 1
+        assert progress["not_task_created"] == 1
+        assert progress["processed"] == progress["url_matched"] == 1
+        assert progress["not_processed"] == 1
+        assert progress["pending"] == progress["task_no_result"] == 0
+        assert progress["published"] == 1
+        assert [row["category_code"] for row in progress["categories"]] == ["headphone"]
+        assert [row["month"] for row in progress["months"]] == [202610]
+        month = progress["months"][0]
+        assert month["dispatchable"] == month["task_created"] + month["not_task_created"]
+        assert month["dispatchable"] == month["processed"] + month["not_processed"]
+
+    assert db.query(RawDataRecord).count() == 5
+    assert db.query(DispatchItem).filter_by(category_code="77").count() == 3
+    assert db.query(CleanJobItemRecord).filter_by(category_code="77").count() == 3
+    assert db.query(PublishJob).count() == 3
+    db.close()
+
+
 def test_slow_counts_refresh_only_when_expired(client, monkeypatch):
     calls = []
     monkeypatch.setattr(stats_api, "_refresh_slow_counts_in_background", lambda: calls.append(1))

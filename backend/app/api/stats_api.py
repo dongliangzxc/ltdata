@@ -19,6 +19,7 @@ from app.models.schemas import (
     CleanJobItemRecord,
     CleanJobRecord,
     DispatchItem,
+    FilteredItem,
     HistoricalMapping,
     ItemExclusion,
     ItemUrlMapping,
@@ -347,6 +348,14 @@ def _progress_join(query, latest_batches):
                 MatchResult.is_disabled == 0,
             ),
         )
+        .outerjoin(
+            FilteredItem,
+            and_(
+                FilteredItem.clean_job_id == CleanJobRecord.id,
+                FilteredItem.raw_data_id == DispatchItem.raw_data_id,
+                FilteredItem.is_recovered == 0,
+            ),
+        )
         .filter(DispatchItem.raw_data_id.isnot(None))
     )
 
@@ -355,6 +364,9 @@ def _progress_stats(db: Session) -> dict:
     """处理进度：上传总量 → 值得分发 → 已清理（按月份 / 品类 / 平台）。"""
     latest_batches = _latest_done_batch_subquery(db)
     status = MatchResult.match_status
+    # Only actual, unrecovered filter records from the current task count.
+    # A live match result takes precedence over a stale filter record.
+    system_filtered = and_(MatchResult.id.is_(None), FilteredItem.id.isnot(None))
 
     detail_rows = (
         _progress_join(
@@ -365,14 +377,18 @@ def _progress_stats(db: Session) -> dict:
                 func.count(func.distinct(DispatchItem.raw_data_id)).label("dispatched"),
                 func.count(func.distinct(case((CleanJobRecord.id.isnot(None), DispatchItem.raw_data_id)))).label("task_created"),
                 func.count(func.distinct(CleanJobRecord.id)).label("task_count"),
-                func.count(func.distinct(case((status.in_(RESOLVED_STATUSES), DispatchItem.raw_data_id)))).label("processed"),
+                func.count(func.distinct(case((or_(status.in_(RESOLVED_STATUSES), system_filtered), DispatchItem.raw_data_id)))).label("processed"),
                 func.count(func.distinct(case((status.in_(PUBLISHABLE_STATUSES), DispatchItem.raw_data_id)))).label("matched"),
                 func.count(func.distinct(case((status == "url_matched", DispatchItem.raw_data_id)))).label("url_matched"),
                 func.count(func.distinct(case((status == "matched", DispatchItem.raw_data_id)))).label("auto_matched"),
                 func.count(func.distinct(case((status == "confirmed", DispatchItem.raw_data_id)))).label("confirmed"),
                 func.count(func.distinct(case((status.in_(EXCLUDED_STATUSES), DispatchItem.raw_data_id)))).label("excluded_ignored"),
+                func.count(func.distinct(case((system_filtered, DispatchItem.raw_data_id)))).label("system_filtered"),
                 func.count(func.distinct(case((status.in_(ACTIONABLE_STATUSES), DispatchItem.raw_data_id)))).label("pending"),
-                func.max(MatchResult.updated_at).label("last_processed_at"),
+                func.max(case(
+                    (MatchResult.id.isnot(None), MatchResult.updated_at),
+                    (system_filtered, FilteredItem.created_at),
+                )).label("last_processed_at"),
             ),
             latest_batches,
         )
@@ -437,6 +453,7 @@ def _progress_stats(db: Session) -> dict:
             "auto_matched": 0,
             "confirmed": 0,
             "excluded_ignored": 0,
+            "system_filtered": 0,
             "pending": 0,
             "published": 0,
             "last_processed_at": None,
@@ -455,6 +472,7 @@ def _progress_stats(db: Session) -> dict:
         auto_matched,
         confirmed,
         excluded_ignored,
+        filtered,
         pending,
         last_processed_at,
     ) in detail_rows:
@@ -468,6 +486,7 @@ def _progress_stats(db: Session) -> dict:
         item["auto_matched"] = _int(auto_matched)
         item["confirmed"] = _int(confirmed)
         item["excluded_ignored"] = _int(excluded_ignored)
+        item["system_filtered"] = _int(filtered)
         item["pending"] = _int(pending)
         item["last_processed_at"] = format_beijing_datetime(last_processed_at)
     for month, code, platform, published in published_rows:
@@ -501,11 +520,12 @@ def _progress_stats(db: Session) -> dict:
             "auto_matched": 0,
             "confirmed": 0,
             "excluded_ignored": 0,
+            "system_filtered": 0,
             "pending": 0,
             "published": 0,
         })
         for key in ("dispatched", "task_created", "task_count", "processed", "matched",
-                    "url_matched", "auto_matched", "confirmed", "excluded_ignored",
+                    "url_matched", "auto_matched", "confirmed", "excluded_ignored", "system_filtered",
                     "pending", "published"):
             acc["dispatchable" if key == "dispatched" else key] += item[key]
 
@@ -538,6 +558,7 @@ def _progress_stats(db: Session) -> dict:
         "auto_matched": total("auto_matched"),
         "confirmed": total("confirmed"),
         "excluded_ignored": total("excluded_ignored"),
+        "system_filtered": total("system_filtered"),
         "pending": total("pending"),
         "task_no_result": total("task_no_result"),
         "published": total("published"),

@@ -114,6 +114,7 @@ export interface PlatformStatsProgressCategory {
   auto_matched: number
   confirmed: number
   excluded_ignored: number
+  system_filtered: number
   pending: number
   published: number
   last_processed_at: string | null
@@ -133,6 +134,7 @@ export interface PlatformStatsProgressMonth {
   auto_matched: number
   confirmed: number
   excluded_ignored: number
+  system_filtered: number
   pending: number
   task_no_result: number
   published: number
@@ -152,6 +154,7 @@ export interface PlatformStatsProgress {
   auto_matched: number
   confirmed: number
   excluded_ignored: number
+  system_filtered: number
   pending: number
   task_no_result: number
   published: number

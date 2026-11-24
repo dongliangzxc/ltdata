@@ -14,10 +14,12 @@ from app.core.permissions import is_admin_only_path
 from app.models.database import Base, get_db
 from app.models.schemas import (
     Category,
+    CleanDuplicateRecord,
     CleanJobItemRecord,
     CleanJobRecord,
     DispatchBatch,
     DispatchItem,
+    FilteredItem,
     ItemUrlMapping,
     MatchResult,
     PublishJob,
@@ -336,6 +338,85 @@ def test_progress_excludes_deleted_category_without_deleting_history(client, ses
     assert db.query(DispatchItem).filter_by(category_code="77").count() == 3
     assert db.query(CleanJobItemRecord).filter_by(category_code="77").count() == 3
     assert db.query(PublishJob).count() == 3
+    db.close()
+
+
+def test_progress_includes_system_filters_once_and_respects_current_task(client, session_factory):
+    db = session_factory()
+    upload = UploadFileRecord(filename="filters.xlsx", status="done")
+    camera = Category(code="camera", name="摄像头")
+    db.add_all([upload, camera, Category(code="headphone", name="耳机")])
+    db.flush()
+    raw = [RawDataRecord(file_id=upload.id, item_id=str(i), platform="tmall" if i == 2 else "jd",
+                         month=202609 if i == 5 else 202610) for i in range(9)]
+    db.add_all(raw)
+    db.flush()
+    old_batch = DispatchBatch(file_id=upload.id, status="done")
+    db.add(old_batch)
+    db.flush()
+    batch = DispatchBatch(file_id=upload.id, status="done")
+    job = CleanJobRecord(status="reviewing", category_code="headphone", platform="jd")
+    archived = CleanJobRecord(status="archived", category_code="headphone", platform="jd")
+    stale_job = CleanJobRecord(status="reviewing", category_code="headphone", platform="jd")
+    camera_job = CleanJobRecord(status="reviewing", category_code="camera", platform="jd")
+    db.add_all([batch, job, archived, stale_job, camera_job])
+    db.flush()
+    db.add(DispatchItem(batch_id=old_batch.id, raw_data_id=raw[8].id, category_code="headphone"))
+    for i in range(8):
+        db.add(DispatchItem(batch_id=batch.id, raw_data_id=raw[i].id, category_code="headphone"))
+        db.add(CleanJobItemRecord(clean_job_id=archived.id if i == 4 else job.id,
+                                 raw_data_id=raw[i].id, category_code="headphone"))
+    db.add(DispatchItem(batch_id=batch.id, raw_data_id=raw[0].id, category_code="camera"))
+    db.add(CleanJobItemRecord(clean_job_id=camera_job.id, raw_data_id=raw[0].id, category_code="camera"))
+    db.add_all([
+        MatchResult(clean_job_id=job.id, raw_data_id=raw[0].id, match_status="url_matched"),
+        MatchResult(clean_job_id=job.id, raw_data_id=raw[1].id, match_status="pending"),
+        MatchResult(clean_job_id=job.id, raw_data_id=raw[5].id, match_status="pending", is_disabled=1),
+        CleanDuplicateRecord(clean_job_id=job.id, raw_data_id=raw[6].id, kept_raw_data_id=raw[0].id,
+                             dedup_basis="item_id_month_shop", dedup_key={"item_id": "0", "month": 202610}),
+    ])
+    # Include stale filters alongside live results, duplicates of one filter, a
+    # recovered filter, archived/other-task filters, and an old-batch-only item.
+    for owner, i, recovered in [
+        (job, 0, 0), (job, 1, 0), (job, 2, 0), (job, 2, 0), (job, 3, 1),
+        (archived, 4, 0), (job, 5, 0), (stale_job, 7, 0), (job, 8, 0), (camera_job, 0, 0),
+    ]:
+        db.add(FilteredItem(clean_job_id=owner.id, raw_data_id=raw[i].id, is_recovered=recovered,
+                            created_at=datetime(2026, 11, 24, 1, 0)))
+    db.commit()
+
+    for endpoint in ("/api/stats/overview", "/api/stats/progress"):
+        progress = client.get(endpoint).json()["data"]["progress"]
+        assert progress["dispatchable"] == 9
+        assert progress["task_created"] == 8
+        assert progress["processed"] == 4
+        assert progress["system_filtered"] == 3
+        assert progress["url_matched"] == progress["matched"] == 1
+        assert progress["confirmed"] == progress["excluded_ignored"] == 0
+        assert progress["pending"] == 1
+        assert progress["task_no_result"] == 3  # recovered, duplicate-only, other task
+        assert progress["not_task_created"] == 1  # archived task
+        assert progress["not_processed"] == 5
+        months = {row["month"]: row for row in progress["months"]}
+        assert months[202610]["system_filtered"] == 2
+        assert months[202609]["system_filtered"] == 1
+        camera_row = next(row for row in progress["categories"] if row["category_code"] == "camera")
+        assert camera_row["processed"] == camera_row["system_filtered"] == 1
+        assert camera_row["completed_at"] == "2026-11-24 09:00:00"
+        for row in [progress, *progress["months"]]:
+            assert row["processed"] == (row["url_matched"] + row["auto_matched"]
+                                        + row["confirmed"] + row["excluded_ignored"] + row["system_filtered"])
+            assert row["task_created"] == row["processed"] + row["pending"] + row["task_no_result"]
+        for row in progress["categories"]:
+            assert row["processed"] <= row["task_created"] <= row["dispatched"]
+
+    # Deleted categories remain excluded even if all their rows were filtered.
+    db.delete(camera)
+    db.commit()
+    progress = client.get("/api/stats/progress").json()["data"]["progress"]
+    assert progress["dispatchable"] == 8
+    assert progress["system_filtered"] == 2
+    assert progress["processed"] == 3
     db.close()
 
 

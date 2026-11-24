@@ -158,6 +158,11 @@ const progressColumns: ColumnsType<ProgressRow> = [
     render: (v: number) => v.toLocaleString(),
   },
   {
+    title: '系统过滤', dataIndex: 'system_filtered', width: 110,
+    sorter: (a, b) => (a.system_filtered ?? 0) - (b.system_filtered ?? 0),
+    render: (v: number | undefined) => (v ?? 0).toLocaleString(),
+  },
+  {
     title: '已发布', dataIndex: 'published', width: 100,
     sorter: (a, b) => a.published - b.published,
     render: (v: number) => v.toLocaleString(),
@@ -378,6 +383,7 @@ export default function PlatformStatsPage() {
       existing.auto_matched += row.auto_matched
       existing.confirmed += row.confirmed
       existing.excluded_ignored += row.excluded_ignored
+      existing.system_filtered = (existing.system_filtered ?? 0) + (row.system_filtered ?? 0)
       existing.pending += row.pending
       existing.published += row.published
       if (row.last_processed_at && (!existing.last_processed_at || row.last_processed_at > existing.last_processed_at)) {
@@ -428,6 +434,7 @@ export default function PlatformStatsPage() {
           auto_matched: 0,
           confirmed: 0,
           excluded_ignored: 0,
+          system_filtered: 0,
           pending: 0,
           task_no_result: 0,
           published: 0,
@@ -441,7 +448,7 @@ export default function PlatformStatsPage() {
         type="info"
         showIcon
         message="口径说明"
-        description="总览与明细均按「分发条目」统计（同一商品分发到多个品类会分别计数）：值得分发 = 最新一次已完成分发批次中命中规则的条目；已清理 = 已有处理结论的条目，其中自动匹配 = URL 精准匹配 + 自动匹配，人工确认 = 人工选定型号，二者分开计数。对账关系：值得分发 = 已入任务条数 + 未入任务条数 = 已清理 + 未清理；已入任务条数 = 已清理 + 当前待处理 + 已入任务未出结果；已清理 = 自动匹配 + 人工确认 + 已排除/忽略。注意：任务相关数字按数据条目计数，清洗页「任务总数」按清洗任务个数计数，两者口径不同。已发布为任务级发布行数，不与条目相加。明细可切换平台聚合或拆分；最后处理时间取分组内最近一次匹配更新时间。时间按北京时间统计；处理进度后台定时刷新，最多延迟约 5 分钟。"
+        description="总览与明细均按「分发条目」统计（同一商品分发到多个品类会分别计数）：值得分发 = 最新一次已完成分发批次中命中规则的条目；已清理 = 自动匹配 + 人工确认 + 已排除/忽略 + 系统过滤。系统过滤表示已按清洗规则或干扰链接库排除，计入处理进度，不计入匹配成功；已恢复或已有匹配结果的条目不重复计入系统过滤，重复数据不按差额推算为过滤。自动匹配 = URL 精准匹配 + 其他自动匹配，人工确认单独计数。对账关系：值得分发 = 已入任务条数 + 未入任务条数 = 已清理 + 未清理；已入任务条数 = 已清理 + 当前待处理 + 已入任务未出结果。任务相关数字按数据条目计数，清洗页「任务总数」按清洗任务个数计数。已发布为任务级发布行数，不与条目相加。明细可切换平台聚合或拆分；最后处理时间包括匹配结果更新时间和系统过滤时间。时间按北京时间统计；处理进度后台定时刷新，最多延迟约 5 分钟。"
         action={
           <Space direction="vertical" align="end">
             <Button icon={<ReloadOutlined />} loading={loading} onClick={refresh}>刷新</Button>
@@ -512,13 +519,14 @@ export default function PlatformStatsPage() {
           </Col>
         </Row>
         <Row gutter={16} style={{ marginTop: 8 }}>
-          <Col span={6}><Statistic title="已排除 / 忽略" value={overview.excluded_ignored} /></Col>
-          <Col span={6}><Statistic title="当前待处理" value={overview.pending} valueStyle={{ color: '#d48806' }} /></Col>
-          <Col span={6}><Statistic title="已入任务未出结果" value={overview.task_no_result} valueStyle={{ color: '#d48806' }} /></Col>
-          <Col span={6}><Statistic title="未清理" value={overview.not_processed} valueStyle={{ color: '#d48806' }} /></Col>
+          <Col flex="1"><Statistic title="已排除 / 忽略" value={overview.excluded_ignored} /></Col>
+          <Col flex="1"><Statistic title="系统过滤" value={overview.system_filtered ?? 0} /></Col>
+          <Col flex="1"><Statistic title="当前待处理" value={overview.pending} valueStyle={{ color: '#d48806' }} /></Col>
+          <Col flex="1"><Statistic title="已入任务未出结果" value={overview.task_no_result} valueStyle={{ color: '#d48806' }} /></Col>
+          <Col flex="1"><Statistic title="未清理" value={overview.not_processed} valueStyle={{ color: '#d48806' }} /></Col>
         </Row>
         <Text type="secondary" style={{ display: 'block', marginTop: 12 }}>
-          对账关系：值得分发 = 已入任务条数 + 未入任务条数 = 已清理 + 未清理；已入任务条数 = 已清理 + 当前待处理 + 已入任务未出结果；已清理 = 自动匹配 + 人工确认 + 已排除 / 忽略。
+          对账关系：值得分发 = 已入任务条数 + 未入任务条数 = 已清理 + 未清理；已入任务条数 = 已清理 + 当前待处理 + 已入任务未出结果；已清理 = 自动匹配 + 人工确认 + 已排除 / 忽略 + 系统过滤。
         </Text>
         <Text type="secondary" style={{ display: 'block', marginTop: 4 }}>
           已发布到分析库：{overview.published.toLocaleString()} 行（任务级发布行数，不参与上方条目对账）。
@@ -592,7 +600,7 @@ export default function PlatformStatsPage() {
           columns={progressTableColumns}
           rowKey={row => `${row.month}-${row.category_code ?? ''}-${row.platform ?? ''}`}
           size="small"
-          scroll={{ x: 2200 }}
+          scroll={{ x: 2310 }}
           pagination={{ pageSize: 20, showSizeChanger: true }}
         />
       </Card>

@@ -390,7 +390,10 @@ export default function PlatformStatsPage() {
         existing.last_processed_at = row.last_processed_at
       }
     }
-    return Array.from(grouped.values())
+    return Array.from(grouped.values(), row => ({
+      ...row,
+      completed_at: row.dispatched > 0 && row.processed >= row.dispatched ? row.last_processed_at : null,
+    }))
   }, [
     progress?.categories,
     progressMonthFilter,

@@ -12,13 +12,15 @@ const base = {
   month: 202610, category_code: 'router', category_name: '路由器', dispatched: 10,
   task_created: 10, task_count: 1, processed: 10, matched: 8, url_matched: 8,
   auto_matched: 0, confirmed: 0, excluded_ignored: 0, system_filtered: 2,
-  pending: 0, published: 0, last_processed_at: null, completed_at: null,
+  pending: 0, published: 0, last_processed_at: '2026-11-24 09:00:00', completed_at: '2026-11-24 09:00:00',
 }
 const progress = {
   ...base, dispatchable: 20, dispatched: undefined, uploaded_rows: 20,
   task_created: 20, processed: 20, url_matched: 16, system_filtered: 4,
   not_task_created: 0, not_processed: 0, task_no_result: 0,
-  months: [], categories: [{ ...base, platform: 'jd' }, { ...base, platform: 'tmall' }],
+  months: [], categories: [{ ...base, platform: 'jd' }, {
+    ...base, platform: 'tmall', last_processed_at: '2026-11-24 10:00:00', completed_at: '2026-11-24 10:00:00',
+  }],
 }
 const data = {
   progress, categories: [], monthly: [], sources: [],
@@ -75,6 +77,11 @@ assert.equal(statistic(tree, '清理占比'), 100)
 const table = nodes(tree, node => node.type === 'Table')[0].props
 assert.equal(table.dataSource.length, 1, 'all-platform view aggregates the category')
 assert.equal(table.dataSource[0].system_filtered, 4, 'aggregation must sum both platforms')
+assert.equal(table.dataSource[0].completed_at, '2026-11-24 10:00:00', 'completion uses the latest time across platforms')
+progress.categories[1].dispatched = 11
+assert.equal(nodes(render(), node => node.type === 'Table')[0].props.dataSource[0].completed_at, null,
+  'one completed platform must not make an incomplete aggregate look finished')
+progress.categories[1].dispatched = 10
 const column = table.columns.find(col => col.dataIndex === 'system_filtered')
 assert.equal(column.title, '系统过滤')
 assert.equal(column.render(4), '4')

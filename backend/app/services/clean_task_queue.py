@@ -62,16 +62,22 @@ def enqueue_clean_job(db: Session, job: CleanJobRecord, *, mode="full",
     if run is None:
         run = CleanTaskRun(clean_job_id=job.id)
         db.add(run)
-    if mode not in {"full", "incremental"}:
+    if mode not in {"full", "incremental", "completion"}:
         raise ValueError("未知清洗执行方式")
     if mode == "incremental" and (
         not snapshot_start_id or not snapshot_end_id or snapshot_start_id > snapshot_end_id or not input_count
     ):
         raise ValueError("追加数据范围为空或不完整，不能执行")
+    if mode == "completion" and (
+        not input_count or input_count <= 0
+        or ((snapshot_start_id is None) != (snapshot_end_id is None))
+        or (snapshot_start_id is not None and (snapshot_start_id <= 0 or snapshot_start_id > snapshot_end_id))
+    ):
+        raise ValueError("补齐数据范围为空或不完整，不能执行")
     run.mode = mode
-    run.snapshot_start_id = snapshot_start_id if mode == "incremental" else None
-    run.snapshot_end_id = snapshot_end_id if mode == "incremental" else None
-    run.input_count = input_count if mode == "incremental" else (job.row_in or 0)
+    run.snapshot_start_id = snapshot_start_id if mode in {"incremental", "completion"} else None
+    run.snapshot_end_id = snapshot_end_id if mode in {"incremental", "completion"} else None
+    run.input_count = input_count if mode in {"incremental", "completion"} else (job.row_in or 0)
     run.state, run.stage = "queued", "排队中"
     run.processed, run.total = 0, run.input_count
     run.queued_at = datetime.utcnow()
@@ -233,7 +239,7 @@ def execute_next_run(db: Session, *, executor=None, progress_factory=CleanProgre
     token = str(uuid.uuid4())
     run.state, run.stage, run.worker_token, run.started_at = "running", "准备清洗", token, datetime.utcnow()
     run_id, job_id = run.id, run.clean_job_id
-    if job_was_queued and run.mode == "incremental":
+    if job_was_queued and run.mode in {"incremental", "completion"}:
         # Publish the start before the append's single output transaction.
         job.status, job.progress_stage = "cleaning", "准备清洗"
     db.commit()
@@ -242,9 +248,10 @@ def execute_next_run(db: Session, *, executor=None, progress_factory=CleanProgre
         if not job_was_queued:
             raise RuntimeError("任务状态异常，未开始执行")
         if executor is None:
-            from app.api.clean import _run_clean_and_match_for_job, _run_incremental_clean_and_match_for_job
-            executor = _run_incremental_clean_and_match_for_job if run.mode == "incremental" else _run_clean_and_match_for_job
-        if run.mode == "incremental":
+            from app.api.clean import _run_clean_and_match_for_job, _run_incremental_clean_and_match_for_job, _run_completion_for_job
+            executor = {"incremental": _run_incremental_clean_and_match_for_job,
+                        "completion": _run_completion_for_job}.get(run.mode, _run_clean_and_match_for_job)
+        if run.mode in {"incremental", "completion"}:
             executor(db, job, stage_progress_cb=progress,
                      snapshot_id_range=(run.snapshot_start_id, run.snapshot_end_id), expected_count=run.input_count)
         elif run.mode == "full":

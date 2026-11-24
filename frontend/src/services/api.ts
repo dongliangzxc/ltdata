@@ -451,7 +451,7 @@ export interface CleanJobItem {
   progress_stage?: string | null
   progress_processed?: number
   progress_total?: number
-  execution_mode?: 'full' | 'incremental'
+  execution_mode?: 'full' | 'incremental' | 'completion'
   execution_input_count?: number
   error_msg?: string | null
   can_retry?: boolean
@@ -571,6 +571,19 @@ export const getCleanJobProgress = async (ids: number[]): Promise<CleanJobProgre
 }
 
 export const retryCleanTask = (id: number) => api.post<CleanJobItem>(`/clean/tasks/${id}/retry`)
+
+export interface CleanTaskCompletion {
+  job_id: number
+  new_items: number
+  missing_results: number
+  match_status?: 'queued' | 'unchanged'
+}
+
+export const checkCleanTaskCompletion = (id: number) =>
+  api.get<CleanTaskCompletion>(`/clean/tasks/${id}/completion`)
+
+export const completeCleanTask = (id: number) =>
+  api.post<CleanTaskCompletion>(`/clean/tasks/${id}/completion`)
 
 export const downloadSupplementTemplate = () =>
   api.get<Blob>('/clean/supplement-template', { responseType: 'blob' })

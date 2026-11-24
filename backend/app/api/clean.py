@@ -25,6 +25,7 @@ from app.services.clean_task_queue import (
     BUSY_CLEAN_STATUSES, clean_heavy_slot, enqueue_clean_job, ensure_clean_job_idle,
 )
 from app.services.clean_accounting import clean_accounting
+from app.services.clean_task_completion import missing_match_raw_ids
 from app.models.analytics_db import AnalyticsSession
 from app.models.schemas import (
     CleanJobRecord,
@@ -62,6 +63,7 @@ from app.services.clean_task_snapshot import (
     _find_monthly_job,
     _has_reviewed_or_published_state,
     _job_months,
+    _monthly_pending_rows,
     create_category_task_snapshot,
     get_clean_pool_summary,
     get_monthly_clean_pool,
@@ -506,6 +508,32 @@ def _run_incremental_clean_and_match_for_job(
     db.flush()
 
 
+def _run_completion_for_job(
+    db: Session, job: CleanJobRecord, *, snapshot_id_range, expected_count: int, stage_progress_cb=None,
+) -> None:
+    """Atomically append the saved new scope and match only existing output gaps."""
+    missing = [raw_id for raw_id, in missing_match_raw_ids(db, job.id)]
+    start, end = snapshot_id_range
+    added_count = db.query(CleanJobItemRecord.id).filter(
+        CleanJobItemRecord.clean_job_id == job.id, CleanJobItemRecord.id.between(start, end),
+    ).count() if start and end else 0
+    if added_count + len(missing) != expected_count or expected_count <= 0:
+        raise ValueError("待补齐数据范围已变化，请重新检查；未扩大处理范围")
+    if added_count:
+        _run_incremental_clean_and_match_for_job(
+            db, job, snapshot_id_range=snapshot_id_range,
+            expected_count=added_count, stage_progress_cb=stage_progress_cb,
+        )
+    if missing:
+        job.status, job.progress_stage = "matching", "补齐匹配结果"
+        run_match(
+            db, job.id, commit=False, raw_data_ids=missing, strict_audit=True,
+            **({"stage_progress_cb": stage_progress_cb} if stage_progress_cb else {}),
+        )
+    job.status, job.progress_stage = "reviewing", "处理完成"
+    db.flush()
+
+
 def _manual_review_snapshot(db: Session, clean_job_id: int) -> dict[int, dict]:
     rows = (
         db.query(MatchResult)
@@ -910,6 +938,78 @@ def get_clean_job_progress(
             for job_id, status, job_stage, error_msg, stage, processed, total, state, updated_at, mode, input_count in query.all()]
 
 
+def _completion_task_scope(db: Session, job: CleanJobRecord):
+    if job.status not in {"reviewing", "done", "published"}:
+        raise HTTPException(409, "请先完成或重试当前任务，再检查补齐数据")
+    category = job.category_code or job.dispatch_category_code
+    platform = normalize_platform(job.platform)
+    months = _job_months(job)
+    if not months and _job_month(job) is not None:
+        months = [_job_month(job)]
+    if not category or not platform or len(set(months)) != 1:
+        raise HTTPException(400, "任务需具备品类、平台和单个月份，才能检查补齐数据")
+    if not db.query(Category.id).filter(Category.code == category).first():
+        raise HTTPException(400, "该品类已删除，不能补齐数据")
+    month = int(months[0])
+    existing = _find_monthly_job(db, category_code=category, platform=platform, month=month)
+    if not existing or existing.id != job.id:
+        raise HTTPException(409, "该范围已有其他任务，请在当前月度任务上检查补齐")
+    return category, platform, month
+
+
+@router.get("/tasks/{job_id}/completion")
+def check_clean_task_completion(
+    job_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
+):
+    job = _get_visible_clean_job_or_404(db, current_user, job_id)
+    category, platform, month = _completion_task_scope(db, job)
+    return {
+        "job_id": job_id,
+        "new_items": _monthly_pending_rows(db, category_code=category, platform=platform, month=month).count(),
+        "missing_results": missing_match_raw_ids(db, job_id).count(),
+    }
+
+
+@router.post("/tasks/{job_id}/completion")
+def complete_clean_task(
+    job_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
+):
+    job = _get_visible_clean_job_or_404(db, current_user, job_id)
+    if not settings.CLEAN_BACKGROUND_ENABLED:
+        raise HTTPException(409, "后台处理暂不可用，请稍后再试")
+    with _clean_scope_guard(job.category_code or job.dispatch_category_code, job.platform):
+        try:
+            job = ensure_clean_job_idle(db, job_id)
+            category, platform, month = _completion_task_scope(db, job)
+            missing_count = missing_match_raw_ids(db, job_id).count()
+            target, _, _, new_ids = upsert_monthly_task_snapshot(
+                db, category_code=category, platform=platform, month=month,
+                rules=None, incremental_append=True,
+            )
+            if target.id != job_id:
+                raise HTTPException(409, "任务范围已变化，请刷新后重试")
+            if new_ids or missing_count:
+                enqueue_clean_job(
+                    db, job, mode="completion", input_count=len(new_ids) + missing_count,
+                    snapshot_start_id=min(new_ids) if new_ids else None,
+                    snapshot_end_id=max(new_ids) if new_ids else None,
+                )
+            db.commit()
+            invalidate_clean_pool_cache()
+            return {"job_id": job_id, "new_items": len(new_ids), "missing_results": missing_count,
+                    "match_status": "queued" if new_ids or missing_count else "unchanged"}
+        except HTTPException:
+            db.rollback()
+            raise
+        except ValueError as exc:
+            db.rollback()
+            raise HTTPException(400, str(exc)) from exc
+        except Exception:
+            db.rollback()
+            logger.exception("completion submission failed job=%s", job_id)
+            raise HTTPException(500, "补齐数据提交失败，请重试")
+
+
 @router.post("/tasks/{job_id}/retry", response_model=CleanJobOut)
 def retry_clean_task(
     job_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
@@ -924,15 +1024,20 @@ def retry_clean_task(
     # Full retries must protect all manual/published output. Incremental retries
     # only touch their saved range, so pre-existing manual output is safe.
     retry_scope = [MatchResult.clean_job_id == job_id]
-    if run.mode == "incremental":
-        if (not run.snapshot_start_id or not run.snapshot_end_id or run.snapshot_start_id > run.snapshot_end_id
-                or not run.input_count or run.input_count < 0):
-            raise HTTPException(409, "追加数据范围不完整，不能重试")
-        retry_raw_ids = select(CleanJobItemRecord.raw_data_id).where(
-            CleanJobItemRecord.clean_job_id == job_id,
-            CleanJobItemRecord.id.between(run.snapshot_start_id, run.snapshot_end_id),
-        )
-        retry_scope.append(MatchResult.raw_data_id.in_(retry_raw_ids))
+    if run.mode in {"incremental", "completion"}:
+        if run.mode == "completion" and run.snapshot_start_id is None and run.snapshot_end_id is None:
+            # Completion matches only rows without any result; old manual
+            # output is outside its scope, including on retries.
+            retry_scope.append(MatchResult.id == -1)
+        else:
+            if (not run.snapshot_start_id or not run.snapshot_end_id or run.snapshot_start_id > run.snapshot_end_id
+                    or not run.input_count or run.input_count < 0):
+                raise HTTPException(409, "追加数据范围不完整，不能重试")
+            retry_raw_ids = select(CleanJobItemRecord.raw_data_id).where(
+                CleanJobItemRecord.clean_job_id == job_id,
+                CleanJobItemRecord.id.between(run.snapshot_start_id, run.snapshot_end_id),
+            )
+            retry_scope.append(MatchResult.raw_data_id.in_(retry_raw_ids))
     manual = db.query(MatchResult.id).filter(*retry_scope, or_(
         MatchResult.matched_by == "manual", MatchResult.reviewed_at.isnot(None),
         MatchResult.review_note.isnot(None), MatchResult.is_disabled == 1,
@@ -941,7 +1046,7 @@ def retry_clean_task(
     manual_fields = db.query(MatchResultExtraValue.id).join(
         MatchResult, MatchResult.id == MatchResultExtraValue.match_result_id,
     ).filter(*retry_scope, MatchResultExtraValue.source == "manual").first()
-    if manual or manual_fields or (run.mode != "incremental" and db.query(PublishJob.id).filter_by(clean_job_id=job_id).first()):
+    if manual or manual_fields or (run.mode not in {"incremental", "completion"} and db.query(PublishJob.id).filter_by(clean_job_id=job_id).first()):
         raise HTTPException(409, "任务已有人工处理或发布记录，不能直接重试")
     enqueue_clean_job(db, job, mode=run.mode, snapshot_start_id=run.snapshot_start_id,
                       snapshot_end_id=run.snapshot_end_id, input_count=run.input_count)

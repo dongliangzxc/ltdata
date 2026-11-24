@@ -21,6 +21,8 @@ import {
   downloadSupplementTemplate,
   getCleanJobProgress,
   retryCleanTask,
+  checkCleanTaskCompletion,
+  completeCleanTask,
 } from '../../services/api'
 import type {
   CleanJobItem, CleanMonthlyPoolItem, CleanJobListView, UserProfile,
@@ -152,6 +154,8 @@ const jobColumns = (
   onRetry: (id: number) => void,
   onSupplement: (target: SupplementTarget) => void,
   supplementing: boolean,
+  onComplete: (target: SupplementTarget) => void,
+  checkingCompletion: boolean,
 ): ColumnsType<CleanJobItem> => [
   {
     title: '任务名称', dataIndex: 'task_name', width: 180,
@@ -214,7 +218,7 @@ const jobColumns = (
     render: (v?: string | null) => v || '-',
   },
   {
-    title: '操作', width: 640, fixed: 'right',
+    title: '操作', width: 750, fixed: 'right',
     render: (_: unknown, row) => (
       <Space size={4}>
         {view === 'active' && (
@@ -229,6 +233,18 @@ const jobColumns = (
               if (target) onSupplement(target)
             }}
           >补充数据</Button>
+        )}
+        {view === 'active' && (
+          <Button
+            type="link"
+            size="small"
+            disabled={checkingCompletion || supplementing || !jobSupplementTarget(row)}
+            title="检查新分发数据和缺失的匹配结果，保留已有人工处理和发布结果"
+            onClick={() => {
+              const target = jobSupplementTarget(row)
+              if (target) onComplete(target)
+            }}
+          >检查并补齐</Button>
         )}
         {view === 'active' && (
           <Button type="link" icon={<AimOutlined />} size="small" disabled={processingStatuses.has(row.status) || row.status === 'failed'} onClick={() => onEnter(row.id)}>进入处理</Button>
@@ -525,6 +541,7 @@ export default function CleanPage() {
   const [supplementing, setSupplementing] = useState(false)
   const [downloadingSupplementTemplate, setDownloadingSupplementTemplate] = useState(false)
   const [supplementResult, setSupplementResult] = useState<SupplementCleanTaskResult | null>(null)
+  const [checkingCompletion, setCheckingCompletion] = useState(false)
 
   const requestParams = useMemo(() => cleanParams(filters), [filters])
   const monthlyPoolRequestParams = useMemo(() => ({ ...requestParams, limit: 50 }), [requestParams])
@@ -646,6 +663,34 @@ export default function CleanPage() {
     },
     { manual: true }
   )
+
+  const handleComplete = async (target: SupplementTarget) => {
+    setCheckingCompletion(true)
+    try {
+      const { data: plan } = await checkCleanTaskCompletion(target.id)
+      if (plan.new_items + plan.missing_results === 0) {
+        message.info('检查完成，没有新增分发数据或缺失结果，无需补齐')
+        return
+      }
+      Modal.confirm({
+        title: '检查并补齐数据',
+        content: `发现 ${plan.new_items} 条新分发数据、${plan.missing_results} 条缺少匹配结果的数据。只处理这些条目，保留已有人工处理和发布结果。`,
+        okText: '补齐数据',
+        cancelText: '取消',
+        onOk: async () => {
+          const { data: result } = await completeCleanTask(target.id)
+          message[result.match_status === 'unchanged' ? 'info' : 'success'](
+            result.match_status === 'unchanged' ? '数据已齐全，无需补齐'
+              : `新增 ${result.new_items} 条、补齐缺失结果 ${result.missing_results} 条，已加入处理队列`,
+          )
+          refreshMonthlyPool()
+          refreshJobs()
+        },
+      })
+    } finally {
+      setCheckingCompletion(false)
+    }
+  }
 
   const { run: handleDeleteJob } = useRequest(
     async (jobId: number) => {
@@ -815,7 +860,7 @@ export default function CleanPage() {
           type="info"
           showIcon
           style={{ marginBottom: 16 }}
-          message="重新分发后有新增数据，可在这里追加到原任务。只处理新增条目，原有人工处理和发布结果保留。"
+          message="有新分发数据可追加到原任务；也可在下方任务列表点击“检查并补齐”，追加新数据或补齐缺失的匹配结果，保留已有人工处理和发布结果。"
         />
         <Row gutter={16} style={{ marginBottom: 16 }}>
           <Col span={6}>
@@ -932,6 +977,8 @@ export default function CleanPage() {
                 },
                 openSupplement,
                 supplementing,
+                handleComplete,
+                checkingCompletion,
               )}
               rowKey="id"
               size="small"

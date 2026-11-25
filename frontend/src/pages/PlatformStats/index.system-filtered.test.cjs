@@ -30,6 +30,7 @@ const data = {
 const exported = {}
 let selectedMonth
 let selectedPlatform = 'all'
+let selectedCategories
 let stateIndex = 0
 const jsx = (type, props) => ({ type, props: props ?? {} })
 vm.runInNewContext(compiled, {
@@ -39,12 +40,13 @@ vm.runInNewContext(compiled, {
       useMemo: fn => fn(), useEffect: () => {},
       useState: value => {
         const index = stateIndex++
-        return [index === 6 ? selectedPlatform : index === 7 ? selectedMonth : value, () => {}]
+        return [index === 5 ? selectedCategories : index === 6 ? selectedPlatform : index === 7 ? selectedMonth : value,
+          next => { if (index === 5) selectedCategories = next }]
       },
     }
     if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'Fragment' }
     if (name === 'antd') return { Typography: { Text: 'Text' }, ...Object.fromEntries(
-      ['Alert', 'Button', 'Card', 'Col', 'Collapse', 'Progress', 'Row', 'Select', 'Space', 'Statistic', 'Table', 'Tag']
+      ['Alert', 'Button', 'Card', 'Checkbox', 'Col', 'Collapse', 'Progress', 'Row', 'Select', 'Space', 'Statistic', 'Table', 'Tag']
         .map(component => [component, component]),
     ) }
     if (name === '@ant-design/icons') return { ReloadOutlined: 'ReloadOutlined' }
@@ -112,3 +114,69 @@ selectedPlatform = 'jd'
 assert.equal(nodes(render(), node => node.type === 'Table')[0].props.dataSource[0].transferred_out, 1)
 delete progress.transferred_out
 assert.equal(statistic(render(), '已转出'), 0, 'rolling deployment remains compatible with the prior API')
+
+// The category selector affects every progress metric and the detail table together.
+progress.uploaded_rows = 100
+progress.categories = [
+  { ...base, platform: 'jd', dispatched: 20, task_created: 15, processed: 10, pending: 3,
+    matched: 7, url_matched: 4, auto_matched: 2, confirmed: 1, excluded_ignored: 1,
+    system_filtered: 1, transferred_out: 1, published: 8 },
+  { ...base, platform: 'tmall', dispatched: 10, task_created: 8, processed: 5, pending: 2,
+    matched: 3, url_matched: 1, auto_matched: 1, confirmed: 1, excluded_ignored: 1,
+    system_filtered: 0, transferred_out: 1, published: 4 },
+  { ...base, category_code: 'camera', category_name: '相机', platform: 'jd', dispatched: 50 },
+  { ...base, month: 202609, platform: 'jd', dispatched: 5, task_created: 5,
+    processed: 3, url_matched: 3, system_filtered: 0, pending: 1, published: 2 },
+]
+selectedPlatform = 'all'
+selectedMonth = undefined
+const selector = () => nodes(render(), node => node.type === 'Select'
+  && node.props['aria-label'] === '筛选处理进度品类')[0].props
+assert.equal(selector().mode, 'multiple')
+assert.equal(JSON.stringify(selector().value.slice().sort()), JSON.stringify(['camera', 'router']),
+  'categories loaded asynchronously must all start selected')
+assert.equal(selector().maxTagPlaceholder(), '全部品类（2）')
+selector().onChange(['router'])
+assert.equal(statistic(render(), '值得分发（分发条目）'), 35)
+assert.equal(statistic(render(), '已清理'), 18)
+assert.equal(statistic(render(), '未入任务条数'), 7)
+assert.equal(statistic(render(), '未清理'), 17)
+assert.equal(statistic(render(), '已入任务未出结果'), 4)
+assert.equal(statistic(render(), '自动匹配'), 11)
+assert.equal(statistic(render(), '人工确认'), 2)
+assert.equal(statistic(render(), '已转出'), 2)
+assert.equal(statistic(render(), '系统过滤'), 1)
+assert.equal(statistic(render(), '清理占比'), 51.4)
+assert.equal(statistic(render(), '上传入库数据总量（全部品类）'), 100,
+  'uploaded raw rows have no category dimension and must be labelled accordingly')
+assert.equal(nodes(render(), node => node.type === 'Table')[0].props.dataSource.length, 2)
+assert.ok(nodes(render(), node => node.type === 'Table')[0].props.dataSource.every(row => row.category_code === 'router'))
+
+selectedMonth = 202610
+assert.equal(statistic(render(), '值得分发（分发条目）'), 30, 'month and category filters combine')
+assert.equal(statistic(render(), '已清理'), 15)
+selectedPlatform = 'jd'
+assert.equal(statistic(render(), '值得分发（分发条目）'), 30, 'detail platform view does not change overview scope')
+assert.equal(nodes(render(), node => node.type === 'Table')[0].props.dataSource.length, 1)
+
+selector().onChange([])
+assert.equal(statistic(render(), '值得分发（分发条目）'), 0, 'clearing categories must not silently select all')
+assert.equal(statistic(render(), '已清理'), 0)
+assert.equal(statistic(render(), '清理占比'), 0)
+assert.equal(nodes(render(), node => node.type === 'Table')[0].props.dataSource.length, 0)
+const selectAll = nodes(selector().dropdownRender('menu'), node => node.type === 'Checkbox')[0].props
+assert.equal(selectAll.checked, false)
+selectAll.onChange({ target: { checked: true } })
+assert.equal(selectedCategories, undefined, 'select all restores the unfiltered scope')
+selector().onChange(['router', 'camera'])
+assert.equal(selectedCategories, undefined, 'manually selecting every category also restores all mode')
+progress.categories.push({ ...base, category_code: 'speaker', category_name: '音箱', platform: 'jd' })
+assert.ok(selector().value.includes('speaker'), 'refreshing all mode automatically includes new categories')
+selector().onChange(['router', 'speaker'])
+assert.equal(statistic(render(), '值得分发（分发条目）'), 40, 'multiple selected categories are summed within the chosen month')
+assert.equal(statistic(render(), '已清理'), 25)
+assert.equal(selector().maxTagPlaceholder(), '已选 2 个品类')
+const partialSelectAll = nodes(selector().dropdownRender('menu'), node => node.type === 'Checkbox')[0].props
+assert.equal(partialSelectAll.checked, false)
+assert.equal(partialSelectAll.indeterminate, true)
+console.log('platform stats filtering and accounting tests passed')

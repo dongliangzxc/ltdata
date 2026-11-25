@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Card, Col, Collapse, Progress, Row, Select, Space, Statistic, Table, Tag, Typography } from 'antd'
+import { Alert, Button, Card, Checkbox, Col, Collapse, Progress, Row, Select, Space, Statistic, Table, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { ReloadOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
@@ -16,6 +16,7 @@ type CategoryRow = PlatformStatsOverview['categories'][number]
 type MonthlyRow = PlatformStatsOverview['monthly'][number]
 type SourceRow = PlatformStatsOverview['sources'][number]
 type ProgressRow = PlatformStatsProgress['categories'][number]
+type ProgressSummary = Omit<PlatformStatsProgress, 'months' | 'categories'>
 
 const platformLabelMap: Record<string, string> = {
   jd: '京东',
@@ -246,7 +247,8 @@ export default function PlatformStatsPage() {
   const [categoryFilter, setCategoryFilter] = useState<string>()
   const [platformFilter, setPlatformFilter] = useState<string>()
   const [monthFilter, setMonthFilter] = useState<string>()
-  const [progressCategoryFilter, setProgressCategoryFilter] = useState<string>()
+  // undefined 表示全选，异步加载及刷新后新增的品类也会自动选中；[] 表示清空。
+  const [progressCategoryFilter, setProgressCategoryFilter] = useState<string[]>()
   const [progressPlatformView, setProgressPlatformView] = useState<string>('all')
   const [progressMonthFilter, setProgressMonthFilter] = useState<number>()
   const progress = data?.progress ?? liveProgress
@@ -366,7 +368,7 @@ export default function PlatformStatsPage() {
   const filteredProgress = useMemo(() => {
     const rows = (progress?.categories ?? []).filter(row => (
       (progressMonthFilter === undefined || row.month === progressMonthFilter)
-      && (progressCategoryFilter === undefined || (row.category_code ?? '') === progressCategoryFilter)
+      && (progressCategoryFilter === undefined || progressCategoryFilter.includes(row.category_code ?? ''))
     ))
     if (progressPlatformView !== 'all') {
       return rows.filter(row => (row.platform ?? '') === progressPlatformView)
@@ -418,15 +420,7 @@ export default function PlatformStatsPage() {
     { dispatched: 0, task_created: 0, task_count: 0, processed: 0, pending: 0 },
   ), [filteredProgress])
 
-  if (!data) {
-    return <Card loading={loading} />
-  }
-
-  const { upload, clean, match, assets } = data
-  const automatedRate = percent(match.auto_matched, match.total)
-  const publishableRate = percent(match.publishable, match.total)
-  const finishedRate = percent(clean.clean_finished, clean.task_total)
-  const overview = progress
+  const monthOverview: ProgressSummary | null = progress
     ? (progressMonthFilter === undefined
       ? progress
       : (progress.months ?? []).find(item => item.month === progressMonthFilter)
@@ -450,7 +444,93 @@ export default function PlatformStatsPage() {
           published: 0,
         })
     : null
+  const overview = useMemo(() => {
+    if (!monthOverview || !progress || progressCategoryFilter === undefined) return monthOverview
+    // 总览只受月份、品类影响；平台选择仍用于明细的聚合/拆分视图。
+    const months = new Map<number, ProgressSummary>()
+    for (const row of progress.categories) {
+      if ((progressMonthFilter !== undefined && row.month !== progressMonthFilter)
+        || !progressCategoryFilter.includes(row.category_code ?? '')) continue
+      const acc = months.get(row.month) ?? {
+        uploaded_rows: monthOverview.uploaded_rows,
+        dispatchable: 0, task_created: 0, task_count: 0, not_task_created: 0,
+        processed: 0, not_processed: 0, matched: 0, url_matched: 0, auto_matched: 0,
+        confirmed: 0, excluded_ignored: 0, system_filtered: 0, transferred_out: 0,
+        pending: 0, task_no_result: 0, published: 0,
+      }
+      acc.dispatchable += row.dispatched
+      for (const key of ['task_created', 'task_count', 'processed', 'matched', 'url_matched',
+        'auto_matched', 'confirmed', 'excluded_ignored', 'system_filtered', 'transferred_out',
+        'pending', 'published'] as const) {
+        acc[key] = (acc[key] ?? 0) + (row[key] ?? 0)
+      }
+      months.set(row.month, acc)
+    }
+    const totals = {
+      uploaded_rows: monthOverview.uploaded_rows,
+      dispatchable: 0, task_created: 0, task_count: 0, not_task_created: 0,
+      processed: 0, not_processed: 0, matched: 0, url_matched: 0, auto_matched: 0,
+      confirmed: 0, excluded_ignored: 0, system_filtered: 0, transferred_out: 0,
+      pending: 0, task_no_result: 0, published: 0,
+    }
+    for (const acc of months.values()) {
+      // 与接口口径一致：先按月计算差额，再跨月求和。
+      acc.not_task_created = Math.max(acc.dispatchable - acc.task_created, 0)
+      acc.not_processed = Math.max(acc.dispatchable - acc.processed, 0)
+      acc.task_no_result = Math.max(acc.task_created - acc.processed - acc.pending, 0)
+      for (const key of Object.keys(totals) as (keyof typeof totals)[]) {
+        if (key !== 'uploaded_rows') totals[key] += acc[key] ?? 0
+      }
+    }
+    return totals
+  }, [monthOverview, progress, progressCategoryFilter, progressMonthFilter])
+
+  if (!data) {
+    return <Card loading={loading} />
+  }
+
+  const { upload, clean, match, assets } = data
+  const automatedRate = percent(match.auto_matched, match.total)
+  const publishableRate = percent(match.publishable, match.total)
+  const finishedRate = percent(clean.clean_finished, clean.task_total)
   const completionRate = overview ? progressPercent(overview.processed, overview.dispatchable) : 0
+  const selectedProgressCategories = progressCategoryFilter ?? progressCategoryOptions.map(option => option.value)
+  const allProgressCategoriesSelected = progressCategoryFilter === undefined
+  const progressCategorySelect = (
+    <Select
+      aria-label="筛选处理进度品类"
+      mode="multiple"
+      allowClear
+      showSearch
+      style={{ width: 240 }}
+      placeholder="请选择品类"
+      optionFilterProp="label"
+      maxTagCount={0}
+      maxTagPlaceholder={() => allProgressCategoriesSelected
+        ? `全部品类（${progressCategoryOptions.length}）`
+        : `已选 ${selectedProgressCategories.length} 个品类`}
+      value={selectedProgressCategories}
+      options={progressCategoryOptions}
+      onChange={(values: string[]) => setProgressCategoryFilter(
+        progressCategoryOptions.length > 0 && values.length === progressCategoryOptions.length
+          ? undefined : values,
+      )}
+      dropdownRender={menu => (
+        <>
+          <div style={{ padding: '8px 12px', borderBottom: '1px solid #f0f0f0' }}>
+            <Checkbox
+              checked={allProgressCategoriesSelected}
+              indeterminate={!allProgressCategoriesSelected && selectedProgressCategories.length > 0}
+              onChange={event => setProgressCategoryFilter(event.target.checked ? undefined : [])}
+            >
+              全选品类
+            </Checkbox>
+          </div>
+          {menu}
+        </>
+      )}
+    />
+  )
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -474,19 +554,26 @@ export default function PlatformStatsPage() {
       <Card
         title={progressMonthFilter === undefined ? '处理进度总览' : `处理进度总览（${formatMonth(progressMonthFilter)}）`}
         extra={(
-          <Select
-            allowClear
-            style={{ width: 160 }}
-            placeholder="全部月份"
-            value={progressMonthFilter}
-            options={progressMonthOptions}
-            onChange={setProgressMonthFilter}
-          />
+          <Space wrap>
+            {progressCategorySelect}
+            <Select
+              allowClear
+              style={{ width: 160 }}
+              placeholder="全部月份"
+              value={progressMonthFilter}
+              options={progressMonthOptions}
+              onChange={setProgressMonthFilter}
+            />
+          </Space>
         )}
       >
         <Row gutter={16}>
           <Col span={6}>
-            <Statistic title="上传入库数据总量" value={overview.uploaded_rows ?? '统计中…'} suffix={overview.uploaded_rows == null ? undefined : '条'} />
+            <Statistic
+              title={allProgressCategoriesSelected ? '上传入库数据总量' : '上传入库数据总量（全部品类）'}
+              value={overview.uploaded_rows ?? '统计中…'}
+              suffix={overview.uploaded_rows == null ? undefined : '条'}
+            />
             {progressMonthFilter === undefined && (
               <Text type="secondary">上传文件行数 {upload.file_rows.toLocaleString()}，去重拦截 {upload.dedup_skipped_rows.toLocaleString()}</Text>
             )}
@@ -554,16 +641,7 @@ export default function PlatformStatsPage() {
             options={progressMonthOptions}
             onChange={setProgressMonthFilter}
           />
-          <Select
-            allowClear
-            showSearch
-            style={{ width: 180 }}
-            placeholder="品类"
-            optionFilterProp="label"
-            value={progressCategoryFilter}
-            options={progressCategoryOptions}
-            onChange={setProgressCategoryFilter}
-          />
+          {progressCategorySelect}
           <Select
             style={{ width: 170 }}
             value={progressPlatformView}

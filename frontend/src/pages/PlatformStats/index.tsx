@@ -582,8 +582,8 @@ export default function PlatformStatsPage() {
           </Space>
         )}
       >
-        <Row gutter={[16, 16]}>
-          <Col xs={12} md={8} xl={4}>
+        <Row gutter={16}>
+          <Col span={6}>
             <Statistic
               title={allProgressCategoriesSelected ? '上传入库数据总量' : '上传入库数据总量（全部品类）'}
               value={overview.uploaded_rows ?? '统计中…'}
@@ -593,13 +593,13 @@ export default function PlatformStatsPage() {
               <Text type="secondary">上传文件行数 {upload.file_rows.toLocaleString()}，去重拦截 {upload.dedup_skipped_rows.toLocaleString()}</Text>
             )}
           </Col>
-          <Col xs={12} md={8} xl={4}>
+          <Col span={6}>
             <Statistic title="值得分发（分发条目）" value={overview.dispatchable} suffix="条" />
           </Col>
-          <Col xs={12} md={8} xl={4}>
+          <Col span={6}>
             <Statistic title="已清理" value={overview.processed} suffix="条" valueStyle={{ color: '#3f8600' }} />
           </Col>
-          <Col xs={12} md={8} xl={4}>
+          <Col span={6}>
             <Statistic
               title="清理占比"
               value={completionRate}
@@ -607,18 +607,21 @@ export default function PlatformStatsPage() {
               valueStyle={{ color: completionRate >= 100 ? '#3f8600' : '#1677ff' }}
             />
           </Col>
-          <Col xs={12} md={8} xl={4}>
-            <Statistic title="已匹配" value={overview.matched} suffix="条" valueStyle={{ color: '#3f8600' }} />
-          </Col>
-          <Col xs={12} md={8} xl={4}>
-            <Statistic title="匹配进度" value={matchingRate} suffix="%" valueStyle={{ color: '#1677ff' }} />
-          </Col>
         </Row>
-        <Progress
-          style={{ marginTop: 20 }}
-          percent={completionRate}
-          format={() => `${overview.processed.toLocaleString()} / ${overview.dispatchable.toLocaleString()}`}
-        />
+        <div style={{ marginTop: 20 }}>
+          <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
+            <Text strong>处理进度</Text>
+            <Text>{completionRate}% · 已清理 {overview.processed.toLocaleString()} / 分发 {overview.dispatchable.toLocaleString()}</Text>
+          </Space>
+          <Progress aria-label="处理进度" percent={completionRate} showInfo={false} />
+        </div>
+        <div style={{ marginTop: 12 }}>
+          <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
+            <Text strong>匹配进度</Text>
+            <Text>{matchingRate}% · 已匹配 {overview.matched.toLocaleString()} / 分发 {overview.dispatchable.toLocaleString()}</Text>
+          </Space>
+          <Progress aria-label="匹配进度" percent={matchingRate} showInfo={false} strokeColor="#13c2c2" />
+        </div>
         <Row gutter={16} style={{ marginTop: 16 }}>
           <Col span={6}>
             <Statistic title="已入任务条数" value={overview.task_created} />
@@ -671,37 +674,43 @@ export default function PlatformStatsPage() {
           />
         </Space>
         <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-          <Col xs={12} md={8} xl={4}><Statistic title="分发条数" value={progressTotals.dispatched} /></Col>
-          <Col xs={12} md={8} xl={4}><Statistic title="已入任务条数" value={progressTotals.task_created} /></Col>
-          <Col xs={12} md={8} xl={4}><Statistic title="清洗任务数" value={progressTotals.task_count} /></Col>
-          <Col xs={12} md={8} xl={4}>
+          <Col xs={12} md={6} xl={3}><Statistic title="分发条数" value={progressTotals.dispatched} /></Col>
+          <Col xs={12} md={6} xl={3}><Statistic title="已入任务条数" value={progressTotals.task_created} /></Col>
+          <Col xs={12} md={6} xl={3}><Statistic title="清洗任务数" value={progressTotals.task_count} /></Col>
+          <Col xs={12} md={6} xl={3}>
             <Statistic
               title="未入任务条数"
               value={Math.max(progressTotals.dispatched - progressTotals.task_created, 0)}
               valueStyle={{ color: '#d48806' }}
             />
           </Col>
-          <Col xs={12} md={8} xl={4}><Statistic title="已清理" value={progressTotals.processed} valueStyle={{ color: '#3f8600' }} /></Col>
-          <Col xs={12} md={8} xl={4}>
+          <Col xs={12} md={6} xl={3}><Statistic title="已清理" value={progressTotals.processed} valueStyle={{ color: '#3f8600' }} /></Col>
+          <Col xs={12} md={6} xl={3}>
             <Statistic
               title="未清理"
               value={Math.max(progressTotals.dispatched - progressTotals.processed, 0)}
               valueStyle={{ color: '#d48806' }}
             />
           </Col>
-          <Col xs={12} md={8} xl={4}><Statistic title="当前待处理" value={progressTotals.pending} valueStyle={{ color: '#d48806' }} /></Col>
-          <Col xs={12} md={8} xl={4}>
+          <Col xs={12} md={6} xl={3}><Statistic title="当前待处理" value={progressTotals.pending} valueStyle={{ color: '#d48806' }} /></Col>
+          <Col xs={12} md={6} xl={3}>
             <Statistic
               title="整体清洗进度"
               value={progressPercent(progressTotals.processed, progressTotals.dispatched)}
               suffix="%"
             />
           </Col>
-          <Col xs={12} md={8} xl={4}>
+        </Row>
+        <Row gutter={16} align="middle" style={{ marginBottom: 16 }}>
+          <Col span={6}>
             <Statistic title="已匹配" value={progressTotals.matched} valueStyle={{ color: '#3f8600' }} />
           </Col>
-          <Col xs={12} md={8} xl={4}>
+          <Col span={6}>
             <Statistic title="匹配进度" value={progressPercent(progressTotals.matched, progressTotals.dispatched)} suffix="%" />
+          </Col>
+          <Col span={12}>
+            <Text type="secondary">已匹配 {progressTotals.matched.toLocaleString()} / 分发 {progressTotals.dispatched.toLocaleString()}</Text>
+            <Progress aria-label="明细匹配进度" percent={progressPercent(progressTotals.matched, progressTotals.dispatched)} showInfo={false} strokeColor="#13c2c2" />
           </Col>
         </Row>
         <Alert

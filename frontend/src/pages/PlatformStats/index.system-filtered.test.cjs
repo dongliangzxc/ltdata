@@ -67,6 +67,12 @@ function nodes(tree, predicate, found = []) {
   }
   return found
 }
+function overviewProgress(tree, label) {
+  return nodes(tree, node => node.type === 'Progress' && node.props['aria-label'] === label)[0].props.percent
+}
+function matchingRates(tree) {
+  return [overviewProgress(tree, '匹配进度'), statistic(tree, '匹配进度')]
+}
 function statistic(tree, title) {
   return nodes(tree, node => node.type === 'Statistic' && node.props.title === title)[0].props.value
 }
@@ -78,6 +84,17 @@ assert.equal(statistic(tree, '自动匹配'), 16, 'filtering must not inflate mo
 assert.equal(statistic(tree, '清理占比'), 100)
 assert.equal(statistic(tree, '已匹配'), 16)
 assert.equal(statistic(tree, '匹配进度'), 80, 'system filtering completes cleaning without increasing matching progress')
+assert.equal(overviewProgress(tree, '处理进度'), 100, 'processing progress must remain separately visible')
+assert.equal(overviewProgress(tree, '匹配进度'), 80, 'matching progress supplements processing progress')
+const overviewCard = nodes(tree, node => node.type === 'Card' && node.props.title === '处理进度总览')[0]
+const originalSummaryRow = nodes(overviewCard, node => node.type === 'Row')[0]
+assert.deepEqual(nodes(originalSummaryRow, node => node.type === 'Statistic').map(node => node.props.title),
+  ['上传入库数据总量', '值得分发（分发条目）', '已清理', '清理占比'], 'preserve the original four overview metrics')
+const detailCard = nodes(tree, node => node.type === 'Card' && node.props.title === '处理进度明细（月份 / 品类 / 平台）')[0]
+const originalDetailRow = nodes(detailCard, node => node.type === 'Row')[0]
+assert.deepEqual(nodes(originalDetailRow, node => node.type === 'Statistic').map(node => node.props.title),
+  ['分发条数', '已入任务条数', '清洗任务数', '未入任务条数', '已清理', '未清理', '当前待处理', '整体清洗进度'],
+  'matching progress must not displace original processing summary metrics')
 const table = nodes(tree, node => node.type === 'Table')[0].props
 const matchColumn = table.columns.find(col => col.key === 'match_rate')
 assert.equal(matchColumn.title, '匹配进度')
@@ -87,6 +104,8 @@ assert.equal(matchColumn.render(null, { ...base, dispatched: 20, task_created: 1
 assert.equal(matchColumn.render(null, { ...base, dispatched: 0 }).props.children, '无分发数据')
 assert.ok(matchColumn.sorter({ ...base, matched: 100, dispatched: 1000 }, { ...base, matched: 1, dispatched: 2 }) < 0,
   'matching progress sorts by ratio rather than raw matches')
+assert.ok(table.columns.some(col => col.key === 'task_rate'), 'task processing progress remains in the table')
+assert.ok(table.columns.some(col => col.key === 'overall_rate'), 'overall processing progress remains in the table')
 assert.equal(table.dataSource.length, 1, 'all-platform view aggregates the category')
 assert.equal(table.dataSource[0].system_filtered, 4, 'aggregation must sum both platforms')
 assert.equal(table.dataSource[0].completed_at, '2026-11-24 10:00:00', 'completion uses the latest time across platforms')
@@ -157,8 +176,8 @@ assert.equal(statistic(render(), '人工确认'), 2)
 assert.equal(statistic(render(), '已转出'), 2)
 assert.equal(statistic(render(), '系统过滤'), 1)
 assert.equal(statistic(render(), '清理占比'), 51.4)
-assert.deepEqual(nodes(render(), node => node.type === 'Statistic' && node.props.title === '匹配进度')
-  .map(node => node.props.value), [37.1, 37.1], 'overview and detail match ratios sum counts before dividing')
+assert.equal(overviewProgress(render(), '处理进度'), 51.4)
+assert.deepEqual(matchingRates(render()), [37.1, 37.1], 'overview and detail match ratios sum counts before dividing')
 assert.equal(statistic(render(), '已匹配'), 13)
 assert.equal(statistic(render(), '上传入库数据总量（全部品类）'), 100,
   'uploaded raw rows have no category dimension and must be labelled accordingly')
@@ -172,13 +191,14 @@ assert.equal(statistic(render(), '匹配进度'), 33.3)
 selectedPlatform = 'jd'
 assert.equal(statistic(render(), '值得分发（分发条目）'), 30, 'detail platform view does not change overview scope')
 assert.equal(nodes(render(), node => node.type === 'Table')[0].props.dataSource.length, 1)
-assert.deepEqual(nodes(render(), node => node.type === 'Statistic' && node.props.title === '匹配进度')
-  .map(node => node.props.value), [33.3, 35], 'detail matching progress follows the platform filter')
+assert.deepEqual(matchingRates(render()), [33.3, 35], 'detail matching progress follows the platform filter')
 
 selector().onChange([])
 assert.equal(statistic(render(), '值得分发（分发条目）'), 0, 'clearing categories must not silently select all')
 assert.equal(statistic(render(), '已清理'), 0)
 assert.equal(statistic(render(), '清理占比'), 0)
+assert.equal(overviewProgress(render(), '处理进度'), 0)
+assert.equal(overviewProgress(render(), '匹配进度'), 0)
 assert.equal(statistic(render(), '匹配进度'), 0)
 assert.equal(statistic(render(), '已匹配'), 0)
 assert.equal(nodes(render(), node => node.type === 'Table')[0].props.dataSource.length, 0)

@@ -1511,11 +1511,28 @@ export const updateUrlMapping = (id: number, data: { platform: string; item_id: 
 export const deleteUrlMapping = (id: number) =>
   api.delete(`/url-mappings/${id}`)
 
-export const getUrlMappingCategoryCount = (category_code: string) =>
-  api.get('/url-mappings/category-count', { params: { category_code } })
+export type UrlMappingFilters = {
+  category_code: string
+  platform?: string
+  brand?: string
+  keyword?: string
+  year?: number
+  month?: number
+}
 
-export const bulkDeleteUrlMappings = (category_code: string) =>
-  api.post('/url-mappings/bulk-delete', { category_code })
+export type UrlMappingDeleteScope = UrlMappingFilters & {
+  include_ids?: readonly number[]
+  exclude_ids?: readonly number[]
+}
+
+export const getUrlMappingCategoryCount = (filters: UrlMappingDeleteScope) =>
+  api.get<{ category_code: string; count: number }>('/url-mappings/category-count', {
+    params: filters,
+    paramsSerializer: { indexes: null },
+  })
+
+export const bulkDeleteUrlMappings = (filters: UrlMappingDeleteScope, expected_count: number) =>
+  api.post<{ category_code: string; deleted: number }>('/url-mappings/bulk-delete', { ...filters, expected_count })
 
 export const downloadUrlMappingTemplate = () =>
   api.get('/url-mappings/template', { responseType: 'blob' })

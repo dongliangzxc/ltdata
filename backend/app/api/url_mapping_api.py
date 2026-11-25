@@ -9,9 +9,9 @@ from pathlib import Path
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt
 from urllib.parse import quote
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, or_, case, func
 from sqlalchemy.orm import Session, joinedload
 import openpyxl
 
@@ -146,7 +146,17 @@ class UrlMappingConfirmPayload(BaseModel):
 
 
 class UrlMappingBulkDeletePayload(BaseModel):
-    category_code: str
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    category_code: str = Field(min_length=1)
+    platform: Optional[str] = None
+    brand: Optional[str] = None
+    keyword: Optional[str] = None
+    year: Optional[int] = Field(None, ge=1, le=9999)
+    month: Optional[int] = Field(None, ge=1, le=12)
+    expected_count: Optional[int] = Field(None, ge=0)
+    include_ids: Optional[list[PositiveInt]] = None
+    exclude_ids: list[PositiveInt] = Field(default_factory=list)
 
 
 @router.get("/template")
@@ -436,22 +446,22 @@ def import_url_mappings(
     return {"imported": imported, "skipped": skipped, "errors": errors[:20]}
 
 
-@router.get("", response_model=PaginatedResponse)
-def list_url_mappings(
-    keyword: Optional[str] = Query(None),
-    platform: Optional[str] = Query(None),
-    category_code: Optional[str] = Query(None),
-    year: Optional[int] = Query(None),
-    month: Optional[int] = Query(None),
-    require_category: bool = Query(False),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=200),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+def _filtered_url_mappings(
+    db: Session,
+    current_user: User,
+    *,
+    keyword: str | None = None,
+    platform: str | None = None,
+    brand: str | None = None,
+    category_code: str | None = None,
+    year: int | None = None,
+    month: int | None = None,
+    include_ids: list[int] | None = None,
+    exclude_ids: list[int] | None = None,
 ):
-    if require_category and not category_code:
-        raise HTTPException(status_code=400, detail="请先选择品类")
-
+    """列表、预览计数和删除共用筛选口径，品类及品牌与页面回显一致。"""
+    if include_ids is not None and exclude_ids:
+        raise HTTPException(422, "不能同时指定勾选和取消勾选的记录")
     visible_codes = _visible_url_mapping_category_codes(db, current_user)
     q = db.query(ItemUrlMapping).outerjoin(ModelRecord, ItemUrlMapping.model_id == ModelRecord.id).filter(
         or_(ItemUrlMapping.brand_code.isnot(None), ItemUrlMapping.model_id.isnot(None))
@@ -462,12 +472,15 @@ def list_url_mappings(
         ItemUrlMapping.source.is_(None),
         ItemUrlMapping.platform.in_(_LEGACY_HEADPHONE_PLATFORMS),
     )
+    effective_category = func.coalesce(
+        ItemUrlMapping.category_code,
+        ModelRecord.category_code,
+        case((legacy_headphone_filter, "headphone")),
+    )
     if visible_codes is not None:
         q = q.filter(or_(
-            ModelRecord.category_code.in_(visible_codes),
-            ItemUrlMapping.category_code.in_(visible_codes),
-            and_(ItemUrlMapping.model_id.is_(None), ItemUrlMapping.category_code.is_(None), ~legacy_headphone_filter),
-            and_(legacy_headphone_filter, "headphone" in visible_codes),
+            effective_category.in_(visible_codes),
+            and_(ItemUrlMapping.model_id.is_(None), effective_category.is_(None)),
         ))
     if platform:
         q = q.filter(ItemUrlMapping.platform == platform)
@@ -475,37 +488,52 @@ def list_url_mappings(
         q = q.filter(ItemUrlMapping.data_year == year)
     if month is not None:
         q = q.filter(ItemUrlMapping.data_month == month)
+    effective_brand = case(
+        (ModelRecord.id.isnot(None), ModelRecord.brand_code),
+        else_=ItemUrlMapping.brand_code,
+    )
+    if brand:
+        brand_kw = f"%{brand}%"
+        q = q.filter(or_(effective_brand.ilike(brand_kw), ModelRecord.brand_name.ilike(brand_kw)))
     if keyword:
         kw = f"%{keyword}%"
         q = q.filter(
             or_(
                 ItemUrlMapping.item_id.ilike(kw),
                 ModelRecord.model_code.ilike(kw),
-                ModelRecord.brand_code.ilike(kw),
+                effective_brand.ilike(kw),
+                ModelRecord.brand_name.ilike(kw),
             )
         )
-    # 品类筛选要与列表展示的品类口径一致：展示优先取记录品类
-    # （`ItemUrlMapping.category_code`，占位/导入时记录），为空再回退型号品类。
-    # 若这里仍用「型号品类 OR 记录品类」，会导致型号在 A 品类、记录在 B 品类的行
-    # 出现在 A 品类筛选下却显示为 B 品类（例如 移动电源 记录挂到 door_lock 型号）。
     if category_code:
-        mapping_category_match = and_(
-            ItemUrlMapping.category_code.isnot(None),
-            ItemUrlMapping.category_code == category_code,
-        )
-        model_category_match = and_(
-            ItemUrlMapping.category_code.is_(None),
-            ModelRecord.category_code == category_code,
-        )
-        if category_code == "headphone":
-            # 无型号、无记录品类的历史耳机映射，展示口径回退为 headphone
-            q = q.filter(or_(
-                mapping_category_match,
-                model_category_match,
-                legacy_headphone_filter,
-            ))
-        else:
-            q = q.filter(or_(mapping_category_match, model_category_match))
+        q = q.filter(effective_category == category_code)
+    if include_ids is not None:
+        q = q.filter(ItemUrlMapping.id.in_(include_ids))
+    if exclude_ids:
+        q = q.filter(ItemUrlMapping.id.notin_(exclude_ids))
+    return q
+
+
+@router.get("", response_model=PaginatedResponse)
+def list_url_mappings(
+    keyword: Optional[str] = Query(None),
+    platform: Optional[str] = Query(None),
+    brand: Optional[str] = Query(None),
+    category_code: Optional[str] = Query(None),
+    year: Optional[int] = Query(None, ge=1, le=9999),
+    month: Optional[int] = Query(None, ge=1, le=12),
+    require_category: bool = Query(False),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if require_category and not category_code:
+        raise HTTPException(status_code=400, detail="请先选择品类")
+    q = _filtered_url_mappings(
+        db, current_user, keyword=keyword, platform=platform, brand=brand,
+        category_code=category_code, year=year, month=month,
+    )
     total = q.count()
     rows = (
         q.options(joinedload(ItemUrlMapping.model).joinedload(ModelRecord.category))
@@ -601,26 +629,25 @@ def delete_url_mapping(
     return {"deleted": True}
 
 
-def _url_mapping_category_match_query(db: Session, category_code: str):
-    """与列表页品类筛选口径一致：记录品类或型号归属品类命中即算该品类。"""
-    return (
-        db.query(ItemUrlMapping.id)
-        .outerjoin(ModelRecord, ItemUrlMapping.model_id == ModelRecord.id)
-        .filter(or_(
-            ModelRecord.category_code == category_code,
-            ItemUrlMapping.category_code == category_code,
-        ))
-    )
-
-
 @router.get("/category-count")
 def url_mapping_category_count(
-    category_code: str = Query(...),
+    category_code: str = Query(..., min_length=1),
+    platform: Optional[str] = Query(None),
+    brand: Optional[str] = Query(None),
+    keyword: Optional[str] = Query(None),
+    year: Optional[int] = Query(None, ge=1, le=9999),
+    month: Optional[int] = Query(None, ge=1, le=12),
+    include_ids: Optional[list[PositiveInt]] = Query(None),
+    exclude_ids: Optional[list[PositiveInt]] = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     _ensure_url_mapping_category_visible(db, current_user, category_code)
-    count = _url_mapping_category_match_query(db, category_code).count()
+    count = _filtered_url_mappings(
+        db, current_user, category_code=category_code, platform=platform,
+        brand=brand, keyword=keyword, year=year, month=month,
+        include_ids=include_ids, exclude_ids=exclude_ids,
+    ).count()
     return {"category_code": category_code, "count": count}
 
 
@@ -630,9 +657,14 @@ def bulk_delete_url_mappings(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """按品类批量删除 URL 映射，删除范围与列表页品类筛选一致。"""
+    """按筛选及跨页勾选范围删除映射，保留型号等其他业务数据。"""
     _ensure_url_mapping_category_visible(db, current_user, payload.category_code)
-    ids = [row[0] for row in _url_mapping_category_match_query(db, payload.category_code).all()]
+    q = _filtered_url_mappings(
+        db, current_user, **payload.model_dump(exclude={"expected_count"}),
+    )
+    ids = [row[0] for row in q.with_entities(ItemUrlMapping.id).with_for_update().all()]
+    if payload.expected_count is not None and len(ids) != payload.expected_count:
+        raise HTTPException(409, "筛选结果数量已变化，请重新打开批量删除并确认")
     deleted = 0
     chunk_size = 1000
     for start in range(0, len(ids), chunk_size):

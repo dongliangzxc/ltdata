@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Card, Table, Button, Input, Select, Space, Typography,
-  Modal, Form, InputNumber, message, Popconfirm, Tag, Alert,
+  Modal, Form, InputNumber, message, Popconfirm, Tag, Alert, Checkbox,
 } from 'antd'
 import { PlusOutlined, UploadOutlined, EditOutlined, DeleteOutlined, DownloadOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
@@ -10,10 +10,12 @@ import {
   deleteUrlMapping, listModels, getModelDetail, downloadUrlMappingTemplate,
   listModelExtraFields, getUrlMappingCategoryCount, bulkDeleteUrlMappings,
 } from '../../services/api'
-import type { UserProfile } from '../../services/api'
+import type { UserProfile, UrlMappingDeleteScope } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 import ImportMappingModal from '../../components/ImportMappingModal'
 import { formatModelLabel } from '../../utils/modelLabel'
+import { buildUrlMappingFilters, describeUrlMappingFilters, buildUrlMappingDeleteScope, countSelectedUrlMappings, isUrlMappingSelected, selectUrlMappingRows } from './filters'
+import type { UrlMappingSelection } from './filters'
 
 const { Text } = Typography
 
@@ -73,6 +75,7 @@ const PLATFORM_OPTIONS = [
 export default function UrlMappingsPage() {
   const [keyword, setKeyword] = useState('')
   const [platform, setPlatform] = useState<string | undefined>()
+  const [brand, setBrand] = useState('')
   const [categoryCode, setCategoryCode] = useState<string | undefined>()
   const [page, setPage] = useState(1)
   const [modalOpen, setModalOpen] = useState(false)
@@ -91,6 +94,21 @@ export default function UrlMappingsPage() {
   const [bulkCount, setBulkCount] = useState<number | null>(null)
   const [bulkLoading, setBulkLoading] = useState(false)
   const [bulkDeleting, setBulkDeleting] = useState(false)
+  const [bulkFilters, setBulkFilters] = useState<UrlMappingDeleteScope | null>(null)
+  const bulkCountSeqRef = useRef(0)
+  const mappingFilters = useMemo(() => categoryCode ? buildUrlMappingFilters({
+    category_code: categoryCode, platform, brand, keyword, year: filterYear, month: filterMonth,
+  }) : null, [categoryCode, platform, brand, keyword, filterYear, filterMonth])
+  const filterKey = JSON.stringify(mappingFilters)
+  const [selectionState, setSelectionState] = useState<{ scope: string; selection: UrlMappingSelection }>({
+    scope: filterKey, selection: { all: true, ids: [] },
+  })
+  const selection: UrlMappingSelection = selectionState.scope === filterKey
+    ? selectionState.selection : { all: true, ids: [] }
+  const updateSelection = (next: UrlMappingSelection) => setSelectionState({ scope: filterKey, selection: next })
+  useEffect(() => {
+    setSelectionState({ scope: filterKey, selection: { all: true, ids: [] } })
+  }, [filterKey])
 
   const currentUser = readStoredUser()
   const { options: categoryOptions } = useCategoryOptions()
@@ -133,22 +151,22 @@ export default function UrlMappingsPage() {
 
   const { data, loading, refresh } = useRequest(
     () => {
-      if (!categoryCode) {
+      if (!mappingFilters) {
         return Promise.resolve({ items: [] as UrlMapping[], total: 0, page: 1, page_size: 20 })
       }
       return listUrlMappings({
-        keyword: keyword || undefined,
-        platform: platform || undefined,
-        category_code: categoryCode,
+        ...mappingFilters,
         require_category: true,
-        year: filterYear,
-        month: filterMonth,
         page,
         page_size: 20,
       }).then(r => r.data)
     },
-    { refreshDeps: [keyword, platform, categoryCode, filterYear, filterMonth, page] }
+    { refreshDeps: [mappingFilters, page] }
   )
+  const selectedCount = countSelectedUrlMappings(selection, data?.total ?? 0)
+  const selectedRowKeys = (data?.items ?? [])
+    .filter((row: UrlMapping) => isUrlMappingSelected(selection, row.id))
+    .map((row: UrlMapping) => row.id)
 
   const openCreate = () => {
     setEditingId(null)
@@ -210,38 +228,60 @@ export default function UrlMappingsPage() {
   const handleDelete = async (id: number) => {
     await deleteUrlMapping(id)
     message.success('已删除')
+    setSelectionState(prev => prev.scope === filterKey
+      ? { ...prev, selection: { ...prev.selection, ids: prev.selection.ids.filter(value => value !== id) } }
+      : prev)
     refresh()
   }
 
-  const selectedCategoryLabel = useMemo(
-    () => visibleCategoryOptions.find(o => o.value === categoryCode)?.label,
-    [visibleCategoryOptions, categoryCode]
-  )
+  const bulkFilterDescription = bulkFilters ? describeUrlMappingFilters(
+    bulkFilters,
+    visibleCategoryOptions.find(o => o.value === bulkFilters.category_code)?.label,
+    PLATFORM_OPTIONS.find(o => o.value === bulkFilters.platform)?.label,
+  ) : []
+
+  const closeBulkDelete = () => {
+    if (bulkDeleting) return
+    bulkCountSeqRef.current += 1
+    setBulkOpen(false)
+    setBulkFilters(null)
+    setBulkCount(null)
+  }
 
   const openBulkDelete = async () => {
-    if (!categoryCode) return
+    if (!mappingFilters || !selectedCount) return
+    const filters = buildUrlMappingDeleteScope(mappingFilters, selection)
+    const seq = ++bulkCountSeqRef.current
+    setBulkFilters(filters)
     setBulkOpen(true)
     setBulkCount(null)
     setBulkLoading(true)
     try {
-      const res = await getUrlMappingCategoryCount(categoryCode)
+      const res = await getUrlMappingCategoryCount(filters)
+      if (seq !== bulkCountSeqRef.current) return
       setBulkCount(res.data.count)
     } catch {
+      if (seq !== bulkCountSeqRef.current) return
       message.error('获取待删除数量失败，请重试')
     } finally {
-      setBulkLoading(false)
+      if (seq === bulkCountSeqRef.current) setBulkLoading(false)
     }
   }
 
   const handleBulkDelete = async () => {
-    if (!categoryCode) return
+    if (!bulkFilters || bulkLoading || bulkCount == null || bulkCount <= 0 || bulkDeleting) return
     setBulkDeleting(true)
     try {
-      const res = await bulkDeleteUrlMappings(categoryCode)
+      const res = await bulkDeleteUrlMappings(bulkFilters, bulkCount)
       message.success(`已删除 ${res.data.deleted} 条映射`)
       setBulkOpen(false)
+      setBulkFilters(null)
+      setBulkCount(null)
+      updateSelection({ all: false, ids: [] })
       setPage(1)
       refresh()
+    } catch {
+      // handled by interceptor; keep the preview open so the user can retry or close it
     } finally {
       setBulkDeleting(false)
     }
@@ -297,6 +337,17 @@ export default function UrlMappingsPage() {
     {
       title: '品牌', width: 120,
       render: (_: unknown, record: UrlMapping) => record.brand_name || record.brand_code || '-'
+    },
+    {
+      title: '商品ID / 链接', width: 180,
+      render: (_: unknown, record: UrlMapping) => (
+        <Space direction="vertical" size={0}>
+          <Text type="secondary">{PLATFORM_OPTIONS.find(option => option.value === record.platform)?.label || record.platform}</Text>
+          {record.item_url
+            ? <a href={record.item_url} target="_blank" rel="noopener noreferrer">{record.item_id}</a>
+            : <Text>{record.item_id}</Text>}
+        </Space>
+      ),
     },
     {
       title: '型号', dataIndex: 'model_code', width: 140,
@@ -385,7 +436,15 @@ export default function UrlMappingsPage() {
             allowClear
             style={{ width: 160 }}
             options={PLATFORM_OPTIONS}
+            value={platform}
             onChange={v => { setPlatform(v); setPage(1) }}
+          />
+          <Input
+            placeholder="品牌码 / 品牌名称"
+            allowClear
+            style={{ width: 180 }}
+            value={brand}
+            onChange={e => { setBrand(e.target.value); setPage(1) }}
           />
           <Input.Search
             placeholder="搜索 item_id / 型号 / 品牌"
@@ -399,11 +458,11 @@ export default function UrlMappingsPage() {
           <Button
             danger
             icon={<DeleteOutlined />}
-            disabled={!categoryCode}
+            disabled={!categoryCode || loading || selectedCount <= 0}
             title={categoryCode ? undefined : '请先选择品类'}
             onClick={openBulkDelete}
           >
-            批量删除
+            删除已选记录
           </Button>
         </Space>
       </Card>
@@ -417,13 +476,32 @@ export default function UrlMappingsPage() {
             description="映射数据量较大，选择品类后才会加载列表。"
           />
         ) : (
+          <>
+          <Space wrap style={{ marginBottom: 16 }}>
+            <Checkbox
+              checked={selection.all && selection.ids.length === 0}
+              indeterminate={selectedCount > 0 && !(selection.all && selection.ids.length === 0)}
+              disabled={loading || !data?.total}
+              onChange={e => updateSelection({ all: e.target.checked, ids: [] })}
+            >
+              全选筛选结果（跨页）
+            </Checkbox>
+            <Text>共 {data?.total ?? 0} 条，已选 {selectedCount} 条</Text>
+            <Text type="secondary">默认全选，可取消勾选要保留的记录；更改筛选条件后重新全选。</Text>
+          </Space>
           <Table
             dataSource={data?.items ?? []}
             columns={columns}
             rowKey="id"
             size="small"
             loading={loading}
-            scroll={{ x: showSeriesColumn ? 1390 : 1250 }}
+            rowSelection={{
+              selectedRowKeys,
+              getCheckboxProps: () => ({ disabled: loading }),
+              onSelect: (record, selected) => updateSelection(selectUrlMappingRows(selection, [record.id], selected)),
+              onSelectAll: (selected, _rows, changedRows) => updateSelection(selectUrlMappingRows(selection, changedRows.map(row => row.id), selected)),
+            }}
+            scroll={{ x: showSeriesColumn ? 1610 : 1470 }}
             pagination={{
               current: page,
               pageSize: 20,
@@ -432,6 +510,7 @@ export default function UrlMappingsPage() {
               showTotal: t => `共 ${t} 条`,
             }}
           />
+          </>
         )}
       </Card>
 
@@ -453,12 +532,17 @@ export default function UrlMappingsPage() {
       />
 
       <Modal
-        title="按品类批量删除"
+        title="批量删除已选映射"
         open={bulkOpen}
-        onCancel={() => setBulkOpen(false)}
+        onCancel={closeBulkDelete}
         onOk={handleBulkDelete}
         okText="确认删除"
-        okButtonProps={{ danger: true, disabled: bulkLoading || bulkCount === 0 }}
+        cancelText="取消"
+        okButtonProps={{ danger: true, disabled: bulkLoading || bulkCount == null || bulkCount <= 0 }}
+        cancelButtonProps={{ disabled: bulkDeleting }}
+        closable={!bulkDeleting}
+        maskClosable={!bulkDeleting}
+        keyboard={!bulkDeleting}
         confirmLoading={bulkDeleting}
         destroyOnClose
         width={480}
@@ -469,15 +553,20 @@ export default function UrlMappingsPage() {
           message="该操作不可恢复，请谨慎执行"
           style={{ marginBottom: 12 }}
         />
+        {bulkFilterDescription.map(([label, value]) => (
+          <p key={label} style={{ marginBottom: 8 }}>{label}：<Text strong>{value}</Text></p>
+        ))}
         <p style={{ marginBottom: 8 }}>
-          品类：<Text strong>{selectedCategoryLabel || categoryCode}</Text>
+          选择方式：{bulkFilters?.include_ids != null
+            ? `手动勾选 ${bulkFilters.include_ids.length} 条`
+            : `全选筛选结果，取消勾选 ${bulkFilters?.exclude_ids?.length ?? 0} 条`}
         </p>
         <p style={{ marginBottom: 8 }}>
-          将删除该品类下全部 URL 映射记录
+          将删除以上筛选范围中已勾选的 URL 映射记录（包含所有分页）
           {bulkLoading ? '（统计中…）' : bulkCount != null ? `，共 ${bulkCount} 条` : ''}。
         </p>
         <p style={{ color: '#999', marginBottom: 0 }}>
-          删除范围与列表页「品类筛选」一致，不受关键词 / 平台 / 年份 / 月份筛选影响。
+          仅删除映射链接，不删除型号或已有匹配结果。筛选结果数量变化时需重新确认。
         </p>
       </Modal>
 

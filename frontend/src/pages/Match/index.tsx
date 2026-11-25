@@ -31,6 +31,7 @@ import CreateModelModal from '../../components/CreateModelModal'
 import { buildTransferFilterState, getDefaultTransferFilters, shouldClearTransferTarget } from './utils/transferFilters'
 import type { TransferFilters, TransferSelectOption } from './utils/transferFilters'
 import { formatModelLabel } from '../../utils/modelLabel'
+import { compareModelOptions, loadAllModelOptions } from './utils/modelOptions'
 
 const { Text } = Typography
 
@@ -379,6 +380,8 @@ export default function MatchPage() {
   const summaryView = hasSummaryFilter ? (viewSummary ?? summary) : summary
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
   const [modelSearchLoading, setModelSearchLoading] = useState(false)
+  const modelSearchSeqRef = useRef(0)
+  const sortedModelOptions = useMemo(() => [...modelOptions].sort(compareModelOptions), [modelOptions])
   const [createModelOpen, setCreateModelOpen] = useState(false)
   const [createModelContext, setCreateModelContext] = useState<'review' | 'batch'>('review')
   const [batchConfirmModalOpen, setBatchConfirmModalOpen] = useState(false)
@@ -466,20 +469,23 @@ export default function MatchPage() {
   const otherAutoMatchedCount = summaryView ? Math.max(summaryView.matched - Math.max(preciseMatchedCount - (summaryView.url_matched ?? 0), 0), 0) : 0
   const readyCount = summaryView ? (summaryView.url_matched ?? 0) + summaryView.matched + summaryView.confirmed : 0
 
-  const handleModelSearch = async (keyword: string) => {
-    if (!keyword.trim()) return
+  useEffect(() => {
+    modelSearchSeqRef.current += 1
+    setModelOptions([])
+    setModelSearchLoading(false)
+  }, [reviewDetail?.id, reviewDetail?.category_code])
+
+  const handleModelSearch = async () => {
+    const searchSeq = ++modelSearchSeqRef.current
     setModelSearchLoading(true)
     try {
-      const res = await listModels({
-        keyword,
-        page: 1,
-        page_size: 50,
-        category_code: reviewDetail?.category_code || undefined,
-        exclude_placeholder: false,
-      }).then(r => r.data)
-      setModelOptions((res.items ?? []).map(modelOptionFromModel))
+      const models = await loadAllModelOptions(reviewDetail?.category_code || undefined)
+      if (searchSeq !== modelSearchSeqRef.current) return
+      setModelOptions(models.map(modelOptionFromModel))
+    } catch {
+      // handled by interceptor
     } finally {
-      setModelSearchLoading(false)
+      if (searchSeq === modelSearchSeqRef.current) setModelSearchLoading(false)
     }
   }
 
@@ -2392,14 +2398,19 @@ export default function MatchPage() {
                           <Select
                             showSearch
                             placeholder="搜索/选择其他型号确认"
-                            style={{ minWidth: 220 }}
+                            style={{ minWidth: 220, maxWidth: '100%' }}
+                            popupMatchSelectWidth={560}
+                            dropdownStyle={{ maxWidth: 'calc(100vw - 32px)' }}
+                            virtual={false}
+                            optionRender={option => <span style={{ whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{option.label}</span>}
                             allowClear
-                            filterOption={false}
-                            onSearch={handleModelSearch}
+                            filterOption={(input, option) => (option?.searchText || '').includes(input.trim().toLocaleLowerCase())}
+                            onDropdownVisibleChange={open => { if (open) void handleModelSearch() }}
                             loading={modelSearchLoading}
-                            options={modelOptions.map(m => ({
+                            options={sortedModelOptions.map(m => ({
                               value: m.id,
                               label: formatModelLabel(m),
+                              searchText: [formatModelLabel(m), m.brand_name, m.model_name].filter(Boolean).join(' ').toLocaleLowerCase(),
                             }))}
                             value={selectedModels[reviewDetail.id]}
                             onChange={v => {

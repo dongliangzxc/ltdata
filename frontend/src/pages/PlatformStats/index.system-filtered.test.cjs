@@ -16,7 +16,7 @@ const base = {
 }
 const progress = {
   ...base, dispatchable: 20, dispatched: undefined, uploaded_rows: 20,
-  task_created: 20, processed: 20, url_matched: 16, system_filtered: 4,
+  task_created: 20, processed: 20, matched: 16, url_matched: 16, system_filtered: 4,
   not_task_created: 0, not_processed: 0, task_no_result: 0,
   months: [], categories: [{ ...base, platform: 'jd' }, {
     ...base, platform: 'tmall', last_processed_at: '2026-11-24 10:00:00', completed_at: '2026-11-24 10:00:00',
@@ -76,7 +76,17 @@ assert.equal(statistic(tree, '已清理'), 20, 'system filtering contributes to 
 assert.equal(statistic(tree, '系统过滤'), 4, 'filtered records must be visible separately')
 assert.equal(statistic(tree, '自动匹配'), 16, 'filtering must not inflate model matches')
 assert.equal(statistic(tree, '清理占比'), 100)
+assert.equal(statistic(tree, '已匹配'), 16)
+assert.equal(statistic(tree, '匹配进度'), 80, 'system filtering completes cleaning without increasing matching progress')
 const table = nodes(tree, node => node.type === 'Table')[0].props
+const matchColumn = table.columns.find(col => col.key === 'match_rate')
+assert.equal(matchColumn.title, '匹配进度')
+assert.equal(matchColumn.render(null, table.dataSource[0]).props.percent, 80)
+assert.equal(matchColumn.render(null, { ...base, dispatched: 20, task_created: 10, matched: 5 }).props.percent, 25,
+  'matching progress uses dispatched rows, including rows not yet in tasks')
+assert.equal(matchColumn.render(null, { ...base, dispatched: 0 }).props.children, '无分发数据')
+assert.ok(matchColumn.sorter({ ...base, matched: 100, dispatched: 1000 }, { ...base, matched: 1, dispatched: 2 }) < 0,
+  'matching progress sorts by ratio rather than raw matches')
 assert.equal(table.dataSource.length, 1, 'all-platform view aggregates the category')
 assert.equal(table.dataSource[0].system_filtered, 4, 'aggregation must sum both platforms')
 assert.equal(table.dataSource[0].completed_at, '2026-11-24 10:00:00', 'completion uses the latest time across platforms')
@@ -126,7 +136,7 @@ progress.categories = [
     system_filtered: 0, transferred_out: 1, published: 4 },
   { ...base, category_code: 'camera', category_name: '相机', platform: 'jd', dispatched: 50 },
   { ...base, month: 202609, platform: 'jd', dispatched: 5, task_created: 5,
-    processed: 3, url_matched: 3, system_filtered: 0, pending: 1, published: 2 },
+    processed: 3, matched: 3, url_matched: 3, system_filtered: 0, pending: 1, published: 2 },
 ]
 selectedPlatform = 'all'
 selectedMonth = undefined
@@ -147,6 +157,9 @@ assert.equal(statistic(render(), '人工确认'), 2)
 assert.equal(statistic(render(), '已转出'), 2)
 assert.equal(statistic(render(), '系统过滤'), 1)
 assert.equal(statistic(render(), '清理占比'), 51.4)
+assert.deepEqual(nodes(render(), node => node.type === 'Statistic' && node.props.title === '匹配进度')
+  .map(node => node.props.value), [37.1, 37.1], 'overview and detail match ratios sum counts before dividing')
+assert.equal(statistic(render(), '已匹配'), 13)
 assert.equal(statistic(render(), '上传入库数据总量（全部品类）'), 100,
   'uploaded raw rows have no category dimension and must be labelled accordingly')
 assert.equal(nodes(render(), node => node.type === 'Table')[0].props.dataSource.length, 2)
@@ -155,14 +168,19 @@ assert.ok(nodes(render(), node => node.type === 'Table')[0].props.dataSource.eve
 selectedMonth = 202610
 assert.equal(statistic(render(), '值得分发（分发条目）'), 30, 'month and category filters combine')
 assert.equal(statistic(render(), '已清理'), 15)
+assert.equal(statistic(render(), '匹配进度'), 33.3)
 selectedPlatform = 'jd'
 assert.equal(statistic(render(), '值得分发（分发条目）'), 30, 'detail platform view does not change overview scope')
 assert.equal(nodes(render(), node => node.type === 'Table')[0].props.dataSource.length, 1)
+assert.deepEqual(nodes(render(), node => node.type === 'Statistic' && node.props.title === '匹配进度')
+  .map(node => node.props.value), [33.3, 35], 'detail matching progress follows the platform filter')
 
 selector().onChange([])
 assert.equal(statistic(render(), '值得分发（分发条目）'), 0, 'clearing categories must not silently select all')
 assert.equal(statistic(render(), '已清理'), 0)
 assert.equal(statistic(render(), '清理占比'), 0)
+assert.equal(statistic(render(), '匹配进度'), 0)
+assert.equal(statistic(render(), '已匹配'), 0)
 assert.equal(nodes(render(), node => node.type === 'Table')[0].props.dataSource.length, 0)
 const selectAll = nodes(selector().dropdownRender('menu'), node => node.type === 'Checkbox')[0].props
 assert.equal(selectAll.checked, false)

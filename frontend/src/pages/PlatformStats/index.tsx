@@ -66,6 +66,7 @@ const unprocessed = (row: ProgressRow) => Math.max(row.dispatched - row.processe
 const notTaskCreated = (row: ProgressRow) => Math.max(row.dispatched - row.task_created, 0)
 const taskPercent = (row: ProgressRow) => progressPercent(row.processed, row.task_created)
 const overallPercent = (row: ProgressRow) => progressPercent(row.processed, row.dispatched)
+const matchPercent = (row: ProgressRow) => progressPercent(row.matched, row.dispatched)
 const autoMatched = (row: ProgressRow) => row.url_matched + row.auto_matched
 const formatMonth = (value: number | null | undefined) => (
   value ? `${Math.floor(value / 100)}-${String(value % 100).padStart(2, '0')}` : '-'
@@ -136,6 +137,18 @@ const progressColumns: ColumnsType<ProgressRow> = [
     sorter: (a, b) => overallPercent(a) - overallPercent(b),
     render: (_: unknown, row) => (row.dispatched > 0
       ? <Progress percent={overallPercent(row)} size="small" />
+      : <Text type="secondary">无分发数据</Text>),
+  },
+  {
+    title: '已匹配', dataIndex: 'matched', width: 110,
+    sorter: (a, b) => a.matched - b.matched,
+    render: (v: number) => <Text type="success">{v.toLocaleString()}</Text>,
+  },
+  {
+    title: '匹配进度', key: 'match_rate', width: 160,
+    sorter: (a, b) => matchPercent(a) - matchPercent(b),
+    render: (_: unknown, row) => (row.dispatched > 0
+      ? <Progress percent={matchPercent(row)} size="small" />
       : <Text type="secondary">无分发数据</Text>),
   },
   {
@@ -415,9 +428,10 @@ export default function PlatformStatsPage() {
       task_created: acc.task_created + row.task_created,
       task_count: acc.task_count + row.task_count,
       processed: acc.processed + row.processed,
+      matched: acc.matched + row.matched,
       pending: acc.pending + row.pending,
     }),
-    { dispatched: 0, task_created: 0, task_count: 0, processed: 0, pending: 0 },
+    { dispatched: 0, task_created: 0, task_count: 0, processed: 0, matched: 0, pending: 0 },
   ), [filteredProgress])
 
   const monthOverview: ProgressSummary | null = progress
@@ -494,6 +508,7 @@ export default function PlatformStatsPage() {
   const publishableRate = percent(match.publishable, match.total)
   const finishedRate = percent(clean.clean_finished, clean.task_total)
   const completionRate = overview ? progressPercent(overview.processed, overview.dispatchable) : 0
+  const matchingRate = overview ? progressPercent(overview.matched, overview.dispatchable) : 0
   const selectedProgressCategories = progressCategoryFilter ?? progressCategoryOptions.map(option => option.value)
   const allProgressCategoriesSelected = progressCategoryFilter === undefined
   const progressCategorySelect = (
@@ -538,7 +553,7 @@ export default function PlatformStatsPage() {
         type="info"
         showIcon
         message="口径说明"
-        description="总览与明细均按「分发条目」统计（同一商品分发到多个品类会分别计数）：值得分发 = 最新一次已完成分发批次中命中规则的条目；已清理 = 自动匹配 + 人工确认 + 已排除/忽略 + 系统过滤。系统过滤表示已按清洗规则或干扰链接库排除，计入处理进度，不计入匹配成功；已恢复或已有匹配结果的条目不重复计入系统过滤，重复数据不按差额推算为过滤。自动匹配 = URL 精准匹配 + 其他自动匹配，人工确认单独计数。对账关系：值得分发 = 已入任务条数 + 未入任务条数 = 已清理 + 未清理；已入任务条数 = 已清理 + 当前待处理 + 已入任务未出结果。任务相关数字按数据条目计数，清洗页「任务总数」按清洗任务个数计数。已发布为任务级发布行数，不与条目相加。明细可切换平台聚合或拆分；最后处理时间包括匹配结果更新时间和系统过滤时间。时间按北京时间统计；处理进度后台定时刷新，最多延迟约 5 分钟。"
+        description="总览与明细均按「分发条目」统计（同一商品分发到多个品类会分别计数）：值得分发 = 最新一次已完成分发批次中命中规则的条目；已清理 = 自动匹配 + 人工确认 + 已排除/忽略 + 系统过滤。系统过滤表示已按清洗规则或干扰链接库排除，计入处理进度，不计入匹配成功；已恢复或已有匹配结果的条目不重复计入系统过滤，重复数据不按差额推算为过滤。自动匹配 = URL 精准匹配 + 其他自动匹配，人工确认单独计数。匹配进度 = 已匹配 ÷ 分发条数，已匹配 = 自动匹配 + 人工确认。对账关系：值得分发 = 已入任务条数 + 未入任务条数 = 已清理 + 未清理；已入任务条数 = 已清理 + 当前待处理 + 已入任务未出结果。任务相关数字按数据条目计数，清洗页「任务总数」按清洗任务个数计数。已发布为任务级发布行数，不与条目相加。明细可切换平台聚合或拆分；最后处理时间包括匹配结果更新时间和系统过滤时间。时间按北京时间统计；处理进度后台定时刷新，最多延迟约 5 分钟。"
         action={
           <Space direction="vertical" align="end">
             <Button icon={<ReloadOutlined />} loading={loading} onClick={refresh}>刷新</Button>
@@ -567,8 +582,8 @@ export default function PlatformStatsPage() {
           </Space>
         )}
       >
-        <Row gutter={16}>
-          <Col span={6}>
+        <Row gutter={[16, 16]}>
+          <Col xs={12} md={8} xl={4}>
             <Statistic
               title={allProgressCategoriesSelected ? '上传入库数据总量' : '上传入库数据总量（全部品类）'}
               value={overview.uploaded_rows ?? '统计中…'}
@@ -578,19 +593,25 @@ export default function PlatformStatsPage() {
               <Text type="secondary">上传文件行数 {upload.file_rows.toLocaleString()}，去重拦截 {upload.dedup_skipped_rows.toLocaleString()}</Text>
             )}
           </Col>
-          <Col span={6}>
+          <Col xs={12} md={8} xl={4}>
             <Statistic title="值得分发（分发条目）" value={overview.dispatchable} suffix="条" />
           </Col>
-          <Col span={6}>
+          <Col xs={12} md={8} xl={4}>
             <Statistic title="已清理" value={overview.processed} suffix="条" valueStyle={{ color: '#3f8600' }} />
           </Col>
-          <Col span={6}>
+          <Col xs={12} md={8} xl={4}>
             <Statistic
               title="清理占比"
               value={completionRate}
               suffix="%"
               valueStyle={{ color: completionRate >= 100 ? '#3f8600' : '#1677ff' }}
             />
+          </Col>
+          <Col xs={12} md={8} xl={4}>
+            <Statistic title="已匹配" value={overview.matched} suffix="条" valueStyle={{ color: '#3f8600' }} />
+          </Col>
+          <Col xs={12} md={8} xl={4}>
+            <Statistic title="匹配进度" value={matchingRate} suffix="%" valueStyle={{ color: '#1677ff' }} />
           </Col>
         </Row>
         <Progress
@@ -649,32 +670,38 @@ export default function PlatformStatsPage() {
             onChange={setProgressPlatformView}
           />
         </Space>
-        <Row gutter={16} style={{ marginBottom: 16 }}>
-          <Col span={3}><Statistic title="分发条数" value={progressTotals.dispatched} /></Col>
-          <Col span={3}><Statistic title="已入任务条数" value={progressTotals.task_created} /></Col>
-          <Col span={3}><Statistic title="清洗任务数" value={progressTotals.task_count} /></Col>
-          <Col span={3}>
+        <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+          <Col xs={12} md={8} xl={4}><Statistic title="分发条数" value={progressTotals.dispatched} /></Col>
+          <Col xs={12} md={8} xl={4}><Statistic title="已入任务条数" value={progressTotals.task_created} /></Col>
+          <Col xs={12} md={8} xl={4}><Statistic title="清洗任务数" value={progressTotals.task_count} /></Col>
+          <Col xs={12} md={8} xl={4}>
             <Statistic
               title="未入任务条数"
               value={Math.max(progressTotals.dispatched - progressTotals.task_created, 0)}
               valueStyle={{ color: '#d48806' }}
             />
           </Col>
-          <Col span={3}><Statistic title="已清理" value={progressTotals.processed} valueStyle={{ color: '#3f8600' }} /></Col>
-          <Col span={3}>
+          <Col xs={12} md={8} xl={4}><Statistic title="已清理" value={progressTotals.processed} valueStyle={{ color: '#3f8600' }} /></Col>
+          <Col xs={12} md={8} xl={4}>
             <Statistic
               title="未清理"
               value={Math.max(progressTotals.dispatched - progressTotals.processed, 0)}
               valueStyle={{ color: '#d48806' }}
             />
           </Col>
-          <Col span={3}><Statistic title="当前待处理" value={progressTotals.pending} valueStyle={{ color: '#d48806' }} /></Col>
-          <Col span={3}>
+          <Col xs={12} md={8} xl={4}><Statistic title="当前待处理" value={progressTotals.pending} valueStyle={{ color: '#d48806' }} /></Col>
+          <Col xs={12} md={8} xl={4}>
             <Statistic
               title="整体清洗进度"
               value={progressPercent(progressTotals.processed, progressTotals.dispatched)}
               suffix="%"
             />
+          </Col>
+          <Col xs={12} md={8} xl={4}>
+            <Statistic title="已匹配" value={progressTotals.matched} valueStyle={{ color: '#3f8600' }} />
+          </Col>
+          <Col xs={12} md={8} xl={4}>
+            <Statistic title="匹配进度" value={progressPercent(progressTotals.matched, progressTotals.dispatched)} suffix="%" />
           </Col>
         </Row>
         <Alert
@@ -682,14 +709,14 @@ export default function PlatformStatsPage() {
           showIcon
           style={{ marginBottom: 16 }}
           message="口径提示"
-          description="此处「已入任务条数 / 未入任务条数」按分发条目计数；清洗页的「任务总数」按清洗任务个数计数，两者不是同一口径。对照清洗页时请选择相同品类 + 月份 + 平台范围。"
+          description="匹配进度 = 已匹配 ÷ 分发条数；已匹配 = URL 精准匹配 + 其他自动匹配 + 人工确认，排除/忽略、系统过滤和已转出不计入已匹配。此处「已入任务条数 / 未入任务条数」按分发条目计数；清洗页的「任务总数」按清洗任务个数计数，两者不是同一口径。对照清洗页时请选择相同品类 + 月份 + 平台范围。"
         />
         <Table
           dataSource={filteredProgress}
           columns={progressTableColumns}
           rowKey={row => `${row.month}-${row.category_code ?? ''}-${row.platform ?? ''}`}
           size="small"
-          scroll={{ x: 2310 }}
+          scroll={{ x: 2580 }}
           pagination={{ pageSize: 20, showSizeChanger: true }}
         />
       </Card>

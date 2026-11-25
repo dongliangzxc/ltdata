@@ -183,11 +183,20 @@ export default function CreateModelModal({
         okText="创建"
         cancelText="取消"
         width={hasProductPreview ? 960 : 720}
+        style={hasProductPreview ? { top: 24 } : undefined}
         maskClosable={false}
         destroyOnClose
       >
         <Row gutter={24} wrap={false} align="top">
-          <Col flex="auto" style={{ minWidth: 0 }}>
+          <Col
+            flex="auto"
+            style={{
+              minWidth: 0,
+              maxHeight: hasProductPreview ? 'calc(100dvh - 160px)' : undefined,
+              overflowY: hasProductPreview ? 'auto' : undefined,
+              overscrollBehavior: hasProductPreview ? 'contain' : undefined,
+            }}
+          >
             <Form form={form} layout="vertical" style={{ marginTop: 8 }}>
           <Divider orientation="left" plain style={{ fontSize: 13, color: '#666' }}>品牌信息</Divider>
           {brandSuggestion && (
@@ -338,8 +347,11 @@ export default function CreateModelModal({
             </Form>
           </Col>
           {hasProductPreview && (
-            <Col flex="0 0 300px">
-              <div style={{ position: 'sticky', top: 0, paddingTop: 8 }}>
+            <Col
+              flex="0 0 300px"
+              style={{ maxHeight: 'calc(100dvh - 160px)', overflowY: 'auto', overscrollBehavior: 'contain' }}
+            >
+              <div style={{ paddingTop: 8 }}>
                 <Text type="secondary" style={{ fontSize: 12 }}>商品图片</Text>
                 <div style={{ display: 'flex', justifyContent: 'center', marginTop: 6 }}>
                   <HoverZoomImage src={productImage ?? ''} width={280} height={280} zoomSize={420} />

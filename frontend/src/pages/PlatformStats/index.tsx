@@ -18,6 +18,26 @@ type SourceRow = PlatformStatsOverview['sources'][number]
 type ProgressRow = PlatformStatsProgress['categories'][number]
 type ProgressSummary = Omit<PlatformStatsProgress, 'months' | 'categories'>
 
+const DEFAULT_PROGRESS_CATEGORY_CODES = [
+  'camera', // 监控摄像头
+  'smartwatch', // 智能手表手环
+  'power_bank', // 移动电源
+  'tablet', // 智能平板
+  'router', // 路由器
+  'kids_smartwatch', // 儿童手表
+  'smart_speaker', // 智能音箱
+  'dict_pen', // 词典笔
+  'soundbar', // 回音壁
+  'smart_lock', // 智能门锁
+  'dashcam', // 行车记录仪
+  'projector', // 智能投影
+  'edu_tablet', // 学习平板
+  'vrar', // XR和智能眼镜
+  'video_doorbell', // 可视门铃
+  'smart_scale', // 智能秤
+  'eye_protection_lamp', // 护眼灯
+]
+
 const platformLabelMap: Record<string, string> = {
   jd: '京东',
   tmall: '天猫',
@@ -261,7 +281,7 @@ export default function PlatformStatsPage() {
   const [platformFilter, setPlatformFilter] = useState<string>()
   const [monthFilter, setMonthFilter] = useState<string>()
   // undefined 表示全选，异步加载及刷新后新增的品类也会自动选中；[] 表示清空。
-  const [progressCategoryFilter, setProgressCategoryFilter] = useState<string[]>()
+  const [progressCategoryFilter, setProgressCategoryFilter] = useState<string[] | undefined>(DEFAULT_PROGRESS_CATEGORY_CODES)
   const [progressPlatformView, setProgressPlatformView] = useState<string>('all')
   const [progressMonthFilter, setProgressMonthFilter] = useState<number>()
   const progress = data?.progress ?? liveProgress
@@ -509,8 +529,11 @@ export default function PlatformStatsPage() {
   const finishedRate = percent(clean.clean_finished, clean.task_total)
   const completionRate = overview ? progressPercent(overview.processed, overview.dispatchable) : 0
   const matchingRate = overview ? progressPercent(overview.matched, overview.dispatchable) : 0
-  const selectedProgressCategories = progressCategoryFilter ?? progressCategoryOptions.map(option => option.value)
+  const selectedProgressCategories = progressCategoryOptions
+    .filter(option => progressCategoryFilter === undefined || progressCategoryFilter.includes(option.value))
+    .map(option => option.value)
   const allProgressCategoriesSelected = progressCategoryFilter === undefined
+    || (progressCategoryOptions.length > 0 && selectedProgressCategories.length === progressCategoryOptions.length)
   const progressCategorySelect = (
     <Select
       aria-label="筛选处理进度品类"

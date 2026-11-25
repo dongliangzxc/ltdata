@@ -31,6 +31,7 @@ const exported = {}
 let selectedMonth
 let selectedPlatform = 'all'
 let selectedCategories
+let initialCategories
 let stateIndex = 0
 const jsx = (type, props) => ({ type, props: props ?? {} })
 vm.runInNewContext(compiled, {
@@ -40,6 +41,7 @@ vm.runInNewContext(compiled, {
       useMemo: fn => fn(), useEffect: () => {},
       useState: value => {
         const index = stateIndex++
+        if (index === 5) initialCategories = value
         return [index === 5 ? selectedCategories : index === 6 ? selectedPlatform : index === 7 ? selectedMonth : value,
           next => { if (index === 5) selectedCategories = next }]
       },
@@ -217,4 +219,38 @@ assert.equal(selector().maxTagPlaceholder(), '已选 2 个品类')
 const partialSelectAll = nodes(selector().dropdownRender('menu'), node => node.type === 'Checkbox')[0].props
 assert.equal(partialSelectAll.checked, false)
 assert.equal(partialSelectAll.indeterminate, true)
+
+// New visits use exactly the 17 categories highlighted by the user.
+const expectedDefaults = ['camera', 'smartwatch', 'power_bank', 'tablet', 'router', 'kids_smartwatch',
+  'smart_speaker', 'dict_pen', 'soundbar', 'smart_lock', 'dashcam', 'projector', 'edu_tablet',
+  'vrar', 'video_doorbell', 'smart_scale', 'eye_protection_lamp']
+assert.equal(JSON.stringify([...initialCategories].sort()), JSON.stringify([...expectedDefaults].sort()))
+selectedCategories = [...initialCategories]
+selectedMonth = undefined
+selectedPlatform = 'all'
+progress.categories = []
+assert.equal(selector().value.length, 0, 'do not show unavailable defaults while progress data loads')
+progress.categories = expectedDefaults.map(code => ({ ...base, category_code: code, category_name: code, platform: 'jd' }))
+progress.categories.push(...['headphone', 'bt_speaker', 'laptop'].map(code => ({
+  ...base, category_code: code, category_name: code, platform: 'jd', dispatched: 1000, processed: 500,
+})))
+assert.equal(selector().value.length, 17, 'default categories become selected when async data arrives')
+assert.equal(selector().maxTagPlaceholder(), '已选 17 个品类')
+assert.ok(!selector().value.includes('headphone') && !selector().value.includes('bt_speaker'))
+assert.equal(statistic(render(), '值得分发（分发条目）'), 170, 'default denominator excludes unselected categories')
+assert.equal(statistic(render(), '已清理'), 170)
+assert.equal(overviewProgress(render(), '处理进度'), 100)
+assert.equal(overviewProgress(render(), '匹配进度'), 80)
+assert.equal(nodes(render(), node => node.type === 'Table')[0].props.dataSource.length, 17)
+selector().onChange([...expectedDefaults, 'headphone'])
+assert.equal(statistic(render(), '值得分发（分发条目）'), 1170, 'users can add categories outside the defaults')
+assert.equal(overviewProgress(render(), '处理进度'), 57.3)
+selector().onChange([])
+assert.equal(statistic(render(), '值得分发（分发条目）'), 0, 'clearing must not restore defaults')
+const defaultCheckbox = nodes(selector().dropdownRender('menu'), node => node.type === 'Checkbox')[0].props
+defaultCheckbox.onChange({ target: { checked: true } })
+assert.equal(selector().value.length, 20, 'select all includes categories outside the defaults')
+selectedCategories = [...initialCategories]
+progress.categories = progress.categories.filter(row => row.category_code !== 'smart_scale')
+assert.equal(selector().value.length, 16, 'missing categories do not create phantom selection tags')
 console.log('platform stats filtering and accounting tests passed')

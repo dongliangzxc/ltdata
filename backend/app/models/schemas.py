@@ -998,6 +998,7 @@ class ItemUrlMapping(Base):
     category_code = Column(String(50), nullable=True, index=True)  # 导入/创建时记录所属品类；型号匹配后也可用型号品类兜底
     price      = Column(Numeric(10, 2), nullable=True)
     source     = Column(String(30),   nullable=True,  comment='model_db_import/manual/match_confirm/url_import')
+    is_enabled = Column(SmallInteger, nullable=False, default=1, server_default="1", comment='是否参与映射库自动匹配')
     data_year  = Column(SmallInteger, nullable=True,  comment='关联的上传年份')
     data_month = Column(SmallInteger, nullable=True,  comment='关联的上传月份')
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
@@ -1093,6 +1094,8 @@ class ItemUrlMappingIn(BaseModel):
     model_id:   Optional[int] = None
     price:      Optional[float] = None
     category_code: Optional[str] = None
+    data_year: Optional[int] = Field(None, ge=1, le=9999)
+    data_month: Optional[int] = Field(None, ge=1, le=12)
 
 
 class ItemUrlMappingOut(BaseModel):
@@ -1111,6 +1114,7 @@ class ItemUrlMappingOut(BaseModel):
     category_name: Optional[str] = None
     item_name:     Optional[str] = None
     source:        Optional[str] = None
+    is_enabled:    bool = True
     data_year:     Optional[int] = None
     data_month:    Optional[int] = None
     operator:      Optional[str] = None

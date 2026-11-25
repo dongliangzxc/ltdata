@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Card, Table, Button, Input, Select, Space, Typography,
-  Modal, Form, InputNumber, message, Popconfirm, Tag, Alert, Checkbox,
+  Modal, Form, InputNumber, message, Popconfirm, Tag, Alert, Checkbox, DatePicker,
 } from 'antd'
+import type { Dayjs } from 'dayjs'
 import { PlusOutlined, UploadOutlined, EditOutlined, DeleteOutlined, DownloadOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import {
   listUrlMappings, createUrlMapping, updateUrlMapping,
   deleteUrlMapping, listModels, getModelDetail, downloadUrlMappingTemplate,
-  listModelExtraFields, getUrlMappingCategoryCount, bulkDeleteUrlMappings,
+  listModelExtraFields, getUrlMappingCategoryCount, bulkDeleteUrlMappings, bulkSetUrlMappingsEnabled,
 } from '../../services/api'
 import type { UserProfile, UrlMappingDeleteScope } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
@@ -48,6 +49,7 @@ type UrlMapping = {
   source: string | null
   data_year: number | null
   data_month: number | null
+  is_enabled: boolean
   operator: string | null
   updated_at: string | null
 }
@@ -87,8 +89,9 @@ export default function UrlMappingsPage() {
   const [modalSeries, setModalSeries] = useState<string | undefined>()
   const [editModelOption, setEditModelOption] = useState<ModelOption | null>(null)
 
-  const [filterYear, setFilterYear] = useState<number | undefined>()
-  const [filterMonth, setFilterMonth] = useState<number | undefined>()
+  const [filterMonths, setFilterMonths] = useState<[Dayjs, Dayjs] | null>(null)
+  const [filterEnabled, setFilterEnabled] = useState<boolean | undefined>()
+  const [statusUpdating, setStatusUpdating] = useState<boolean | null>(null)
 
   const [bulkOpen, setBulkOpen] = useState(false)
   const [bulkCount, setBulkCount] = useState<number | null>(null)
@@ -97,8 +100,11 @@ export default function UrlMappingsPage() {
   const [bulkFilters, setBulkFilters] = useState<UrlMappingDeleteScope | null>(null)
   const bulkCountSeqRef = useRef(0)
   const mappingFilters = useMemo(() => categoryCode ? buildUrlMappingFilters({
-    category_code: categoryCode, platform, brand, keyword, year: filterYear, month: filterMonth,
-  }) : null, [categoryCode, platform, brand, keyword, filterYear, filterMonth])
+    category_code: categoryCode, platform, brand, keyword,
+    start_month: filterMonths ? Number(filterMonths[0].format('YYYYMM')) : undefined,
+    end_month: filterMonths ? Number(filterMonths[1].format('YYYYMM')) : undefined,
+    enabled: filterEnabled,
+  }) : null, [categoryCode, platform, brand, keyword, filterMonths, filterEnabled])
   const filterKey = JSON.stringify(mappingFilters)
   const [selectionState, setSelectionState] = useState<{ scope: string; selection: UrlMappingSelection }>({
     scope: filterKey, selection: { all: true, ids: [] },
@@ -184,6 +190,8 @@ export default function UrlMappingsPage() {
       item_url: record.item_url,
       model_id: record.model_id,
       price: record.price,
+      data_year: record.data_year,
+      data_month: record.data_month,
     })
     setModalCategoryCode(record.category_code ?? undefined)
     setModalSeries(record.series ?? undefined)
@@ -232,6 +240,23 @@ export default function UrlMappingsPage() {
       ? { ...prev, selection: { ...prev.selection, ids: prev.selection.ids.filter(value => value !== id) } }
       : prev)
     refresh()
+  }
+
+  const handleBulkStatus = async (enabled: boolean) => {
+    if (!mappingFilters || !selectedCount || loading || statusUpdating != null) return
+    const scope = buildUrlMappingDeleteScope(mappingFilters, selection)
+    setStatusUpdating(enabled)
+    try {
+      const res = await bulkSetUrlMappingsEnabled(scope, enabled)
+      message.success(`已${enabled ? '启用' : '禁用'} ${res.data.updated} 条映射（所选共 ${res.data.matched} 条）`)
+      updateSelection({ all: false, ids: [] })
+      setPage(1)
+      refresh()
+    } catch {
+      // API interceptor displays the error; retain the selection for retry.
+    } finally {
+      setStatusUpdating(null)
+    }
   }
 
   const bulkFilterDescription = bulkFilters ? describeUrlMappingFilters(
@@ -331,6 +356,15 @@ export default function UrlMappingsPage() {
 
   const columns = [
     {
+      title: '状态', dataIndex: 'is_enabled', width: 90,
+      render: (enabled: boolean) => <Tag color={enabled ? 'green' : 'default'}>{enabled ? '已启用' : '已禁用'}</Tag>,
+    },
+    {
+      title: '确认月份', width: 110,
+      render: (_: unknown, record: UrlMapping) => record.data_year && record.data_month
+        ? `${record.data_year}-${String(record.data_month).padStart(2, '0')}` : '未标注',
+    },
+    {
       title: '品类', width: 120,
       render: (_: unknown, record: UrlMapping) => record.category_name || record.category_code || '-'
     },
@@ -407,21 +441,22 @@ export default function UrlMappingsPage() {
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <Card>
         <Space wrap>
-          <InputNumber
-            placeholder="年份"
-            value={filterYear}
-            onChange={v => { setFilterYear(v ?? undefined); setPage(1) }}
-            min={2020}
-            max={2099}
-            style={{ width: 100 }}
+          <DatePicker.RangePicker
+            picker="month"
+            placeholder={['确认开始月份', '确认结束月份']}
+            value={filterMonths}
+            onChange={dates => {
+              setFilterMonths(dates?.[0] && dates?.[1] ? [dates[0], dates[1]] : null)
+              setPage(1)
+            }}
           />
           <Select
-            placeholder="月份"
-            value={filterMonth}
-            onChange={v => { setFilterMonth(v); setPage(1) }}
+            placeholder="启用状态"
+            value={filterEnabled == null ? undefined : Number(filterEnabled)}
+            onChange={v => { setFilterEnabled(v == null ? undefined : Boolean(v)); setPage(1) }}
             allowClear
-            style={{ width: 90 }}
-            options={Array.from({ length: 12 }, (_, i) => ({ value: i + 1, label: `${i + 1} 月` }))}
+            style={{ width: 120 }}
+            options={[{ value: 1, label: '已启用' }, { value: 0, label: '已禁用' }]}
           />
           <Select
             placeholder="品类筛选"
@@ -456,9 +491,19 @@ export default function UrlMappingsPage() {
           <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>导入 Excel</Button>
           <Button icon={<DownloadOutlined />} onClick={handleDownloadTemplate}>下载导入模板</Button>
           <Button
+            disabled={!categoryCode || loading || selectedCount <= 0 || statusUpdating != null}
+            loading={statusUpdating === true}
+            onClick={() => handleBulkStatus(true)}
+          >启用已选记录</Button>
+          <Button
+            disabled={!categoryCode || loading || selectedCount <= 0 || statusUpdating != null}
+            loading={statusUpdating === false}
+            onClick={() => handleBulkStatus(false)}
+          >禁用已选记录</Button>
+          <Button
             danger
             icon={<DeleteOutlined />}
-            disabled={!categoryCode || loading || selectedCount <= 0}
+            disabled={!categoryCode || loading || selectedCount <= 0 || statusUpdating != null}
             title={categoryCode ? undefined : '请先选择品类'}
             onClick={openBulkDelete}
           >
@@ -468,6 +513,13 @@ export default function UrlMappingsPage() {
       </Card>
 
       <Card>
+        <Alert
+          type="info"
+          showIcon
+          message="各品类可自行选择使用近 1 个月或近 3 个月等月份的链接"
+          description="首次设置可先禁用品类全部链接，再按确认月份筛选并启用所需范围。操作覆盖跨页勾选记录；启用不会自动禁用其他月份。清洗只使用已启用的映射，已有结果和历史库规则保持原样。未标注月份的旧链接可编辑补充月份。"
+          style={{ marginBottom: 16 }}
+        />
         {!categoryCode ? (
           <Alert
             type="info"
@@ -481,7 +533,7 @@ export default function UrlMappingsPage() {
             <Checkbox
               checked={selection.all && selection.ids.length === 0}
               indeterminate={selectedCount > 0 && !(selection.all && selection.ids.length === 0)}
-              disabled={loading || !data?.total}
+              disabled={loading || statusUpdating != null || !data?.total}
               onChange={e => updateSelection({ all: e.target.checked, ids: [] })}
             >
               全选筛选结果（跨页）
@@ -497,11 +549,11 @@ export default function UrlMappingsPage() {
             loading={loading}
             rowSelection={{
               selectedRowKeys,
-              getCheckboxProps: () => ({ disabled: loading }),
+              getCheckboxProps: () => ({ disabled: loading || statusUpdating != null }),
               onSelect: (record, selected) => updateSelection(selectUrlMappingRows(selection, [record.id], selected)),
               onSelectAll: (selected, _rows, changedRows) => updateSelection(selectUrlMappingRows(selection, changedRows.map(row => row.id), selected)),
             }}
-            scroll={{ x: showSeriesColumn ? 1610 : 1470 }}
+            scroll={{ x: showSeriesColumn ? 1810 : 1670 }}
             pagination={{
               current: page,
               pageSize: 20,
@@ -629,6 +681,14 @@ export default function UrlMappingsPage() {
           <Form.Item name="price" label="单价（元）">
             <InputNumber min={0} precision={2} style={{ width: '100%' }} />
           </Form.Item>
+          <Space align="start">
+            <Form.Item name="data_year" label="映射确认年份" rules={[{ required: true, message: '请填写确认年份' }]}>
+              <InputNumber min={1} max={9999} precision={0} placeholder="如 2026" />
+            </Form.Item>
+            <Form.Item name="data_month" label="映射确认月份" rules={[{ required: true, message: '请选择确认月份' }]}>
+              <Select style={{ width: 120 }} options={Array.from({ length: 12 }, (_, i) => ({ value: i + 1, label: `${i + 1} 月` }))} />
+            </Form.Item>
+          </Space>
         </Form>
       </Modal>
     </Space>

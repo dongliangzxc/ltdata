@@ -15,7 +15,10 @@ def mapping_reads(db):
     statements = []
 
     def capture(conn, cursor, statement, parameters, context, executemany):
-        if statement.lstrip().upper().startswith("SELECT") and "FROM item_url_mappings" in statement:
+        # Track the expensive cached mapping columns separately from the live
+        # status reads (covered by the enable/disable regression tests).
+        if (statement.lstrip().upper().startswith("SELECT") and "FROM item_url_mappings" in statement
+                and "item_url_mappings.is_enabled" not in statement):
             statements.append((statement, parameters))
 
     engine = db.get_bind()

@@ -33,6 +33,7 @@ import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 import { finishedCleanJobIds, formatCleanProgress, mergeCleanProgress, processingStatuses } from './cleanProgress'
 import { formatCleanAccounting, formatDuplicateBasis } from './cleanAccounting'
 import { FilterReason } from './FilterReason'
+import { cleanStatusLabel } from './cleanReasons'
 import { supplementFeedback } from './supplementFeedback'
 import { jobSupplementTarget } from './supplementTarget'
 import type { SupplementTarget } from './supplementTarget'
@@ -410,7 +411,17 @@ const MATCH_SOURCE_LABEL: Record<string, string> = {
 
 const matchedSourceLabel = (source?: string | null) => (source ? MATCH_SOURCE_LABEL[source] ?? source : '-')
 
+const cleanReasonCol: ColumnsType<CleanMatchedItem>[number] = {
+  title: '清洗原因', width: 360,
+  render: (_: unknown, row) => <FilterReason
+    reason={row.clean_reason || row.matched_reason}
+    title="完整清洗原因"
+    emptyText="未记录清洗原因"
+  />,
+}
+
 const matchedMappingCols: ColumnsType<CleanMatchedItem> = [
+  { title: '处理状态', dataIndex: 'match_status', width: 110, render: cleanStatusLabel },
   {
     title: '国家', dataIndex: 'country_code', width: 80,
     render: (v: string | null | undefined) => v || '-',
@@ -439,6 +450,7 @@ const matchedMappingCols: ColumnsType<CleanMatchedItem> = [
     title: '匹配来源', dataIndex: 'match_source', width: 130,
     render: matchedSourceLabel,
   },
+  cleanReasonCol,
   {
     title: '销量', dataIndex: 'sales_qty', width: 80,
     render: formatNumber,
@@ -466,10 +478,7 @@ const matchedFilteredCols: ColumnsType<CleanMatchedItem> = [
     title: '命中来源', width: 150,
     render: (_: unknown, row) => row.intervention_rule_name || row.matched_keyword || '-',
   },
-  {
-    title: '过滤原因', dataIndex: 'matched_reason', width: 340,
-    render: (reason: string | null | undefined) => <FilterReason reason={reason} />,
-  },
+  cleanReasonCol,
   {
     title: '销量', dataIndex: 'sales_qty', width: 80,
     render: formatNumber,
@@ -485,6 +494,7 @@ const matchedTabLabels: Record<CleanMatchedGroup, string> = {
   interference_link: '干扰链接',
   interference_archive: '规则过滤',
   duplicates: '重复明细',
+  other: '其他处理明细',
 }
 
 const matchedDuplicateCols: ColumnsType<CleanMatchedItem> = [
@@ -496,6 +506,7 @@ const matchedDuplicateCols: ColumnsType<CleanMatchedItem> = [
       ? <Space direction="vertical" size={0} style={{ maxWidth: 240 }}><Text style={{ maxWidth: 240 }} ellipsis={{ tooltip: row.kept_item_name }}>{row.kept_item_name || '-'}</Text><Text type="secondary">原始记录 #{row.kept_raw_data_id} · 文件 #{row.kept_file_id}</Text></Space>
       : '保留记录的来源未记录' },
   { title: '去重依据', width: 340, render: (_, row) => formatDuplicateBasis(row) },
+  cleanReasonCol,
   { title: '记录时间', dataIndex: 'created_at', width: 170, render: formatText },
 ]
 
@@ -1124,6 +1135,9 @@ export default function CleanPage() {
             label: `${matchedTabLabels[key]}（${currentMatchedData?.counts?.[key] ?? 0}）`,
           }))}
         />
+        <Typography.Paragraph type="secondary">
+          每条记录展示已保存的匹配、过滤、去重或人工处理依据，可点击「查看完整原因」展开并复制；未保存的历史依据会明确标注。
+        </Typography.Paragraph>
         <Space style={{ marginBottom: 12 }} wrap>
           <Input.Search
             allowClear
@@ -1152,11 +1166,11 @@ export default function CleanPage() {
         </Space>
         <Table
           dataSource={currentMatchedData?.items ?? []}
-          columns={matchedGroup === 'mapping' ? matchedMappingCols : matchedGroup === 'duplicates' ? matchedDuplicateCols : matchedFilteredCols}
+          columns={matchedGroup === 'mapping' || matchedGroup === 'other' ? matchedMappingCols : matchedGroup === 'duplicates' ? matchedDuplicateCols : matchedFilteredCols}
           rowKey="id"
           size="small"
           loading={matchedLoading}
-          scroll={{ x: 1000 }}
+          scroll={{ x: 1500 }}
           pagination={{
             current: matchedPage,
             pageSize: 20,

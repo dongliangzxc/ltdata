@@ -25,6 +25,7 @@ from app.services.clean_task_queue import (
     BUSY_CLEAN_STATUSES, clean_heavy_slot, enqueue_clean_job, ensure_clean_job_idle,
 )
 from app.services.clean_accounting import clean_accounting
+from app.services.clean_detail_reasons import match_detail_reason, filter_detail_reason, duplicate_detail_reason
 from app.services.clean_task_completion import missing_match_raw_ids
 from app.models.analytics_db import AnalyticsSession
 from app.models.schemas import (
@@ -1707,7 +1708,7 @@ def preview_clean_job(
 @router.get("/jobs/{job_id}/matched")
 def list_clean_job_matched(
     job_id: int,
-    group: str = Query("mapping", pattern="^(mapping|interference_link|interference_archive|duplicates)$"),
+    group: str = Query("mapping", pattern="^(mapping|interference_link|interference_archive|duplicates|other)$"),
     keyword: Optional[str] = Query(None),
     price_min: Optional[float] = Query(None, ge=0),
     price_max: Optional[float] = Query(None, ge=0),
@@ -1721,6 +1722,7 @@ def list_clean_job_matched(
     - interference_link：命中干扰链接库被剔除的数据
     - interference_archive：命中干扰项规则被存档的数据
     - duplicates：清洗去重时实际记录的重复行及其保留行
+    - other：保留但未匹配成功的数据，包括待确认、排除、忽略等
 
     支持按价格区间筛选（price_min / price_max，单位为元）。
     """
@@ -1755,11 +1757,25 @@ def list_clean_job_matched(
         .scalar()
         or 0
     )
+    other_query = (
+        db.query(CleanedDataRecord, RawDataRecord, MatchResult, ModelRecord)
+        .join(RawDataRecord, CleanedDataRecord.raw_data_id == RawDataRecord.id)
+        .outerjoin(MatchResult, and_(
+            MatchResult.clean_job_id == job_id,
+            MatchResult.raw_data_id == CleanedDataRecord.raw_data_id,
+        ))
+        .outerjoin(ModelRecord, MatchResult.model_id == ModelRecord.id)
+        .filter(CleanedDataRecord.clean_job_id == job_id, or_(
+            MatchResult.match_status.is_(None),
+            MatchResult.match_status.notin_(["matched", "url_matched", "confirmed"]),
+        ))
+    )
     counts = {
         "mapping": mapping_count,
         "interference_link": interference_link_count,
         "interference_archive": interference_archive_count,
         "duplicates": db.query(CleanDuplicateRecord).filter_by(clean_job_id=job_id).count(),
+        "other": other_query.count(),
     }
 
     kw = (keyword or "").strip()
@@ -1771,7 +1787,7 @@ def list_clean_job_matched(
             query = query.filter(RawDataRecord.price <= price_max)
         return query
 
-    if group == "mapping":
+    if group in {"mapping", "other"}:
         q = (
             db.query(MatchResult, RawDataRecord, ModelRecord)
             .join(RawDataRecord, MatchResult.raw_data_id == RawDataRecord.id)
@@ -1781,21 +1797,26 @@ def list_clean_job_matched(
                 MatchResult.match_status.in_(["matched", "url_matched", "confirmed"]),
             )
         )
+        if group == "other":
+            q = other_query
         if kw:
             q = q.filter(RawDataRecord.item_name.ilike(f"%{kw}%"))
         q = _apply_price_filter(q)
         total = q.count()
-        rows = q.order_by(MatchResult.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
+        order = CleanedDataRecord.id if group == "other" else MatchResult.id
+        rows = q.order_by(order.desc()).offset((page - 1) * page_size).limit(page_size).all()
         rates = build_rate_map(db)
         items = []
-        for mr, rd, model in rows:
+        for record in rows:
+            cleaned, rd, mr, model = record if group == "other" else (None, record[1], record[0], record[2])
             info = rates.get(rd.country_code or "")
             rate = info["rate_to_cny"] if info else None
             items.append({
-                "id": mr.id,
-                "raw_data_id": mr.raw_data_id,
-                "match_status": mr.match_status,
-                "match_source": mr.match_source,
+                "id": cleaned.id if cleaned is not None else mr.id,
+                "raw_data_id": rd.id,
+                "match_status": mr.match_status if mr else None,
+                "match_source": mr.match_source if mr else None,
+                "clean_reason": match_detail_reason(mr, model),
                 "model_code": model.model_code if model else None,
                 "brand_code": model.brand_code if model else None,
                 "series": model.series if model else None,
@@ -1836,6 +1857,7 @@ def list_clean_job_matched(
             kept_raw_data_id=entry.kept_raw_data_id, kept_item_name=retained.item_name if retained else None,
             kept_item_url=retained.item_url if retained else None, kept_file_id=retained.file_id if retained else None,
             dedup_basis=entry.dedup_basis, dedup_key=entry.dedup_key,
+            clean_reason=duplicate_detail_reason(entry),
             created_at=format_beijing_datetime(entry.created_at),
         ) for entry, raw, retained in rows]
     else:
@@ -1864,6 +1886,7 @@ def list_clean_job_matched(
                 "matched_keyword": fi.matched_keyword,
                 "intervention_rule_name": fi.intervention_rule_name,
                 "matched_reason": fi.matched_reason,
+                "clean_reason": filter_detail_reason(fi),
                 "item_name": rd.item_name,
                 "item_url": rd.item_url,
                 "brand_raw": rd.brand_raw,

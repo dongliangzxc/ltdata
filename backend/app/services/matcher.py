@@ -146,7 +146,18 @@ def _build_url_maps(
                 "match_ctx", ("url_rows", platform, batch), URL_MAP_CACHE_TTL,
                 lambda: _load_url_mapping_rows(db, platform, batch),
             )
+            # 状态不走进程缓存：API 和清洗 worker 是独立进程，批量禁用后，
+            # 下一次匹配必须读取最新状态；原映射四列仍复用有界批次缓存。
+            enabled_ids = {
+                item_id for item_id, in db.query(ItemUrlMapping.item_id).filter(
+                    ItemUrlMapping.platform == platform,
+                    ItemUrlMapping.item_id.in_(batch),
+                    ItemUrlMapping.is_enabled == 1,
+                ).all()
+            }
             for row_platform, item_id, model_id, brand_code in rows:
+                if item_id not in enabled_ids:
+                    continue
                 if model_id and model_id in url_reusable_model_ids:
                     url_map[(row_platform, item_id)] = model_id
                 elif brand_code:

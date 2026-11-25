@@ -333,6 +333,7 @@ def test_scope_migration_defaults_existing_queue_to_full_and_preserves_it_on_dow
         c.execute(text('CREATE TABLE clean_jobs (id INTEGER PRIMARY KEY)'))
         c.execute(text('INSERT INTO clean_jobs(id) VALUES(1)'))
         c.execute(text('CREATE TABLE upload_files(id INTEGER PRIMARY KEY, filename VARCHAR(255) NOT NULL)'))
+        c.execute(text('CREATE TABLE item_url_mappings(id INTEGER PRIMARY KEY, item_id VARCHAR(100))'))
     monkeypatch.setattr(settings,'DATABASE_URL',url)
     config=Config(); config.set_main_option('script_location',str(Path(__file__).resolve().parents[1]/'alembic'))
     command.stamp(config,'p74a1b2c3d4e5'); command.upgrade(config,'p76a1b2c3d4e5')

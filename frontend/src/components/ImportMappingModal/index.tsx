@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import {
   Modal, Steps, Upload, Button, Select, Checkbox, Switch, Input,
-  Table, Alert, Collapse, Space, Typography, Spin, message,
+  Table, Alert, Collapse, Space, Typography, Spin, message, DatePicker,
 } from 'antd'
+import type { Dayjs } from 'dayjs'
 import { InboxOutlined } from '@ant-design/icons'
 import CategorySelect from '../CategorySelect'
 
@@ -43,10 +44,11 @@ interface HeadersResponse {
 }
 
 export default function ImportMappingModal({
-  open, module: _module, standardFields, headersUrl, confirmUrl, extraPayload, onSuccess, onClose,
+  open, module, standardFields, headersUrl, confirmUrl, extraPayload, onSuccess, onClose,
 }: Props) {
   const [step, setStep] = useState<Step>('category')
   const [categoryCode, setCategoryCode] = useState<string>('')
+  const [mappingMonth, setMappingMonth] = useState<Dayjs | null>(null)
   const [uploading, setUploading] = useState(false)
   const [confirming, setConfirming] = useState(false)
 
@@ -64,6 +66,7 @@ export default function ImportMappingModal({
   const reset = () => {
     setStep('category')
     setCategoryCode('')
+    setMappingMonth(null)
     setTempFileId('')
     setColumns([])
     setMapping({})
@@ -83,6 +86,10 @@ export default function ImportMappingModal({
   const handleUpload = async (file: File) => {
     if (!categoryCode) {
       message.warning('请先选择品类')
+      return false
+    }
+    if (module === 'url' && !mappingMonth) {
+      message.warning('请选择映射确认月份')
       return false
     }
     setUploading(true)
@@ -137,7 +144,7 @@ export default function ImportMappingModal({
   const requiredFields = standardFields.filter(f => f.required).map(f => f.value)
   const mappedTargets = new Set(Object.values(mapping))
   const missingRequired = requiredFields.filter(f => !mappedTargets.has(f))
-  const canConfirm = missingRequired.length === 0
+  const canConfirm = missingRequired.length === 0 && (module !== 'url' || !!mappingMonth)
 
   const handleConfirm = async () => {
     if (!canConfirm) return
@@ -149,6 +156,9 @@ export default function ImportMappingModal({
         ignore_columns: Array.from(ignoreColumns),
         category_code: categoryCode,
         ...extraPayload,
+        ...(module === 'url' && mappingMonth ? {
+          data_year: mappingMonth.year(), data_month: mappingMonth.month() + 1,
+        } : {}),
       }
       if (saveTemplate && templateName.trim()) {
         payload.save_template_name = templateName.trim()
@@ -280,12 +290,25 @@ export default function ImportMappingModal({
               style={{ width: '100%', marginTop: 8 }}
             />
           </div>
+          {module === 'url' && (
+            <div>
+              <Text strong>映射确认月份（必填）</Text>
+              <DatePicker
+                picker="month"
+                value={mappingMonth}
+                onChange={setMappingMonth}
+                placeholder="请选择这份映射资料对应的月份"
+                style={{ width: '100%', marginTop: 8 }}
+              />
+              <Text type="secondary">整份文件使用此月份；新增链接默认启用，已有链接保留原启停状态。</Text>
+            </div>
+          )}
           <Spin spinning={uploading}>
             <Dragger
               accept=".xlsx,.xls,.csv"
               showUploadList={false}
               beforeUpload={handleUpload}
-              disabled={!categoryCode || uploading}
+              disabled={!categoryCode || uploading || (module === 'url' && !mappingMonth)}
             >
               <p className="ant-upload-drag-icon"><InboxOutlined /></p>
               <p className="ant-upload-text">点击或拖拽文件到此区域上传</p>
@@ -298,6 +321,7 @@ export default function ImportMappingModal({
       {/* Step 2: mapping */}
       {step === 'mapping' && (
         <Space direction="vertical" style={{ width: '100%' }} size="middle">
+          {module === 'url' && <Text>映射确认月份：{mappingMonth?.format('YYYY-MM')}</Text>}
           {missingRequired.length > 0 && (
             <Alert
               type="error"
@@ -349,7 +373,7 @@ export default function ImportMappingModal({
                 {typeof result.models_inserted === 'number' && <Text>新增型号：{result.models_inserted} 条</Text>}
                 {typeof result.models_updated === 'number' && <Text>更新型号：{result.models_updated} 条</Text>}
                 {typeof result.specs_inserted === 'number' && <Text>导入规格：{result.specs_inserted} 条</Text>}
-                {typeof result.updated === 'number' && <Text>{_module === 'url' ? '实际更新' : '更新'}：{result.updated} 条{_module === 'url' && '（去重后的已有链接）'}</Text>}
+                {typeof result.updated === 'number' && <Text>{module === 'url' ? '实际更新' : '更新'}：{result.updated} 条{module === 'url' && '（去重后的已有链接）'}</Text>}
                 {typeof result.duplicates === 'number' && <Text>文件内去重：{result.duplicates} 条</Text>}
                 {typeof result.skipped === 'number' && <Text>跳过：{result.skipped} 条</Text>}
                 {warnings.length > 0 && <Text type="secondary">提示：{warnings.length} 条</Text>}

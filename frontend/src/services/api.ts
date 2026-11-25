@@ -629,7 +629,7 @@ export const deleteCleanJob = (jobId: number) =>
 export const previewCleanJob = (jobId: number, params?: Record<string, unknown>) =>
   api.get(`/clean/jobs/${jobId}/preview`, { params })
 
-export type CleanMatchedGroup = 'mapping' | 'interference_link' | 'interference_archive' | 'duplicates'
+export type CleanMatchedGroup = 'mapping' | 'interference_link' | 'interference_archive' | 'duplicates' | 'other'
 
 export type CleanAccounting = {
   input_count: number
@@ -652,6 +652,7 @@ export type CleanMatchedItem = {
   matched_keyword?: string | null
   intervention_rule_name?: string | null
   matched_reason?: string | null
+  clean_reason?: string | null
   item_name: string | null
   item_url: string | null
   brand_raw: string | null
@@ -1502,10 +1503,12 @@ export const importUrlMappings = (formData: FormData) =>
 export const listUrlMappings = (params: Record<string, unknown>) =>
   api.get('/url-mappings', { params })
 
-export const createUrlMapping = (data: { platform: string; item_id: string; model_id: number; price?: number }) =>
+type UrlMappingInput = { platform: string; item_id: string; model_id: number; price?: number; data_year?: number; data_month?: number }
+
+export const createUrlMapping = (data: UrlMappingInput) =>
   api.post('/url-mappings', data)
 
-export const updateUrlMapping = (id: number, data: { platform: string; item_id: string; model_id: number; price?: number }) =>
+export const updateUrlMapping = (id: number, data: UrlMappingInput) =>
   api.put(`/url-mappings/${id}`, data)
 
 export const deleteUrlMapping = (id: number) =>
@@ -1518,6 +1521,9 @@ export type UrlMappingFilters = {
   keyword?: string
   year?: number
   month?: number
+  start_month?: number
+  end_month?: number
+  enabled?: boolean
 }
 
 export type UrlMappingDeleteScope = UrlMappingFilters & {
@@ -1533,6 +1539,9 @@ export const getUrlMappingCategoryCount = (filters: UrlMappingDeleteScope) =>
 
 export const bulkDeleteUrlMappings = (filters: UrlMappingDeleteScope, expected_count: number) =>
   api.post<{ category_code: string; deleted: number }>('/url-mappings/bulk-delete', { ...filters, expected_count })
+
+export const bulkSetUrlMappingsEnabled = (filters: UrlMappingDeleteScope, is_enabled: boolean) =>
+  api.post<{ matched: number; updated: number; is_enabled: boolean }>('/url-mappings/bulk-status', { ...filters, is_enabled })
 
 export const downloadUrlMappingTemplate = () =>
   api.get('/url-mappings/template', { responseType: 'blob' })
@@ -2370,6 +2379,8 @@ export const confirmUrlMappingImport = (payload: {
   ignore_columns: string[]
   category_code: string
   save_template_name?: string
+  data_year?: number
+  data_month?: number
 }) => api.post<{ inserted: number; updated: number; duplicates: number; skipped: number; errors: string[] }>(
   '/url-mappings/confirm', payload
 )

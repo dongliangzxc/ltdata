@@ -127,6 +127,7 @@ def _to_out(m: ItemUrlMapping, category: Category | None = None) -> ItemUrlMappi
         category_name=category.name if category else None,
         item_name=None,
         source=m.source,
+        is_enabled=bool(m.is_enabled),
         data_year=m.data_year,
         data_month=m.data_month,
         operator=None,
@@ -141,8 +142,8 @@ class UrlMappingConfirmPayload(BaseModel):
     ignore_columns: list = []
     category_code: str
     save_template_name: Optional[str] = None
-    data_year: Optional[int] = None
-    data_month: Optional[int] = None
+    data_year: Optional[int] = Field(None, ge=1, le=9999)
+    data_month: Optional[int] = Field(None, ge=1, le=12)
 
 
 class UrlMappingBulkDeletePayload(BaseModel):
@@ -154,9 +155,16 @@ class UrlMappingBulkDeletePayload(BaseModel):
     keyword: Optional[str] = None
     year: Optional[int] = Field(None, ge=1, le=9999)
     month: Optional[int] = Field(None, ge=1, le=12)
+    start_month: Optional[int] = None
+    end_month: Optional[int] = None
+    enabled: Optional[bool] = None
     expected_count: Optional[int] = Field(None, ge=0)
     include_ids: Optional[list[PositiveInt]] = None
     exclude_ids: list[PositiveInt] = Field(default_factory=list)
+
+
+class UrlMappingBulkStatusPayload(UrlMappingBulkDeletePayload):
+    is_enabled: bool
 
 
 @router.get("/template")
@@ -456,12 +464,20 @@ def _filtered_url_mappings(
     category_code: str | None = None,
     year: int | None = None,
     month: int | None = None,
+    start_month: int | None = None,
+    end_month: int | None = None,
+    enabled: bool | None = None,
     include_ids: list[int] | None = None,
     exclude_ids: list[int] | None = None,
 ):
     """列表、预览计数和删除共用筛选口径，品类及品牌与页面回显一致。"""
     if include_ids is not None and exclude_ids:
         raise HTTPException(422, "不能同时指定勾选和取消勾选的记录")
+    for value in (start_month, end_month):
+        if value is not None and not (101 <= value <= 999912 and 1 <= value % 100 <= 12):
+            raise HTTPException(422, "月份范围须为有效年月，如 202610")
+    if start_month is not None and end_month is not None and start_month > end_month:
+        raise HTTPException(422, "开始月份不能晚于结束月份")
     visible_codes = _visible_url_mapping_category_codes(db, current_user)
     q = db.query(ItemUrlMapping).outerjoin(ModelRecord, ItemUrlMapping.model_id == ModelRecord.id).filter(
         or_(ItemUrlMapping.brand_code.isnot(None), ItemUrlMapping.model_id.isnot(None))
@@ -488,6 +504,13 @@ def _filtered_url_mappings(
         q = q.filter(ItemUrlMapping.data_year == year)
     if month is not None:
         q = q.filter(ItemUrlMapping.data_month == month)
+    mapping_month = ItemUrlMapping.data_year * 100 + ItemUrlMapping.data_month
+    if start_month is not None:
+        q = q.filter(mapping_month >= start_month)
+    if end_month is not None:
+        q = q.filter(mapping_month <= end_month)
+    if enabled is not None:
+        q = q.filter(ItemUrlMapping.is_enabled == int(enabled))
     effective_brand = case(
         (ModelRecord.id.isnot(None), ModelRecord.brand_code),
         else_=ItemUrlMapping.brand_code,
@@ -522,6 +545,9 @@ def list_url_mappings(
     category_code: Optional[str] = Query(None),
     year: Optional[int] = Query(None, ge=1, le=9999),
     month: Optional[int] = Query(None, ge=1, le=12),
+    start_month: Optional[int] = Query(None),
+    end_month: Optional[int] = Query(None),
+    enabled: Optional[bool] = Query(None),
     require_category: bool = Query(False),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
@@ -533,6 +559,7 @@ def list_url_mappings(
     q = _filtered_url_mappings(
         db, current_user, keyword=keyword, platform=platform, brand=brand,
         category_code=category_code, year=year, month=month,
+        start_month=start_month, end_month=end_month, enabled=enabled,
     )
     total = q.count()
     rows = (
@@ -577,6 +604,8 @@ def create_url_mapping(
         category_code=payload.category_code or (model_for_brand.category_code if model_for_brand else None),
         price=payload.price,
         source='manual',
+        data_year=payload.data_year,
+        data_month=payload.data_month,
     )
     db.add(m)
     db.commit()
@@ -607,6 +636,9 @@ def update_url_mapping(
     m.model_id = payload.model_id
     m.category_code = payload.category_code or (model_for_brand.category_code if model_for_brand else None)
     m.price = payload.price
+    for name in ("data_year", "data_month"):
+        if name in payload.model_fields_set:
+            setattr(m, name, getattr(payload, name))
     m.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(m)
@@ -637,6 +669,9 @@ def url_mapping_category_count(
     keyword: Optional[str] = Query(None),
     year: Optional[int] = Query(None, ge=1, le=9999),
     month: Optional[int] = Query(None, ge=1, le=12),
+    start_month: Optional[int] = Query(None),
+    end_month: Optional[int] = Query(None),
+    enabled: Optional[bool] = Query(None),
     include_ids: Optional[list[PositiveInt]] = Query(None),
     exclude_ids: Optional[list[PositiveInt]] = Query(None),
     db: Session = Depends(get_db),
@@ -646,6 +681,7 @@ def url_mapping_category_count(
     count = _filtered_url_mappings(
         db, current_user, category_code=category_code, platform=platform,
         brand=brand, keyword=keyword, year=year, month=month,
+        start_month=start_month, end_month=end_month, enabled=enabled,
         include_ids=include_ids, exclude_ids=exclude_ids,
     ).count()
     return {"category_code": category_code, "count": count}
@@ -676,3 +712,28 @@ def bulk_delete_url_mappings(
         )
     db.commit()
     return {"category_code": payload.category_code, "deleted": deleted}
+
+
+@router.post("/bulk-status")
+def bulk_set_url_mapping_status(
+    payload: UrlMappingBulkStatusPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """按当前品类、月份等筛选及跨页勾选批量启停，不改变型号或已有结果。"""
+    _ensure_url_mapping_category_visible(db, current_user, payload.category_code)
+    q = _filtered_url_mappings(
+        db, current_user, **payload.model_dump(exclude={"expected_count", "is_enabled"}),
+    )
+    ids = [row[0] for row in q.with_entities(ItemUrlMapping.id).with_for_update().all()]
+    if payload.expected_count is not None and len(ids) != payload.expected_count:
+        raise HTTPException(409, "筛选结果数量已变化，请刷新后重试")
+    updated = 0
+    for start in range(0, len(ids), 1000):
+        updated += db.query(ItemUrlMapping).filter(
+            ItemUrlMapping.id.in_(ids[start:start + 1000]),
+            ItemUrlMapping.is_enabled != int(payload.is_enabled),
+        ).update({ItemUrlMapping.is_enabled: int(payload.is_enabled)}, synchronize_session=False)
+    db.commit()
+    return {"category_code": payload.category_code, "matched": len(ids), "updated": updated,
+            "is_enabled": payload.is_enabled}

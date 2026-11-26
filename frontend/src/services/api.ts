@@ -1322,7 +1322,7 @@ export type BatchConfirmResult = {
 export type BatchConfirmPreview = {
   total_valid: number
   total_invalid: number
-  candidate_distribution: { brand_code: string; model_code: string; series: string | null; count: number }[]
+  candidate_distribution: { brand_code: string; model_code: string; model_name?: string | null; series: string | null; count: number }[]
 }
 
 export const batchConfirmMatch = (clean_job_id: number, payload: BatchConfirmPayload) =>

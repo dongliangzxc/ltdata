@@ -71,6 +71,32 @@ const renderMatchSource = (source?: string | null) => {
 const getTopCandidate = (item: PendingItem): MatchCandidateOut | undefined =>
   item.candidates?.slice().sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0))[0]
 
+const GENERIC_BRAND_CODES = new Set([
+  '无品牌', '其他品牌', '其他', '未知品牌', '未知', '未识别品牌', 'UNKNOWN', 'OTHER',
+])
+
+const modelChoiceLabel = (model: ModelOption): string => {
+  const brand = (model.brand_code || '').trim()
+  const name = (model.model_name || '').trim()
+  if (name && GENERIC_BRAND_CODES.has(brand.toUpperCase())) {
+    return `${brand ? `[${brand}] ` : ''}${name}`.trim()
+  }
+  return formatModelLabel(model)
+}
+
+const candidateDistributionLabel = (
+  brand_code: string | null | undefined,
+  model_code: string | null | undefined,
+  model_name: string | null | undefined,
+  series: string | null | undefined,
+): string => {
+  const brand = (brand_code || '').trim()
+  const name = (model_name || '').trim()
+  const code = (model_code || '').trim()
+  const model = name && GENERIC_BRAND_CODES.has(brand.toUpperCase()) ? name : code
+  return `[${brand}]${series ? ` [${series}]` : ''} ${model}`
+}
+
 const isCandidateValidForBatch = (item: PendingItem): { ok: boolean; reason?: string } => {
   if (item.brand_identified === 0) return { ok: false, reason: '未识别品牌，请先补充品牌写法' }
   return { ok: true }
@@ -1111,7 +1137,7 @@ export default function MatchPage() {
         processCount = 500
       }
       distributionLines = preview.candidate_distribution.map(d =>
-        `  · [${d.brand_code}]${d.series ? ` [${d.series}]` : ''} ${d.model_code} × ${d.count}`,
+        `  · ${candidateDistributionLabel(d.brand_code, d.model_code, d.model_name, d.series)} × ${d.count}`,
       )
     } else {
       if (selectedBatchIds.size === 0) return
@@ -1130,7 +1156,7 @@ export default function MatchPage() {
       items.filter((i: PendingItem) => confirmableIds.includes(i.id)).forEach((i: PendingItem) => {
         const top = getTopCandidate(i)
         if (!top) return
-        const k = `[${top.brand_code}]${top.series ? ` [${top.series}]` : ''} ${top.model_code}`
+        const k = candidateDistributionLabel(top.brand_code, top.model_code, top.model_name, top.series)
         dist.set(k, (dist.get(k) ?? 0) + 1)
       })
       distributionLines = Array.from(dist.entries()).map(([k, v]) => `  · ${k} × ${v}`)
@@ -2709,7 +2735,7 @@ export default function MatchPage() {
               loading={batchModelSearchLoading}
               options={batchModelOptions.map(m => ({
                 value: m.id,
-                label: formatModelLabel(m),
+                label: modelChoiceLabel(m),
               }))}
             />
             <Button icon={<PlusOutlined />} onClick={() => { setCreateModelContext('batch'); setCreateModelOpen(true) }}>
@@ -2748,7 +2774,7 @@ export default function MatchPage() {
               loading={batchModelSearchLoading}
               options={batchModelOptions.map(m => ({
                 value: m.id,
-                label: formatModelLabel(m),
+                label: modelChoiceLabel(m),
               }))}
             />
             <Button icon={<PlusOutlined />} onClick={() => { setCreateModelContext('batch'); setCreateModelOpen(true) }}>

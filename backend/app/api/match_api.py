@@ -1651,14 +1651,19 @@ def batch_confirm_preview(
             continue
         total_valid += 1
         if cand_model and _candidate_is_valid(mr, cand_model):
-            dist[(cand_model.brand_code, cand_model.model_code, cand_model.series)] += 1
+            dist[(
+                cand_model.brand_code,
+                cand_model.model_code,
+                cand_model.model_name,
+                cand_model.series,
+            )] += 1
     top = dist.most_common(20)
     return {
         "total_valid": total_valid,
         "total_invalid": total_invalid,
         "candidate_distribution": [
-            {"brand_code": bc, "model_code": mc, "series": s, "count": c}
-            for (bc, mc, s), c in top
+            {"brand_code": bc, "model_code": mc, "model_name": mn, "series": s, "count": c}
+            for (bc, mc, mn, s), c in top
         ],
     }
 

@@ -31,7 +31,7 @@ import CreateModelModal from '../../components/CreateModelModal'
 import { buildTransferFilterState, getDefaultTransferFilters, shouldClearTransferTarget } from './utils/transferFilters'
 import type { TransferFilters, TransferSelectOption } from './utils/transferFilters'
 import { formatModelLabel } from '../../utils/modelLabel'
-import { compareModelOptions, loadAllModelOptions } from './utils/modelOptions'
+import { buildModelSelectOptions, createModelOptionsLoader } from './utils/modelOptions'
 
 const { Text } = Typography
 
@@ -381,7 +381,8 @@ export default function MatchPage() {
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
   const [modelSearchLoading, setModelSearchLoading] = useState(false)
   const modelSearchSeqRef = useRef(0)
-  const sortedModelOptions = useMemo(() => [...modelOptions].sort(compareModelOptions), [modelOptions])
+  const [modelOptionsLoader] = useState(() => createModelOptionsLoader())
+  const modelSelectOptions = useMemo(() => buildModelSelectOptions(modelOptions), [modelOptions])
   const [createModelOpen, setCreateModelOpen] = useState(false)
   const [createModelContext, setCreateModelContext] = useState<'review' | 'batch'>('review')
   const [batchConfirmModalOpen, setBatchConfirmModalOpen] = useState(false)
@@ -479,7 +480,7 @@ export default function MatchPage() {
     const searchSeq = ++modelSearchSeqRef.current
     setModelSearchLoading(true)
     try {
-      const models = await loadAllModelOptions(reviewDetail?.category_code || undefined)
+      const models = await modelOptionsLoader.load(reviewDetail?.category_code || undefined)
       if (searchSeq !== modelSearchSeqRef.current) return
       setModelOptions(models.map(modelOptionFromModel))
     } catch {
@@ -515,6 +516,9 @@ export default function MatchPage() {
   }
 
   const handleCreatedModel = (model: ModelItem) => {
+    modelOptionsLoader.invalidate()
+    modelSearchSeqRef.current += 1
+    setModelSearchLoading(false)
     const option = modelOptionFromModel(model)
     if (createModelContext === 'batch') {
       setBatchModelOptions(prev => {
@@ -2401,17 +2405,14 @@ export default function MatchPage() {
                             style={{ minWidth: 220, maxWidth: '100%' }}
                             popupMatchSelectWidth={560}
                             dropdownStyle={{ maxWidth: 'calc(100vw - 32px)' }}
-                            virtual={false}
+                            virtual
+                            listHeight={320}
                             optionRender={option => <span style={{ whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{option.label}</span>}
                             allowClear
                             filterOption={(input, option) => (option?.searchText || '').includes(input.trim().toLocaleLowerCase())}
                             onDropdownVisibleChange={open => { if (open) void handleModelSearch() }}
                             loading={modelSearchLoading}
-                            options={sortedModelOptions.map(m => ({
-                              value: m.id,
-                              label: formatModelLabel(m),
-                              searchText: [formatModelLabel(m), m.brand_name, m.model_name].filter(Boolean).join(' ').toLocaleLowerCase(),
-                            }))}
+                            options={modelSelectOptions}
                             value={selectedModels[reviewDetail.id]}
                             onChange={v => {
                               if (v) {

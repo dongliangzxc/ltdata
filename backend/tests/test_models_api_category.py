@@ -74,6 +74,49 @@ def test_list_models_returns_category_name(client):
     assert items[0]["category_name"] == "回音壁"
 
 
+@pytest.mark.parametrize("size", [1, 120, 501])
+def test_list_models_batches_relations_without_loading_unused_specs(client, db_session, size):
+    """首次展开不能为每个型号各查一次规格和别名。"""
+    from sqlalchemy import event
+    from app.models.schemas import ModelRecord, ModelAlias, ModelSpec
+
+    models = [ModelRecord(
+        brand_code="永好", brand_name="永好", model_code=f"K{i:04}",
+        category_code="soundbar",
+    ) for i in range(size)]
+    db_session.add_all(models)
+    db_session.flush()
+    db_session.add_all([
+        ModelAlias(model_id=models[0].id, alias_code="中文别名"),
+        ModelSpec(model_id=models[0].id, spec_name="尺寸", spec_value="10"),
+    ])
+    db_session.commit()
+
+    statements = []
+    engine = db_session.get_bind()
+
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement.lower())
+
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        response = client.get("/api/models", params={
+            "keyword": "永", "category_code": "soundbar", "page_size": 2000,
+        })
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["total"] == size
+    assert len(result["items"]) == size
+    assert result["items"][0]["aliases"][0]["alias_code"] == "中文别名"
+    assert all(item["specs"] == [] for item in result["items"])
+    assert not any("from model_specs" in sql for sql in statements)
+    # 品类权限、计数、型号列表各一次，别名每500条一个批次。
+    assert len(statements) <= 3 + (size + 499) // 500
+
+
 def test_create_model_without_model_code_stores_null(client):
     r = client.post("/api/models", json={
         "brand_code": "SONY",

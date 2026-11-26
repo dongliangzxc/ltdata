@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Response
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, noload, selectinload
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy import func
 from app.core.auth_deps import get_current_user
@@ -898,7 +898,9 @@ def list_models(
         q = q.filter(ModelRecord.category_code == category_code)
     if status:
         q = q.filter(ModelRecord.status == status)
-    rows = q.order_by(ModelRecord.brand_code, ModelRecord.model_code) \
+    # 列表不返回规格；别名仍保留，但按批次加载，避免每个型号触发两次懒查询。
+    rows = q.options(noload(ModelRecord.specs), selectinload(ModelRecord.aliases)) \
+            .order_by(ModelRecord.brand_code, ModelRecord.model_code) \
             .offset((page - 1) * page_size).limit(page_size).all()
 
     result = []

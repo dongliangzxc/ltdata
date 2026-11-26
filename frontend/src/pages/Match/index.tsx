@@ -1604,10 +1604,14 @@ export default function MatchPage() {
     },
   ]
 
+  const pendingTabCount = activeTab === 'pending' && whiteLabelOnly
+    ? (pendingData?.total ?? 0)
+    : (summaryView?.pending ?? 0)
+
   const queueTabs: Array<{ key: ReviewTabKey; label: string; count: number; color: string }> = [
     { key: 'unidentified_brand', label: '未识别品牌', count: summaryView?.unidentified_brand ?? 0, color: '#722ed1' },
     { key: 'text_only', label: 'URL映射待确认', count: summaryView?.text_only ?? 0, color: '#d48806' },
-    { key: 'pending', label: '待确认', count: summaryView?.pending ?? 0, color: '#d46b08' },
+    { key: 'pending', label: '待确认', count: pendingTabCount, color: '#d46b08' },
     { key: 'disputed', label: '争议复核', count: summaryView?.disputed ?? 0, color: '#cf1322' },
     { key: 'matched', label: '已匹配', count: (summaryView?.matched ?? 0) + (summaryView?.url_matched ?? 0), color: '#389e0d' },
     { key: 'invalid_model', label: '型号失效', count: summaryView?.invalid_model ?? 0, color: '#fa541c' },
@@ -2060,6 +2064,11 @@ export default function MatchPage() {
                       }}
                     />
                     <Text style={{ fontSize: 12 }}>只看白牌建议</Text>
+                    {whiteLabelOnly && (
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        共 {pendingData?.total ?? 0} 条
+                      </Text>
+                    )}
                   </Space>
                 )}
                 <div style={{ flex: 1 }} />

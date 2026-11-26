@@ -2214,6 +2214,11 @@ export default function MatchPage() {
                                   <Tag>{item.category_name || '未归类'}</Tag>
                                   {item.country_code && <Tag color="purple">{item.country_code}</Tag>}
                                   <Tag color="blue">{item.brand_raw || '无原品牌'}</Tag>
+                                  {(() => {
+                                    const wl = (item.candidates ?? []).find(c => c.match_source === 'white_label')
+                                    if (!wl) return null
+                                    return <Tag color="gold">建议: {wl.model_name || wl.model_code || '未分类'}</Tag>
+                                  })()}
                                   {activeTab === 'ignored' && <Tag color="default">已忽略</Tag>}
                                   {renderMatchSource(item.match_source)}
                                   {item.item_url && <Tag icon={<LinkOutlined />} color="green">有链接</Tag>}
@@ -2464,8 +2469,11 @@ export default function MatchPage() {
                                   const brand = !isPlaceholderCode(brandVal) ? `[${brandVal}]` : ''
                                   const seriesVal = (candidate.series ?? '').trim()
                                   const series = seriesVal ? `[${seriesVal}]` : ''
+                                  const modelName = (candidate.model_name ?? '').trim()
                                   const modelVal = (candidate.model_code ?? '').trim()
-                                  const model = modelVal && !isPlaceholderCode(modelVal) && !/^-+$/.test(modelVal) ? modelVal : ''
+                                  const model = candidate.match_source === 'white_label' && modelName
+                                    ? modelName
+                                    : (modelVal && !isPlaceholderCode(modelVal) && !/^-+$/.test(modelVal) ? modelVal : '')
                                   return [brand, series, model].filter(Boolean).join(' ') || '-'
                                 })()}</Text>
                                 {renderMatchSource(candidate.match_source)}

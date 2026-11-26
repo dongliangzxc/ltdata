@@ -1956,6 +1956,7 @@ export interface PaginatedResponse<T> {
 export interface MatchCandidateOut {
   model_id: number
   model_code: string | null
+  model_name: string | null
   brand_code: string | null
   series: string | null
   match_source: string | null

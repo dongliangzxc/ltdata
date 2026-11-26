@@ -836,6 +836,7 @@ def list_pending(
                 MatchCandidateOut(
                     model_id=cand.model_id,
                     model_code=model.model_code if model else None,
+                    model_name=model.model_name if model else None,
                     brand_code=model.brand_code if model else None,
                     series=model.series if model else None,
                     match_source=cand.match_source,
@@ -1114,6 +1115,7 @@ def get_match_review_detail(match_id: int, db: Session = Depends(get_db)):
                 "model_id": cand.model_id,
                 "model_code": candidate_model.model_code if candidate_model else None,
                 "brand_code": candidate_model.brand_code if candidate_model else None,
+                "model_name": candidate_model.model_name if candidate_model else None,
                 "series": candidate_model.series if candidate_model else None,
                 "match_source": cand.match_source,
                 "score": cand.score,

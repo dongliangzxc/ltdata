@@ -663,6 +663,21 @@ def _index_keys_by_grams(prefix_index: dict, order: dict, grams: set) -> list:
     return keys
 
 
+_WHITE_LABEL_ALLOWED_BRAND_VALUES = {"无品牌", "无牌", "白牌", "公模"}
+
+
+def _brand_text_blocks_white_label(value: str | None) -> bool:
+    """有明确品牌文字但品牌库没认出来时，不能直接归「无品牌」。
+
+    例如原品牌「硕科思」「罗巴赫（LUOBAHE）」仍应留在待确认/未识别品牌，
+    避免把漏采品牌误判成白牌。只有空、占位符或明确「无品牌」文案才放行。
+    """
+    text = _norm(value)
+    if not text or set(text) == {"-"}:
+        return False
+    return text not in _WHITE_LABEL_ALLOWED_BRAND_VALUES
+
+
 def _match_white_label(item_upper: str, ctx: MatchContext):
     """S5 白牌/公模归类：按品类关键词规则选择占位型号。
 
@@ -1134,6 +1149,7 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
                 and policy.enabled
                 and policy.mode in ("auto", "suggest")
                 and not brand_identified
+                and not _brand_text_blocks_white_label(row.brand_raw)
             ):
                 white_label_model, _ = _match_white_label(item_upper, ctx)
 
@@ -1441,6 +1457,7 @@ def run_match_for_result(
             and policy.enabled
             and policy.mode in ("auto", "suggest")
             and not brand_identified
+            and not _brand_text_blocks_white_label(raw.brand_raw)
         ):
             white_label_model, _ = _match_white_label(item_upper, ctx)
 

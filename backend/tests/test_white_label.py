@@ -209,6 +209,29 @@ def test_placeholder_long_code_is_not_used_by_s4(db):
     assert result.model_id is None
 
 
+def test_brand_text_not_in_library_is_not_white_labeled(db):
+    """原品牌有明确文字但品牌库没认出来时，不能归成「无品牌」。"""
+    _seed_category(db, "headphone")
+    placeholder = _seed_placeholder(db, category_code="headphone")
+    _seed_policy(db, category_code="headphone", mode="auto", enabled=1)
+    db.add(WhiteLabelRule(
+        category_code="headphone", keyword="入耳", match_type="contains",
+        model_id=placeholder.id, priority=20, is_active=1,
+    ))
+    job_id = _seed_job(
+        db, category_code="headphone", brand_raw="硕科思",
+        item_name="硕科思 入耳式蓝牙耳机",
+    )
+    db.commit()
+
+    run_match(db, job_id)
+
+    result = db.query(MatchResult).filter(MatchResult.clean_job_id == job_id).one()
+    assert result.match_status == "pending"
+    assert result.model_id is None
+    assert result.brand_identified == 0
+
+
 def test_unmatched_falls_back_to_unmatched_model(db):
     _seed_category(db, "bt_speaker")
     unmatched = _seed_placeholder(

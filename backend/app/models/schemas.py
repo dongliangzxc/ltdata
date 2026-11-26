@@ -1377,6 +1377,7 @@ class MatchResultAttr(Base):
 class MatchCandidateOut(BaseModel):
     model_id:     int
     model_code:   Optional[str] = None
+    model_name:   Optional[str] = None
     brand_code:   Optional[str] = None
     series:       Optional[str] = None
     match_source: Optional[str] = None

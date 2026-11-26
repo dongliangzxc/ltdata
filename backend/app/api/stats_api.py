@@ -368,6 +368,15 @@ def _progress_stats(db: Session) -> dict:
     # Only actual, unrecovered filter records from the current task count.
     # A live match result takes precedence over a stale filter record.
     system_filtered = and_(MatchResult.id.is_(None), FilteredItem.id.isnot(None))
+    # Manual exclusion can retain an older automatic match_source. The current
+    # actor flag takes precedence; legacy rows without either marker stay unknown.
+    exclusion_origin = case(
+        (MatchResult.matched_by == "manual", "manual"),
+        (MatchResult.matched_by == "auto", "auto"),
+        (MatchResult.match_source == "manual", "manual"),
+        (MatchResult.match_source == "exclude_reuse", "auto"),
+        else_="unknown",
+    )
 
     detail_rows = (
         _progress_join(
@@ -384,6 +393,9 @@ def _progress_stats(db: Session) -> dict:
                 func.count(func.distinct(case((status == "matched", DispatchItem.raw_data_id)))).label("auto_matched"),
                 func.count(func.distinct(case((status == "confirmed", DispatchItem.raw_data_id)))).label("confirmed"),
                 func.count(func.distinct(case((status.in_(EXCLUDED_STATUSES), DispatchItem.raw_data_id)))).label("excluded_ignored"),
+                func.count(func.distinct(case((and_(status.in_(EXCLUDED_STATUSES), exclusion_origin == "manual"), DispatchItem.raw_data_id)))).label("manual_excluded_ignored"),
+                func.count(func.distinct(case((and_(status.in_(EXCLUDED_STATUSES), exclusion_origin == "auto"), DispatchItem.raw_data_id)))).label("auto_excluded_ignored"),
+                func.count(func.distinct(case((and_(status.in_(EXCLUDED_STATUSES), exclusion_origin.in_(("manual", "auto"))), DispatchItem.raw_data_id)))).label("known_excluded_ignored"),
                 func.count(func.distinct(case((system_filtered, DispatchItem.raw_data_id)))).label("system_filtered"),
                 func.count(func.distinct(case((status.in_(ACTIONABLE_STATUSES), DispatchItem.raw_data_id)))).label("pending"),
                 func.max(case(
@@ -454,6 +466,9 @@ def _progress_stats(db: Session) -> dict:
             "auto_matched": 0,
             "confirmed": 0,
             "excluded_ignored": 0,
+            "manual_excluded_ignored": 0,
+            "auto_excluded_ignored": 0,
+            "unknown_excluded_ignored": 0,
             "system_filtered": 0,
             "transferred_out": 0,
             "pending": 0,
@@ -474,6 +489,9 @@ def _progress_stats(db: Session) -> dict:
         auto_matched,
         confirmed,
         excluded_ignored,
+        manual_excluded_ignored,
+        auto_excluded_ignored,
+        known_excluded_ignored,
         filtered,
         pending,
         last_processed_at,
@@ -488,6 +506,15 @@ def _progress_stats(db: Session) -> dict:
         item["auto_matched"] = _int(auto_matched)
         item["confirmed"] = _int(confirmed)
         item["excluded_ignored"] = _int(excluded_ignored)
+        # Duplicate match records can disagree on who excluded the same item.
+        # Keep those items in the unknown bucket rather than counting them twice.
+        conflicting_origins = max(_int(manual_excluded_ignored) + _int(auto_excluded_ignored)
+                                  - _int(known_excluded_ignored), 0)
+        item["manual_excluded_ignored"] = _int(manual_excluded_ignored) - conflicting_origins
+        item["auto_excluded_ignored"] = _int(auto_excluded_ignored) - conflicting_origins
+        item["unknown_excluded_ignored"] = max(
+            item["excluded_ignored"] - item["manual_excluded_ignored"] - item["auto_excluded_ignored"], 0,
+        )
         item["system_filtered"] = _int(filtered)
         item["pending"] = _int(pending)
         item["last_processed_at"] = format_beijing_datetime(last_processed_at)
@@ -555,13 +582,18 @@ def _progress_stats(db: Session) -> dict:
             "auto_matched": 0,
             "confirmed": 0,
             "excluded_ignored": 0,
+            "manual_excluded_ignored": 0,
+            "auto_excluded_ignored": 0,
+            "unknown_excluded_ignored": 0,
             "system_filtered": 0,
             "transferred_out": 0,
             "pending": 0,
             "published": 0,
         })
         for key in ("dispatched", "task_created", "task_count", "processed", "matched",
-                    "url_matched", "auto_matched", "confirmed", "excluded_ignored", "system_filtered", "transferred_out",
+                    "url_matched", "auto_matched", "confirmed", "excluded_ignored",
+                    "manual_excluded_ignored", "auto_excluded_ignored", "unknown_excluded_ignored",
+                    "system_filtered", "transferred_out",
                     "pending", "published"):
             acc["dispatchable" if key == "dispatched" else key] += item[key]
 
@@ -594,6 +626,9 @@ def _progress_stats(db: Session) -> dict:
         "auto_matched": total("auto_matched"),
         "confirmed": total("confirmed"),
         "excluded_ignored": total("excluded_ignored"),
+        "manual_excluded_ignored": total("manual_excluded_ignored"),
+        "auto_excluded_ignored": total("auto_excluded_ignored"),
+        "unknown_excluded_ignored": total("unknown_excluded_ignored"),
         "system_filtered": total("system_filtered"),
         "transferred_out": total("transferred_out"),
         "pending": total("pending"),

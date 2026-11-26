@@ -441,3 +441,67 @@ def test_slow_counts_refresh_only_when_expired(client, monkeypatch):
     # 过期时先返回旧值，同时触发后台刷新
     assert data["upload"]["raw_rows"] == 7
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize("conflicting_records", [False, True])
+def test_progress_splits_manual_auto_and_unknown_exclusion_sources(client, session_factory, conflicting_records):
+    db = session_factory()
+    upload = UploadFileRecord(filename="sources.xlsx", status="done")
+    db.add_all([upload, Category(code="camera", name="监控摄像头")])
+    db.flush()
+    batch = DispatchBatch(file_id=upload.id, status="done")
+    job = CleanJobRecord(status="reviewing", category_code="camera", platform="jd")
+    archived = CleanJobRecord(status="archived", category_code="camera", platform="jd")
+    db.add_all([batch, job, archived])
+    db.flush()
+    raw = [RawDataRecord(file_id=upload.id, item_id=f"source-{i}", month=202609 if i == 6 else 202610,
+                         platform="tmall" if i == 2 else "jd") for i in range(12)]
+    db.add_all(raw)
+    db.flush()
+    for item in raw:
+        db.add(DispatchItem(batch_id=batch.id, raw_data_id=item.id, category_code="camera"))
+        db.add(CleanJobItemRecord(clean_job_id=job.id, raw_data_id=item.id, category_code="camera"))
+    for i, status, actor, source in [
+        (0, "excluded", "manual", "exclude_reuse"),  # manual action retains a stale automatic source
+        (1, "ignored", "manual", "manual"),
+        (2, "excluded", "auto", "exclude_reuse"), (3, "excluded", "auto", "s1"),
+        (4, "excluded", "", None),  # legacy row without provenance
+        (5, "excluded", "", "manual"), (6, "excluded", "", "exclude_reuse"),
+        (7, "url_matched", "auto", "s0"), (8, "confirmed", "manual", "manual"),
+        (10, "pending", "auto", None),
+    ]:
+        db.add(MatchResult(clean_job_id=job.id, raw_data_id=raw[i].id,
+                           match_status=status, matched_by=actor, match_source=source))
+    if conflicting_records:
+        for actor in ("manual", "auto"):
+            db.add(MatchResult(clean_job_id=job.id, raw_data_id=raw[4].id,
+                               match_status="excluded", matched_by=actor))
+    # Duplicate results/filters count once; archived and recovered records do not count.
+    db.add(MatchResult(clean_job_id=job.id, raw_data_id=raw[0].id,
+                       match_status="excluded", matched_by="manual", match_source="exclude_reuse"))
+    db.add(MatchResult(clean_job_id=archived.id, raw_data_id=raw[10].id,
+                       match_status="excluded", matched_by="manual"))
+    for i, recovered in [(0, 0), (9, 0), (9, 0), (11, 1)]:
+        db.add(FilteredItem(clean_job_id=job.id, raw_data_id=raw[i].id, is_recovered=recovered))
+    db.commit()
+    for endpoint in ("/api/stats/overview", "/api/stats/progress"):
+        progress = client.get(endpoint).json()["data"]["progress"]
+        assert progress["manual_excluded_ignored"] == 3
+        assert progress["auto_excluded_ignored"] == 3
+        assert progress["unknown_excluded_ignored"] == 1
+        assert progress["excluded_ignored"] == 7
+        assert progress["system_filtered"] == 1
+        assert progress["matched"] == 2  # conclusions must not inflate model matches
+        assert progress["processed"] == 10
+        assert progress["pending"] == progress["task_no_result"] == 1
+        for row in [progress, *progress["months"], *progress["categories"]]:
+            assert row["excluded_ignored"] == (row["manual_excluded_ignored"]
+                                               + row["auto_excluded_ignored"] + row["unknown_excluded_ignored"])
+        months = {row["month"]: row for row in progress["months"]}
+        assert months[202609]["auto_excluded_ignored"] == 1
+        assert months[202610]["manual_excluded_ignored"] == 3
+        assert months[202610]["auto_excluded_ignored"] == 2
+        tmall = next(row for row in progress["categories"] if row["platform"] == "tmall")
+        assert tmall["auto_excluded_ignored"] == 1
+        assert tmall["manual_excluded_ignored"] == tmall["unknown_excluded_ignored"] == 0
+    db.close()

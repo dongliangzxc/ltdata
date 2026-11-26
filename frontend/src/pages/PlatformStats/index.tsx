@@ -86,7 +86,19 @@ const unprocessed = (row: ProgressRow) => Math.max(row.dispatched - row.processe
 const notTaskCreated = (row: ProgressRow) => Math.max(row.dispatched - row.task_created, 0)
 const taskPercent = (row: ProgressRow) => progressPercent(row.processed, row.task_created)
 const overallPercent = (row: ProgressRow) => progressPercent(row.processed, row.dispatched)
-const matchPercent = (row: ProgressRow) => progressPercent(row.matched, row.dispatched)
+// 已有匹配结论包含型号匹配、排除/忽略和系统过滤；转出仍需在目标任务处理。
+const matchingConcluded = (row: Pick<ProgressRow, 'processed' | 'transferred_out'>) => Math.max(row.processed - (row.transferred_out ?? 0), 0)
+const matchPercent = (row: ProgressRow) => progressPercent(matchingConcluded(row), row.dispatched)
+const modelMatchPercent = (row: ProgressRow) => progressPercent(row.matched, row.dispatched)
+type ExclusionProgress = Pick<ProgressRow, 'excluded_ignored' | 'manual_excluded_ignored' | 'auto_excluded_ignored' | 'unknown_excluded_ignored'>
+const unknownExcluded = (row: ExclusionProgress) => row.unknown_excluded_ignored
+  ?? Math.max(row.excluded_ignored - (row.manual_excluded_ignored ?? 0) - (row.auto_excluded_ignored ?? 0), 0)
+const exclusionSources = (row: ExclusionProgress) => {
+  const manual = row.manual_excluded_ignored ?? 0
+  const auto = row.auto_excluded_ignored ?? 0
+  const unknown = unknownExcluded(row)
+  return `人工 ${manual.toLocaleString()} · 自动 ${auto.toLocaleString()}${unknown > 0 ? ` · 来源未明 ${unknown.toLocaleString()}` : ''}`
+}
 const autoMatched = (row: ProgressRow) => row.url_matched + row.auto_matched
 const formatMonth = (value: number | null | undefined) => (
   value ? `${Math.floor(value / 100)}-${String(value % 100).padStart(2, '0')}` : '-'
@@ -160,7 +172,7 @@ const progressColumns: ColumnsType<ProgressRow> = [
       : <Text type="secondary">无分发数据</Text>),
   },
   {
-    title: '已匹配', dataIndex: 'matched', width: 110,
+    title: '型号匹配成功', dataIndex: 'matched', width: 110,
     sorter: (a, b) => a.matched - b.matched,
     render: (v: number) => <Text type="success">{v.toLocaleString()}</Text>,
   },
@@ -169,6 +181,13 @@ const progressColumns: ColumnsType<ProgressRow> = [
     sorter: (a, b) => matchPercent(a) - matchPercent(b),
     render: (_: unknown, row) => (row.dispatched > 0
       ? <Progress percent={matchPercent(row)} size="small" />
+      : <Text type="secondary">无分发数据</Text>),
+  },
+  {
+    title: '型号匹配成功率', key: 'model_match_rate', width: 160,
+    sorter: (a, b) => modelMatchPercent(a) - modelMatchPercent(b),
+    render: (_: unknown, row) => (row.dispatched > 0
+      ? <Progress percent={modelMatchPercent(row)} size="small" />
       : <Text type="secondary">无分发数据</Text>),
   },
   {
@@ -187,9 +206,9 @@ const progressColumns: ColumnsType<ProgressRow> = [
     render: (v: number) => v.toLocaleString(),
   },
   {
-    title: '排除 / 忽略', dataIndex: 'excluded_ignored', width: 110,
+    title: '排除 / 忽略（来源）', dataIndex: 'excluded_ignored', width: 250,
     sorter: (a, b) => a.excluded_ignored - b.excluded_ignored,
-    render: (v: number) => v.toLocaleString(),
+    render: (v: number, row) => <Space direction="vertical" size={0}><Text>{v.toLocaleString()}</Text><Text type="secondary">{exclusionSources(row)}</Text></Space>,
   },
   {
     title: '系统过滤', dataIndex: 'system_filtered', width: 110,
@@ -411,7 +430,7 @@ export default function PlatformStatsPage() {
       const key = `${row.month}-${row.category_code ?? ''}`
       const existing = grouped.get(key)
       if (!existing) {
-        grouped.set(key, { ...row, platform: 'all' })
+        grouped.set(key, { ...row, platform: 'all', unknown_excluded_ignored: unknownExcluded(row) })
         continue
       }
       existing.dispatched += row.dispatched
@@ -423,6 +442,9 @@ export default function PlatformStatsPage() {
       existing.auto_matched += row.auto_matched
       existing.confirmed += row.confirmed
       existing.excluded_ignored += row.excluded_ignored
+      existing.manual_excluded_ignored = (existing.manual_excluded_ignored ?? 0) + (row.manual_excluded_ignored ?? 0)
+      existing.auto_excluded_ignored = (existing.auto_excluded_ignored ?? 0) + (row.auto_excluded_ignored ?? 0)
+      existing.unknown_excluded_ignored = (existing.unknown_excluded_ignored ?? 0) + unknownExcluded(row)
       existing.system_filtered = (existing.system_filtered ?? 0) + (row.system_filtered ?? 0)
       existing.transferred_out = (existing.transferred_out ?? 0) + (row.transferred_out ?? 0)
       existing.pending += row.pending
@@ -449,9 +471,10 @@ export default function PlatformStatsPage() {
       task_count: acc.task_count + row.task_count,
       processed: acc.processed + row.processed,
       matched: acc.matched + row.matched,
+      transferred_out: acc.transferred_out + (row.transferred_out ?? 0),
       pending: acc.pending + row.pending,
     }),
-    { dispatched: 0, task_created: 0, task_count: 0, processed: 0, matched: 0, pending: 0 },
+    { dispatched: 0, task_created: 0, task_count: 0, processed: 0, matched: 0, transferred_out: 0, pending: 0 },
   ), [filteredProgress])
 
   const monthOverview: ProgressSummary | null = progress
@@ -471,6 +494,7 @@ export default function PlatformStatsPage() {
           auto_matched: 0,
           confirmed: 0,
           excluded_ignored: 0,
+          manual_excluded_ignored: 0, auto_excluded_ignored: 0, unknown_excluded_ignored: 0,
           system_filtered: 0,
           transferred_out: 0,
           pending: 0,
@@ -489,14 +513,16 @@ export default function PlatformStatsPage() {
         uploaded_rows: monthOverview.uploaded_rows,
         dispatchable: 0, task_created: 0, task_count: 0, not_task_created: 0,
         processed: 0, not_processed: 0, matched: 0, url_matched: 0, auto_matched: 0,
-        confirmed: 0, excluded_ignored: 0, system_filtered: 0, transferred_out: 0,
+        confirmed: 0, excluded_ignored: 0, manual_excluded_ignored: 0, auto_excluded_ignored: 0, unknown_excluded_ignored: 0, system_filtered: 0, transferred_out: 0,
         pending: 0, task_no_result: 0, published: 0,
       }
       acc.dispatchable += row.dispatched
       for (const key of ['task_created', 'task_count', 'processed', 'matched', 'url_matched',
-        'auto_matched', 'confirmed', 'excluded_ignored', 'system_filtered', 'transferred_out',
+        'auto_matched', 'confirmed', 'excluded_ignored', 'manual_excluded_ignored', 'auto_excluded_ignored', 'unknown_excluded_ignored', 'system_filtered', 'transferred_out',
         'pending', 'published'] as const) {
-        acc[key] = (acc[key] ?? 0) + (row[key] ?? 0)
+        acc[key] = (acc[key] ?? 0) + (key === 'unknown_excluded_ignored'
+          ? unknownExcluded(row)
+          : (row[key] ?? 0))
       }
       months.set(row.month, acc)
     }
@@ -504,7 +530,7 @@ export default function PlatformStatsPage() {
       uploaded_rows: monthOverview.uploaded_rows,
       dispatchable: 0, task_created: 0, task_count: 0, not_task_created: 0,
       processed: 0, not_processed: 0, matched: 0, url_matched: 0, auto_matched: 0,
-      confirmed: 0, excluded_ignored: 0, system_filtered: 0, transferred_out: 0,
+      confirmed: 0, excluded_ignored: 0, manual_excluded_ignored: 0, auto_excluded_ignored: 0, unknown_excluded_ignored: 0, system_filtered: 0, transferred_out: 0,
       pending: 0, task_no_result: 0, published: 0,
     }
     for (const acc of months.values()) {
@@ -528,7 +554,7 @@ export default function PlatformStatsPage() {
   const publishableRate = percent(match.publishable, match.total)
   const finishedRate = percent(clean.clean_finished, clean.task_total)
   const completionRate = overview ? progressPercent(overview.processed, overview.dispatchable) : 0
-  const matchingRate = overview ? progressPercent(overview.matched, overview.dispatchable) : 0
+  const matchingRate = overview ? progressPercent(matchingConcluded(overview), overview.dispatchable) : 0
   const selectedProgressCategories = progressCategoryOptions
     .filter(option => progressCategoryFilter === undefined || progressCategoryFilter.includes(option.value))
     .map(option => option.value)
@@ -576,7 +602,7 @@ export default function PlatformStatsPage() {
         type="info"
         showIcon
         message="口径说明"
-        description="总览与明细均按「分发条目」统计（同一商品分发到多个品类会分别计数）：值得分发 = 最新一次已完成分发批次中命中规则的条目；已清理 = 自动匹配 + 人工确认 + 已排除/忽略 + 系统过滤。系统过滤表示已按清洗规则或干扰链接库排除，计入处理进度，不计入匹配成功；已恢复或已有匹配结果的条目不重复计入系统过滤，重复数据不按差额推算为过滤。自动匹配 = URL 精准匹配 + 其他自动匹配，人工确认单独计数。匹配进度 = 已匹配 ÷ 分发条数，已匹配 = 自动匹配 + 人工确认。对账关系：值得分发 = 已入任务条数 + 未入任务条数 = 已清理 + 未清理；已入任务条数 = 已清理 + 当前待处理 + 已入任务未出结果。任务相关数字按数据条目计数，清洗页「任务总数」按清洗任务个数计数。已发布为任务级发布行数，不与条目相加。明细可切换平台聚合或拆分；最后处理时间包括匹配结果更新时间和系统过滤时间。时间按北京时间统计；处理进度后台定时刷新，最多延迟约 5 分钟。"
+        description="总览与明细均按「分发条目」统计（同一商品分发到多个品类会分别计数）：值得分发 = 最新一次已完成分发批次中命中规则的条目；已清理 = 自动匹配 + 人工确认 + 已排除/忽略 + 系统过滤。系统过滤表示已按清洗规则或干扰链接库排除，计入处理进度，不计入匹配成功；已恢复或已有匹配结果的条目不重复计入系统过滤，重复数据不按差额推算为过滤。自动匹配 = URL 精准匹配 + 其他自动匹配，人工确认单独计数。匹配进度 = 已得匹配结论 ÷ 分发条数，包含型号匹配成功、排除/忽略和系统过滤，不含已转出。型号匹配成功率 =（自动匹配 + 人工确认）÷ 分发条数。对账关系：值得分发 = 已入任务条数 + 未入任务条数 = 已清理 + 未清理；已入任务条数 = 已清理 + 当前待处理 + 已入任务未出结果。任务相关数字按数据条目计数，清洗页「任务总数」按清洗任务个数计数。已发布为任务级发布行数，不与条目相加。明细可切换平台聚合或拆分；最后处理时间包括匹配结果更新时间和系统过滤时间。时间按北京时间统计；处理进度后台定时刷新，最多延迟约 5 分钟。"
         action={
           <Space direction="vertical" align="end">
             <Button icon={<ReloadOutlined />} loading={loading} onClick={refresh}>刷新</Button>
@@ -641,9 +667,10 @@ export default function PlatformStatsPage() {
         <div style={{ marginTop: 12 }}>
           <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
             <Text strong>匹配进度</Text>
-            <Text>{matchingRate}% · 已匹配 {overview.matched.toLocaleString()} / 分发 {overview.dispatchable.toLocaleString()}</Text>
+            <Text>{matchingRate}% · 已得匹配结论 {matchingConcluded(overview).toLocaleString()} / 分发 {overview.dispatchable.toLocaleString()}</Text>
           </Space>
           <Progress aria-label="匹配进度" percent={matchingRate} showInfo={false} strokeColor="#13c2c2" />
+          <Text type="secondary">型号匹配成功 {overview.matched.toLocaleString()} 条，成功率 {progressPercent(overview.matched, overview.dispatchable)}%；排除/忽略和系统过滤也计入匹配进度，已转出不计入。</Text>
         </div>
         <Row gutter={16} style={{ marginTop: 16 }}>
           <Col span={6}>
@@ -663,8 +690,8 @@ export default function PlatformStatsPage() {
           </Col>
         </Row>
         <Row gutter={16} style={{ marginTop: 8 }}>
-          <Col flex="1"><Statistic title="已排除 / 忽略" value={overview.excluded_ignored} /></Col>
-          <Col flex="1"><Statistic title="系统过滤" value={overview.system_filtered ?? 0} /></Col>
+          <Col flex="1"><Statistic title="已排除 / 忽略" value={overview.excluded_ignored} /><Text type="secondary">{exclusionSources(overview)}</Text></Col>
+          <Col flex="1"><Statistic title="系统过滤" value={overview.system_filtered ?? 0} /><Text type="secondary">系统自动：清洗规则 / 干扰链接</Text></Col>
           <Col flex="1"><Statistic title="已转出" value={overview.transferred_out ?? 0} /></Col>
           <Col flex="1"><Statistic title="当前待处理" value={overview.pending} valueStyle={{ color: '#d48806' }} /></Col>
           <Col flex="1"><Statistic title="已入任务未出结果" value={overview.task_no_result} valueStyle={{ color: '#d48806' }} /></Col>
@@ -726,14 +753,15 @@ export default function PlatformStatsPage() {
         </Row>
         <Row gutter={16} align="middle" style={{ marginBottom: 16 }}>
           <Col span={6}>
-            <Statistic title="已匹配" value={progressTotals.matched} valueStyle={{ color: '#3f8600' }} />
+            <Statistic title="型号匹配成功" value={progressTotals.matched} valueStyle={{ color: '#3f8600' }} />
           </Col>
           <Col span={6}>
-            <Statistic title="匹配进度" value={progressPercent(progressTotals.matched, progressTotals.dispatched)} suffix="%" />
+            <Statistic title="匹配进度" value={progressPercent(matchingConcluded(progressTotals), progressTotals.dispatched)} suffix="%" />
           </Col>
           <Col span={12}>
-            <Text type="secondary">已匹配 {progressTotals.matched.toLocaleString()} / 分发 {progressTotals.dispatched.toLocaleString()}</Text>
-            <Progress aria-label="明细匹配进度" percent={progressPercent(progressTotals.matched, progressTotals.dispatched)} showInfo={false} strokeColor="#13c2c2" />
+            <Text type="secondary">已得匹配结论 {matchingConcluded(progressTotals).toLocaleString()} / 分发 {progressTotals.dispatched.toLocaleString()}</Text>
+            <Progress aria-label="明细匹配进度" percent={progressPercent(matchingConcluded(progressTotals), progressTotals.dispatched)} showInfo={false} strokeColor="#13c2c2" />
+            <Text type="secondary">型号匹配成功率 {progressPercent(progressTotals.matched, progressTotals.dispatched)}%</Text>
           </Col>
         </Row>
         <Alert
@@ -741,14 +769,14 @@ export default function PlatformStatsPage() {
           showIcon
           style={{ marginBottom: 16 }}
           message="口径提示"
-          description="匹配进度 = 已匹配 ÷ 分发条数；已匹配 = URL 精准匹配 + 其他自动匹配 + 人工确认，排除/忽略、系统过滤和已转出不计入已匹配。此处「已入任务条数 / 未入任务条数」按分发条目计数；清洗页的「任务总数」按清洗任务个数计数，两者不是同一口径。对照清洗页时请选择相同品类 + 月份 + 平台范围。"
+          description="匹配进度 =（型号匹配成功 + 已排除/忽略 + 系统过滤）÷ 分发条数，已转出不计入。型号匹配成功率只统计 URL 精准匹配、其他自动匹配和人工确认。排除/忽略按当前记录的人工、自动来源拆分，旧记录来源缺失或冲突时显示「来源未明」；系统过滤由清洗规则或干扰链接自动产生。此处「已入任务条数 / 未入任务条数」按分发条目计数；清洗页的「任务总数」按清洗任务个数计数，两者不是同一口径。对照清洗页时请选择相同品类 + 月份 + 平台范围。"
         />
         <Table
           dataSource={filteredProgress}
           columns={progressTableColumns}
           rowKey={row => `${row.month}-${row.category_code ?? ''}-${row.platform ?? ''}`}
           size="small"
-          scroll={{ x: 2580 }}
+          scroll={{ x: 2880 }}
           pagination={{ pageSize: 20, showSizeChanger: true }}
         />
       </Card>

@@ -114,6 +114,9 @@ export interface PlatformStatsProgressCategory {
   auto_matched: number
   confirmed: number
   excluded_ignored: number
+  manual_excluded_ignored?: number
+  auto_excluded_ignored?: number
+  unknown_excluded_ignored?: number
   system_filtered: number
   transferred_out?: number
   pending: number
@@ -135,6 +138,9 @@ export interface PlatformStatsProgressMonth {
   auto_matched: number
   confirmed: number
   excluded_ignored: number
+  manual_excluded_ignored?: number
+  auto_excluded_ignored?: number
+  unknown_excluded_ignored?: number
   system_filtered: number
   transferred_out?: number
   pending: number
@@ -156,6 +162,9 @@ export interface PlatformStatsProgress {
   auto_matched: number
   confirmed: number
   excluded_ignored: number
+  manual_excluded_ignored?: number
+  auto_excluded_ignored?: number
+  unknown_excluded_ignored?: number
   system_filtered: number
   transferred_out?: number
   pending: number

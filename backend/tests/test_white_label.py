@@ -330,6 +330,89 @@ def test_policy_and_rule_api(db):
     assert deleted.status_code == 204
 
 
+def _match_client(db):
+    from app.api.match_api import router as match_router
+
+    app = FastAPI()
+    app.include_router(match_router)
+    current_user = {"value": DummyUser(is_admin=1)}
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_current_user] = lambda: current_user["value"]
+    client = TestClient(app)
+    client.db = db
+    client.current_user = current_user
+    return client
+
+
+def test_batch_white_label_classify_ids(db):
+    _seed_category(db, "headphone")
+    placeholder = _seed_placeholder(db, category_code="headphone", model_code="INEAR", model_name="入耳式")
+    upload = UploadFileRecord(filename="wl.xlsx", status="done", row_count=1)
+    db.add(upload)
+    db.flush()
+    job = CleanJobRecord(file_ids=[upload.id], rules={}, status="reviewing", category_code="headphone")
+    db.add(job)
+    db.flush()
+    match_ids = []
+    for index in range(2):
+        raw = RawDataRecord(file_id=upload.id, item_name=f"无名入耳式耳机{index}", brand_raw="力勤")
+        db.add(raw)
+        db.flush()
+        mr = MatchResult(
+            clean_job_id=job.id,
+            raw_data_id=raw.id,
+            match_status="pending",
+            matched_by="auto",
+            brand_identified=0,
+        )
+        db.add(mr)
+        db.flush()
+        match_ids.append(mr.id)
+    db.commit()
+    client = _match_client(db)
+
+    response = client.post(f"/api/match/{job.id}/white-label-classify", json={
+        "mode": "ids",
+        "ids": match_ids,
+        "model_id": placeholder.id,
+    })
+
+    assert response.status_code == 200
+    assert response.json()["success"] == 2
+    db.expire_all()
+    rows = db.query(MatchResult).filter(MatchResult.id.in_(match_ids)).all()
+    assert all(row.match_status == "confirmed" for row in rows)
+    assert all(row.model_id == placeholder.id for row in rows)
+    assert all(row.brand_identified == 1 for row in rows)
+    assert all(row.match_source == "white_label" for row in rows)
+
+
+def test_batch_white_label_classify_rejects_real_model(db):
+    _seed_category(db, "headphone")
+    real = ModelRecord(
+        brand_code="EDIFIER", model_code="LOLLIPODS", brand_name="漫步者",
+        model_name="LolliPods", category_code="headphone",
+    )
+    db.add(real)
+    db.flush()
+    upload = UploadFileRecord(filename="wl.xlsx", status="done", row_count=1)
+    db.add(upload)
+    db.flush()
+    job = CleanJobRecord(file_ids=[upload.id], rules={}, status="reviewing", category_code="headphone")
+    db.add(job)
+    db.commit()
+    client = _match_client(db)
+
+    response = client.post(f"/api/match/{job.id}/white-label-classify", json={
+        "mode": "ids",
+        "ids": [1],
+        "model_id": real.id,
+    })
+
+    assert response.status_code == 400
+    assert "占位型号" in response.json()["detail"]
+
+
 def test_rule_api_rejects_non_placeholder_model(db):
     _seed_category(db, "headphone")
     real = ModelRecord(

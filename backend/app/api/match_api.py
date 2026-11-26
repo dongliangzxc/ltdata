@@ -1627,6 +1627,101 @@ def batch_confirm(clean_job_id: int, payload: dict, db: Session = Depends(get_db
     raise HTTPException(status_code=400, detail="mode 必须为 ids 或 filter")
 
 
+_WHITE_LABEL_BRAND_CODES = {
+    "其他", "其他品牌", "无品牌", "未知品牌", "未知", "未识别品牌", "UNKNOWN", "OTHER",
+}
+_WHITE_LABEL_CLASSIFY_MAX = 500
+_WHITE_LABEL_CLASSIFY_STATUSES = {"pending", "text_only", "disputed"}
+
+
+@router.post("/{clean_job_id}/white-label-classify")
+def white_label_classify(
+    clean_job_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """把选中的未识别/待确认数据人工批量归为白牌占位型号。
+
+    这是显式人工动作：会绕过「有品牌文字不自动归无品牌」的护栏，
+    由操作人确认这些商品确实属于白牌/公模。
+    """
+    model_id = (payload or {}).get("model_id")
+    if not model_id:
+        raise HTTPException(status_code=400, detail="model_id 不能为空")
+    selected_model = db.query(ModelRecord).filter(ModelRecord.id == model_id).first()
+    if not selected_model:
+        raise HTTPException(status_code=400, detail="型号不存在")
+    if (selected_model.brand_code or "").upper() not in {
+        code.upper() for code in _WHITE_LABEL_BRAND_CODES
+    }:
+        raise HTTPException(status_code=400, detail="只能选择无品牌/其他品牌下的占位型号")
+
+    clean_job = _get_visible_match_clean_job_or_404(db, current_user, clean_job_id)
+    job_category = clean_job.category_code or clean_job.dispatch_category_code
+    if job_category and selected_model.category_code and selected_model.category_code != job_category:
+        raise HTTPException(status_code=400, detail="占位型号不属于当前任务品类")
+
+    mode = (payload or {}).get("mode")
+    if mode == "ids":
+        ids = payload.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            raise HTTPException(status_code=400, detail="ids 不能为空")
+        if len(ids) > _WHITE_LABEL_CLASSIFY_MAX:
+            raise HTTPException(status_code=400, detail=f"单次最多处理 {_WHITE_LABEL_CLASSIFY_MAX} 条")
+        targets = (
+            db.query(MatchResult)
+            .filter(
+                MatchResult.clean_job_id == clean_job_id,
+                MatchResult.id.in_(ids),
+                MatchResult.match_status.in_(list(_WHITE_LABEL_CLASSIFY_STATUSES)),
+            )
+            .all()
+        )
+    elif mode == "filter":
+        f = payload.get("filter") or {}
+        tab = f.get("tab") or "pending"
+        if tab == "unidentified_brand":
+            tab = "pending"
+        q = _build_review_queue_query(
+            db,
+            clean_job_id,
+            tab=tab,
+            keyword=f.get("keyword") or None,
+            search_by=f.get("search_by") or "item_name",
+            category_name=f.get("category_name") or None,
+            sort_by=f.get("sort_by") or "default",
+            top_brands=f.get("top_brands") or None,
+        )
+        if (payload.get("filter") or {}).get("tab") == "unidentified_brand":
+            q = q.filter(MatchResult.brand_identified == 0)
+        targets = [
+            mr for mr, *_ in q.limit(_WHITE_LABEL_CLASSIFY_MAX).all()
+            if mr.match_status in _WHITE_LABEL_CLASSIFY_STATUSES
+        ]
+    else:
+        raise HTTPException(status_code=400, detail="mode 必须为 ids 或 filter")
+
+    if not targets:
+        return {"success": 0, "failed": 0, "failures": []}
+
+    ok_ids: list[int] = []
+    failures: list[dict] = []
+    for mr in targets:
+        try:
+            _snapshot_prev_state(mr)
+            confirm_single_review(db, mr, selected_model)
+            mr.brand_identified = 1
+            mr.match_source = "white_label"
+            ok_ids.append(mr.id)
+        except Exception as exc:  # keep processing the rest
+            failures.append({"id": mr.id, "reason": str(exc)})
+    db.commit()
+    touch_clean_job(db, clean_job_id)
+    db.commit()
+    return {"success": len(ok_ids), "failed": len(failures), "failures": failures}
+
+
 @router.get("/{clean_job_id}/batch-confirm/preview")
 def batch_confirm_preview(
     clean_job_id: int,

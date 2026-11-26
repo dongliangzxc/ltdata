@@ -1328,6 +1328,18 @@ export type BatchConfirmPreview = {
 export const batchConfirmMatch = (clean_job_id: number, payload: BatchConfirmPayload) =>
   api.post<BatchConfirmResult>(`/match/${clean_job_id}/batch-confirm`, payload)
 
+export const classifyWhiteLabel = (
+  clean_job_id: number,
+  payload: {
+    mode: 'ids' | 'filter'
+    ids?: number[]
+    filter?: BatchConfirmFilter | Record<string, unknown>
+    model_id: number
+  },
+) => api.post<{ success: number; failed: number; failures: { id: number; reason: string }[] }>(
+  `/match/${clean_job_id}/white-label-classify`, payload,
+)
+
 export const previewBatchConfirmMatch = (clean_job_id: number, filter: BatchConfirmFilter) =>
   api.get<BatchConfirmPreview>(`/match/${clean_job_id}/batch-confirm/preview`, { params: filter })
 

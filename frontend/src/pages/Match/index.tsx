@@ -16,11 +16,12 @@ import {
   getCleanMonthlyPool, rerunCleanTaskWithCurrentRules,
   listFilteredItems, recoverFilteredItem,
   batchConfirmMatch, previewBatchConfirmMatch, reassignInvalidModel, batchIgnoreMatches, batchExcludeMatches, batchRestoreMatches,
+  classifyWhiteLabel, listWhiteLabelModels,
   searchCleanTasks, transferMatchItem, getTransferNotice, fetchAllCategories,
   listExchangeRateOptions, getTranslationStatus, translateTexts,
   updateMatchCustomField,
 } from '../../services/api'
-import type { CleanJobItem, MatchCandidateOut, MatchReviewDetail, FilteredItemOut, ModelItem, BatchConfirmFilter, BatchConfirmResult, BatchIgnoreFilter, BatchRestoreFilter, CleanTaskSearchItem, UserProfile, ExchangeRateOption, MatchCustomField } from '../../services/api'
+import type { CleanJobItem, MatchCandidateOut, MatchReviewDetail, FilteredItemOut, ModelItem, BatchConfirmFilter, BatchConfirmResult, BatchIgnoreFilter, BatchRestoreFilter, CleanTaskSearchItem, UserProfile, ExchangeRateOption, MatchCustomField, WhiteLabelModel } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 import ProgressModal from '../../components/ProgressModal'
 import AttributeInsightCard from './components/AttributeInsightCard'
@@ -260,6 +261,10 @@ export default function MatchPage() {
   const [salesMax, setSalesMax] = useState<number | null>(null)
   const [topBrandsOnly, setTopBrandsOnly] = useState(false)
   const [whiteLabelOnly, setWhiteLabelOnly] = useState(false)
+  const [whiteLabelClassifyOpen, setWhiteLabelClassifyOpen] = useState(false)
+  const [whiteLabelClassifyModels, setWhiteLabelClassifyModels] = useState<WhiteLabelModel[]>([])
+  const [whiteLabelClassifyModelId, setWhiteLabelClassifyModelId] = useState<number | null>(null)
+  const [whiteLabelClassifying, setWhiteLabelClassifying] = useState(false)
   const [displayCurrency, setDisplayCurrency] = useState('original')
   const [showTranslation, setShowTranslation] = useState(() => localStorage.getItem('show_translation') !== '0')
   const [translationEnabled, setTranslationEnabled] = useState(false)
@@ -1197,6 +1202,63 @@ export default function MatchPage() {
     }
   }
 
+  const openWhiteLabelClassify = async () => {
+    if (!selectedJobId) return
+    const category = selectedJob?.category_code || selectedJob?.dispatch_category_code
+    if (!category) {
+      message.warning('当前任务缺少品类，无法归为白牌')
+      return
+    }
+    try {
+      const { data } = await listWhiteLabelModels(category)
+      if (!data.length) {
+        message.warning('该品类还没有白牌占位型号，请先在「规则管理 → 白牌归类」配置')
+        return
+      }
+      setWhiteLabelClassifyModels(data)
+      setWhiteLabelClassifyModelId(null)
+      setWhiteLabelClassifyOpen(true)
+    } catch {
+      // handled by interceptor
+    }
+  }
+
+  const submitWhiteLabelClassify = async () => {
+    if (!selectedJobId) return
+    if (!whiteLabelClassifyModelId) {
+      message.warning('请选择白牌类型')
+      return
+    }
+    const useFilterMode = batchAllPages
+    setWhiteLabelClassifying(true)
+    try {
+      const payload: Parameters<typeof classifyWhiteLabel>[1] = {
+        mode: useFilterMode ? 'filter' : 'ids',
+        model_id: whiteLabelClassifyModelId,
+      }
+      if (useFilterMode) {
+        payload.filter = {
+          tab: activeTab === 'unidentified_brand' ? 'unidentified_brand' : activeTab,
+          keyword: keyword || null,
+          search_by: searchBy,
+          category_name: categoryName ?? null,
+          sort_by: sortBy,
+          top_brands: topBrandsOnly && isPowerBankJob ? TOP_BRANDS_LIMIT : null,
+        }
+      } else {
+        payload.ids = Array.from(selectedBatchIds)
+      }
+      const { data } = await classifyWhiteLabel(selectedJobId, payload)
+      message.success(`已归为白牌 ${data.success} 条${data.failed ? `，失败 ${data.failed} 条` : ''}`)
+      setWhiteLabelClassifyOpen(false)
+      refreshCurrentJobState()
+    } catch (err: any) {
+      message.error(err?.response?.data?.detail || '批量归白牌失败')
+    } finally {
+      setWhiteLabelClassifying(false)
+    }
+  }
+
   const handleBatchIgnore = () => {
     if (!selectedJobId) return
     const useFilterMode = batchAllPages
@@ -2025,7 +2087,7 @@ export default function MatchPage() {
               children: null,
             }))}
           />
-          {(activeTab === 'text_only' || activeTab === 'pending' || activeTab === 'ignored') && (() => {
+          {(activeTab === 'text_only' || activeTab === 'pending' || activeTab === 'ignored' || activeTab === 'unidentified_brand') && (() => {
             const items: PendingItem[] = pendingData?.items ?? []
             const pageIds = items.map((item: PendingItem) => item.id)
             const selectedOnPage = pageIds.filter((id: number) => selectedBatchIds.has(id))
@@ -2081,6 +2143,15 @@ export default function MatchPage() {
                   >
                     一键恢复（{batchAllPages ? pendingData?.total ?? 0 : selectedBatchIds.size}）
                   </Button>
+                ) : activeTab === 'unidentified_brand' ? (
+                  <Button
+                    type="primary"
+                    loading={whiteLabelClassifying}
+                    disabled={batchAllPages ? (pendingData?.total ?? 0) === 0 : selectedBatchIds.size === 0}
+                    onClick={openWhiteLabelClassify}
+                  >
+                    批量归为白牌（{batchAllPages ? pendingData?.total ?? 0 : selectedBatchIds.size}）
+                  </Button>
                 ) : (
                   <>
                     <Button
@@ -2112,7 +2183,7 @@ export default function MatchPage() {
               </div>
             )
           })()}
-          {(activeTab === 'text_only' || activeTab === 'pending' || activeTab === 'ignored') && pendingData && (() => {
+          {(activeTab === 'text_only' || activeTab === 'pending' || activeTab === 'ignored' || activeTab === 'unidentified_brand') && pendingData && (() => {
             const items: PendingItem[] = pendingData.items ?? []
             const pageIds = items.map((item: PendingItem) => item.id)
             const allPageChecked = pageIds.length > 0 && pageIds.every((id: number) => selectedBatchIds.has(id))
@@ -2226,9 +2297,14 @@ export default function MatchPage() {
                       showSizeChanger: false,
                     }}
                     renderItem={(item: PendingItem) => {
-                      const showCheckbox = activeTab === 'text_only' || activeTab === 'pending' || activeTab === 'ignored'
+                      const showCheckbox = activeTab === 'text_only' || activeTab === 'pending' || activeTab === 'ignored' || activeTab === 'unidentified_brand'
                       const candValidation = isCandidateValidForBatch(item)
                       const checked = selectedBatchIds.has(item.id)
+                      const checkboxTip = activeTab === 'unidentified_brand'
+                        ? '可勾选后批量归为白牌'
+                        : activeTab === 'ignored' || candValidation.ok
+                          ? ''
+                          : `${candValidation.reason}；仍可勾选后批量忽略`
                       return (
                         <List.Item
                           onClick={() => setSelectedReviewId(item.id)}
@@ -2239,7 +2315,7 @@ export default function MatchPage() {
                           }}
                         >
                           {showCheckbox && (
-                            <Tooltip title={activeTab === 'ignored' || candValidation.ok ? '' : `${candValidation.reason}；仍可勾选后批量忽略`}>
+                            <Tooltip title={checkboxTip}>
                               <Checkbox
                                 style={{ marginRight: 8, marginTop: 4, alignSelf: 'flex-start' }}
                                 checked={checked}
@@ -2768,6 +2844,41 @@ export default function MatchPage() {
               新建型号
             </Button>
           </Space.Compact>
+        </Space>
+      </Modal>
+
+      <Modal
+        open={whiteLabelClassifyOpen}
+        title={`将 ${batchAllPages ? pendingData?.total ?? 0 : selectedBatchIds.size} 条归为白牌`}
+        width={520}
+        okText="确认归为白牌"
+        cancelText="取消"
+        confirmLoading={whiteLabelClassifying}
+        onOk={submitWhiteLabelClassify}
+        onCancel={() => setWhiteLabelClassifyOpen(false)}
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Alert
+            type="info"
+            showIcon
+            message="这是人工归类：仅对确认属于白牌/公模的商品使用，系统不会自动判断品牌。"
+          />
+          <Select
+            showSearch
+            allowClear
+            value={whiteLabelClassifyModelId ?? undefined}
+            placeholder="选择白牌类型"
+            style={{ width: '100%' }}
+            optionFilterProp="label"
+            onChange={v => setWhiteLabelClassifyModelId(v ?? null)}
+            options={whiteLabelClassifyModels.map(m => ({
+              value: m.id,
+              label: `${m.brand_code ? `[${m.brand_code}] ` : ''}${m.model_name || m.model_code || '未分类'}`,
+            }))}
+          />
+          <Text type="secondary">
+            确认后会写 URL 映射，后续同链接会优先复用本次结果。
+          </Text>
         </Space>
       </Modal>
 

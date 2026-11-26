@@ -91,7 +91,6 @@ type AutomaticProgress = Pick<ProgressRow, 'url_matched' | 'auto_matched' | 'aut
 const automaticallyProcessed = (row: AutomaticProgress) => row.url_matched + row.auto_matched
   + (row.auto_excluded_ignored ?? 0) + (row.system_filtered ?? 0)
 const matchPercent = (row: ProgressRow) => progressPercent(automaticallyProcessed(row), row.dispatched)
-const modelMatchPercent = (row: ProgressRow) => progressPercent(row.matched, row.dispatched)
 type ExclusionProgress = Pick<ProgressRow, 'excluded_ignored' | 'manual_excluded_ignored' | 'auto_excluded_ignored' | 'unknown_excluded_ignored'>
 const unknownExcluded = (row: ExclusionProgress) => row.unknown_excluded_ignored
   ?? Math.max(row.excluded_ignored - (row.manual_excluded_ignored ?? 0) - (row.auto_excluded_ignored ?? 0), 0)
@@ -174,22 +173,15 @@ const progressColumns: ColumnsType<ProgressRow> = [
       : <Text type="secondary">无分发数据</Text>),
   },
   {
-    title: '型号匹配成功', dataIndex: 'matched', width: 110,
-    sorter: (a, b) => a.matched - b.matched,
-    render: (v: number) => <Text type="success">{v.toLocaleString()}</Text>,
+    title: '自动已处理', key: 'automatic_processed', width: 130,
+    sorter: (a, b) => automaticallyProcessed(a) - automaticallyProcessed(b),
+    render: (_: unknown, row) => <Text type="success">{automaticallyProcessed(row).toLocaleString()}</Text>,
   },
   {
     title: '匹配进度（自动）', key: 'match_rate', width: 160,
     sorter: (a, b) => matchPercent(a) - matchPercent(b),
     render: (_: unknown, row) => (row.dispatched > 0
       ? <Progress percent={matchPercent(row)} size="small" />
-      : <Text type="secondary">无分发数据</Text>),
-  },
-  {
-    title: '型号匹配成功率（含人工）', key: 'model_match_rate', width: 180,
-    sorter: (a, b) => modelMatchPercent(a) - modelMatchPercent(b),
-    render: (_: unknown, row) => (row.dispatched > 0
-      ? <Progress percent={modelMatchPercent(row)} size="small" />
       : <Text type="secondary">无分发数据</Text>),
   },
   {
@@ -608,7 +600,7 @@ export default function PlatformStatsPage() {
         type="info"
         showIcon
         message="口径说明"
-        description="总览与明细均按「分发条目」统计（同一商品分发到多个品类会分别计数）：值得分发 = 最新一次已完成分发批次中命中规则的条目；已清理 = 自动匹配 + 人工确认 + 已排除/忽略 + 系统过滤。系统过滤表示已按清洗规则或干扰链接库排除，计入处理进度，不计入匹配成功；已恢复或已有匹配结果的条目不重复计入系统过滤，重复数据不按差额推算为过滤。自动匹配 = URL 精准匹配 + 其他自动匹配，人工确认单独计数。匹配进度（自动）=（自动匹配 + 自动排除/忽略 + 系统自动过滤）÷ 所选品类分发条数；人工确认、人工排除/忽略、来源未明和已转出不计入。型号匹配成功数/成功率另含人工确认，与自动匹配进度分开统计。对账关系：值得分发 = 已入任务条数 + 未入任务条数 = 已清理 + 未清理；已入任务条数 = 已清理 + 当前待处理 + 已入任务未出结果。任务相关数字按数据条目计数，清洗页「任务总数」按清洗任务个数计数。已发布为任务级发布行数，不与条目相加。明细可切换平台聚合或拆分；最后处理时间包括匹配结果更新时间和系统过滤时间。时间按北京时间统计；处理进度后台定时刷新，最多延迟约 5 分钟。"
+        description="总览与明细均按「分发条目」统计（同一商品分发到多个品类会分别计数）：值得分发 = 最新一次已完成分发批次中命中规则的条目；已清理 = 自动匹配 + 人工确认 + 已排除/忽略 + 系统过滤。系统过滤表示已按清洗规则或干扰链接库排除，计入处理进度和自动匹配进度；已恢复或已有匹配结果的条目不重复计入系统过滤，重复数据不按差额推算为过滤。自动匹配 = URL 精准匹配 + 其他自动匹配，人工确认单独计数。匹配进度（自动）=（自动匹配 + 自动排除/忽略 + 系统自动过滤）÷ 所选品类分发条数；人工确认、人工排除/忽略、来源未明和已转出不计入。对账关系：值得分发 = 已入任务条数 + 未入任务条数 = 已清理 + 未清理；已入任务条数 = 已清理 + 当前待处理 + 已入任务未出结果。任务相关数字按数据条目计数，清洗页「任务总数」按清洗任务个数计数。已发布为任务级发布行数，不与条目相加。明细可切换平台聚合或拆分；最后处理时间包括匹配结果更新时间和系统过滤时间。时间按北京时间统计；处理进度后台定时刷新，最多延迟约 5 分钟。"
         action={
           <Space direction="vertical" align="end">
             <Button icon={<ReloadOutlined />} loading={loading} onClick={refresh}>刷新</Button>
@@ -759,7 +751,7 @@ export default function PlatformStatsPage() {
         </Row>
         <Row gutter={16} align="middle" style={{ marginBottom: 16 }}>
           <Col span={6}>
-            <Statistic title="型号匹配成功" value={progressTotals.matched} valueStyle={{ color: '#3f8600' }} />
+            <Statistic title="自动已处理" value={automaticallyProcessed(progressTotals)} valueStyle={{ color: '#3f8600' }} />
           </Col>
           <Col span={6}>
             <Statistic title="匹配进度（自动）" value={progressPercent(automaticallyProcessed(progressTotals), progressTotals.dispatched)} suffix="%" />
@@ -767,7 +759,6 @@ export default function PlatformStatsPage() {
           <Col span={12}>
             <Text type="secondary">自动已处理 {automaticallyProcessed(progressTotals).toLocaleString()} / 分发 {progressTotals.dispatched.toLocaleString()}</Text>
             <Progress aria-label="明细匹配进度" percent={progressPercent(automaticallyProcessed(progressTotals), progressTotals.dispatched)} showInfo={false} strokeColor="#13c2c2" />
-            <Text type="secondary">型号匹配成功率（含人工确认）{progressPercent(progressTotals.matched, progressTotals.dispatched)}%</Text>
           </Col>
         </Row>
         <Alert
@@ -775,14 +766,14 @@ export default function PlatformStatsPage() {
           showIcon
           style={{ marginBottom: 16 }}
           message="口径提示"
-          description="匹配进度（自动）=（URL 精准匹配 + 其他自动匹配 + 自动排除/忽略 + 系统自动过滤）÷ 所选品类分发条数；人工确认、人工排除/忽略、来源未明和已转出均不计入。型号匹配成功数/成功率另含人工确认。排除/忽略按当前记录的人工、自动来源拆分，旧记录来源缺失或冲突时显示「来源未明」；系统过滤由清洗规则或干扰链接自动产生。此处「已入任务条数 / 未入任务条数」按分发条目计数；清洗页的「任务总数」按清洗任务个数计数，两者不是同一口径。对照清洗页时请选择相同品类 + 月份 + 平台范围。"
+          description="匹配进度（自动）=（URL 精准匹配 + 其他自动匹配 + 自动排除/忽略 + 系统自动过滤）÷ 所选品类分发条数；人工确认、人工排除/忽略、来源未明和已转出均不计入。排除/忽略按当前记录的人工、自动来源拆分，旧记录来源缺失或冲突时显示「来源未明」；系统过滤由清洗规则或干扰链接自动产生。此处「已入任务条数 / 未入任务条数」按分发条目计数；清洗页的「任务总数」按清洗任务个数计数，两者不是同一口径。对照清洗页时请选择相同品类 + 月份 + 平台范围。"
         />
         <Table
           dataSource={filteredProgress}
           columns={progressTableColumns}
           rowKey={row => `${row.month}-${row.category_code ?? ''}-${row.platform ?? ''}`}
           size="small"
-          scroll={{ x: 2880 }}
+          scroll={{ x: 2720 }}
           pagination={{ pageSize: 20, showSizeChanger: true }}
         />
       </Card>

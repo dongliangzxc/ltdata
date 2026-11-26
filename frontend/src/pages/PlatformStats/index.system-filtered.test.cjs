@@ -90,7 +90,7 @@ assert.equal(statistic(tree, '已清理'), 20, 'system filtering contributes to 
 assert.equal(statistic(tree, '系统过滤'), 4, 'filtered records must be visible separately')
 assert.equal(statistic(tree, '自动匹配'), 16, 'filtering must not inflate model matches')
 assert.equal(statistic(tree, '清理占比'), 100)
-assert.equal(statistic(tree, '型号匹配成功'), 16)
+assert.equal(statistic(tree, '自动已处理'), 20)
 assert.equal(statistic(tree, '匹配进度（自动）'), 100, 'system filters contribute to automatic matching progress')
 assert.equal(overviewProgress(tree, '处理进度'), 100, 'processing progress must remain separately visible')
 assert.equal(overviewProgress(tree, '匹配进度'), 100, 'matching progress supplements processing progress')
@@ -105,9 +105,12 @@ assert.deepEqual(nodes(originalDetailRow, node => node.type === 'Statistic').map
   'matching progress must not displace original processing summary metrics')
 const table = nodes(tree, node => node.type === 'Table')[0].props
 const matchColumn = table.columns.find(col => col.key === 'match_rate')
-const modelRateColumn = table.columns.find(col => col.key === 'model_match_rate')
-assert.equal(modelRateColumn.render(null, table.dataSource[0]).props.percent, 80, 'model success remains separately measurable')
-assert.equal(modelRateColumn.render(null, { ...base, dispatched: 20, matched: 5 }).props.percent, 25)
+const automaticCountColumn = table.columns.find(col => col.key === 'automatic_processed')
+assert.equal(textContent(automaticCountColumn.render(null, table.dataSource[0])), '20')
+assert.ok(!table.columns.some(col => col.key === 'model_match_rate'), 'remove the duplicate matching rate with manual confirmations')
+assert.equal(table.columns.filter(col => col.key === 'match_rate').length, 1, 'only one matching progress column remains')
+assert.ok(!textContent(tree).includes('型号匹配成功'), 'summaries and explanations must use the same automatic definition')
+assert.ok(table.columns.every(col => !String(col.title).includes('含人工')), 'do not expose a second conflicting matching rate')
 assert.equal(matchColumn.title, '匹配进度（自动）')
 const excludedColumn = table.columns.find(col => col.dataIndex === 'excluded_ignored')
 assert.ok(textContent(excludedColumn.render(5, { ...base, excluded_ignored: 5,
@@ -127,8 +130,10 @@ const mixedSources = { ...base, dispatched: 100, processed: 90, matched: 45,
   system_filtered: 20, transferred_out: 5 }
 assert.equal(matchColumn.render(null, mixedSources).props.percent, 55,
   'only automatic model matches, automatic exclusions and system filters count')
-assert.equal(modelRateColumn.render(null, mixedSources).props.percent, 45,
-  'model success separately includes manual confirmation but no exclusions or filters')
+assert.equal(textContent(automaticCountColumn.render(null, mixedSources)), '55',
+  'automatic count and rate must use the same numerator, excluding manual confirmations')
+assert.ok(automaticCountColumn.sorter({ ...mixedSources, confirmed: 100, matched: 130 }, mixedSources) === 0,
+  'manual confirmations do not affect the automatic count or its sorting')
 assert.equal(matchColumn.render(null, { ...mixedSources, auto_excluded_ignored: undefined }).props.percent, 50,
   'missing exclusion provenance must not treat manual or unknown exclusions as automatic')
 assert.equal(matchColumn.render(null, { ...mixedSources, system_filtered: undefined }).props.percent, 35,
@@ -162,6 +167,7 @@ Object.assign(progress, { dispatchable: 141454, processed: 128549, matched: 7878
 const reported = render()
 assert.equal(overviewProgress(reported, '处理进度'), 90.9)
 assert.equal(overviewProgress(reported, '匹配进度'), 68.4)
+assert.ok(!textContent(reported).includes('55.7'), 'do not retain the old manual-inclusive rate in the matching summary')
 assert.ok(textContent(reported).includes('68.4% · 自动已处理 96,771 / 分发 141,454'),
   'matching bar text must use the same success numerator and percentage as its fill')
 assert.equal(statistic(reported, '自动匹配'), 60318, 'manual confirmations remain a separate statistic')
@@ -232,7 +238,7 @@ assert.ok(textContent(render()).includes('人工 1 · 自动 1'), 'source counts
 assert.equal(statistic(render(), '清理占比'), 51.4)
 assert.equal(overviewProgress(render(), '处理进度'), 51.4)
 assert.deepEqual(matchingRates(render()), [37.1, 37.1], 'overview and detail match ratios sum counts before dividing')
-assert.equal(statistic(render(), '型号匹配成功'), 13)
+assert.equal(statistic(render(), '自动已处理'), 13)
 assert.equal(statistic(render(), '上传入库数据总量（全部品类）'), 100,
   'uploaded raw rows have no category dimension and must be labelled accordingly')
 assert.equal(nodes(render(), node => node.type === 'Table')[0].props.dataSource.length, 2)
@@ -254,7 +260,7 @@ assert.equal(statistic(render(), '清理占比'), 0)
 assert.equal(overviewProgress(render(), '处理进度'), 0)
 assert.equal(overviewProgress(render(), '匹配进度'), 0)
 assert.equal(statistic(render(), '匹配进度（自动）'), 0)
-assert.equal(statistic(render(), '型号匹配成功'), 0)
+assert.equal(statistic(render(), '自动已处理'), 0)
 assert.equal(nodes(render(), node => node.type === 'Table')[0].props.dataSource.length, 0)
 const selectAll = nodes(selector().dropdownRender('menu'), node => node.type === 'Checkbox')[0].props
 assert.equal(selectAll.checked, false)

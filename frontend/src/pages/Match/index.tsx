@@ -56,6 +56,7 @@ const matchSourceMeta = (source?: string | null) => {
     s2: { label: '标题品牌码匹配', color: 'green' },
     s3: { label: '标题品牌名匹配', color: 'green' },
     s4: { label: '型号码兜底匹配', color: 'orange' },
+    white_label: { label: '白牌归类', color: 'gold' },
     manual: { label: '人工确认', color: 'blue' },
     exclude_reuse: { label: '沿用历史排除', color: 'default' },
   }
@@ -258,6 +259,7 @@ export default function MatchPage() {
   const [salesMin, setSalesMin] = useState<number | null>(null)
   const [salesMax, setSalesMax] = useState<number | null>(null)
   const [topBrandsOnly, setTopBrandsOnly] = useState(false)
+  const [whiteLabelOnly, setWhiteLabelOnly] = useState(false)
   const [displayCurrency, setDisplayCurrency] = useState('original')
   const [showTranslation, setShowTranslation] = useState(() => localStorage.getItem('show_translation') !== '0')
   const [translationEnabled, setTranslationEnabled] = useState(false)
@@ -602,10 +604,11 @@ export default function MatchPage() {
       sales_min: salesMin ?? undefined,
       sales_max: salesMax ?? undefined,
       top_brands: topBrandsOnly && isPowerBankJob ? TOP_BRANDS_LIMIT : undefined,
+      ...(activeTab === 'pending' && whiteLabelOnly ? { white_label: 1 } : {}),
     }).then(r => r.data),
     {
       ready: selectedJobId != null && summary != null && summary.total > 0 && activeTab !== 'filtered',
-      refreshDeps: [selectedJobId, keyword, searchBy, page, activeTab, categoryName, sortBy, priceMin, priceMax, salesMin, salesMax, topBrandsOnly],
+      refreshDeps: [selectedJobId, keyword, searchBy, page, activeTab, categoryName, sortBy, priceMin, priceMax, salesMin, salesMax, topBrandsOnly, whiteLabelOnly],
     }
   )
 
@@ -2045,6 +2048,20 @@ export default function MatchPage() {
                     ? `已选择全部搜索结果 ${pendingData?.total ?? 0} 条`
                     : `已选当前页 ${selectedOnPage.length} / ${pageIds.length} 条`}
                 </span>
+                {activeTab === 'pending' && (
+                  <Space size={6}>
+                    <Switch
+                      size="small"
+                      checked={whiteLabelOnly}
+                      onChange={checked => {
+                        setWhiteLabelOnly(checked)
+                        setPage(1)
+                        resetBatchSelection()
+                      }}
+                    />
+                    <Text style={{ fontSize: 12 }}>只看白牌建议</Text>
+                  </Space>
+                )}
                 <div style={{ flex: 1 }} />
                 {activeTab === 'ignored' ? (
                   <Button

@@ -713,6 +713,7 @@ def list_pending(
     search_by: str = Query("item_name"),
     status: str = Query("pending"),
     brand_identified: Optional[int] = Query(None),
+    white_label: Optional[int] = Query(None, description="只看白牌归类候选（1=是）"),
     category_name: Optional[str] = Query(None),
     sort_by: str = Query("default"),
     top_brands: Optional[int] = Query(None, ge=1, le=500, description="仅展示当前任务内销量前 N 品牌"),
@@ -786,6 +787,11 @@ def list_pending(
             q = q.filter(RawDataRecord.item_name.ilike(pattern))
     if brand_identified is not None:
         q = q.filter(MatchResult.brand_identified == brand_identified)
+    if white_label:
+        q = q.filter(exists().where(
+            MatchResultCandidate.match_result_id == MatchResult.id,
+            MatchResultCandidate.match_source == "white_label",
+        ))
     if category_name:
         q = q.filter(Category.code == category_name)
     if price_min is not None:

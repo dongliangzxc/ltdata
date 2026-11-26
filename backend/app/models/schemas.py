@@ -1235,6 +1235,45 @@ class AttrRule(Base):
     created_at    = Column(DateTime, default=datetime.utcnow)
 
 
+# ─────────────────────────── 白牌/公模归类 ───────────────────────────
+
+class WhiteLabelPolicy(Base):
+    """品类级白牌归类策略：控制是否自动归类以及归类模式。"""
+    __tablename__ = "white_label_policies"
+    __table_args__ = (
+        UniqueConstraint("category_code", name="uq_white_label_policy_category"),
+    )
+
+    id                 = Column(Integer, primary_key=True, index=True)
+    category_code      = Column(String(50), ForeignKey("categories.code", ondelete="CASCADE"), nullable=False)
+    enabled            = Column(SmallInteger, nullable=False, default=0, server_default="0")
+    mode               = Column(String(20), nullable=False, default="off", server_default="off")  # off/suggest/auto
+    brand_code         = Column(String(100), nullable=False, default="无品牌", server_default="无品牌")
+    unmatched_model_id = Column(Integer, ForeignKey("models.id", ondelete="SET NULL"), nullable=True)
+    created_at         = Column(DateTime, default=datetime.utcnow)
+    updated_at         = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class WhiteLabelRule(Base):
+    """白牌/公模归类关键词规则：标题关键词 → 占位型号（类型）。"""
+    __tablename__ = "white_label_rules"
+    __table_args__ = (
+        UniqueConstraint("category_code", "keyword", "model_id", name="uq_white_label_rule"),
+        CheckConstraint("match_type IN ('contains', 'exact')", name="ck_white_label_rule_type"),
+        Index("idx_white_label_rule_category", "category_code", "is_active", "priority"),
+    )
+
+    id            = Column(Integer, primary_key=True, index=True)
+    category_code = Column(String(50), ForeignKey("categories.code", ondelete="CASCADE"), nullable=False)
+    keyword       = Column(String(200), nullable=False)
+    match_type    = Column(String(20), nullable=False, default="contains", server_default="contains")
+    model_id      = Column(Integer, ForeignKey("models.id", ondelete="CASCADE"), nullable=False)
+    priority      = Column(Integer, nullable=False, default=100, server_default="100")
+    is_active     = Column(SmallInteger, nullable=False, default=1, server_default="1")
+    created_at    = Column(DateTime, default=datetime.utcnow)
+    updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 # ─────────────────────────── 型号匹配结果 ───────────────────────────
 
 class MatchResult(Base):

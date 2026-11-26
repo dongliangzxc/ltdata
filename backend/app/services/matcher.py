@@ -35,10 +35,15 @@
            S2 仍未命中，改用 brand_name（≥2字符）在商品名中匹配，逻辑同 S2。
            标记 brand_identified=1。
 
-  S4     ── 全局长码兜底（仅限品牌完全未识别时）
-           S1/S2/S3 均未识别出品牌，才触发此阶段。
-           对所有 model_code ≥5 字符的型号，直接检查商品名是否包含该 model_code。
+   S4     ── 全局长码兜底（仅限品牌完全未识别时）
+            S1/S2/S3 均未识别出品牌，才触发此阶段。
+            对所有 model_code ≥5 字符的型号，直接检查商品名是否包含该 model_code。
            不检查别名（别名较短，无品牌约束下容易误匹配）。
+
+   S5     ── 白牌/公模归类（仅限启用的品类，且品牌/型号均未匹配时）
+            按品类白牌规则把标题关键词映射到占位型号（如「入耳」→ 入耳式）。
+            auto 模式直接记为 matched；suggest 模式只写候选，保留待确认。
+            占位型号不会进入 S1-S4 候选，也不会作为 URL/历史库的品牌证据。
 
 型号候选评分规则：多个候选均命中时，取 model_code 最长者（长码更精确，短码误匹配率高）。
 
@@ -64,7 +69,7 @@ from app.services.rawdata_cache import cached_value
 # 按平台及商品键批次缓存原始映射；共享缓存失效机制，TTL 兜底。
 URL_MAP_CACHE_TTL = 60.0
 _URL_MAP_BATCH_SIZE = 1000
-from app.models.schemas import CleanedDataRecord, ModelRecord, ModelAlias, MatchResult, MatchResultAttr, MatchResultCandidate, MatchResultExtraValue, ItemUrlMapping, MatchRule, HistoricalMapping, CleanJobRecord, RawDataRecord
+from app.models.schemas import CleanedDataRecord, ModelRecord, ModelAlias, MatchResult, MatchResultAttr, MatchResultCandidate, MatchResultExtraValue, ItemUrlMapping, MatchRule, HistoricalMapping, CleanJobRecord, RawDataRecord, WhiteLabelPolicy, WhiteLabelRule
 from app.utils.url_utils import extract_item_id
 from app.utils.text_utils import title_key
 from app.services.attribute_matcher import run_attribute_matching
@@ -110,6 +115,10 @@ class MatchContext:
     hist_item_name_norm: dict | None = None
     # 已加载「全量（含无月份行）」历史的平台；仅按月加载子集的平台不在其中
     hist_full_platforms: set = field(default_factory=set)
+    # 白牌/公模归类：品类策略、关键词规则和占位型号对象
+    white_label_policy: WhiteLabelPolicy | None = None
+    white_label_rules: list = field(default_factory=list)
+    white_label_models: dict = field(default_factory=dict)
 
 
 def _load_url_mapping_rows(db: Session, platform: str, item_ids: tuple[str, ...]) -> tuple:
@@ -172,11 +181,46 @@ def _load_match_context(
     保留 run_match 原有行为（全部有效型号进入 valid_model_ids）。"""
     ctx = MatchContext(job_category_code=category_code)
 
+    # 白牌/公模策略：占位型号不能进入 S1-S4 自动候选，否则长型号码（如 SOUNDBAR）
+    # 可能被真实商品标题误命中。
+    white_label_model_ids: set[int] = set()
+    if category_code:
+        ctx.white_label_policy = (
+            db.query(WhiteLabelPolicy)
+            .filter(WhiteLabelPolicy.category_code == category_code)
+            .first()
+        )
+        if ctx.white_label_policy is not None:
+            ctx.white_label_rules = (
+                db.query(WhiteLabelRule)
+                .filter(
+                    WhiteLabelRule.category_code == category_code,
+                    WhiteLabelRule.is_active == 1,
+                )
+                .order_by(WhiteLabelRule.priority, WhiteLabelRule.id)
+                .all()
+            )
+            white_label_model_ids = {rule.model_id for rule in ctx.white_label_rules}
+            unmatched_model_id = ctx.white_label_policy.unmatched_model_id
+            if unmatched_model_id:
+                white_label_model_ids.add(unmatched_model_id)
+            if white_label_model_ids:
+                loaded = (
+                    db.query(ModelRecord)
+                    .filter(ModelRecord.id.in_(white_label_model_ids))
+                    .all()
+                )
+                ctx.white_label_models = {m.id: m for m in loaded}
+
     model_query = db.query(ModelRecord)
     if category_code:
         model_query = model_query.filter(ModelRecord.category_code == category_code)
     model_rows = model_query.all()
-    ctx.valid_model_ids = {m.id for m in model_rows if _is_valid_model(m)}
+    ctx.valid_model_ids = {
+        m.id
+        for m in model_rows
+        if _is_valid_model(m) and m.id not in white_label_model_ids
+    }
     # URL 映射可复用型号：本品类 active 且品牌非占位的型号即可被 URL 直接复用
     # （type 允许为空——video_doorbell 等按品牌级归类的品类，人工确认往往落在
     # 型号码为空的占位型号上，若不放开则同链接已确认商品无法自动复用）。
@@ -619,6 +663,30 @@ def _index_keys_by_grams(prefix_index: dict, order: dict, grams: set) -> list:
     return keys
 
 
+def _match_white_label(item_upper: str, ctx: MatchContext):
+    """S5 白牌/公模归类：按品类关键词规则选择占位型号。
+
+    仅在品类策略启用、且前面的品牌/型号匹配都失败时调用。
+    返回 (占位型号, 命中规则)；未命中时返回兜底型号。
+    """
+    policy = ctx.white_label_policy
+    if not policy or not policy.enabled:
+        return None, None
+    for rule in ctx.white_label_rules:
+        model = ctx.white_label_models.get(rule.model_id)
+        if model is None:
+            continue
+        keyword = _norm(rule.keyword)
+        if not keyword:
+            continue
+        hit = item_upper == keyword if rule.match_type == "exact" else keyword in item_upper
+        if hit:
+            return model, rule
+    if policy.unmatched_model_id:
+        return ctx.white_label_models.get(policy.unmatched_model_id), None
+    return None, None
+
+
 def _match_text_stages(
     raw,
     item_upper: str,
@@ -841,7 +909,10 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
         # 每批 commit 会 expire 会话内全部对象（expire_on_commit），之后访问型号/
         # 清洗行/规则的属性会逐个触发单行 SELECT（headphone 3 万行任务因此跑了 20 分钟+）。
         # 这些对象在匹配中只读，移出会话后保留已加载的值，commit 不再使其失效。
-        for obj in (*ctx.models, *explicit_rules, *cleaned_rows):
+        white_label_objects = (*ctx.white_label_rules, *ctx.white_label_models.values())
+        if ctx.white_label_policy is not None:
+            white_label_objects += (ctx.white_label_policy,)
+        for obj in (*ctx.models, *explicit_rules, *cleaned_rows, *white_label_objects):
             if obj in db:
                 db.expunge(obj)
     _t3 = time.perf_counter()
@@ -1056,15 +1127,51 @@ def run_match(db: Session, clean_job_id: int, progress_cb=None, commit: bool = T
             ))
             matched_count += 1
         else:
-            results.append(MatchResult(
-                clean_job_id=clean_job_id,
-                raw_data_id=row.raw_data_id,
-                model_id=None,
-                match_status="pending",
-                matched_by="auto",
-                match_source=None,
-                brand_identified=1 if brand_identified else 0,
-            ))
+            white_label_model = None
+            policy = ctx.white_label_policy
+            if (
+                policy is not None
+                and policy.enabled
+                and policy.mode in ("auto", "suggest")
+                and not brand_identified
+            ):
+                white_label_model, _ = _match_white_label(item_upper, ctx)
+
+            if white_label_model is not None and policy.mode == "auto":
+                results.append(MatchResult(
+                    clean_job_id=clean_job_id,
+                    raw_data_id=row.raw_data_id,
+                    model_id=white_label_model.id,
+                    match_status="matched",
+                    matched_by="auto",
+                    match_source="white_label",
+                    brand_identified=1,
+                ))
+                matched_count += 1
+            elif white_label_model is not None and policy.mode == "suggest":
+                # 半自动：只给候选，不直接发布；品牌标记为已识别，进入「待确认」
+                raw_data_candidates.setdefault(row.raw_data_id, []).append(
+                    (white_label_model, 100, "white_label")
+                )
+                results.append(MatchResult(
+                    clean_job_id=clean_job_id,
+                    raw_data_id=row.raw_data_id,
+                    model_id=None,
+                    match_status="pending",
+                    matched_by="auto",
+                    match_source=None,
+                    brand_identified=1,
+                ))
+            else:
+                results.append(MatchResult(
+                    clean_job_id=clean_job_id,
+                    raw_data_id=row.raw_data_id,
+                    model_id=None,
+                    match_status="pending",
+                    matched_by="auto",
+                    match_source=None,
+                    brand_identified=1 if brand_identified else 0,
+                ))
 
         if len(results) >= BATCH:
             db.bulk_save_objects(results)
@@ -1327,10 +1434,38 @@ def run_match_for_result(
         mr.match_source = match_source
         mr.brand_identified = 1 if brand_identified else 0
     else:
-        mr.match_status = "pending"
-        mr.model_id = None
-        mr.match_source = None
-        mr.brand_identified = 1 if brand_identified else 0
+        white_label_model = None
+        policy = ctx.white_label_policy
+        if (
+            policy is not None
+            and policy.enabled
+            and policy.mode in ("auto", "suggest")
+            and not brand_identified
+        ):
+            white_label_model, _ = _match_white_label(item_upper, ctx)
+
+        if white_label_model is not None and policy.mode == "auto":
+            mr.match_status = "matched"
+            mr.model_id = white_label_model.id
+            mr.match_source = "white_label"
+            mr.brand_identified = 1
+        elif white_label_model is not None and policy.mode == "suggest":
+            db.add(MatchResultCandidate(
+                match_result_id=mr.id,
+                model_id=white_label_model.id,
+                match_source="white_label",
+                score=100,
+                rank=1,
+            ))
+            mr.match_status = "pending"
+            mr.model_id = None
+            mr.match_source = None
+            mr.brand_identified = 1
+        else:
+            mr.match_status = "pending"
+            mr.model_id = None
+            mr.match_source = None
+            mr.brand_identified = 1 if brand_identified else 0
 
     mr.matched_by = "auto"
 

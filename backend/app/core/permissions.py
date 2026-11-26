@@ -24,6 +24,7 @@ API_PERMISSION_PREFIXES: tuple[tuple[str, str], ...] = (
     ("/api/rawdata", PERMISSION_DATA_MANAGEMENT),
     ("/api/categories", PERMISSION_DATA_MANAGEMENT),
     ("/api/match", PERMISSION_PROCESSING_WORKBENCH),
+    ("/api/white-label", PERMISSION_PROCESSING_WORKBENCH),
     ("/api/clean", PERMISSION_PROCESSING_WORKBENCH),
     ("/api/metadata", PERMISSION_PROCESSING_WORKBENCH),
     ("/api/models", PERMISSION_PROCESSING_WORKBENCH),

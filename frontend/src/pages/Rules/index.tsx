@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   Tabs, Card, Table, Button, Input, Select, Space, Popconfirm,
@@ -24,7 +24,9 @@ import {
   getCorrectionRuleCategoryCount, bulkDeleteCorrectionRules,
   listInterferenceLinks, importInterferenceLinks, deleteInterferenceLink, downloadInterferenceLinkTemplate,
   getInterferenceLinkCategoryCount, bulkDeleteInterferenceLinks,
-  type UserProfile,
+  listWhiteLabelPolicies, upsertWhiteLabelPolicy, listWhiteLabelModels,
+  listWhiteLabelRules, createWhiteLabelRule, updateWhiteLabelRule, deleteWhiteLabelRule,
+  type UserProfile, type WhiteLabelModel, type WhiteLabelRule,
 } from '../../services/api'
 import { useCategoryOptions } from '../../hooks/useCategoryOptions'
 import ImportMappingModal from '../../components/ImportMappingModal'
@@ -1034,9 +1036,258 @@ function InterferenceLinkTab() {
 }
 
 // ══════════════════════════════════════════════
+// Tab 7: 白牌/公模归类
+// ══════════════════════════════════════════════
+const WHITE_LABEL_MODES = [
+  { value: 'off', label: '关闭' },
+  { value: 'suggest', label: '半自动（只给候选）' },
+  { value: 'auto', label: '全自动（直接归类）' },
+]
+
+function whiteLabelModelLabel(model?: WhiteLabelModel | null) {
+  if (!model) return '-'
+  return `${model.brand_code || '-'} ${model.model_name || model.model_code || ''}`.trim()
+}
+
+function WhiteLabelTab() {
+  const [selectedCategory, setSelectedCategory] = useState<string | undefined>()
+  const [policyForm] = Form.useForm()
+  const [ruleForm] = Form.useForm()
+  const [ruleModalOpen, setRuleModalOpen] = useState(false)
+  const [editingRule, setEditingRule] = useState<WhiteLabelRule | null>(null)
+  const [savingPolicy, setSavingPolicy] = useState(false)
+
+  const { data: policies, refresh: refreshPolicies } = useRequest(
+    () => listWhiteLabelPolicies().then(r => r.data)
+  )
+  const { data: models } = useRequest(
+    () => selectedCategory ? listWhiteLabelModels(selectedCategory).then(r => r.data) : Promise.resolve([]),
+    { refreshDeps: [selectedCategory] }
+  )
+  const { data: rules, loading: rulesLoading, refresh: refreshRules } = useRequest(
+    () => selectedCategory ? listWhiteLabelRules(selectedCategory).then(r => r.data) : Promise.resolve([]),
+    { refreshDeps: [selectedCategory] }
+  )
+
+  const currentPolicy = useMemo(
+    () => (policies ?? []).find(p => p.category_code === selectedCategory),
+    [policies, selectedCategory],
+  )
+
+  useEffect(() => {
+    if (!currentPolicy) {
+      policyForm.resetFields()
+      return
+    }
+    policyForm.setFieldsValue({
+      enabled: currentPolicy.enabled,
+      mode: currentPolicy.mode,
+      brand_code: currentPolicy.brand_code,
+      unmatched_model_id: currentPolicy.unmatched_model_id,
+    })
+  }, [currentPolicy, policyForm])
+
+  const handleSavePolicy = async () => {
+    if (!selectedCategory) return
+    const values = await policyForm.validateFields()
+    setSavingPolicy(true)
+    try {
+      await upsertWhiteLabelPolicy(selectedCategory, {
+        enabled: !!values.enabled,
+        mode: values.mode,
+        brand_code: values.brand_code,
+        unmatched_model_id: values.unmatched_model_id ?? null,
+      })
+      message.success('白牌策略已保存')
+      refreshPolicies()
+    } finally {
+      setSavingPolicy(false)
+    }
+  }
+
+  const openAddRule = () => {
+    setEditingRule(null)
+    ruleForm.resetFields()
+    ruleForm.setFieldsValue({ match_type: 'contains', priority: 100, is_active: true })
+    setRuleModalOpen(true)
+  }
+
+  const openEditRule = (rule: WhiteLabelRule) => {
+    setEditingRule(rule)
+    ruleForm.setFieldsValue({
+      keyword: rule.keyword,
+      match_type: rule.match_type,
+      model_id: rule.model_id,
+      priority: rule.priority,
+      is_active: rule.is_active,
+    })
+    setRuleModalOpen(true)
+  }
+
+  const handleSaveRule = async () => {
+    if (!selectedCategory) return
+    const values = await ruleForm.validateFields()
+    if (editingRule) {
+      await updateWhiteLabelRule(editingRule.id, values)
+      message.success('规则已更新')
+    } else {
+      await createWhiteLabelRule({
+        category_code: selectedCategory,
+        keyword: values.keyword,
+        match_type: values.match_type,
+        model_id: values.model_id,
+        priority: values.priority,
+        is_active: !!values.is_active,
+      })
+      message.success('规则已新增')
+    }
+    setRuleModalOpen(false)
+    refreshRules()
+  }
+
+  const modelOptions = (models ?? []).map(m => ({
+    value: m.id,
+    label: whiteLabelModelLabel(m),
+  }))
+
+  const ruleColumns = [
+    { title: '关键词', dataIndex: 'keyword', ellipsis: true },
+    { title: '匹配方式', dataIndex: 'match_type', width: 90,
+      render: (v: string) => v === 'exact' ? '精准' : '包含' },
+    { title: '占位型号（类型）', width: 200,
+      render: (_: unknown, row: WhiteLabelRule) => whiteLabelModelLabel({
+        id: row.model_id,
+        brand_code: row.brand_code ?? '',
+        model_code: row.model_code,
+        model_name: row.model_name,
+      }) },
+    { title: '优先级', dataIndex: 'priority', width: 80 },
+    { title: '状态', dataIndex: 'is_active', width: 80,
+      render: (v: boolean) => v ? <Tag color="green">启用</Tag> : <Tag>禁用</Tag> },
+    { title: '操作', width: 180,
+      render: (_: unknown, row: WhiteLabelRule) => (
+        <Space size={4}>
+          <Button size="small" onClick={() => openEditRule(row)}>编辑</Button>
+          <Button size="small" onClick={async () => {
+            await updateWhiteLabelRule(row.id, { is_active: !row.is_active })
+            refreshRules()
+          }}>{row.is_active ? '禁用' : '启用'}</Button>
+          <Popconfirm title="确认删除？" onConfirm={async () => {
+            await deleteWhiteLabelRule(row.id)
+            refreshRules()
+          }}>
+            <Button size="small" danger icon={<DeleteOutlined />} />
+          </Popconfirm>
+        </Space>
+      ) },
+  ]
+
+  return (
+    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      <Alert
+        type="info"
+        showIcon
+        message="白牌/公模归类只在前面的品牌、型号都匹配不到时生效。占位型号不会参与普通自动匹配，也不会作为 URL/历史库的品牌证据。关闭时完全不影响现有流程。"
+      />
+      <Space wrap>
+        <Text strong>品类</Text>
+        <Select
+          style={{ width: 260 }}
+          placeholder="选择品类"
+          value={selectedCategory}
+          onChange={setSelectedCategory}
+          options={(policies ?? []).map(p => ({
+            value: p.category_code,
+            label: `${p.category_name}（${p.category_code}）`,
+          }))}
+        />
+        {currentPolicy && (
+          <Tag color={currentPolicy.enabled ? 'green' : 'default'}>
+            {currentPolicy.enabled ? '已启用' : '未启用'}
+          </Tag>
+        )}
+      </Space>
+
+      {!selectedCategory && <Text type="secondary">请先选择品类，再配置白牌策略和归类规则。</Text>}
+
+      {selectedCategory && (
+        <Card size="small" title="品类开关">
+          <Form form={policyForm} layout="inline" style={{ rowGap: 12 }}>
+            <Form.Item label="启用白牌归类" name="enabled" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+            <Form.Item label="模式" name="mode">
+              <Select style={{ width: 200 }} options={WHITE_LABEL_MODES} />
+            </Form.Item>
+            <Form.Item label="占位品牌" name="brand_code">
+              <Select style={{ width: 140 }} options={[
+                { value: '无品牌', label: '无品牌' },
+                { value: '其他品牌', label: '其他品牌' },
+              ]} />
+            </Form.Item>
+            <Form.Item label="未命中兜底型号" name="unmatched_model_id">
+              <Select style={{ width: 220 }} allowClear placeholder="可不选" options={modelOptions} />
+            </Form.Item>
+            <Form.Item>
+              <Button type="primary" loading={savingPolicy} onClick={handleSavePolicy}>保存策略</Button>
+            </Form.Item>
+          </Form>
+          <Text type="secondary">
+            关闭：不自动归类；半自动：命中后只写候选，仍走人工确认；全自动：命中后直接归类并可发布。
+          </Text>
+        </Card>
+      )}
+
+      {selectedCategory && (
+        <Card
+          size="small"
+          title="归类规则（关键词 → 类型）"
+          extra={<Button type="primary" icon={<PlusOutlined />} onClick={openAddRule}>添加规则</Button>}
+        >
+          <Table
+            dataSource={rules ?? []}
+            columns={ruleColumns}
+            rowKey="id"
+            size="small"
+            loading={rulesLoading}
+            pagination={{ pageSize: 20, showTotal: (t: number) => `共 ${t} 条` }}
+          />
+        </Card>
+      )}
+
+      <Modal
+        title={editingRule ? '编辑白牌规则' : '新增白牌规则'}
+        open={ruleModalOpen}
+        onOk={handleSaveRule}
+        onCancel={() => setRuleModalOpen(false)}
+        destroyOnClose
+      >
+        <Form form={ruleForm} layout="vertical">
+          <Form.Item label="关键词" name="keyword" rules={[{ required: true, message: '请输入关键词' }]}>
+            <Input placeholder="如：入耳 / 便携" />
+          </Form.Item>
+          <Form.Item label="匹配方式" name="match_type" initialValue="contains">
+            <Select options={[{ value: 'contains', label: '包含' }, { value: 'exact', label: '精准' }]} />
+          </Form.Item>
+          <Form.Item label="占位型号（类型）" name="model_id" rules={[{ required: true, message: '请选择占位型号' }]}>
+            <Select placeholder="选择无品牌/其他品牌下的型号" options={modelOptions} />
+          </Form.Item>
+          <Form.Item label="优先级（数字越小越先执行）" name="priority" initialValue={100}>
+            <InputNumber min={1} max={9999} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item label="启用" name="is_active" valuePropName="checked" initialValue>
+            <Switch />
+          </Form.Item>
+        </Form>
+      </Modal>
+    </Space>
+  )
+}
+
+// ══════════════════════════════════════════════
 // 主页面
 // ══════════════════════════════════════════════
-const RULE_TAB_KEYS = ['intervention', 'brand', 'rules', 'filtered', 'attr', 'correction', 'links']
+const RULE_TAB_KEYS = ['intervention', 'brand', 'rules', 'filtered', 'attr', 'correction', 'links', 'white_label']
 
 function normalizeRuleTab(tab: string | null) {
   if (!tab || tab === 'noise') return 'intervention'
@@ -1064,6 +1315,7 @@ export default function RulesPage() {
           { key: 'attr',       label: '属性规则',   children: <AttrRuleTab /> },
           { key: 'correction', label: '修正规则',   children: <CorrectionRulesTab /> },
           { key: 'links',      label: '干扰链接库', children: <InterferenceLinkTab /> },
+          { key: 'white_label', label: '白牌归类',  children: <WhiteLabelTab /> },
         ]}
       />
     </Card>

@@ -1663,6 +1663,70 @@ export const bulkDeleteAttrRules = (category_code: string) =>
 export const applyAttrRules = (match_job_id: number) =>
   api.post('/rules/attr-rules/apply', { match_job_id })
 
+// ─── White-label classification ─────────────────────────────
+export interface WhiteLabelPolicy {
+  category_code: string
+  category_name: string
+  enabled: boolean
+  mode: 'off' | 'suggest' | 'auto'
+  brand_code: string
+  unmatched_model_id: number | null
+}
+
+export interface WhiteLabelModel {
+  id: number
+  brand_code: string
+  model_code: string | null
+  model_name: string | null
+}
+
+export interface WhiteLabelRule {
+  id: number
+  category_code: string
+  keyword: string
+  match_type: 'contains' | 'exact'
+  model_id: number
+  model_code: string | null
+  model_name: string | null
+  brand_code: string | null
+  priority: number
+  is_active: boolean
+}
+
+export const listWhiteLabelPolicies = () =>
+  api.get<WhiteLabelPolicy[]>('/white-label/policies')
+
+export const upsertWhiteLabelPolicy = (
+  category_code: string,
+  payload: {
+    enabled: boolean
+    mode: 'off' | 'suggest' | 'auto'
+    brand_code: string
+    unmatched_model_id: number | null
+  },
+) => api.put<WhiteLabelPolicy>(`/white-label/policies/${category_code}`, payload)
+
+export const listWhiteLabelModels = (category_code: string) =>
+  api.get<WhiteLabelModel[]>('/white-label/models', { params: { category_code } })
+
+export const listWhiteLabelRules = (category_code: string) =>
+  api.get<WhiteLabelRule[]>('/white-label/rules', { params: { category_code } })
+
+export const createWhiteLabelRule = (payload: {
+  category_code: string
+  keyword: string
+  match_type: 'contains' | 'exact'
+  model_id: number
+  priority: number
+  is_active: boolean
+}) => api.post<WhiteLabelRule>('/white-label/rules', payload)
+
+export const updateWhiteLabelRule = (id: number, payload: Record<string, unknown>) =>
+  api.patch<WhiteLabelRule>(`/white-label/rules/${id}`, payload)
+
+export const deleteWhiteLabelRule = (id: number) =>
+  api.delete(`/white-label/rules/${id}`)
+
 // ─── Match - Missing Attrs ──────────────────────────────────
 export const listMissingAttrs = (clean_job_id: number, params?: Record<string, unknown>) =>
   api.get(`/match/${clean_job_id}/missing-attrs`, { params })

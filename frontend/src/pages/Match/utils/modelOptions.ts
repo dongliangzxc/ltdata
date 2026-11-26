@@ -14,9 +14,22 @@ export function compareModelOptions(a: ModelLabelSource, b: ModelLabelSource): n
 
 type SearchableModel = ModelLabelSource & { id: number; brand_name?: string | null }
 
+const GENERIC_BRAND_CODES = new Set([
+  '无品牌', '其他品牌', '其他', '未知品牌', '未知', '未识别品牌', 'UNKNOWN', 'OTHER',
+])
+
+function displayLabel(model: SearchableModel): string {
+  const brand = (model.brand_code || '').trim()
+  const name = (model.model_name || '').trim()
+  if (name && GENERIC_BRAND_CODES.has(brand.toUpperCase())) {
+    return `${brand ? `[${brand}] ` : ''}${name}`.trim()
+  }
+  return formatModelLabel(model)
+}
+
 export function buildModelSelectOptions(models: SearchableModel[]) {
   return [...models].sort(compareModelOptions).map(model => {
-    const label = formatModelLabel(model)
+    const label = displayLabel(model)
     return {
       value: model.id,
       label,

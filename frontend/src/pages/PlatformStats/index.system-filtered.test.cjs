@@ -11,7 +11,8 @@ const compiled = ts.transpileModule(source, {
 const base = {
   month: 202610, category_code: 'router', category_name: '路由器', dispatched: 10,
   task_created: 10, task_count: 1, processed: 10, matched: 8, url_matched: 8,
-  auto_matched: 0, confirmed: 0, excluded_ignored: 0, system_filtered: 2,
+  auto_matched: 0, confirmed: 0, excluded_ignored: 0, manual_excluded_ignored: 0,
+  auto_excluded_ignored: 0, unknown_excluded_ignored: 0, system_filtered: 2,
   pending: 0, published: 0, last_processed_at: '2026-11-24 09:00:00', completed_at: '2026-11-24 09:00:00',
 }
 const progress = {
@@ -78,7 +79,7 @@ function overviewProgress(tree, label) {
   return nodes(tree, node => node.type === 'Progress' && node.props['aria-label'] === label)[0].props.percent
 }
 function matchingRates(tree) {
-  return [overviewProgress(tree, '匹配进度'), statistic(tree, '匹配进度')]
+  return [overviewProgress(tree, '匹配进度'), statistic(tree, '匹配进度（自动）')]
 }
 function statistic(tree, title) {
   return nodes(tree, node => node.type === 'Statistic' && node.props.title === title)[0].props.value
@@ -90,9 +91,9 @@ assert.equal(statistic(tree, '系统过滤'), 4, 'filtered records must be visib
 assert.equal(statistic(tree, '自动匹配'), 16, 'filtering must not inflate model matches')
 assert.equal(statistic(tree, '清理占比'), 100)
 assert.equal(statistic(tree, '型号匹配成功'), 16)
-assert.equal(statistic(tree, '匹配进度'), 80, 'system filters must not inflate matching progress')
+assert.equal(statistic(tree, '匹配进度（自动）'), 100, 'system filters contribute to automatic matching progress')
 assert.equal(overviewProgress(tree, '处理进度'), 100, 'processing progress must remain separately visible')
-assert.equal(overviewProgress(tree, '匹配进度'), 80, 'matching progress supplements processing progress')
+assert.equal(overviewProgress(tree, '匹配进度'), 100, 'matching progress supplements processing progress')
 const overviewCard = nodes(tree, node => node.type === 'Card' && node.props.title === '处理进度总览')[0]
 const originalSummaryRow = nodes(overviewCard, node => node.type === 'Row')[0]
 assert.deepEqual(nodes(originalSummaryRow, node => node.type === 'Statistic').map(node => node.props.title),
@@ -107,19 +108,31 @@ const matchColumn = table.columns.find(col => col.key === 'match_rate')
 const modelRateColumn = table.columns.find(col => col.key === 'model_match_rate')
 assert.equal(modelRateColumn.render(null, table.dataSource[0]).props.percent, 80, 'model success remains separately measurable')
 assert.equal(modelRateColumn.render(null, { ...base, dispatched: 20, matched: 5 }).props.percent, 25)
-assert.equal(matchColumn.title, '匹配进度')
+assert.equal(matchColumn.title, '匹配进度（自动）')
 const excludedColumn = table.columns.find(col => col.dataIndex === 'excluded_ignored')
 assert.ok(textContent(excludedColumn.render(5, { ...base, excluded_ignored: 5,
   manual_excluded_ignored: 2, auto_excluded_ignored: 1, unknown_excluded_ignored: 2 })).includes('人工 2 · 自动 1 · 来源未明 2'))
-assert.ok(textContent(excludedColumn.render(5, { ...base, excluded_ignored: 5 })).includes('人工 0 · 自动 0 · 来源未明 5'),
+assert.ok(textContent(excludedColumn.render(5, { ...base, excluded_ignored: 5, unknown_excluded_ignored: undefined })).includes('人工 0 · 自动 0 · 来源未明 5'),
   'old cached payloads must not invent provenance')
 
-assert.equal(matchColumn.render(null, table.dataSource[0]).props.percent, 80)
-assert.equal(matchColumn.render(null, { ...base, dispatched: 20, task_created: 10, matched: 5 }).props.percent, 25,
-  'matching success uses dispatched rows, including rows not yet in tasks')
+assert.equal(matchColumn.render(null, table.dataSource[0]).props.percent, 100)
+assert.equal(matchColumn.render(null, { ...base, dispatched: 20, task_created: 10, matched: 5, url_matched: 5 }).props.percent, 35,
+  'automatic progress includes filtering and uses all selected dispatched rows')
 assert.equal(matchColumn.render(null, { ...base, dispatched: 0 }).props.children, '无分发数据')
-assert.ok(matchColumn.sorter({ ...base, matched: 100, dispatched: 1000 }, { ...base, matched: 1, dispatched: 2 }) < 0,
+assert.ok(matchColumn.sorter({ ...base, url_matched: 100, dispatched: 1000 }, { ...base, url_matched: 1, dispatched: 2 }) < 0,
   'matching progress sorts by ratio rather than raw matches')
+const mixedSources = { ...base, dispatched: 100, processed: 90, matched: 45,
+  url_matched: 20, auto_matched: 10, confirmed: 15, excluded_ignored: 20,
+  manual_excluded_ignored: 10, auto_excluded_ignored: 5, unknown_excluded_ignored: 5,
+  system_filtered: 20, transferred_out: 5 }
+assert.equal(matchColumn.render(null, mixedSources).props.percent, 55,
+  'only automatic model matches, automatic exclusions and system filters count')
+assert.equal(modelRateColumn.render(null, mixedSources).props.percent, 45,
+  'model success separately includes manual confirmation but no exclusions or filters')
+assert.equal(matchColumn.render(null, { ...mixedSources, auto_excluded_ignored: undefined }).props.percent, 50,
+  'missing exclusion provenance must not treat manual or unknown exclusions as automatic')
+assert.equal(matchColumn.render(null, { ...mixedSources, system_filtered: undefined }).props.percent, 35,
+  'old cache payloads may omit system filtering')
 assert.ok(table.columns.some(col => col.key === 'task_rate'), 'task processing progress remains in the table')
 assert.ok(table.columns.some(col => col.key === 'overall_rate'), 'overall processing progress remains in the table')
 assert.equal(table.dataSource.length, 1, 'all-platform view aggregates the category')
@@ -140,18 +153,27 @@ selectedMonth = 202609
 assert.equal(statistic(render(), '系统过滤'), 0, 'empty months must not retain the total filter count')
 assert.equal(statistic(render(), '已清理'), 0)
 
-// The reported 17-category snapshot must keep model success distinct from processing.
+// Automatic matching excludes manual confirmations but includes automatic exclusions and filters.
 selectedMonth = undefined
 const savedProgress = { ...progress }
 Object.assign(progress, { dispatchable: 141454, processed: 128549, matched: 78780,
   url_matched: 60318, auto_matched: 0, confirmed: 18462, excluded_ignored: 16306,
-  system_filtered: 33462, transferred_out: 1 })
+  system_filtered: 33462, auto_excluded_ignored: 2991, manual_excluded_ignored: 13315, transferred_out: 1 })
 const reported = render()
 assert.equal(overviewProgress(reported, '处理进度'), 90.9)
-assert.equal(overviewProgress(reported, '匹配进度'), 55.7)
-assert.ok(textContent(reported).includes('55.7% · 已匹配 78,780 / 分发 141,454'),
+assert.equal(overviewProgress(reported, '匹配进度'), 68.4)
+assert.ok(textContent(reported).includes('68.4% · 自动已处理 96,771 / 分发 141,454'),
   'matching bar text must use the same success numerator and percentage as its fill')
-assert.ok(!textContent(reported).includes('已得匹配结论'), 'do not mislabel processing decisions as model matches')
+assert.equal(statistic(reported, '自动匹配'), 60318, 'manual confirmations remain a separate statistic')
+assert.equal(statistic(reported, '人工确认'), 18462)
+progress.confirmed += 1000
+progress.matched += 1000
+progress.processed += 1000
+progress.manual_excluded_ignored += 500
+assert.equal(overviewProgress(render(), '匹配进度'), 68.4,
+  'more manual confirmations and manual exclusions must not increase automatic progress')
+progress.unknown_excluded_ignored = 100
+assert.equal(overviewProgress(render(), '匹配进度'), 68.4, 'unknown source decisions are not automatic')
 Object.assign(progress, savedProgress)
 
 // During rolling deployment, the prior API/cache may omit the new field.
@@ -219,7 +241,7 @@ assert.ok(nodes(render(), node => node.type === 'Table')[0].props.dataSource.eve
 selectedMonth = 202610
 assert.equal(statistic(render(), '值得分发（分发条目）'), 30, 'month and category filters combine')
 assert.equal(statistic(render(), '已清理'), 15)
-assert.equal(statistic(render(), '匹配进度'), 33.3)
+assert.equal(statistic(render(), '匹配进度（自动）'), 33.3)
 selectedPlatform = 'jd'
 assert.equal(statistic(render(), '值得分发（分发条目）'), 30, 'detail platform view does not change overview scope')
 assert.equal(nodes(render(), node => node.type === 'Table')[0].props.dataSource.length, 1)
@@ -231,7 +253,7 @@ assert.equal(statistic(render(), '已清理'), 0)
 assert.equal(statistic(render(), '清理占比'), 0)
 assert.equal(overviewProgress(render(), '处理进度'), 0)
 assert.equal(overviewProgress(render(), '匹配进度'), 0)
-assert.equal(statistic(render(), '匹配进度'), 0)
+assert.equal(statistic(render(), '匹配进度（自动）'), 0)
 assert.equal(statistic(render(), '型号匹配成功'), 0)
 assert.equal(nodes(render(), node => node.type === 'Table')[0].props.dataSource.length, 0)
 const selectAll = nodes(selector().dropdownRender('menu'), node => node.type === 'Checkbox')[0].props
@@ -270,7 +292,7 @@ assert.ok(!selector().value.includes('headphone') && !selector().value.includes(
 assert.equal(statistic(render(), '值得分发（分发条目）'), 170, 'default denominator excludes unselected categories')
 assert.equal(statistic(render(), '已清理'), 170)
 assert.equal(overviewProgress(render(), '处理进度'), 100)
-assert.equal(overviewProgress(render(), '匹配进度'), 80)
+assert.equal(overviewProgress(render(), '匹配进度'), 100)
 assert.equal(nodes(render(), node => node.type === 'Table')[0].props.dataSource.length, 17)
 selector().onChange([...expectedDefaults, 'headphone'])
 assert.equal(statistic(render(), '值得分发（分发条目）'), 1170, 'users can add categories outside the defaults')

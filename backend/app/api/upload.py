@@ -191,13 +191,13 @@ def _upload_download_job_out(job: UploadDownloadJob) -> dict:
 def _run_upload_download_job(job_id: int) -> None:
     db = SessionLocal()
     try:
-        job = db.query(UploadDownloadJob).filter(UploadDownloadJob.id == job_id).first()
+        # Hold the job lock until preparation finishes. File deletion either
+        # removes a queued job first or waits for this short transaction.
+        job = db.query(UploadDownloadJob).filter(UploadDownloadJob.id == job_id).with_for_update().first()
         if not job:
             return
         job.status = "running"
         job.progress = 10
-        db.commit()
-
         record = db.query(UploadFileRecord).filter(UploadFileRecord.id == job.file_id).first()
         if record is None:
             job.status = "error"
@@ -217,7 +217,6 @@ def _run_upload_download_job(job_id: int) -> None:
             return
 
         job.progress = 80
-        db.commit()
         job.filename = record.filename
         job.download_token = uuid.uuid4().hex
         job.status = "done"
@@ -519,7 +518,9 @@ def download_upload_file(file_id: int, db: Session = Depends(get_db)):
 @router.post("/files/{file_id}/download-jobs", response_model=UploadDownloadJobOut)
 def create_upload_download_job(file_id: int, db: Session = Depends(get_db)):
     """创建上传历史原始文件后台下载准备任务"""
-    record = db.query(UploadFileRecord).filter(UploadFileRecord.id == file_id).first()
+    # Serialize creation against deletion so a late download request sees 404
+    # instead of inserting a child of an already deleted upload.
+    record = db.query(UploadFileRecord).filter(UploadFileRecord.id == file_id).with_for_update().first()
     if record is None:
         raise HTTPException(status_code=404, detail="上传记录不存在")
 
@@ -530,12 +531,14 @@ def create_upload_download_job(file_id: int, db: Session = Depends(get_db)):
         filename=record.filename,
     )
     db.add(job)
+    db.flush()
+    job_id = job.id
+    result = _upload_download_job_out(job)
     db.commit()
-    db.refresh(job)
 
-    thread = threading.Thread(target=_run_upload_download_job, args=(job.id,), daemon=True)
+    thread = threading.Thread(target=_run_upload_download_job, args=(job_id,), daemon=True)
     thread.start()
-    return _upload_download_job_out(job)
+    return result
 
 
 @router.get("/download-jobs", response_model=list[UploadDownloadJobOut])
@@ -626,6 +629,8 @@ def delete_upload_batch(batch_key: str, db: Session = Depends(get_db)):
     records = (
         db.query(UploadFileRecord)
         .filter(UploadFileRecord.batch_key == batch_key)
+        .order_by(UploadFileRecord.id)
+        .with_for_update()
         .all()
     )
     if not records:
@@ -647,6 +652,7 @@ def delete_upload_batch(batch_key: str, db: Session = Depends(get_db)):
 
     placeholders = ",".join(f":fid{i}" for i in range(len(file_ids)))
     params = {f"fid{i}": file_id for i, file_id in enumerate(file_ids)}
+    db.query(UploadDownloadJob).filter(UploadDownloadJob.file_id.in_(file_ids)).delete(synchronize_session=False)
     db.execute(text(f"DELETE FROM raw_data WHERE file_id IN ({placeholders})"), params)
     db.execute(text(f"UPDATE dispatch_batches SET file_id = NULL WHERE file_id IN ({placeholders})"), params)
     db.query(UploadFileRecord).filter(UploadFileRecord.id.in_(file_ids)).delete(synchronize_session=False)
@@ -658,7 +664,7 @@ def delete_upload_batch(batch_key: str, db: Session = Depends(get_db)):
 @router.delete("/files/{file_id}")
 def delete_upload_file(file_id: int, db: Session = Depends(get_db)):
     """删除上传文件记录及其原始数据；已有下游清洗任务时拒绝删除。"""
-    record = db.query(UploadFileRecord).filter(UploadFileRecord.id == file_id).first()
+    record = db.query(UploadFileRecord).filter(UploadFileRecord.id == file_id).with_for_update().first()
     if not record:
         raise HTTPException(status_code=404, detail="文件记录不存在")
 
@@ -674,6 +680,9 @@ def delete_upload_file(file_id: int, db: Session = Depends(get_db)):
             status_code=400,
             detail="该文件的数据已进入分发/清洗任务，不能直接删除。请先处理或保留相关清洗任务记录。",
         )
+
+    # Download jobs reference the upload too; remove them in the same transaction.
+    db.query(UploadDownloadJob).filter(UploadDownloadJob.file_id == file_id).delete(synchronize_session=False)
 
     # Batch-delete raw_data in one SQL — avoids 7000+ ORM cascade operations
     db.execute(text("DELETE FROM raw_data WHERE file_id = :fid"), {"fid": file_id})

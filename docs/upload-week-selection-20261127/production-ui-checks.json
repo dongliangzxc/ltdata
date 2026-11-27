@@ -1,0 +1,43 @@
+{
+  "date": "2026-11-27",
+  "base": "https://data.runtotech.com",
+  "feature_commit": "0305d3b",
+  "geometry": [
+    {
+      "viewport": 1440,
+      "pageWidth": 1440,
+      "tableRight": 1403,
+      "cardRight": 1416,
+      "tableViewport": 1166,
+      "tableScroll": 2100
+    },
+    {
+      "viewport": 1024,
+      "pageWidth": 1024,
+      "tableRight": 987,
+      "cardRight": 1000,
+      "tableViewport": 750,
+      "tableScroll": 2100
+    },
+    {
+      "viewport": 768,
+      "pageWidth": 768,
+      "tableRight": 731,
+      "cardRight": 744,
+      "tableViewport": 494,
+      "tableScroll": 2100
+    }
+  ],
+  "validation": {
+    "weeks": [
+      1,
+      3
+    ],
+    "selected_rows": 2,
+    "excluded_rows": 3,
+    "total_rows": 2
+  },
+  "errors": [],
+  "business_data_imported": false,
+  "temporary_header_file_created": true
+}

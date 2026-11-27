@@ -1,0 +1,28 @@
+{
+  "date": "2026-11-27",
+  "feature_commit": "0305d3b",
+  "url": "https://data.runtotech.com",
+  "backend_worker_image": "2c66a97205a88adc887d414e97721b06241529ef527ebdd53ed297d11af95670",
+  "frontend_image": "d6e921ee9ae0de44e6956331f80b57d6fc114ab1662781721d34fd82a043f2f3",
+  "changed_backend_modules": [
+    "app/api/upload.py",
+    "app/services/data_period.py",
+    "app/services/upload_validation.py"
+  ],
+  "unchanged_backend_modules_verified": 76,
+  "public_assets_verified": 6,
+  "migration": "unchanged p82a1b2c3d4e5",
+  "container_restarts": 0,
+  "health": "healthy",
+  "business_data_imported": false,
+  "temporary_header_file_cleaned": true,
+  "rollback_directory": "/tmp/luotu-week-selection-20261127",
+  "regression": {
+    "passed": 1381,
+    "existing_failed": 81,
+    "existing_errors": 6,
+    "new_failures": 0,
+    "frontend_files_passed": 55,
+    "typecheck": "passed"
+  }
+}

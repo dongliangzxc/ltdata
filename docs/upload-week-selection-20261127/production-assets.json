@@ -1,0 +1,32 @@
+[
+  {
+    "path": "index.html",
+    "sha256": "9384f6d2d3a0af662c1de4af1b0c63ff685dac9b217b8810bfb3886365d4ba80",
+    "status": 200
+  },
+  {
+    "path": "assets/vendor-antd-BWi4Rd7D.js",
+    "sha256": "bf6c13c45e56c614ad2c3de647e2bf8873ca4ae6a2fc6a10c4659449c2c956df",
+    "status": 200
+  },
+  {
+    "path": "assets/vendor-react-CBXNyqj4.js",
+    "sha256": "a842a4b84ebc87d9c949850b1bcd154077c84a1d6c39b85b060aef7e18f9dd78",
+    "status": 200
+  },
+  {
+    "path": "assets/index-DmhLKVP-.js",
+    "sha256": "d08eec33a7d4b1a5199eeee1559b329b3c5d026710a8ac5b797ace2b7d73c0cf",
+    "status": 200
+  },
+  {
+    "path": "assets/vendor-utils-ChQFbX4V.js",
+    "sha256": "9bf4178e2a0804d0822abf553b71b41c94a3c41a1828ab24b9635be20e63e1c7",
+    "status": 200
+  },
+  {
+    "path": "assets/index-D8nJ3JtN.css",
+    "sha256": "f951779a0344b76cb23b0412e5c7a5b041e0e77c6404c2063f8889f870e1cd8c",
+    "status": 200
+  }
+]

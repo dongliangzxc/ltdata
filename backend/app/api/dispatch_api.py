@@ -14,14 +14,14 @@ import io
 from pathlib import Path
 import re
 import threading
-from typing import Optional
+from typing import Optional, Literal
 from urllib.parse import quote
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 import pandas as pd
 from openpyxl import Workbook
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 from app.core.auth_deps import get_current_user
@@ -41,6 +41,7 @@ from app.services.export_guards import (
     reserve_async_export_capacity,
 )
 from app.services.dispatch_scope import latest_done_batch_subquery
+from app.services.data_period import filter_period, normalize_week
 
 router = APIRouter(prefix="/api/dispatch", tags=["dispatch"])
 
@@ -82,6 +83,16 @@ def _job_matches_category_scope(job: WorkbenchExportJob, scoped_codes: list[str]
 
 
 class DispatchExportParams(BaseModel):
+    period_type: Literal["month", "week"] = "month"
+    weeks: list[int] = Field(default_factory=list)
+
+    @field_validator("weeks", mode="before")
+    @classmethod
+    def validate_weeks(cls, values):
+        if not isinstance(values, list):
+            raise ValueError("weeks必须是周次数组")
+        return sorted({normalize_week(value, required=True) for value in values})
+
     category_code: Optional[str] = None
     platform: Optional[str] = None
     month: Optional[int] = None
@@ -192,6 +203,8 @@ def _build_export_row(raw: RawDataRecord, file_record: UploadFileRecord, templat
         if key not in included_extra_columns and key not in row:
             row[key] = _excel_value(value)
 
+    if raw.week_of_month:
+        row["周次"] = raw.week_of_month
     row["_raw_data_id"] = raw.id
     row["_source_filename"] = file_record.filename
     return row
@@ -203,6 +216,8 @@ def _build_fallback_row(raw: RawDataRecord, file_record: UploadFileRecord) -> di
     for key, value in extra.items():
         if key not in row:
             row[key] = _excel_value(value)
+    if raw.week_of_month:
+        row["周次"] = raw.week_of_month
     row["_raw_data_id"] = raw.id
     row["_source_filename"] = file_record.filename
     return row
@@ -280,6 +295,7 @@ def _dispatch_export_column_query(query):
         DispatchItem.id,
         RawDataRecord.extra_data,
         ColumnTemplate,
+        RawDataRecord.week_of_month,
     )
 
 
@@ -296,14 +312,17 @@ def _collect_dispatch_export_columns(query, page_size: int) -> dict[tuple[int | 
         )
         if not rows:
             break
-        for dispatch_item_id, extra_data, template in rows:
+        for dispatch_item_id, extra_data, template, local_week in rows:
             template_id = template.id if template else None
             template_name = template.name if template else "无模板"
             key = (template_id, template_name)
             if key not in grouped_columns:
                 grouped_columns[key] = {"template": template, "columns": []}
             columns = grouped_columns[key]["columns"]
-            for column in _columns_for_export_row(template, extra_data):
+            discovered = _columns_for_export_row(template, extra_data)
+            if local_week and "周次" not in discovered:
+                discovered.append("周次")
+            for column in discovered:
                 if column not in columns:
                     columns.append(column)
         last_id = rows[-1][0]
@@ -374,6 +393,8 @@ def _latest_dispatch_export_query(
     platform: str | None,
     months: list[int] | None = None,
     allowed_category_codes: list[str] | None = None,
+    period_type: str | None = None,
+    weeks: list[int] | None = None,
 ):
     latest_batches = latest_done_batch_subquery(db)
     query = (
@@ -392,6 +413,9 @@ def _latest_dispatch_export_query(
         query = query.filter(RawDataRecord.platform == platform)
     if months:
         query = query.filter(RawDataRecord.month.in_(months))
+    query = filter_period(query, RawDataRecord, period_type)
+    if weeks:
+        query = query.filter(RawDataRecord.week_of_month.in_(weeks))
     return query
 
 
@@ -1258,7 +1282,7 @@ def _run_dispatch_export_thread(job_id: int, params: dict):
         category_code = params.get("category_code")
         platform = params.get("platform")
         months = _normalize_export_months(params.get("month"), params.get("months") or [])
-        query = _latest_dispatch_export_query(db, category_code, platform, months)
+        query = _latest_dispatch_export_query(db, category_code, platform, months, period_type=params.get("period_type", "month"), weeks=params.get("weeks"))
         total = query.count()
         if total == 0:
             job.status = "error"
@@ -1318,7 +1342,9 @@ def create_dispatch_export_job(payload: DispatchExportParams, db: Session = Depe
         _ensure_category_in_scope(db, current_user, category_code)
     elif scoped_codes is not None and not scoped_codes:
         raise HTTPException(status_code=403, detail="无权限访问该品类")
-    has_export_data = _latest_dispatch_export_query(db, category_code, platform, months, scoped_codes).limit(1).first()
+    if payload.weeks and payload.period_type != "week":
+        raise HTTPException(422, "周次筛选需选择周度")
+    has_export_data = _latest_dispatch_export_query(db, category_code, platform, months, scoped_codes, payload.period_type, payload.weeks).limit(1).first()
     if not has_export_data:
         raise HTTPException(status_code=400, detail="当前筛选条件无可导出数据，请调整月份、品类或平台")
 
@@ -1329,7 +1355,7 @@ def create_dispatch_export_job(payload: DispatchExportParams, db: Session = Depe
             category_code=category_code,
             platform=platform,
             month=primary_month,
-            params={"month": primary_month, "months": months},
+            params={"month": primary_month, "months": months, **({"period_type": "week", "weeks": payload.weeks} if payload.period_type == "week" else {})},
         )
         db.add(job)
         db.commit()
@@ -1337,7 +1363,7 @@ def create_dispatch_export_job(payload: DispatchExportParams, db: Session = Depe
 
     thread = threading.Thread(
         target=_run_dispatch_export_thread,
-        args=(job.id, {"category_code": category_code, "platform": platform, "month": primary_month, "months": months}),
+        args=(job.id, {"category_code": category_code, "platform": platform, "month": primary_month, "months": months, **({"period_type": "week", "weeks": payload.weeks} if payload.period_type == "week" else {})}),
         daemon=True,
     )
     thread.start()
@@ -1362,6 +1388,8 @@ def _dispatch_export_job_out(job: WorkbenchExportJob) -> dict:
         "platform": job.platform,
         "month": job.month,
         "months": months,
+        "period_type": params.get("period_type", "month"),
+        "weeks": params.get("weeks", []),
         "filename": job.filename,
         "download_url": download_url,
         "error_msg": job.error_msg,
@@ -1471,12 +1499,20 @@ def _latest_done_batch_subquery(db: Session):
 @router.get("/rule-coverage")
 def get_rule_coverage(
     months: list[int] = Query(..., min_length=1),
+    period_type: str = Query("month", pattern="^(month|week)$"),
+    weeks: Optional[list[str]] = Query(None),
     category_codes: Optional[list[str]] = Query(None),
     platforms: Optional[list[str]] = Query(None),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     """按月度/品类/平台核对当前生效规则在最新分发批次中的命中数，零命中也展示。"""
+    try:
+        week_values = [normalize_week(value, required=True) for value in weeks or []]
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if week_values and period_type != "week":
+        raise HTTPException(422, "周次筛选需选择周度")
     month_values = sorted({int(month) for month in months})
     if any(not _is_valid_export_month(month) for month in month_values):
         raise HTTPException(status_code=400, detail="月份格式应为 YYYYMM")
@@ -1490,6 +1526,7 @@ def get_rule_coverage(
     data_q = (
         db.query(
             RawDataRecord.month.label("month"),
+            RawDataRecord.week_of_month.label("week_of_month"),
             platform_expr.label("platform"),
             DispatchItem.matched_rule_id.label("rule_id"),
             func.count(DispatchItem.id).label("count"),
@@ -1501,20 +1538,24 @@ def get_rule_coverage(
             RawDataRecord.month.in_(month_values),
         )
     )
+    data_q = filter_period(data_q, RawDataRecord, period_type)
+    if week_values:
+        data_q = data_q.filter(RawDataRecord.week_of_month.in_(week_values))
     if platform_values:
         data_q = data_q.filter(platform_expr.in_(platform_values))
     data_q = _apply_category_scope(data_q, DispatchItem.category_code, scoped_codes)
     data_rows = data_q.group_by(
         RawDataRecord.month,
+        RawDataRecord.week_of_month,
         platform_expr,
         DispatchItem.matched_rule_id,
     ).all()
 
-    combos = sorted({(row.month, row.platform) for row in data_rows}, key=lambda item: (-item[0], item[1] or ""))
-    counts: dict[tuple[int, Optional[str], int], int] = {}
+    combos = sorted({(row.month, row.platform, row.week_of_month) for row in data_rows}, key=lambda item: (-item[0], item[1] or ""))
+    counts: dict[tuple[int, Optional[str], int, int], int] = {}
     for row in data_rows:
         if row.rule_id is not None:
-            counts[(row.month, row.platform, row.rule_id)] = int(row.count or 0)
+            counts[(row.month, row.platform, row.week_of_month, row.rule_id)] = int(row.count or 0)
 
     rules_q = (
         db.query(DispatchRule, Category.name.label("category_name"))
@@ -1531,17 +1572,18 @@ def get_rule_coverage(
 
     rows = []
     empty_rule_ids: set[int] = set()
-    for month, platform in combos:
+    for month, platform, local_week in combos:
         platform_key = (platform or "").lower()
         for rule, category_name in rules:
             if rule.platform and rule.platform.strip().lower() != platform_key:
                 continue
-            count = counts.get((month, platform, rule.id), 0)
+            count = counts.get((month, platform, local_week, rule.id), 0)
             is_empty = count == 0
             if is_empty:
                 empty_rule_ids.add(rule.id)
             rows.append({
                 "month": month,
+                "week_of_month": local_week,
                 "category_code": rule.category_code,
                 "category_name": category_name or rule.category_code,
                 "platform": platform,

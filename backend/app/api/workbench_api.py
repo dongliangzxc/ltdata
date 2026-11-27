@@ -13,7 +13,7 @@ from urllib.parse import quote
 from openpyxl import Workbook
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import distinct
 from sqlalchemy.orm import Session
 
@@ -56,7 +56,25 @@ def _ensure_workbench_category_visible(category_names: set[str] | None, category
         raise HTTPException(status_code=403, detail="无权限访问该品类")
 
 
+from app.services.data_period import filter_period, normalize_week
+
+
 class WorkbenchExportParams(BaseModel):
+    period_type: str = "month"
+    week: Optional[int] = None
+
+    @field_validator("period_type")
+    @classmethod
+    def validate_period(cls, value):
+        if value not in ("month", "week"):
+            raise ValueError("数据粒度只能为月度或周度")
+        return value
+
+    @field_validator("week", mode="before")
+    @classmethod
+    def validate_week(cls, value):
+        return normalize_week(value, required=True) if value is not None else None
+
     year:          Optional[int] = None
     month:         Optional[int] = None
     category_name: Optional[str] = None
@@ -170,7 +188,10 @@ def _load_workbench_context(rows: list[PublishedItem]) -> tuple[dict[int, tuple[
 
 
 def _build_query(db: Session, params: dict, visible_category_names: set[str] | None = None, series_match_ids: list[int] | None = None):
-    q = db.query(PublishedItem)
+    try:
+        q = filter_period(db.query(PublishedItem), PublishedItem, params.get("period_type", "month"), params.get("week"))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     q = _filter_workbench_visible_categories(q, visible_category_names)
 
     if series_match_ids is not None:
@@ -285,7 +306,7 @@ def _run_wb_export_thread(job_id: int, params: dict):
 
         attr_columns = [f"attr_{name}" for name in sorted(all_attr_names)]
         base_columns = [
-            "月份", "平台", "宝贝名称", "品牌代码", "品牌名称", "型号代码", "产品系列", "型号名称", "店铺",
+            "月份", "周次", "平台", "宝贝名称", "品牌代码", "品牌名称", "型号代码", "产品系列", "型号名称", "店铺",
             "参考价格", "销量", "计算价格", "修正销量", "修正销售额", "一级类目", "二级类目", "三级类目", "宝贝链接",
         ]
         custom_export_fields = load_all_export_fields(db)
@@ -346,6 +367,7 @@ def _run_wb_export_thread(job_id: int, params: dict):
             for r in page_rows:
                 base_values = [
                     r.month,
+                    r.week_of_month or None,
                     r.platform,
                     r.item_name,
                     r.brand_code,
@@ -467,6 +489,8 @@ def get_filters(
 def query_data(
     year: Optional[int] = Query(None),
     month: Optional[int] = Query(None),
+    period_type: str = Query("month", pattern="^(month|week)$"),
+    week: Optional[str] = Query(None),
     category_name: Optional[str] = Query(None),
     platform: Optional[str] = Query(None),
     brand_code: Optional[str] = Query(None),
@@ -484,7 +508,7 @@ def query_data(
     current_user: User = Depends(get_current_user),
 ):
     params = dict(
-        year=year, month=month, category_name=category_name,
+        year=year, month=month, period_type=period_type, week=week, category_name=category_name,
         platform=platform, brand_code=brand_code,
         model_code=model_code, item_url=item_url,
         category_lv1=category_lv1,
@@ -519,6 +543,7 @@ def query_data(
             "sequence": index,
             "year": _year_from_month(r.month),
             "month": r.month,
+            "week_of_month": r.week_of_month,
             "platform": r.platform,
             "item_name": r.item_name,
             "item_image": r.item_image,
@@ -560,6 +585,8 @@ def export_data(
     params = {
         "year":          payload.year,
         "month":         payload.month,
+        "period_type": payload.period_type,
+        "week": payload.week,
         "category_name": payload.category_name,
         "platform":      payload.platform,
         "brand_code":    payload.brand_code,

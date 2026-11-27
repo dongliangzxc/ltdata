@@ -1,5 +1,6 @@
 """Analytics dashboard query helpers."""
 from __future__ import annotations
+from app.services.data_period import filter_period
 
 import uuid
 from datetime import datetime
@@ -100,6 +101,8 @@ def build_analytics_query(
     *,
     year: Optional[int] = None,
     month: Optional[int] = None,
+    period_type: str = "month",
+    week: Optional[str] = None,
     brand: Optional[str] = None,
     category: Optional[str] = None,
     platform: Optional[str] = None,
@@ -108,7 +111,7 @@ def build_analytics_query(
     allowed_categories: Optional[set[str]] = None,
 ) -> Query:
     """Build the filtered PublishedItem query used by dashboard endpoints."""
-    query = db.query(PublishedItem)
+    query = filter_period(db.query(PublishedItem), PublishedItem, period_type, week)
 
     if year and month:
         query = query.filter(PublishedItem.month == int(year) * 100 + int(month))
@@ -225,6 +228,8 @@ def get_analytics_summary(
     *,
     year: Optional[int] = None,
     month: Optional[int] = None,
+    period_type: str = "month",
+    week: Optional[str] = None,
     brand: Optional[str] = None,
     category: Optional[str] = None,
     platform: Optional[str] = None,
@@ -247,6 +252,8 @@ def get_analytics_summary(
         db,
         year=year,
         month=month,
+        period_type=period_type,
+        week=week,
         brand=brand,
         category=category,
         platform=platform,
@@ -345,6 +352,7 @@ def get_analytics_detail_rows(db: Session, **filters: Any) -> list[dict[str, Any
     return [
         {
             "month": row.month,
+            "week_of_month": row.week_of_month,
             "platform": row.platform,
             "item_id": row.item_id,
             "item_name": row.item_name,

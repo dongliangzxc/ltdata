@@ -1,3 +1,4 @@
+import DataPeriodFilter from '../../components/DataPeriodFilter'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Key } from 'react'
 import {
@@ -80,6 +81,8 @@ function readStoredUser(): UserProfile | null {
 }
 
 type FilterState = {
+  period_type?: 'month' | 'week'
+  week?: number
   category_code?: string
   platform?: string
   month?: number
@@ -277,7 +280,7 @@ const jobColumns = (
   },
 ]
 
-const getMonthlyQueueRowKey = (row: CleanMonthlyPoolItem) => `${row.category_code}-${row.platform ?? 'none'}-${row.month}`
+const getMonthlyQueueRowKey = (row: CleanMonthlyPoolItem) => `${row.category_code}-${row.platform ?? 'none'}-${row.month}-${row.week_of_month ?? 0}`
 
 const getQueueAction = (row: CleanMonthlyPoolItem) => {
   if (!row.platform) return { label: '缺少平台', disabled: true, action: 'blocked' as const }
@@ -311,8 +314,8 @@ const monthlyQueueColumns = (
     render: formatPlatform,
   },
   {
-    title: '月份', dataIndex: 'month', width: 100,
-    render: formatText,
+    title: '周期', dataIndex: 'month', width: 170,
+    render: (value: number, row) => `${value}${row.week_of_month ? ` 第${row.week_of_month}周` : ' 月度'}`,
   },
   {
     title: '分发数量', dataIndex: 'dispatched_count', width: 110,
@@ -525,6 +528,8 @@ export default function CleanPage() {
   const [filters, setFilters] = useState<FilterState>(() => {
     const monthRaw = searchParams.get('month')
     return {
+      period_type: searchParams.get('period_type') === 'week' ? 'week' : 'month',
+      week: /^[1-5]$/.test(searchParams.get('week') || '') ? Number(searchParams.get('week')) : undefined,
       category_code: searchParams.get('category_code') || undefined,
       platform: searchParams.get('platform') || undefined,
       month: monthRaw && /^\d{6}$/.test(monthRaw) ? Number(monthRaw) : undefined,
@@ -645,6 +650,7 @@ export default function CleanPage() {
           category_code: row.category_code,
           platform: row.platform!,
           month: row.month,
+          week: row.week_of_month || undefined,
           rules: action === 'appended' ? undefined : { dedup: true },
           force_reclean: action === 'recleaned',
           force_rebuild: action === 'rebuild',
@@ -791,6 +797,7 @@ export default function CleanPage() {
             category_code: row.category_code,
             platform: row.platform!,
             month: row.month,
+          week: row.week_of_month || undefined,
             rules: getQueueAction(row).action === 'appended' ? undefined : { dedup: true },
           })
           if (response.data.match_status === 'unchanged') unchangedCount += 1
@@ -908,6 +915,8 @@ export default function CleanPage() {
             />
           </Col>
         </Row>
+        <div style={{ marginBottom: 16 }}><DataPeriodFilter value={filters.period_type ?? 'month'} week={filters.week}
+          onChange={(period_type, week) => { setFilters(prev => ({ ...prev, period_type, week })); setSelectedMonthlyRowKeys([]) }} /></div>
         <Row justify="space-between" align="middle" style={{ marginBottom: 16 }}>
           <Col>已选择 {selectedActionableRows.length} 项</Col>
           <Col>
@@ -975,7 +984,7 @@ export default function CleanPage() {
               columns={jobColumns(
                 id => { setPreviewJobId(id); setPreviewPage(1) },
                 id => navigate(`/match?job_id=${id}`),
-                id => navigate(`/data-adjustment?clean_job_id=${id}`),
+                id => { const week = (jobsData ?? []).find(job => job.id === id)?.week_of_month; navigate(`/data-adjustment?clean_job_id=${id}${week ? `&period_type=week&week=${week}` : ''}`) },
                 id => navigate(`/brand-clean?clean_job_id=${id}`),
                 handleDeleteJob,
                 jobView,
@@ -1021,7 +1030,7 @@ export default function CleanPage() {
               type="info"
               showIcon
               message="只补充新增数据"
-              description={`任务范围：${supplementJob.category_code || '-'} / ${formatPlatform(supplementJob.platform)} / ${supplementJob.month ?? '-'}。文件上传、校验和入库后提交后台队列，只清洗/匹配新增行（使用当前历史库、映射库和规则），保留已有处理结果。`}
+              description={`任务范围：${supplementJob.category_code || '-'} / ${formatPlatform(supplementJob.platform)} / ${supplementJob.month ?? '-'}${supplementJob.week_of_month ? ` 第${supplementJob.week_of_month}周` : ' 月度'}。文件上传、校验和入库后提交后台队列，只清洗/匹配新增行（使用当前历史库、映射库和规则），保留已有处理结果。`}
             />
             <Space align="start">
               <Button
@@ -1031,7 +1040,7 @@ export default function CleanPage() {
               >
                 下载示例
               </Button>
-              <Text type="secondary">含两行示例和字段说明；替换示例数据、保留表头后即可上传。品类、平台、月份沿用当前任务。</Text>
+              <Text type="secondary">含两行示例和字段说明；替换示例数据、保留表头后即可上传。品类、平台、月份和周次沿用当前任务。</Text>
             </Space>
             <Upload.Dragger
               accept=".xlsx,.xls,.csv"

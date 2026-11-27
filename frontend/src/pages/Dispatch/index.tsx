@@ -1,3 +1,4 @@
+import DataPeriodFilter, { WEEK_OPTIONS } from '../../components/DataPeriodFilter'
 import { useEffect, useMemo, useState } from 'react'
 import {
   Tabs, Table, Button, Tag, Space, Modal, Form, Select,
@@ -569,6 +570,9 @@ function DispatchExportTab({ visibleCategories }: { visibleCategories: CategoryO
   const [categoryCode, setCategoryCode] = useState<string | undefined>()
   const [platform, setPlatform] = useState<string | undefined>()
   const [months, setMonths] = useState<number[]>([])
+  const [periodType, setPeriodType] = useState<'month' | 'week'>('month')
+  const [weeks, setWeeks] = useState<number[]>([])
+  const { data: rawTimeFilters } = useRequest(() => getRawFilters().then(r => r.data as { months?: number[] }))
   const [exporting, setExporting] = useState(false)
   const [downloadingToken, setDownloadingToken] = useState<string | null>(null)
   const [exportJobsPage, setExportJobsPage] = useState(1)
@@ -608,7 +612,7 @@ function DispatchExportTab({ visibleCategories }: { visibleCategories: CategoryO
     }
     setExporting(true)
     try {
-      await createDispatchExportJob({ category_code: categoryCode, platform, months })
+      await createDispatchExportJob({ category_code: categoryCode, platform, months, period_type: periodType, weeks: periodType === 'week' ? weeks : [] })
       message.success('导出任务已创建，可在列表查看进度')
       refreshFirstExportJobsPage()
     } catch {
@@ -667,6 +671,7 @@ function DispatchExportTab({ visibleCategories }: { visibleCategories: CategoryO
 
   const exportJobColumns = [
     { title: '任务ID', dataIndex: 'job_id', width: 90 },
+    { title: '粒度 / 周次', width: 170, render: (_: unknown, row: DispatchExportJob) => row.period_type === 'week' ? `周度：${row.weeks?.length ? row.weeks.map(week => `第${week}周`).join('、') : '全部周次'}` : '月度' },
     {
       title: '月份', dataIndex: 'months', width: 180,
       render: (values: number[] | null, row: DispatchExportJob) => {
@@ -747,6 +752,8 @@ function DispatchExportTab({ visibleCategories }: { visibleCategories: CategoryO
         message="按品类和平台下载当前分发结果池。系统会按每个上传文件的最新已完成分发批次取数，多个文件命中的数据会串联导出。"
       />
       <Space wrap>
+        <DataPeriodFilter value={periodType} onChange={value => { setPeriodType(value); setWeeks([]) }} />
+        {periodType === 'week' && <Select aria-label="导出周次" mode="multiple" allowClear placeholder="全部周次" value={weeks} options={WEEK_OPTIONS} onChange={setWeeks} style={{ minWidth: 180 }} />}
         <Select
           mode="multiple"
           allowClear
@@ -756,10 +763,8 @@ function DispatchExportTab({ visibleCategories }: { visibleCategories: CategoryO
           value={months}
           optionFilterProp="label"
           maxTagCount="responsive"
-          options={Array.from({ length: 36 }, (_, index) => {
-            const value = Number(dayjs().subtract(index, 'month').format('YYYYMM'))
-            return { value, label: formatMonth(value) }
-          })}
+          options={Array.from(new Set([...(rawTimeFilters?.months ?? []), ...Array.from({ length: 36 }, (_, index) => Number(dayjs().subtract(index, 'month').format('YYYYMM')))]))
+            .sort((a, b) => b - a).map(value => ({ value, label: formatMonth(value) }))}
           onChange={(values) => setMonths([...values].sort((a, b) => a - b))}
         />
         <Select
@@ -1317,6 +1322,8 @@ function DispatchRulesTab({ refreshVersion, visibleCategories }: { refreshVersio
 // ─── Tab 5: 规则命中核对 ──────────────────────────────────────
 function DispatchRuleCoverageTab({ visibleCategories }: { visibleCategories: CategoryOption[] }) {
   const [months, setMonths] = useState<number[]>([])
+  const [periodType, setPeriodType] = useState<'month' | 'week'>('month')
+  const [weeks, setWeeks] = useState<number[]>([])
   const [categoryCodes, setCategoryCodes] = useState<string[]>([])
   const [platforms, setPlatforms] = useState<string[]>([])
   const [onlyEmpty, setOnlyEmpty] = useState(false)
@@ -1347,11 +1354,13 @@ function DispatchRuleCoverageTab({ visibleCategories }: { visibleCategories: Cat
     () => months.length > 0
       ? getDispatchRuleCoverage({
           months,
+          period_type: periodType,
+          weeks: periodType === 'week' ? weeks : [],
           category_codes: categoryCodes.length > 0 ? categoryCodes : undefined,
           platforms: platforms.length > 0 ? platforms : undefined,
         }).then(r => r.data)
       : Promise.resolve(null),
-    { refreshDeps: [months.join(','), categoryCodes.join(','), platforms.join(',')] },
+    { refreshDeps: [months.join(','), categoryCodes.join(','), platforms.join(','), periodType, weeks.join(',')] },
   )
 
   const rows = useMemo(
@@ -1366,6 +1375,7 @@ function DispatchRuleCoverageTab({ visibleCategories }: { visibleCategories: Cat
       render: (value: number) => formatMonth(value),
       sorter: (a: DispatchRuleCoverageRow, b: DispatchRuleCoverageRow) => a.month - b.month,
     },
+    { title: '周次', dataIndex: 'week_of_month', width: 85, render: (v: number) => v ? `第${v}周` : '月度' },
     {
       title: '品类', dataIndex: 'category_name', width: 140,
       render: (value: string | null, row: DispatchRuleCoverageRow) => value || row.category_code,
@@ -1399,6 +1409,8 @@ function DispatchRuleCoverageTab({ visibleCategories }: { visibleCategories: Cat
   return (
     <>
       <Space wrap style={{ marginBottom: 12 }}>
+        <DataPeriodFilter value={periodType} onChange={value => { setPeriodType(value); setWeeks([]) }} />
+        {periodType === 'week' && <Select aria-label="核对周次" mode="multiple" allowClear placeholder="全部周次" value={weeks} options={WEEK_OPTIONS} onChange={setWeeks} style={{ minWidth: 180 }} />}
         <Select
           mode="multiple" allowClear showSearch optionFilterProp="label" maxTagCount="responsive"
           placeholder="月度" style={{ width: 200 }}
@@ -1451,7 +1463,7 @@ function DispatchRuleCoverageTab({ visibleCategories }: { visibleCategories: Cat
             </Space>
           )}
           <Table<DispatchRuleCoverageRow>
-            rowKey={row => `${row.month}-${row.category_code}-${row.platform ?? 'unknown'}-${row.rule_id}`}
+            rowKey={row => `${row.month}-${row.week_of_month ?? 0}-${row.category_code}-${row.platform ?? 'unknown'}-${row.rule_id}`}
             size="small"
             loading={loading}
             dataSource={rows}

@@ -101,6 +101,7 @@ export const resetUserPassword = (id: number, password: string) =>
 
 // ─── Platform Stats（仅管理员） ───────────────────────────────
 export interface PlatformStatsProgressCategory {
+  week_of_month?: number
   month: number
   category_code: string | null
   category_name: string
@@ -356,6 +357,7 @@ export const downloadUploadSample = () =>
   api.get('/upload/sample-template', { responseType: 'blob' })
 
 export interface UploadFileItem {
+  week_of_month?: number
   id: number
   filename: string
   platform: string | null
@@ -369,6 +371,8 @@ export interface UploadFileItem {
   country_code: string | null
   data_year: number | null
   data_month: number | null
+  period_type?: 'month' | 'week'
+  weeks?: number[]
 }
 
 export const listUploadFiles = (params?: {
@@ -445,6 +449,7 @@ export const exportRawData = (params: Record<string, unknown>) =>
 
 // ─── Clean ─────────────────────────────────────────────────
 export interface CleanJobItem {
+  week_of_month?: number
   id: number
   file_ids: number[]
   rules: Record<string, unknown>
@@ -489,6 +494,7 @@ export interface CleanPoolCategoryItem {
 }
 
 export interface CleanMonthlyPoolItem {
+  week_of_month?: number
   category_code: string
   category_name: string | null
   platform: string | null
@@ -503,6 +509,7 @@ export interface CleanMonthlyPoolItem {
 }
 
 export interface UpsertMonthlyCleanTaskPayload {
+  week?: number
   category_code: string
   platform: string
   month: number
@@ -564,10 +571,12 @@ export const getCleanMonthlyPool = (params?: {
   platform?: string
   month?: number
   limit?: number
-}) => api.get<CleanMonthlyPoolItem[]>('/clean/pool/monthly', { params })
+  period_type?: 'month' | 'week'
+  week?: number
+}) => api.get<CleanMonthlyPoolItem[]>('/clean/pool', { params })
 
 export const upsertMonthlyCleanTask = (payload: UpsertMonthlyCleanTaskPayload) =>
-  api.post<UpsertMonthlyCleanTaskResponse>('/clean/tasks/upsert-monthly', payload)
+  api.post<UpsertMonthlyCleanTaskResponse>('/clean/tasks/upsert-period', payload)
 
 export const createCleanTask = (payload: CreateCleanTaskPayload) =>
   api.post<CreateCleanTaskResponse>('/clean/tasks', payload)
@@ -622,6 +631,8 @@ export const supplementCleanTask = (jobId: number, formData: FormData) =>
   }).then(r => r.data.data)
 
 export const listCleanJobs = (params?: {
+  period_type?: 'month' | 'week'
+  week?: number
   category_code?: string
   platform?: string
   month?: number
@@ -918,6 +929,8 @@ export const listDispatchUnmatched = (batchId: number, params?: { page?: number;
   api.get<DispatchUnmatchedResponse>(`/dispatch/batches/${batchId}/unmatched`, { params })
 
 export interface DispatchExportJob {
+  period_type?: 'month' | 'week'
+  weeks?: number[]
   job_id: number
   status: 'pending' | 'running' | 'done' | 'error'
   progress: number
@@ -939,8 +952,10 @@ export interface DispatchExportJobsResponse {
   items: DispatchExportJob[]
 }
 
-export const createDispatchExportJob = (params: { category_code?: string; platform?: string | null; month?: number; months?: number[] }) =>
+export const createDispatchExportJob = (params: { category_code?: string; platform?: string | null; month?: number; months?: number[]; period_type?: 'month' | 'week'; weeks?: number[] }) =>
   api.post('/dispatch/export', {
+    period_type: params.period_type ?? 'month',
+    weeks: params.weeks ?? [],
     ...(params.category_code ? { category_code: params.category_code } : {}),
     ...(params.platform ? { platform: params.platform } : {}),
     ...(params.months && params.months.length > 0 ? { months: params.months } : {}),
@@ -960,6 +975,7 @@ export const deleteDispatchExportJob = (jobId: number) =>
   api.delete(`/dispatch/export/jobs/${jobId}`)
 
 export interface DispatchRuleCoverageRow {
+  week_of_month?: number
   month: number
   category_code: string
   category_name: string | null
@@ -985,6 +1001,8 @@ export interface DispatchRuleCoverageResponse {
 }
 
 export const getDispatchRuleCoverage = (params: {
+  period_type?: 'month' | 'week'
+  weeks?: number[]
   months: number[]
   category_codes?: string[]
   platforms?: string[]
@@ -1059,9 +1077,11 @@ export const getDispatchRedispatchJob = (jobId: number) =>
 // ─── Export ────────────────────────────────────────────────
 export type TriggerExportPayload =
   | { clean_job_id: number; filename_prefix: string }
-  | { months: number[]; category_code: string; platforms: string[]; filename_prefix: string }
+  | { months: number[]; category_code: string; platforms: string[]; filename_prefix: string; period_type?: 'month' | 'week'; weeks?: number[] }
 
 export interface ExportJobItem {
+  period_type?: 'month' | 'week'
+  weeks?: number[]
   id: number
   clean_job_id: number | null
   months: number[] | null
@@ -1488,6 +1508,8 @@ export function fetchItemAttrs(publishedItemId: number): Promise<{ attr_name: st
 }
 
 export interface WorkbenchExportParams {
+  period_type?: 'month' | 'week'
+  week?: number
   year?: number
   month?: number
   category_name?: string
@@ -2299,6 +2321,8 @@ export const getUploadHeaders = (formData: FormData) =>
   }>('/upload/headers', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
 
 export interface UploadValidationPayload {
+  period_type?: 'month' | 'week'
+  week?: number | string
   temp_file_id: string
   mapping: Record<string, string>
   ignore_columns: string[]

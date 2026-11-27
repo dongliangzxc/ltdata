@@ -95,6 +95,7 @@ def audit_price(db: Session, match_result_ids: list[int], commit: bool = True, p
                 .filter(PublishedItem.model_code.in_(model_codes))
                 .filter(PublishedItem.month.in_(history_months))
                 .filter(PublishedItem.price.isnot(None))
+                .filter(PublishedItem.week_of_month == 0)
                 .group_by(PublishedItem.model_code, PublishedItem.month)
                 .all()
             )

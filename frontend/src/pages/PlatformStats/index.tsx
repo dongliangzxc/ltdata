@@ -1,3 +1,4 @@
+import DataPeriodFilter from '../../components/DataPeriodFilter'
 import { useEffect, useMemo, useState } from 'react'
 import { Alert, Button, Card, Checkbox, Col, Collapse, Progress, Row, Select, Space, Statistic, Table, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
@@ -297,6 +298,8 @@ export default function PlatformStatsPage() {
   const [progressCategoryFilter, setProgressCategoryFilter] = useState<string[] | undefined>(DEFAULT_PROGRESS_CATEGORY_CODES)
   const [progressPlatformView, setProgressPlatformView] = useState<string>('all')
   const [progressMonthFilter, setProgressMonthFilter] = useState<number>()
+  const [progressPeriodType, setProgressPeriodType] = useState<'month' | 'week'>('month')
+  const [progressWeek, setProgressWeek] = useState<number | undefined>()
   const progress = data?.progress ?? liveProgress
   const progressAt = data?.progress_at ?? liveProgressAt
 
@@ -309,6 +312,7 @@ export default function PlatformStatsPage() {
       return `/clean?${params.toString()}`
     }
     return [
+      { title: '周次', dataIndex: 'week_of_month', width: 85, render: (v: number) => v ? `第${v}周` : '月度' },
       ...progressColumns,
       {
         title: '操作',
@@ -414,6 +418,8 @@ export default function PlatformStatsPage() {
   const filteredProgress = useMemo(() => {
     const rows = (progress?.categories ?? []).filter(row => (
       (progressMonthFilter === undefined || row.month === progressMonthFilter)
+      && (Boolean(row.week_of_month) === (progressPeriodType === 'week'))
+      && (progressWeek === undefined || row.week_of_month === progressWeek)
       && (progressCategoryFilter === undefined || progressCategoryFilter.includes(row.category_code ?? ''))
     ))
     if (progressPlatformView !== 'all') {
@@ -421,7 +427,7 @@ export default function PlatformStatsPage() {
     }
     const grouped = new Map<string, ProgressRow>()
     for (const row of rows) {
-      const key = `${row.month}-${row.category_code ?? ''}`
+      const key = `${row.month}-${row.category_code ?? ''}-${row.week_of_month ?? 0}`
       const existing = grouped.get(key)
       if (!existing) {
         grouped.set(key, { ...row, platform: 'all', unknown_excluded_ignored: unknownExcluded(row) })
@@ -456,6 +462,7 @@ export default function PlatformStatsPage() {
     progressMonthFilter,
     progressCategoryFilter,
     progressPlatformView,
+    progressPeriodType, progressWeek,
   ])
 
   const progressTotals = useMemo(() => filteredProgress.reduce(
@@ -501,12 +508,16 @@ export default function PlatformStatsPage() {
         })
     : null
   const overview = useMemo(() => {
-    if (!monthOverview || !progress || progressCategoryFilter === undefined) return monthOverview
+    if (!monthOverview || !progress) return monthOverview
+    if (progressCategoryFilter === undefined && progressPeriodType === 'month' && progressWeek === undefined
+      && !progress.categories.some(row => row.week_of_month)) return monthOverview
     // 总览只受月份、品类影响；平台选择仍用于明细的聚合/拆分视图。
     const months = new Map<number, ProgressSummary>()
     for (const row of progress.categories) {
       if ((progressMonthFilter !== undefined && row.month !== progressMonthFilter)
-        || !progressCategoryFilter.includes(row.category_code ?? '')) continue
+        || (progressCategoryFilter !== undefined && !progressCategoryFilter.includes(row.category_code ?? ''))
+        || (Boolean(row.week_of_month) !== (progressPeriodType === 'week'))
+        || (progressWeek !== undefined && row.week_of_month !== progressWeek)) continue
       const acc = months.get(row.month) ?? {
         uploaded_rows: monthOverview.uploaded_rows,
         dispatchable: 0, task_created: 0, task_count: 0, not_task_created: 0,
@@ -541,7 +552,7 @@ export default function PlatformStatsPage() {
       }
     }
     return totals
-  }, [monthOverview, progress, progressCategoryFilter, progressMonthFilter])
+  }, [monthOverview, progress, progressCategoryFilter, progressMonthFilter, progressPeriodType, progressWeek])
 
   if (!data) {
     return <Card loading={loading} />
@@ -617,6 +628,7 @@ export default function PlatformStatsPage() {
         title={progressMonthFilter === undefined ? '处理进度总览' : `处理进度总览（${formatMonth(progressMonthFilter)}）`}
         extra={(
           <Space wrap>
+            <DataPeriodFilter value={progressPeriodType} week={progressWeek} onChange={(value, week) => { setProgressPeriodType(value); setProgressWeek(week) }} />
             {progressCategorySelect}
             <Select
               allowClear
@@ -632,7 +644,7 @@ export default function PlatformStatsPage() {
         <Row gutter={16}>
           <Col span={6}>
             <Statistic
-              title={allProgressCategoriesSelected ? '上传入库数据总量' : '上传入库数据总量（全部品类）'}
+              title={allProgressCategoriesSelected ? '上传入库数据总量（全部粒度）' : '上传入库数据总量（全部品类、全部粒度）'}
               value={overview.uploaded_rows ?? '统计中…'}
               suffix={overview.uploaded_rows == null ? undefined : '条'}
             />
@@ -771,7 +783,7 @@ export default function PlatformStatsPage() {
         <Table
           dataSource={filteredProgress}
           columns={progressTableColumns}
-          rowKey={row => `${row.month}-${row.category_code ?? ''}-${row.platform ?? ''}`}
+          rowKey={row => `${row.month}-${row.category_code ?? ''}-${row.platform ?? ''}-${row.week_of_month ?? 0}`}
           size="small"
           scroll={{ x: 2720 }}
           pagination={{ pageSize: 20, showSizeChanger: true }}

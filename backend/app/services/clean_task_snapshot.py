@@ -15,6 +15,7 @@ from app.models.schemas import (
     RawDataRecord,
 )
 from app.services.dispatch_scope import latest_done_batch_subquery
+from app.services.data_period import job_week, period_key
 
 
 ACTIVE_TASK_STATUSES = {"queued", "created", "cleaning", "matching", "reviewing", "processing", "done"}
@@ -185,6 +186,7 @@ def _find_monthly_job(
     category_code: str,
     platform: str | None,
     month: int,
+    week: int = 0,
 ) -> CleanJobRecord | None:
     normalized_platform = normalize_platform(platform)
     platform_aliases = platform_aliases_for(normalized_platform)
@@ -200,7 +202,7 @@ def _find_monthly_job(
         .all()
     )
     for job in candidates:
-        if month in _job_months(job):
+        if month in _job_months(job) and job_week(job) == week:
             return job
     return None
 
@@ -211,11 +213,12 @@ def _monthly_pending_rows(
     category_code: str | None = None,
     platform: str | None = None,
     month: int | None = None,
+    week: int = 0,
 ):
     q = _pending_dispatch_query(db, category_code=category_code, platform=platform, month=month)
     if month is not None:
         q = q.filter(RawDataRecord.month == month)
-    return q
+    return q.filter(RawDataRecord.week_of_month == week)
 
 
 def get_clean_pool_summary(db: Session, dispatch_batch_id: int | None = None) -> list[dict]:
@@ -279,7 +282,7 @@ def _monthly_jobs_by_scope(
     category_code: str | None = None,
     platform: str | None = None,
     category_codes: set[str] | None = None,
-) -> dict[tuple[str, str, int], CleanJobRecord]:
+) -> dict[tuple[str, str, int, int], CleanJobRecord]:
     q = db.query(CleanJobRecord).filter(CleanJobRecord.category_code.isnot(None))
     if category_code:
         q = q.filter(CleanJobRecord.category_code == category_code)
@@ -291,13 +294,13 @@ def _monthly_jobs_by_scope(
     if normalized_platform:
         q = q.filter(func.lower(CleanJobRecord.platform).in_(platform_aliases_for(normalized_platform)))
 
-    jobs_by_scope: dict[tuple[str, str, int], CleanJobRecord] = {}
+    jobs_by_scope: dict[tuple[str, str, int, int], CleanJobRecord] = {}
     for job in q.order_by(CleanJobRecord.id.desc()).all():
         job_platform = normalize_platform(job.platform)
         if not job.category_code or not job_platform or job.status == "archived":
             continue
         for job_month in _job_months(job):
-            jobs_by_scope.setdefault((job.category_code, job_platform, job_month), job)
+            jobs_by_scope.setdefault((job.category_code, job_platform, job_month, job_week(job)), job)
     return jobs_by_scope
 
 
@@ -308,6 +311,8 @@ def get_monthly_clean_pool(
     platform: str | None = None,
     month: int | None = None,
     limit: int | None = None,
+    period_type: str = "month",
+    week: int | None = None,
 ) -> list[dict]:
     """待入清洗队列（按月/品类/平台聚合）。
 
@@ -334,6 +339,7 @@ def get_monthly_clean_pool(
                 Category.name.label("category_name"),
                 platform_label.label("platform"),
                 RawDataRecord.month.label("month"),
+                RawDataRecord.week_of_month.label("week_of_month"),
                 dispatched_count,
                 queued_count,
             )
@@ -356,7 +362,10 @@ def get_monthly_clean_pool(
             q = q.filter(func.lower(RawDataRecord.platform).in_(platform_aliases_for(normalized_filter_platform)))
         if month is not None:
             q = q.filter(RawDataRecord.month == month)
-        return q.group_by(DispatchItem.category_code, Category.name, platform_label, RawDataRecord.month)
+        q = q.filter(RawDataRecord.week_of_month > 0) if period_type == "week" else q.filter(RawDataRecord.week_of_month == 0)
+        if week is not None:
+            q = q.filter(RawDataRecord.week_of_month == week)
+        return q.group_by(DispatchItem.category_code, Category.name, platform_label, RawDataRecord.month, RawDataRecord.week_of_month)
 
     if limit is not None and not category_code:
         grouped = []
@@ -370,13 +379,13 @@ def get_monthly_clean_pool(
                 break
             rows = (
                 build_grouped_query(scoped_category_code)
-                .order_by(platform_label, RawDataRecord.month)
+                .order_by(platform_label, RawDataRecord.month, RawDataRecord.week_of_month)
                 .limit(remaining)
                 .all()
             )
             grouped.extend(rows)
     else:
-        grouped_query = build_grouped_query().order_by(DispatchItem.category_code, platform_label, RawDataRecord.month)
+        grouped_query = build_grouped_query().order_by(DispatchItem.category_code, platform_label, RawDataRecord.month, RawDataRecord.week_of_month)
         if limit is not None:
             grouped_query = grouped_query.limit(limit)
         grouped = grouped_query.all()
@@ -398,6 +407,7 @@ def get_monthly_clean_pool(
         scope_category_code: str,
         scope_platform: str | None,
         scope_month: int,
+        scope_week: int,
     ) -> tuple[CleanJobRecord, bool] | None:
         normalized_platform = normalize_platform(scope_platform)
         cache_key = (scope_category_code, normalized_platform)
@@ -417,7 +427,7 @@ def get_monthly_clean_pool(
                     .all()
                 )
         for job in archived_candidates[cache_key]:
-            if scope_month not in _job_months(job):
+            if scope_month not in _job_months(job) or job_week(job) != scope_week:
                 continue
             if job.id not in downstream_state:
                 downstream_state[job.id] = _has_reviewed_or_published_state(db, job.id)
@@ -429,12 +439,12 @@ def get_monthly_clean_pool(
         normalized_platform = normalize_platform(row.platform)
         row_month = int(row.month)
         pending_count = row.dispatched_count - row.queued_count
-        job = jobs_by_scope.get((row.category_code, normalized_platform, row_month))
+        job = jobs_by_scope.get((row.category_code, normalized_platform, row_month, row.week_of_month))
         if job is not None and job.id in active_downstream_ids and pending_count == 0:
             # 已有处理结果且没有新增条目时隐藏；有新增分发时仍展示追加入口。
             continue
         if job is None:
-            archived_job = _archived_job_with_downstream(row.category_code, row.platform, row_month)
+            archived_job = _archived_job_with_downstream(row.category_code, row.platform, row_month, row.week_of_month)
             if archived_job:
                 archived_job_obj, has_downstream = archived_job
                 if has_downstream:
@@ -443,6 +453,7 @@ def get_monthly_clean_pool(
                         "category_name": row.category_name,
                         "platform": normalized_platform,
                         "month": row_month,
+                        "week_of_month": row.week_of_month,
                         "dispatched_count": row.dispatched_count,
                         "pending_count": pending_count,
                         "queued_count": row.queued_count,
@@ -457,6 +468,7 @@ def get_monthly_clean_pool(
             "category_name": row.category_name,
             "platform": normalized_platform,
             "month": row_month,
+            "week_of_month": row.week_of_month,
             "dispatched_count": row.dispatched_count,
             "pending_count": pending_count,
             "queued_count": row.queued_count,
@@ -540,6 +552,8 @@ def create_category_task_snapshot(
     )
     if not rows:
         raise ValueError("该品类没有可创建任务的数据")
+    if any(raw.week_of_month for _, raw in rows):
+        raise ValueError("周度数据请在待入清洗队列按具体周期创建任务")
 
     file_ids = sorted({raw.file_id for _, raw in rows if raw.file_id is not None})
     dispatch_batch_ids = sorted({dispatch_item.batch_id for dispatch_item, _ in rows if dispatch_item.batch_id is not None})
@@ -600,6 +614,7 @@ def _safe_existing_int_list(value) -> list[int]:
 def _merge_scope(scope: dict | None, *, months: list[int], platforms: list[str], dispatch_batch_ids: list[int], file_ids: list[int]) -> dict:
     current = scope if isinstance(scope, dict) else {}
     return {
+        **current,
         "months": sorted({*_safe_int_values(_scope_list(current, "months")), *months}),
         "platforms": sorted({str(v) for v in _scope_list(current, "platforms") + platforms if v}),
         "dispatch_batch_ids": sorted({*_safe_int_values(_scope_list(current, "dispatch_batch_ids")), *dispatch_batch_ids}),
@@ -664,6 +679,7 @@ def upsert_monthly_task_snapshot(
     category_code: str,
     platform: str,
     month: int,
+    week: int = 0,
     rules: dict | None,
     force_reclean: bool = False,
     force_rebuild: bool = False,
@@ -682,6 +698,7 @@ def upsert_monthly_task_snapshot(
         category_code=category_code,
         platform=normalized_platform,
         month=month,
+        week=week,
     )
     action = "appended" if job else "created"
     if job and job.status in {"queued", "created", "cleaning", "matching", "processing"}:
@@ -717,6 +734,7 @@ def upsert_monthly_task_snapshot(
             category_code=category_code,
             platform=normalized_platform,
             month=month,
+            week=week,
         )
         .order_by(DispatchItem.id)
         .all()
@@ -736,12 +754,16 @@ def upsert_monthly_task_snapshot(
             status="created",
             row_in=0,
             row_out=0,
-            task_name=_default_monthly_task_name(db, category_code, normalized_platform, month),
+            task_name=_default_monthly_task_name(db, category_code, normalized_platform, month) + (f" / 第{week}周" if week else ""),
+            week_of_month=week,
             category_code=category_code,
             platform=normalized_platform,
             dispatch_category_code=category_code,
             source_scope={
                 "months": [month],
+                "period_type": "week" if week else "month",
+                "period_key": period_key(month, week),
+                "week_of_month": week,
                 "platforms": [normalized_platform],
                 "dispatch_batch_ids": dispatch_batch_ids,
                 "file_ids": file_ids,

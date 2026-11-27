@@ -1,3 +1,4 @@
+import DataPeriodFilter from '../../components/DataPeriodFilter'
 import { useMemo, useState, useEffect, useRef } from 'react'
 import {
   Card, Select, Input, Button, Table, Space, Typography, message,
@@ -46,6 +47,8 @@ const emptyFilterOptions: ExportFilterOption = {
 const formatPlatform = (value?: string | null) => value ? (platformLabelMap[value] ?? value) : '-'
 
 export default function ExportPage() {
+  const [periodType, setPeriodType] = useState<'month' | 'week'>('month')
+  const [week, setWeek] = useState<number | undefined>()
   const [selectedMonths, setSelectedMonths] = useState<number[]>([])
   const [selectedCategoryCode, setSelectedCategoryCode] = useState<string | undefined>(undefined)
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([])
@@ -118,6 +121,8 @@ export default function ExportPage() {
     try {
       await triggerExport({
         months: selectedMonths,
+        period_type: periodType,
+        weeks: week ? [week] : [],
         category_code: selectedCategoryCode,
         platforms: selectedPlatforms,
         filename_prefix: filenamePrefix,
@@ -145,7 +150,7 @@ export default function ExportPage() {
     const months = row.months?.join('、') || '-'
     const category = categoryLabelMap[row.category_code ?? ''] ?? row.category_code ?? '-'
     const platforms = row.platforms?.map(formatPlatform).join('、') || '-'
-    return `${months}｜${category}｜${platforms}`
+    return `${months}｜${row.period_type === 'week' ? `周度 ${row.weeks?.length ? row.weeks.join('、') : '全部周次'}` : '月度'}｜${category}｜${platforms}`
   }
 
   const exportCols = [
@@ -205,6 +210,7 @@ export default function ExportPage() {
           />
         )}
 
+        <div style={{ marginBottom: 16 }}><DataPeriodFilter value={periodType} week={week} onChange={(value, selectedWeek) => { setPeriodType(value); setWeek(selectedWeek) }} /></div>
         <Row gutter={16} style={{ marginBottom: 16 }}>
           <Col span={8}>
             <Text strong>月度</Text>

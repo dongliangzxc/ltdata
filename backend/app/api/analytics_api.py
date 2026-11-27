@@ -41,8 +41,12 @@ def _filter_kwargs(
     platform: Optional[str] = None,
     model_keyword: Optional[str] = None,
     item_keyword: Optional[str] = None,
+    period_type: str = "month",
+    week: Optional[str] = None,
 ) -> dict:
     return {
+        "period_type": period_type,
+        "week": week,
         "year": year,
         "month": month,
         "brand": brand,
@@ -88,6 +92,8 @@ def filters(
 def summary(
     year: Optional[int] = Query(None),
     month: Optional[int] = Query(None, ge=1, le=12),
+    period_type: str = Query("month", pattern="^(month|week)$"),
+    week: Optional[str] = Query(None, pattern="^[1-5]$"),
     brand: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
     platform: Optional[str] = Query(None),
@@ -106,7 +112,7 @@ def summary(
     _ensure_analytics_category_visible(allowed_categories, category)
     return get_analytics_summary(
         analytics_db,
-        **_filter_kwargs(year, month, brand, category, platform, model_keyword, item_keyword),
+        **_filter_kwargs(year, month, brand, category, platform, model_keyword, item_keyword, period_type, week),
         group_by=group_by,
         page=page,
         page_size=page_size,
@@ -119,6 +125,8 @@ def summary(
 def export_summary(
     year: Optional[int] = Query(None),
     month: Optional[int] = Query(None, ge=1, le=12),
+    period_type: str = Query("month", pattern="^(month|week)$"),
+    week: Optional[str] = Query(None, pattern="^[1-5]$"),
     brand: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
     platform: Optional[str] = Query(None),
@@ -135,7 +143,7 @@ def export_summary(
     _ensure_analytics_category_visible(allowed_categories, category)
     source_total = build_analytics_query(
         analytics_db,
-        **_filter_kwargs(year, month, brand, category, platform, model_keyword, item_keyword),
+        **_filter_kwargs(year, month, brand, category, platform, model_keyword, item_keyword, period_type, week),
         allowed_categories=allowed_categories,
     ).count()
     ensure_export_row_limit(source_total, max_rows=MAX_SYNC_EXPORT_ROWS, label="看板汇总导出")
@@ -149,7 +157,7 @@ def export_summary(
     try:
         data = get_analytics_summary(
             analytics_db,
-            **_filter_kwargs(year, month, brand, category, platform, model_keyword, item_keyword),
+            **_filter_kwargs(year, month, brand, category, platform, model_keyword, item_keyword, period_type, week),
             group_by=group_by,
             paginate=False,
             sort_by=sort_by,
@@ -171,6 +179,8 @@ def export_summary(
 def export_detail(
     year: Optional[int] = Query(None),
     month: Optional[int] = Query(None, ge=1, le=12),
+    period_type: str = Query("month", pattern="^(month|week)$"),
+    week: Optional[str] = Query(None, pattern="^[1-5]$"),
     brand: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
     platform: Optional[str] = Query(None),
@@ -186,7 +196,7 @@ def export_detail(
     _ensure_analytics_category_visible(allowed_categories, category)
     source_total = build_analytics_query(
         analytics_db,
-        **_filter_kwargs(year, month, brand, category, platform, model_keyword, item_keyword),
+        **_filter_kwargs(year, month, brand, category, platform, model_keyword, item_keyword, period_type, week),
         allowed_categories=allowed_categories,
     ).count()
     ensure_export_row_limit(source_total, max_rows=MAX_SYNC_EXPORT_ROWS, label="看板明细导出")
@@ -200,7 +210,7 @@ def export_detail(
     try:
         rows = get_analytics_detail_rows(
             analytics_db,
-            **_filter_kwargs(year, month, brand, category, platform, model_keyword, item_keyword),
+            **_filter_kwargs(year, month, brand, category, platform, model_keyword, item_keyword, period_type, week),
             allowed_categories=allowed_categories,
         )
         token, filename, _ = write_detail_export_file(rows, fields)

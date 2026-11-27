@@ -1,8 +1,9 @@
+from app.services.data_period import filter_period
 import io
 from typing import List, Optional
 from urllib.parse import quote
 import pandas as pd
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, distinct, asc, desc
@@ -53,6 +54,8 @@ def build_query(
     price_max=None,
     months=None,
     country_code=None,
+    period_type=None,
+    week=None,
 ):
     q = db.query(RawDataRecord)
     if file_id is not None:
@@ -75,13 +78,17 @@ def build_query(
         q = q.filter(RawDataRecord.price >= price_min)
     if price_max is not None:
         q = q.filter(RawDataRecord.price <= price_max)
-    return q
+    try:
+        return filter_period(q, RawDataRecord, period_type, week)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 EXPORT_COLUMNS = [
     ("country_code", "国家"),
     ("platform",     "平台"),
     ("month",        "月份"),
+    ("week_of_month", "周次"),
     ("category_lv0", "一级品类"),
     ("brand_raw",    "品牌原始值"),
     ("brand_std",    "标准品牌"),
@@ -103,6 +110,8 @@ def export_raw_data(
     platform: Optional[str] = Query(None),
     month: Optional[int] = Query(None),
     months: Optional[List[int]] = Query(None),
+    period_type: Optional[str] = Query(None, pattern="^(month|week)$"),
+    week: Optional[str] = Query(None),
     country_code: Optional[str] = Query(None),
     brand_std: Optional[str] = Query(None),
     brand_raw: Optional[str] = Query(None),
@@ -124,12 +133,15 @@ def export_raw_data(
         price_max,
         months,
         country_code,
+        period_type,
+        week,
     )
     total = query.count()
     ensure_export_row_limit(total, max_rows=MAX_SYNC_EXPORT_ROWS, label="原始数据导出")
     rows = query.order_by(RawDataRecord.id).all()
     data = [
-        {label: getattr(r, field, None) for field, label in EXPORT_COLUMNS}
+        {label: (getattr(r, field, None) or None) if field == "week_of_month" else getattr(r, field, None)
+         for field, label in EXPORT_COLUMNS}
         for r in rows
     ]
     df = pd.DataFrame(data, columns=[label for _, label in EXPORT_COLUMNS])
@@ -150,6 +162,8 @@ def list_raw_data(
     platform: Optional[str] = Query(None),
     month: Optional[int] = Query(None),
     months: Optional[List[int]] = Query(None),
+    period_type: Optional[str] = Query(None, pattern="^(month|week)$"),
+    week: Optional[str] = Query(None),
     country_code: Optional[str] = Query(None),
     brand_std: Optional[str] = Query(None),
     brand_raw: Optional[str] = Query(None),
@@ -162,13 +176,15 @@ def list_raw_data(
     page_size: int = Query(20, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
-    q = build_query(db, file_id, platform, month, brand_std, brand_raw, item_name, price_min, price_max, months, country_code)
+    q = build_query(db, file_id, platform, month, brand_std, brand_raw, item_name, price_min, price_max, months, country_code, period_type, week)
     count_key = _cache_key(
         file_id=file_id,
         platform=platform,
         month=month,
         months=months,
         country_code=country_code,
+        period_type=period_type,
+        week=week,
         brand_std=brand_std,
         brand_raw=brand_raw,
         item_name=item_name,
@@ -199,6 +215,8 @@ def get_stats(
     platform: Optional[str] = Query(None),
     month: Optional[int] = Query(None),
     months: Optional[List[int]] = Query(None),
+    period_type: Optional[str] = Query(None, pattern="^(month|week)$"),
+    week: Optional[str] = Query(None),
     country_code: Optional[str] = Query(None),
     brand_std: Optional[str] = Query(None),
     brand_raw: Optional[str] = Query(None),
@@ -207,13 +225,15 @@ def get_stats(
     price_max: Optional[float] = Query(None, ge=0),
     db: Session = Depends(get_db),
 ):
-    q = build_query(db, file_id, platform, month, brand_std, brand_raw, item_name, price_min, price_max, months, country_code)
+    q = build_query(db, file_id, platform, month, brand_std, brand_raw, item_name, price_min, price_max, months, country_code, period_type, week)
     stats_key = _cache_key(
         file_id=file_id,
         platform=platform,
         month=month,
         months=months,
         country_code=country_code,
+        period_type=period_type,
+        week=week,
         brand_std=brand_std,
         brand_raw=brand_raw,
         item_name=item_name,

@@ -1,0 +1,10 @@
+{
+  "mysql_version": "8.0.36",
+  "background_worker": "separate real process",
+  "five_week_tasks": "passed",
+  "week2_append_and_supplement": 3,
+  "manual_review_source_and_note_retained": true,
+  "republish_week2_retains_three": true,
+  "monthly_coexistence": true,
+  "production_business_data_modified": false
+}

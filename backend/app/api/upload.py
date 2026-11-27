@@ -34,6 +34,7 @@ from app.services.currency_service import get_country
 from app.services.rawdata_cache import invalidate_rawdata_cache
 from app.services.filename_metadata import parse_filename_metadata
 from app.services.upload_validation import inspect_upload_values
+from app.services.data_period import apply_record_period, inspect_upload_periods
 from app.services.import_helper import (
     col_fingerprint as _ih_col_fingerprint,
     read_columns as _ih_read_columns,
@@ -132,11 +133,18 @@ def _mark_interrupted_upload_jobs(db: Session) -> None:
     if not jobs:
         return
     for job in jobs:
-        job.status = "error"
-        job.stage = "interrupted"
-        job.stage_label = "任务已中断"
-        job.error_msg = "后端服务重启，后台处理线程已中断，请重新上传"
-        job.finished_at = datetime.utcnow()
+        # The thread may have registered while the database query was running.
+        if job.id in _upload_progress:
+            continue
+        # A completed thread may have cleared its registry entry after SELECT.
+        # MySQL UPDATE checks the current status rather than the old read snapshot.
+        db.query(UploadConfirmJob).filter(
+            UploadConfirmJob.id == job.id, UploadConfirmJob.status == "running",
+        ).update({
+            "status": "error", "stage": "interrupted", "stage_label": "任务已中断",
+            "error_msg": "后端服务重启，后台处理线程已中断，请重新上传",
+            "finished_at": datetime.utcnow(),
+        }, synchronize_session=False)
     db.commit()
 
 
@@ -236,17 +244,17 @@ def _existing_upload_keys(
     country_code: Optional[str],
     filter_country: bool = True,
 ) -> set:
-    """按 (month, platform) 分批查已存在的 item_id，避免超大 IN 查询。"""
+    """按 (month, platform, week_of_month) 分批查已存在的 item_id，避免超大 IN 查询。"""
     keys_by_scope: dict[tuple, list[str]] = {}
     for record in records:
         item_id = record.get("item_id")
         if item_id is None:
             continue
-        scope = (record.get("month"), record.get("platform"))
+        scope = (record.get("month"), record.get("platform"), record.get("week_of_month", 0))
         keys_by_scope.setdefault(scope, []).append(str(item_id))
 
     existing: set = set()
-    for (month, platform), item_ids in keys_by_scope.items():
+    for (month, platform, week), item_ids in keys_by_scope.items():
         for start in range(0, len(item_ids), 10000):
             chunk = item_ids[start:start + 10000]
             query = db.query(
@@ -254,7 +262,8 @@ def _existing_upload_keys(
                 RawDataRecord.item_id,
                 RawDataRecord.month,
                 RawDataRecord.platform,
-            ).filter(RawDataRecord.item_id.in_(chunk))
+                RawDataRecord.week_of_month,
+            ).filter(RawDataRecord.item_id.in_(chunk), RawDataRecord.week_of_month == week)
             if filter_country:
                 if country_code is None:
                     query = query.filter(RawDataRecord.country_code.is_(None))
@@ -270,9 +279,9 @@ def _existing_upload_keys(
                 query = query.filter(RawDataRecord.platform == platform)
             for row in query.all():
                 if filter_country:
-                    existing.add((row.country_code, row.item_id, row.month, row.platform))
+                    existing.add((row.country_code, row.item_id, row.month, row.platform, row.week_of_month))
                 else:
-                    existing.add((row.item_id, row.month, row.platform))
+                    existing.add((row.item_id, row.month, row.platform, row.week_of_month))
     return existing
 
 
@@ -281,6 +290,8 @@ def _raw_data_record(file_id: int, record: dict) -> RawDataRecord:
         file_id=file_id,
         platform=record.get("platform"),
         month=record.get("month"),
+        week=record.get("week"),
+        week_of_month=record.get("week_of_month", 0),
         category_lv0=record.get("category_lv0"),
         category_lv1=record.get("category_lv1"),
         category_lv2=record.get("category_lv2"),
@@ -313,6 +324,8 @@ def _raw_insert_row(file_id: int, country_code: Optional[str], record: dict) -> 
         "source_category_name": record.get("source_category_name"),
         "platform": record.get("platform"),
         "month": record.get("month"),
+        "week": record.get("week"),
+        "week_of_month": record.get("week_of_month", 0),
         "category_lv0": record.get("category_lv0"),
         "category_lv1": record.get("category_lv1"),
         "category_lv2": record.get("category_lv2"),
@@ -366,8 +379,11 @@ def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db)):
     months: set[int] = set()
     total_rows = 0
     inserted_total = 0
+    weeks: set[int] = set()
 
     try:
+        mode = "week" if {"week", "周", "周次", "周度"}.intersection(_read_columns(Path(save_path))) else "month"
+        file_record.period_type = mode
         for chunk_records, chunk_platform, chunk_months in iter_raw_chunks(save_path):
             if chunk_platform:
                 platform = chunk_platform
@@ -375,11 +391,14 @@ def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db)):
 
             candidate_records = []
             for record in chunk_records:
+                apply_record_period(record, period_type=mode)
+                if record["week_of_month"]:
+                    weeks.add(record["week_of_month"])
                 item_id = record.get("item_id")
                 if item_id is None:
                     candidate_records.append(record)
                     continue
-                key = (str(item_id), record.get("month"), record.get("platform"))
+                key = (str(item_id), record.get("month"), record.get("platform"), record.get("week_of_month", 0))
                 if key in seen_upload_keys:
                     continue
                 seen_upload_keys.add(key)
@@ -390,7 +409,7 @@ def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db)):
             )
             to_insert = [
                 record for record in candidate_records
-                if (str(record.get("item_id")), record.get("month"), record.get("platform"))
+                if (str(record.get("item_id")), record.get("month"), record.get("platform"), record.get("week_of_month", 0))
                 not in existing_set
             ]
 
@@ -407,6 +426,7 @@ def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db)):
 
         file_record.platform = platform or "UNKNOWN"
         file_record.month_range = _month_range(months)
+        file_record.weeks = sorted(weeks)
         file_record.row_count = inserted_total
         file_record.status = "done"
         db.commit()
@@ -424,6 +444,8 @@ def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db)):
         "filename": file.filename,
         "platform": file_record.platform,
         "month_range": file_record.month_range,
+        "period_type": file_record.period_type,
+        "weeks": file_record.weeks or [],
         "row_count": total_rows,
         "inserted": inserted_total,
         "skipped": total_rows - inserted_total,
@@ -464,6 +486,8 @@ def list_upload_files(
             "filename": record.filename,
             "platform": record.platform,
             "month_range": record.month_range,
+            "period_type": record.period_type,
+            "weeks": record.weeks or [],
             "row_count": record.row_count,
             "status": record.status,
             "template_id": record.template_id,
@@ -691,6 +715,8 @@ def _run_upload_confirm_thread(
     filename_category_name: str | None = None,
     data_year: int | None = None,
     data_month: int | None = None,
+    period_type: str | None = None,
+    default_week=None,
 ):
     """后台线程：分块解析 Excel、去重、写库，更新 job 状态。"""
     db = SessionLocal()
@@ -783,6 +809,12 @@ def _run_upload_confirm_thread(
             skipped_rows=0,
         )
 
+        period_summary = inspect_upload_periods(
+            tmp_path, mapping, ignore_columns, period_type=period_type,
+            default_week=default_week, filename_month=filename_month,
+        )
+        file_record.period_type = period_summary["period_type"]
+        file_record.weeks = period_summary["weeks"]
         seen_upload_keys: set = set()
         preview: list[dict] = []
         total_rows = 0
@@ -803,6 +835,7 @@ def _run_upload_confirm_thread(
                     record["month"] = filename_month
                 if filename_platform:
                     record["platform"] = filename_platform
+                apply_record_period(record, period_type=period_summary["period_type"], default_week=default_week)
                 record["source_category_code"] = filename_category_code
                 record["source_category_name"] = filename_category_name
 
@@ -817,7 +850,7 @@ def _run_upload_confirm_thread(
                 if item_id is None:
                     candidate_records.append(record)
                     continue
-                key = (country_code, str(item_id), record.get("month"), record.get("platform"))
+                key = (country_code, str(item_id), record.get("month"), record.get("platform"), record.get("week_of_month", 0))
                 if key in seen_upload_keys:
                     continue
                 seen_upload_keys.add(key)
@@ -829,7 +862,7 @@ def _run_upload_confirm_thread(
             )
             to_insert = [
                 record for record in candidate_records
-                if (country_code, str(record.get("item_id")), record.get("month"), record.get("platform"))
+                if (country_code, str(record.get("item_id")), record.get("month"), record.get("platform"), record.get("week_of_month", 0))
                 not in existing_set
             ]
 
@@ -900,6 +933,8 @@ def _run_upload_confirm_thread(
             "filename": original_filename,
             "platform": file_record.platform,
             "month_range": file_record.month_range,
+            "period_type": file_record.period_type,
+            "weeks": file_record.weeks or [],
             "row_count": total_rows,
             "total_rows": total_rows,
             "inserted": inserted_total,
@@ -1104,13 +1139,17 @@ def validate_upload(payload: dict, db: Session = Depends(get_db)):
     # Release the metadata read connection while scanning a large source file.
     db.rollback()
     try:
+        summary = inspect_upload_periods(
+            tmp_path, payload.get("mapping", {}), payload.get("ignore_columns", []),
+            period_type=payload.get("period_type"), default_week=payload.get("week"), filename_month=hints.month,
+        )
         result = inspect_upload_values(
             tmp_path, payload.get("mapping", {}), payload.get("ignore_columns", []),
             filename_month=hints.month, filename_platform=hints.platform,
         )
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"无法检查文件数据：{exc}")
-    return {"filename": original_filename, **result}
+    return {"filename": original_filename, **result, **summary}
 
 
 @router.post("/confirm", status_code=202)
@@ -1176,6 +1215,14 @@ def upload_confirm(payload: dict, db: Session = Depends(get_db)):
             detail=f"以下必填字段未映射：{', '.join(sorted(missing))}"
         )
 
+    try:
+        inspect_upload_periods(
+            tmp_path, mapping, ignore_columns, period_type=payload.get("period_type"),
+            default_week=payload.get("week"), filename_month=filename_hints.month,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     # Older open pages may submit directly without calling /validate. Keep
     # quality warnings optional, but require a review before importing them.
     if payload.get("quality_reviewed") is not True:
@@ -1222,10 +1269,18 @@ def upload_confirm(payload: dict, db: Session = Depends(get_db)):
             filename_hints.category_name,
             data_year,
             data_month,
+            payload.get("period_type"),
+            payload.get("week"),
         ),
         daemon=True,
     )
-    t.start()
+    # Register before starting: polling must never mistake startup for a restart.
+    _upload_progress[job.id] = 0
+    try:
+        t.start()
+    except Exception:
+        _upload_progress.pop(job.id, None)
+        raise
 
     return {"job_id": job.id, "status": "pending"}
 

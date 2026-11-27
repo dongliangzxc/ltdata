@@ -1,3 +1,4 @@
+import { WEEK_OPTIONS } from '../../components/DataPeriodFilter'
 import { useState, useEffect, useRef, useMemo } from 'react'
 import {
   Card, Row, Col, Select, Input, Button, Table,
@@ -46,6 +47,7 @@ type DataRow = {
   id: number
   sequence: number
   year: number | null
+  week_of_month?: number
   month: number | null
   category_name: string | null
   platform: string | null
@@ -250,6 +252,8 @@ export default function WorkbenchPage({ mode = 'default' }: WorkbenchPageProps) 
         ...modeParams,
         year: vals.year ?? exportYear,
         month: vals.month,
+        period_type: vals.period_type ?? 'month',
+        week: vals.week,
         category_name: vals.category_name,
         platform: vals.platform,
         brand_code: vals.brand_code,
@@ -303,6 +307,7 @@ export default function WorkbenchPage({ mode = 'default' }: WorkbenchPageProps) 
     { title: '序号', dataIndex: 'sequence', width: 70, fixed: 'left' as const },
     { title: '年度', dataIndex: 'year', width: 70 },
     { title: '月度', dataIndex: 'month', width: 90 },
+    { title: '周次', dataIndex: 'week_of_month', width: 80, render: (v: number) => v ? `第${v}周` : '月度' },
     { title: '品类', dataIndex: 'category_name', width: 120, ellipsis: true },
     { title: '平台', dataIndex: 'platform', width: 80 },
     {
@@ -368,7 +373,9 @@ export default function WorkbenchPage({ mode = 'default' }: WorkbenchPageProps) 
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       {/* 筛选面板 */}
       <Card>
-        <Form form={form} layout="inline" style={{ rowGap: 8 }}>
+        <Form form={form} layout="inline" initialValues={{ period_type: searchParams.get('period_type') === 'week' ? 'week' : 'month', week: /^[1-5]$/.test(searchParams.get('week') ?? '') ? Number(searchParams.get('week')) : undefined }} style={{ rowGap: 8 }}>
+          <Form.Item name="period_type" style={{ marginBottom: 8 }}><Select aria-label="数据粒度" style={{ width: 100 }} options={[{ value: 'month', label: '月度' }, { value: 'week', label: '周度' }]} onChange={() => form.setFieldValue('week', undefined)} /></Form.Item>
+          <Form.Item noStyle shouldUpdate={(prev, next) => prev.period_type !== next.period_type}>{() => form.getFieldValue('period_type') === 'week' && <Form.Item name="week" style={{ marginBottom: 8 }}><Select aria-label="周次" allowClear placeholder="全部周次" style={{ width: 130 }} options={WEEK_OPTIONS} /></Form.Item>}</Form.Item>
           <Form.Item name="year" style={{ marginBottom: 8 }}>
             <Select
               placeholder="年度"

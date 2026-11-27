@@ -29,6 +29,8 @@ const data = {
   assets: { models: 0, brands: 0, url_mapping_sources: [] },
 }
 const exported = {}
+let selectedPeriod = 'month'
+let selectedWeek
 let selectedMonth
 let selectedPlatform = 'all'
 let selectedCategories
@@ -43,7 +45,7 @@ vm.runInNewContext(compiled, {
       useState: value => {
         const index = stateIndex++
         if (index === 5) initialCategories = value
-        return [index === 5 ? selectedCategories : index === 6 ? selectedPlatform : index === 7 ? selectedMonth : value,
+        return [index === 5 ? selectedCategories : index === 6 ? selectedPlatform : index === 7 ? selectedMonth : index === 8 ? selectedPeriod : index === 9 ? selectedWeek : value,
           next => { if (index === 5) selectedCategories = next }]
       },
     }
@@ -55,6 +57,7 @@ vm.runInNewContext(compiled, {
     if (name === '@ant-design/icons') return { ReloadOutlined: 'ReloadOutlined' }
     if (name === 'ahooks') return { useRequest: () => ({ data, loading: false, refresh: () => {} }) }
     if (name === '../../services/api') return {}
+    if (name === '../../components/DataPeriodFilter') return { __esModule: true, default: 'DataPeriodFilter' }
     throw new Error(`Unexpected import: ${name}`)
   },
 })
@@ -97,7 +100,7 @@ assert.equal(overviewProgress(tree, '匹配进度'), 100, 'matching progress sup
 const overviewCard = nodes(tree, node => node.type === 'Card' && node.props.title === '处理进度总览')[0]
 const originalSummaryRow = nodes(overviewCard, node => node.type === 'Row')[0]
 assert.deepEqual(nodes(originalSummaryRow, node => node.type === 'Statistic').map(node => node.props.title),
-  ['上传入库数据总量', '值得分发（分发条目）', '已清理', '清理占比'], 'preserve the original four overview metrics')
+  ['上传入库数据总量（全部粒度）', '值得分发（分发条目）', '已清理', '清理占比'], 'preserve the original four overview metrics')
 const detailCard = nodes(tree, node => node.type === 'Card' && node.props.title === '处理进度明细（月份 / 品类 / 平台）')[0]
 const originalDetailRow = nodes(detailCard, node => node.type === 'Row')[0]
 assert.deepEqual(nodes(originalDetailRow, node => node.type === 'Statistic').map(node => node.props.title),
@@ -239,7 +242,7 @@ assert.equal(statistic(render(), '清理占比'), 51.4)
 assert.equal(overviewProgress(render(), '处理进度'), 51.4)
 assert.deepEqual(matchingRates(render()), [37.1, 37.1], 'overview and detail match ratios sum counts before dividing')
 assert.equal(statistic(render(), '自动已处理'), 13)
-assert.equal(statistic(render(), '上传入库数据总量（全部品类）'), 100,
+assert.equal(statistic(render(), '上传入库数据总量（全部品类、全部粒度）'), 100,
   'uploaded raw rows have no category dimension and must be labelled accordingly')
 assert.equal(nodes(render(), node => node.type === 'Table')[0].props.dataSource.length, 2)
 assert.ok(nodes(render(), node => node.type === 'Table')[0].props.dataSource.every(row => row.category_code === 'router'))
@@ -312,3 +315,15 @@ selectedCategories = [...initialCategories]
 progress.categories = progress.categories.filter(row => row.category_code !== 'smart_scale')
 assert.equal(selector().value.length, 16, 'missing categories do not create phantom selection tags')
 console.log('platform stats filtering and accounting tests passed')
+
+// New local-week records must not enter the monthly overview or collide across weeks.
+progress.categories = [{ ...base, platform: 'jd', week_of_month: 0 },
+  { ...base, platform: 'jd', week_of_month: 1, dispatched: 7, processed: 7 },
+  { ...base, platform: 'jd', week_of_month: 2, dispatched: 11, processed: 11 }]
+selectedCategories = undefined; selectedMonth = undefined; selectedPlatform = 'all'
+selectedPeriod = 'month'; selectedWeek = undefined
+assert.equal(statistic(render(), '值得分发（分发条目）'), 10)
+selectedPeriod = 'week'
+assert.equal(statistic(render(), '值得分发（分发条目）'), 18)
+selectedWeek = 2
+assert.equal(statistic(render(), '值得分发（分发条目）'), 11)

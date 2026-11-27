@@ -22,6 +22,7 @@ import pandas as pd
 JD_COLUMN_MAP = {
     "平台": "platform",
     "月": "month",
+    "周": "week", "周次": "week", "周度": "week",
     "Lv0类目名称(逐月固定)": "category_lv0",
     "Lv1类目名称(逐月固定)": "category_lv1",
     "Lv2类目名称(逐月固定)": "category_lv2",
@@ -43,6 +44,7 @@ JD_COLUMN_MAP = {
 TM_TB_COLUMN_MAP = {
     "平台": "platform",
     "月": "month",
+    "周": "week", "周次": "week", "周度": "week",
     "Lv1类目名称(逐月固定)": "category_lv1",
     "Lv2类目名称(逐月固定)": "category_lv2",
     "Lv3类目名称(逐月固定)": "category_lv3",
@@ -63,7 +65,7 @@ TM_TB_COLUMN_MAP = {
 }
 
 STANDARD_FIELDS = [
-    "platform", "month",
+    "platform", "month", "week",
     "category_lv0", "category_lv1", "category_lv2",
     "category_lv3", "category_lv4", "category_lv5",
     "item_id", "item_name", "item_image", "item_url",
@@ -81,6 +83,7 @@ _PLATFORM_NORM = {
     "亚马逊": "amazon", "amazon": "amazon", "amz": "amazon",
     "西皮": "shopee", "虾皮": "shopee", "shopee": "shopee",
 }
+_PLATFORM_NORM.update({code: code for code in tuple(_PLATFORM_NORM.values())})
 
 DEFAULT_CHUNK_SIZE = 5000
 
@@ -161,6 +164,7 @@ def iter_source_chunks(
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     *,
     preserve_values: bool = False,
+    typed_columns: set | None = None,
 ) -> Iterator[pd.DataFrame]:
     """Read source chunks indexed by row number (header is row 1).
 
@@ -210,7 +214,7 @@ def iter_source_chunks(
                     values.extend([None] * (width - len(values)))
                 if all(v is None or (isinstance(v, str) and not v.strip()) for v in values):
                     continue
-                batch.append([_stringify_cell(v) for v in values])
+                batch.append([v if col in (typed_columns or set()) else _stringify_cell(v) for col, v in zip(columns, values)])
                 source_rows.append(row_number)
                 if len(batch) >= chunk_size:
                     yield pd.DataFrame(batch, columns=columns, index=source_rows, dtype=object)
@@ -223,7 +227,11 @@ def iter_source_chunks(
         return
 
     # .xls：pandas 全量读取，按块切分（文件本身最多 65536 行）
-    df = pd.read_excel(fp, sheet_name=0, dtype=str, keep_default_na=not preserve_values)
+    df = pd.read_excel(fp, sheet_name=0, dtype=object if typed_columns else str, keep_default_na=not preserve_values)
+    if typed_columns:
+        for col in df.columns:
+            if col not in typed_columns:
+                df[col] = df[col].map(_stringify_cell)
     df.columns = [str(c).strip() for c in df.columns]
     df.index = df.index + 2
     for start in range(0, len(df), chunk_size):
@@ -307,7 +315,7 @@ def iter_raw_chunks(
     rename_map: dict = {}
     first_platform_seen = False
 
-    for df in iter_source_chunks(file_path, chunk_size):
+    for df in iter_source_chunks(file_path, chunk_size, typed_columns={"week", "周", "周度", "周次"}):
         if first_chunk:
             platform_label = detect_platform(list(df.columns))
             col_map = JD_COLUMN_MAP if platform_label == "JD" else TM_TB_COLUMN_MAP
@@ -469,7 +477,7 @@ def iter_mapped_chunks(
     platform_label = "UNKNOWN"
     label_locked = False
 
-    for df in iter_source_chunks(file_path, chunk_size, preserve_values=tolerate_invalid_numbers):
+    for df in iter_source_chunks(file_path, chunk_size, preserve_values=tolerate_invalid_numbers, typed_columns={col for col, field in mapping.items() if field == "week"}):
         records, first_platform, months = _normalize_mapped_df(
             df, mapping, ignore_columns, tolerate_invalid_numbers=tolerate_invalid_numbers
         )

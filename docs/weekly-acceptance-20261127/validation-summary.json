@@ -1,0 +1,67 @@
+{
+  "date": "2026-11-27",
+  "baseline_counts": {
+    "passed": 1290,
+    "failed": 81,
+    "errors": 6,
+    "skipped": 1,
+    "xfail": 7,
+    "xpass": 2
+  },
+  "after_counts": {
+    "passed": 1345,
+    "failed": 81,
+    "errors": 6,
+    "skipped": 1,
+    "xfail": 7,
+    "xpass": 2
+  },
+  "new_weekly_backend_tests": 55,
+  "frontend_test_files_passed": 54,
+  "frontend_typecheck": "passed",
+  "frontend_production_build": "passed",
+  "new_failures": [],
+  "changed_failure_types": [],
+  "migration_validation": [
+    "SQLite upgrade, resume and downgrade; preserve IDs, legacy weeks and duplicate raw rows",
+    "Real isolated MySQL 8.0.36 upgrade/resume/downgrade passed; weekly published uniqueness verified; lossy downgrade blocked"
+  ],
+  "browser_checks": [
+    "UI upload: five local weeks preserved",
+    "Real category dispatch completed",
+    "UI batch create: five isolated weekly tasks cleaned",
+    "Duplicate weekly upload: 0 inserted / 5 skipped",
+    "Week 2 append: original task preserved, 2 rows",
+    "Monthly coexistence and manual week 3 accepted",
+    "Supplement inherited week 2; explicit week 1 conflict rejected",
+    "Publication: 8 weekly + 1 monthly rows; republishing week 2 retains exactly 3 rows",
+    "Page errors: 0",
+    "Workbench week 2 selection and query",
+    "Real asynchronous week 2 dispatch export downloaded: 3 rows, all week 2, A/B/D",
+    "Export task preserves weekly conditions",
+    "1024px clean page renders without JavaScript errors"
+  ],
+  "preview_environment": {
+    "database": "isolated temporary SQLite",
+    "cleaning": "synchronous compatibility mode",
+    "production_deployed": false
+  },
+  "invalid_excel_files_rejected_before_insert": [
+    "周次_0.xlsx",
+    "周次_03.xlsx",
+    "周次_6.xlsx",
+    "周次_W03.xlsx",
+    "周次_全角数字.xlsx",
+    "周次_小数.xlsx",
+    "周次_布尔值.xlsx",
+    "周次_文本3.0.xlsx",
+    "周次_空值.xlsx",
+    "周次_第3周.xlsx"
+  ],
+  "raw_rows_before_after_invalid_tests": [
+    9,
+    9
+  ],
+  "mysql_worker_checks": "mysql-worker-checks.json",
+  "upload_poll_race_regressions": 3
+}

@@ -1,3 +1,4 @@
+import DataPeriodFilter from '../../components/DataPeriodFilter'
 import { useState, useRef, useCallback } from 'react'
 import {
   Card, Table, Select, Input, Row, Col, Statistic, Space, Tag, Button, message, InputNumber, Alert
@@ -75,6 +76,7 @@ const BASE_COLUMNS: ColDef[] = [
       return <Tag color="blue">{label}</Tag>
     }
   },
+  { title: '周次', dataIndex: 'week_of_month', width: 90, render: (v: number) => v ? `第${v}周` : '月度' },
   { title: '月份', dataIndex: 'month', width: 90, sorter: true, render: renderVal },
   { title: '品牌', dataIndex: 'brand_std', width: 110, fixed: 'left' as const, render: renderBrand },
   { title: '机型', dataIndex: 'model_std', width: 130, render: renderVal },
@@ -96,7 +98,7 @@ const BASE_COLUMNS: ColDef[] = [
 ]
 
 export default function DataListPage() {
-  const [filters, setFilters] = useState<Record<string, unknown>>({})
+  const [filters, setFilters] = useState<Record<string, unknown>>({ period_type: 'month' })
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [sortBy, setSortBy] = useState<string | undefined>()
@@ -124,6 +126,7 @@ export default function DataListPage() {
   }, [filterOptionsLoading])
 
   const hasFilters = Object.keys(filters).some(key => {
+    if (key === 'period_type') return false
     const value = filters[key]
     if (value == null || value === '') return false
     if (Array.isArray(value)) return value.length > 0
@@ -203,7 +206,8 @@ export default function DataListPage() {
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <Card>
-        <Row gutter={[8, 8]} style={{ marginBottom: 16 }} align="middle">
+        <div style={{ marginBottom: 12 }}><DataPeriodFilter value={(filters.period_type as 'month' | 'week') ?? 'month'} week={filters.week as number | undefined} onChange={(period_type, week) => { setFilters(prev => ({ ...prev, period_type, week })); setPage(1) }} /></div>
+      <Row gutter={[8, 8]} style={{ marginBottom: 16 }} align="middle">
           <Col span={3}>
             <Select
               placeholder="平台"

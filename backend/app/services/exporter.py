@@ -32,6 +32,7 @@ from app.services.custom_fields import (
 BASE_COLS = [
     ("platform",      "平台"),
     ("month",         "月"),
+    ("week_of_month", "周"),
     ("category_lv1",  "Lv1类目名称"),
     ("category_lv2",  "Lv2类目名称"),
     ("category_lv3",  "Lv3类目名称"),
@@ -199,7 +200,7 @@ def _base_row(
                 else float(base_amount) if base_amount is not None else None
             )
         else:
-            row[field] = getattr(rd, field, None)
+            row[field] = (getattr(rd, field, None) or None) if field == "week_of_month" else getattr(rd, field, None)
     return row
 
 
@@ -301,6 +302,8 @@ def _filter_clean_job_ids(
     months: list[int],
     category_code: str,
     platforms: list[str],
+    period_type: str = "month",
+    weeks: list[int] | None = None,
 ) -> list[int]:
     month_set = {int(month) for month in months}
     category_code = str(category_code).strip()
@@ -321,6 +324,8 @@ def _filter_clean_job_ids(
         if str(job.category_code or "").strip() == category_code
         and str(job.platform or "").strip() in platform_set
         and _job_months(job).intersection(month_set)
+        and (bool(job.week_of_month) == (period_type == "week"))
+        and (not weeks or job.week_of_month in weeks)
     ]
 
 
@@ -337,6 +342,8 @@ def export_match_filters(
     months: list[int],
     category_code: str,
     platforms: list[str],
+    period_type: str = "month",
+    weeks: list[int] | None = None,
     filename_prefix: str = "已处理数据",
 ) -> list[dict]:
     clean_job_ids = _filter_clean_job_ids(
@@ -344,6 +351,8 @@ def export_match_filters(
         months=months,
         category_code=category_code,
         platforms=platforms,
+        period_type=period_type,
+        weeks=weeks,
     )
     if not clean_job_ids:
         return []

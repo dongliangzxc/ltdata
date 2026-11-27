@@ -1,0 +1,13 @@
+{
+  "mysql_version": "8.0.36",
+  "isolated": true,
+  "legacy_ids_retained": [
+    42,
+    43
+  ],
+  "legacy_raw_duplicates_retained": true,
+  "upgrade_resume_downgrade": "passed",
+  "weekly_published_unique": "passed",
+  "lossy_downgrade_blocked": true,
+  "production_business_data_modified": false
+}

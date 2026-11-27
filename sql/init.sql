@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS upload_files (
     id           INT AUTO_INCREMENT PRIMARY KEY,
     filename     VARCHAR(255) NOT NULL           COMMENT '原始文件名',
     platform     VARCHAR(50)                     COMMENT '平台: JD/TM/TB',
+    period_type  VARCHAR(10) NOT NULL DEFAULT 'month',
+    weeks        JSON,
     month_range  VARCHAR(20)                     COMMENT '月份范围, 如 202501-202503',
     row_count    INT          DEFAULT 0          COMMENT '实际入库行数',
     status       VARCHAR(20)  DEFAULT 'done'     COMMENT 'pending/processing/done/error',
@@ -111,6 +113,7 @@ CREATE TABLE IF NOT EXISTS raw_data (
     source_category_name VARCHAR(200)             COMMENT '文件名识别出的品类名称',
     platform       VARCHAR(50)                    COMMENT '平台',
     month          INT                            COMMENT '月份, 如 202507',
+    week_of_month SMALLINT NOT NULL DEFAULT 0 COMMENT '0月度，1至5月内周',
     week           VARCHAR(50)                    COMMENT '周，如 W21',
     category_lv0   VARCHAR(100)                   COMMENT 'JD Lv0类目',
     category_lv1   VARCHAR(100)                   COMMENT 'Lv1类目',
@@ -135,12 +138,12 @@ CREATE TABLE IF NOT EXISTS raw_data (
     created_at     DATETIME     DEFAULT CURRENT_TIMESTAMP,
     KEY idx_file_id (file_id),
     -- 去重唯一索引：同一国家同一商品同一月份同一平台只保留一条
-    UNIQUE KEY uq_raw_dedup (country_code, item_id, month, platform),
-    KEY idx_raw_dedup_lookup (country_code, item_id, month, platform),
+    UNIQUE KEY uq_raw_dedup (country_code, item_id, month, platform, week_of_month),
+    KEY idx_raw_dedup_lookup (country_code, item_id, month, platform, week_of_month),
     KEY ix_raw_data_country_code (country_code),
     KEY ix_raw_data_source_category_code (source_category_code),
     -- 待入清洗队列按月/平台聚合：走覆盖索引取 month/platform，避免回表读整行
-    KEY idx_raw_data_month_platform (month, platform),
+    KEY idx_raw_data_month_platform (month, platform, week_of_month),
     -- 同标题复核按规范化标题缩小 raw_data -> match_results 连接范围
     KEY idx_raw_data_item_name_norm (item_name_norm(255), id),
     CONSTRAINT fk_raw_file FOREIGN KEY (file_id) REFERENCES upload_files(id) ON DELETE CASCADE
@@ -149,6 +152,7 @@ CREATE TABLE IF NOT EXISTS raw_data (
 -- 清洗任务
 CREATE TABLE IF NOT EXISTS clean_jobs (
     id          INT AUTO_INCREMENT PRIMARY KEY,
+    week_of_month SMALLINT NOT NULL DEFAULT 0,
     file_ids    JSON                              COMMENT '关联的 file_id 列表',
     rules       JSON                              COMMENT '清洗规则 {filter_brands, dedup}',
     status      VARCHAR(20)  DEFAULT 'done'       COMMENT 'done/error',
@@ -165,6 +169,7 @@ CREATE TABLE IF NOT EXISTS cleaned_data (
     country_code   VARCHAR(8)                     COMMENT 'ISO 国家码，如 CN/US/DE/JP',
     platform       VARCHAR(50),
     month          INT,
+    week_of_month SMALLINT NOT NULL DEFAULT 0 COMMENT '0月度，1至5月内周',
     week           VARCHAR(50),
     category_lv1   VARCHAR(100),
     category_lv2   VARCHAR(100),
@@ -442,6 +447,8 @@ CREATE TABLE IF NOT EXISTS users (
 -- 异步导出任务记录
 CREATE TABLE IF NOT EXISTS export_jobs (
     id              INT AUTO_INCREMENT PRIMARY KEY,
+    period_type VARCHAR(10) NOT NULL DEFAULT 'month',
+    weeks JSON,
     clean_job_id    INT          NOT NULL               COMMENT '关联清洗任务',
     filename_prefix VARCHAR(255) NOT NULL DEFAULT '已处理数据' COMMENT '文件名前缀',
     status          VARCHAR(20)  NOT NULL DEFAULT 'pending' COMMENT 'pending/running/done/error',
@@ -470,6 +477,7 @@ CREATE TABLE IF NOT EXISTS published_items (
     match_result_id INT         NOT NULL          COMMENT '关联 luotu.match_results.id',
     -- 商品基础信息
     platform       VARCHAR(50)                    COMMENT '平台',
+    week_of_month SMALLINT NOT NULL DEFAULT 0,
     month          INT                            COMMENT '月份 202507',
     category_lv1   VARCHAR(100),
     category_lv2   VARCHAR(100),
@@ -498,6 +506,7 @@ CREATE TABLE IF NOT EXISTS published_items (
     corrected_sales_amount DECIMAL(14,2)          COMMENT '修正销售额',
     -- 发布时间
     published_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_published_item (platform, item_id, month, week_of_month),
     KEY idx_pub_platform  (platform),
     KEY idx_pub_month     (month),
     KEY idx_pub_brand     (brand_code),

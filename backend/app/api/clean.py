@@ -59,6 +59,7 @@ from app.models.schemas import (
     BrandRecord,
     User,
 )
+from app.services.data_period import apply_record_period, job_week, normalize_week, filter_period
 from app.services.clean_task_snapshot import (
     ACTIVE_TASK_STATUSES,
     _find_monthly_job,
@@ -142,10 +143,10 @@ _clean_scope_lock_guard = threading.Lock()
 _clean_scope_locks: dict[str, threading.Lock] = {}
 
 
-def _clean_scope_lock_key(category_code: str, platform: str | None, month: int | None = None) -> str:
+def _clean_scope_lock_key(category_code: str, platform: str | None, month: int | None = None, week: int = 0) -> str:
     normalized = normalize_platform(platform) or ""
     month_part = str(month) if month is not None else "*"
-    return f"clean-task:{category_code}:{normalized}:{month_part}"
+    return f"clean-task:{category_code}:{normalized}:{month_part}" + (f":week{week}" if week else "")
 
 
 def _acquire_clean_scope_lock(key: str) -> bool:
@@ -159,9 +160,9 @@ def _release_clean_scope_lock(key: str) -> None:
 
 
 @contextmanager
-def _clean_scope_guard(category_code: str, platform: str | None, month: int | None = None):
+def _clean_scope_guard(category_code: str, platform: str | None, month: int | None = None, week: int = 0):
     """同一清洗范围串行化：锁已被其它请求持有则抛 409，成功则持有到请求结束。"""
-    key = _clean_scope_lock_key(category_code, platform, month)
+    key = _clean_scope_lock_key(category_code, platform, month, week)
     if not _acquire_clean_scope_lock(key):
         scope_desc = f"{category_code} / {platform or ''} / {month if month is not None else '全部月份'}"
         raise HTTPException(status_code=409, detail=f"该范围（{scope_desc}）的清洗任务正在处理中，请稍后重试")
@@ -336,6 +337,7 @@ def _clean_job_to_dict(
         "category_code": job.category_code or job.dispatch_category_code,
         "platform": job.platform,
         "month": _job_month(job),
+        "week_of_month": job_week(job),
         "source_scope": job.source_scope,
         "progress": job.progress or 0,
         "progress_stage": job.progress_stage,
@@ -729,21 +731,30 @@ def get_clean_pool_summary_endpoint(
     return [row for row in rows if row.get("category_code") in visible_codes]
 
 
-@router.get("/pool/monthly", response_model=list[CleanMonthlyPoolOut])
+@router.get("/pool", response_model=list[CleanMonthlyPoolOut])
+@router.get("/pool/monthly", response_model=list[CleanMonthlyPoolOut], response_model_exclude={"__all__": {"week_of_month"}})
 def get_monthly_clean_pool_endpoint(
     category_code: Optional[str] = Query(None),
     platform: Optional[str] = Query(None),
     month: Optional[int] = Query(None),
+    period_type: str = Query("month", pattern="^(month|week)$"),
+    week: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=500),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    try:
+        selected_week = normalize_week(week, required=True) if week is not None else None
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if selected_week is not None and period_type != "week":
+        raise HTTPException(422, "周次筛选需选择周度")
     visible_codes = _visible_clean_category_codes(db, current_user)
     if visible_codes is not None and category_code and category_code not in visible_codes:
         return []
     # 缓存键不含用户可见品类：昂贵的聚合结果按查询条件共享，权限过滤在缓存之后做，
     # 这样不同权限的用户也能命中同一份结果。
-    cache_key = (category_code, platform, month, limit)
+    cache_key = (category_code, platform, month, limit, period_type, selected_week)
     rows = _clean_pool_cache_get(cache_key)
     if rows is not None:
         job_ids = {row["existing_job_id"] for row in rows if row.get("existing_job_id")}
@@ -757,6 +768,8 @@ def get_monthly_clean_pool_endpoint(
             platform=platform,
             month=month,
             limit=limit,
+            period_type=period_type,
+            week=selected_week,
         )
         _clean_pool_cache_set(cache_key, rows)
     if visible_codes is None:
@@ -834,6 +847,7 @@ def create_clean_task(
         return {"job": job, "snapshot_count": snapshot_count, "match_status": "done"}
 
 
+@router.post("/tasks/upsert-period", response_model=UpsertMonthlyCleanTaskOut)
 @router.post("/tasks/upsert-monthly", response_model=UpsertMonthlyCleanTaskOut)
 def upsert_monthly_clean_task(
     payload: UpsertMonthlyCleanTaskIn,
@@ -841,10 +855,10 @@ def upsert_monthly_clean_task(
     current_user: User = Depends(get_current_user),
 ):
     _ensure_clean_category_visible(db, current_user, payload.category_code)
-    with _clean_scope_guard(payload.category_code, payload.platform, payload.month):
+    with _clean_scope_guard(payload.category_code, payload.platform, payload.month, payload.week or 0):
         try:
             existing = _find_monthly_job(db, category_code=payload.category_code,
-                                         platform=payload.platform, month=payload.month)
+                                         platform=payload.platform, month=payload.month, week=payload.week or 0)
             if existing:
                 ensure_clean_job_idle(db, existing.id, allow_failed=True)
             incremental = bool(settings.CLEAN_BACKGROUND_ENABLED and existing and existing.status != "archived"
@@ -855,6 +869,7 @@ def upsert_monthly_clean_task(
                     category_code=payload.category_code,
                     platform=payload.platform,
                     month=payload.month,
+                    week=payload.week or 0,
                 )
                 if existing and _has_reviewed_or_published_state(db, existing.id):
                     _reset_clean_job_downstream(db, existing.id)
@@ -863,6 +878,7 @@ def upsert_monthly_clean_task(
                 category_code=payload.category_code,
                 platform=payload.platform,
                 month=payload.month,
+                week=payload.week or 0,
                 rules=payload.rules,
                 force_reclean=payload.force_reclean,
                 force_rebuild=payload.force_rebuild,
@@ -952,7 +968,7 @@ def _completion_task_scope(db: Session, job: CleanJobRecord):
     if not db.query(Category.id).filter(Category.code == category).first():
         raise HTTPException(400, "该品类已删除，不能补齐数据")
     month = int(months[0])
-    existing = _find_monthly_job(db, category_code=category, platform=platform, month=month)
+    existing = _find_monthly_job(db, category_code=category, platform=platform, month=month, week=job_week(job))
     if not existing or existing.id != job.id:
         raise HTTPException(409, "该范围已有其他任务，请在当前月度任务上检查补齐")
     return category, platform, month
@@ -966,7 +982,7 @@ def check_clean_task_completion(
     category, platform, month = _completion_task_scope(db, job)
     return {
         "job_id": job_id,
-        "new_items": _monthly_pending_rows(db, category_code=category, platform=platform, month=month).count(),
+        "new_items": _monthly_pending_rows(db, category_code=category, platform=platform, month=month, week=job_week(job)).count(),
         "missing_results": missing_match_raw_ids(db, job_id).count(),
     }
 
@@ -984,7 +1000,7 @@ def complete_clean_task(
             category, platform, month = _completion_task_scope(db, job)
             missing_count = missing_match_raw_ids(db, job_id).count()
             target, _, _, new_ids = upsert_monthly_task_snapshot(
-                db, category_code=category, platform=platform, month=month,
+                db, category_code=category, platform=platform, month=month, week=job_week(job),
                 rules=None, incremental_append=True,
             )
             if target.id != job_id:
@@ -1259,6 +1275,8 @@ def supplement_clean_task(
             filename=final_name,
             platform=platform.upper(),
             month_range=str(month),
+            period_type="week" if job_week(job) else "month",
+            weeks=[job_week(job)] if job_week(job) else [],
             row_count=0,
             status="processing",
             batch_key=batch_key,
@@ -1274,14 +1292,17 @@ def supplement_clean_task(
         total_rows = inserted_rows = skipped_rows = 0
         for records, _chunk_platform, _chunk_months in iter_mapped_chunks(str(temp_path), mapping, ignore_columns):
             for record in records:
+                if record.get("month") is not None and record["month"] != month:
+                    raise ValueError("文件月份与目标任务不一致")
                 record["month"] = month
+                apply_record_period(record, period_type="week" if job_week(job) else "month", default_week=job_week(job) or None)
                 record["platform"] = platform
                 record["source_category_code"] = category_code
             candidates = []
             for record in records:
                 item_id = record.get("item_id")
                 if item_id is not None:
-                    key = (country, str(item_id), month, platform)
+                    key = (country, str(item_id), month, platform, record.get("week_of_month", 0))
                     if key in seen_keys:
                         continue
                     seen_keys.add(key)
@@ -1289,7 +1310,7 @@ def supplement_clean_task(
             existing_keys = _existing_upload_keys(db, candidates, country, filter_country=True)
             to_insert = [
                 record for record in candidates
-                if (country, str(record.get("item_id")), record.get("month"), record.get("platform")) not in existing_keys
+                if (country, str(record.get("item_id")), record.get("month"), record.get("platform"), record.get("week_of_month", 0)) not in existing_keys
             ]
             for start in range(0, len(to_insert), 5000):
                 db.execute(
@@ -1335,6 +1356,9 @@ def supplement_clean_task(
         job.file_ids = sorted({*(job.file_ids or []), file_record.id})
         scope = job.source_scope if isinstance(job.source_scope, dict) else {}
         job.source_scope = {
+            **scope,
+            "week_of_month": job_week(job),
+            "period_type": "week" if job_week(job) else "month",
             "months": sorted({*_int_scope_list(scope.get("months")), month}),
             "platforms": sorted({*(scope.get("platforms") or []), platform}),
             "dispatch_batch_ids": sorted({*_int_scope_list(scope.get("dispatch_batch_ids")), batch.id}),
@@ -1360,6 +1384,11 @@ def supplement_clean_task(
         temp_path.unlink(missing_ok=True)
         final_path.unlink(missing_ok=True)
         raise
+    except ValueError as exc:
+        db.rollback()
+        temp_path.unlink(missing_ok=True)
+        final_path.unlink(missing_ok=True)
+        raise HTTPException(422, str(exc)) from exc
     except Exception as exc:
         db.rollback()
         temp_path.unlink(missing_ok=True)
@@ -1476,6 +1505,8 @@ def run_clean_job(
 
     # 统计输入行数
     from app.models.schemas import RawDataRecord, DispatchItem
+    if file_ids and db.query(RawDataRecord.id).filter(RawDataRecord.file_id.in_(file_ids), RawDataRecord.week_of_month > 0).first():
+        raise HTTPException(400, "周度数据请在待入清洗队列按具体周期创建任务")
     if dispatch_batch_id and dispatch_category_code:
         raw_data_ids = (
             db.query(DispatchItem.raw_data_id)
@@ -1567,6 +1598,8 @@ def list_clean_jobs(
     category_code: Optional[str] = Query(None),
     platform: Optional[str] = Query(None),
     month: Optional[int] = Query(None),
+    period_type: Optional[str] = Query(None, pattern="^(month|week)$"),
+    week: Optional[str] = Query(None),
     view: str = Query("active", pattern="^(active|archived|all)$"),
     sort_by: str = Query("created_at", pattern="^(created_at|updated_at)$"),
     order: str = Query("desc", pattern="^(asc|desc)$"),
@@ -1586,6 +1619,10 @@ def list_clean_jobs(
         q = q.filter(CleanJobRecord.category_code == category_code)
     if platform:
         q = q.filter(func.lower(CleanJobRecord.platform) == platform.lower())
+    try:
+        q = filter_period(q, CleanJobRecord, period_type, week)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     sort_col = CleanJobRecord.updated_at if sort_by == "updated_at" else CleanJobRecord.created_at
     q = q.order_by(sort_col.desc() if order == "desc" else sort_col.asc())
     if month is None:
@@ -1678,6 +1715,8 @@ def preview_clean_job(
             "exchange_rate": rate,
             "platform": r.platform,
             "month": r.month,
+            "week": r.week,
+            "week_of_month": r.week_of_month,
             "category_lv1": r.category_lv1,
             "category_lv2": r.category_lv2,
             "item_id": r.item_id,
@@ -2281,6 +2320,7 @@ def exclude_clean_job_brand_rows(
 
 
 class CleanTaskSearchItem(BaseModel):
+    week_of_month: int = 0
     id: int
     task_name: str | None = None
     category_code: str | None = None
@@ -2345,6 +2385,7 @@ def search_clean_tasks(
             category_name=cat.name if cat else None,
             platform=cj.platform,
             month=_job_month(cj),
+            week_of_month=job_week(cj),
             status=cj.status,
             display_name=_build_clean_scope_desc(db, cj),
         ))

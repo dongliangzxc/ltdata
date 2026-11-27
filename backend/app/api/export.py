@@ -1,3 +1,4 @@
+from app.services.data_period import normalize_week
 """
 导出 API
 - POST /api/export        触发异步导出，立即返回 job_id
@@ -88,6 +89,8 @@ def _run_export_thread(export_job_id: int):
                 category_code=job.category_code or "",
                 platforms=job.platforms or [],
                 filename_prefix=job.filename_prefix,
+                period_type=job.period_type,
+                weeks=job.weeks or [],
             )
 
         if not files:
@@ -143,6 +146,18 @@ def trigger_export(
     payload: {"clean_job_id": 1, "filename_prefix": "已处理数据"}
     payload: {"months": [202501], "category_code": "headphone", "platforms": ["jd"], "filename_prefix": "已处理数据"}
     """
+    period_type = payload.get("period_type", "month")
+    if period_type not in ("month", "week"):
+        raise HTTPException(422, "数据粒度只能为月度或周度")
+    try:
+        values = payload.get("weeks", [])
+        if not isinstance(values, list):
+            raise ValueError("weeks必须是周次数组")
+        weeks = [normalize_week(value, required=True) for value in values]
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if weeks and period_type != "week":
+        raise HTTPException(422, "周次筛选需选择周度")
     filename_prefix: str = str(payload.get("filename_prefix") or "已处理数据").strip() or "已处理数据"
     has_clean_job_id = "clean_job_id" in payload
     clean_job_id = payload.get("clean_job_id")
@@ -178,6 +193,8 @@ def trigger_export(
     with reserve_async_export_capacity(db):
         export_job = ExportJob(
             filename_prefix=filename_prefix,
+            period_type=period_type,
+            weeks=weeks,
             status="pending",
             **job_kwargs,
         )

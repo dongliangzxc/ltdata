@@ -2,7 +2,7 @@
 数据清洗服务：
 1. 干扰链接库（interference_links）→ 按当前品类过滤并记录原因
 2. 清洗干预规则（intervention_rules）→ 按优先级首条命中决定过滤或放行
-3. 去重（有商品 ID 时按 item_id + month + shop_name；缺失时仅去重同一原始记录）
+3. 去重（有商品 ID 时按 item_id + month + week_of_month + shop_name；缺失时仅去重同一原始记录）
 4. 品牌写法标准化（brand_aliases）→ brand_raw 查表覆盖 brand_std
 5. brand_std 兜底补全（无匹配时用 brand_raw）
 """
@@ -487,7 +487,7 @@ def _iter_clean_record_batches(
 
 
 def _clean_dedup_key(
-    item_id: str | None, month: int | None, shop_name: str | None, raw_data_id: int | None,
+    item_id: str | None, month: int | None, shop_name: str | None, raw_data_id: int | None, week: int = 0,
 ) -> tuple | None:
     """空商品 ID 不足以识别同款，仅阻止同一原始记录被重复写入。
 
@@ -495,7 +495,7 @@ def _clean_dedup_key(
     旧输出若连原始记录 ID 都没有，就不能据此排除任何新记录。
     """
     if item_id is not None and item_id.strip():
-        return (item_id, month, shop_name)
+        return (item_id, month, shop_name, week or 0)
     if raw_data_id is not None:
         return ("raw_record", raw_data_id)
     return None
@@ -539,11 +539,11 @@ def run_clean(
     query_start = time.perf_counter()
     if dedup and raw_data_ids is not None:
         # 先完整消费已有键的读取，再开始交错的分批读取/写入。
-        for item_id, month, shop_name, raw_id in db.query(
+        for item_id, month, shop_name, raw_id, week in db.query(
                 CleanedDataRecord.item_id, CleanedDataRecord.month,
-                CleanedDataRecord.shop_name, CleanedDataRecord.raw_data_id,
+                CleanedDataRecord.shop_name, CleanedDataRecord.raw_data_id, CleanedDataRecord.week_of_month,
             ).filter(CleanedDataRecord.clean_job_id == clean_job_id).order_by(CleanedDataRecord.id).yield_per(_CLEAN_BATCH_SIZE):
-            key = _clean_dedup_key(item_id, month, shop_name, raw_id)
+            key = _clean_dedup_key(item_id, month, shop_name, raw_id, week)
             if key is not None:
                 seen_keys.setdefault(key, raw_id)
         recorded_duplicate_ids = {
@@ -599,7 +599,7 @@ def run_clean(
 
             # ── Step 3: 去重 ─────────────────────────────────────────
             if dedup:
-                key = _clean_dedup_key(r.item_id, r.month, r.shop_name, r.id)
+                key = _clean_dedup_key(r.item_id, r.month, r.shop_name, r.id, r.week_of_month)
                 if key is not None:
                     if key in seen_keys:
                         kept_raw_id = seen_keys[key]
@@ -609,7 +609,7 @@ def run_clean(
                             duplicates.append(dict(
                                 clean_job_id=clean_job_id, raw_data_id=r.id,
                                 kept_raw_data_id=kept_raw_id, dedup_basis="item_id_month_shop",
-                                dedup_key={"item_id": r.item_id, "month": r.month, "shop_name": r.shop_name},
+                                dedup_key={"item_id": r.item_id, "month": r.month, "shop_name": r.shop_name, **({"week": r.week_of_month} if r.week_of_month else {})},
                             ))
                             recorded_duplicate_ids.add(r.id)
                         continue
@@ -631,6 +631,7 @@ def run_clean(
                 platform=r.platform,
                 month=r.month,
                 week=r.week,
+                week_of_month=r.week_of_month,
                 category_lv1=r.category_lv1,
                 category_lv2=r.category_lv2,
                 category_lv3=r.category_lv3,

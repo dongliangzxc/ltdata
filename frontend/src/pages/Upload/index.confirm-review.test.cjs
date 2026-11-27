@@ -25,7 +25,7 @@ function handler(name, scope) {
 }
 
 const noop = () => {}
-async function check(name, decision, validationFails = false) {
+async function check(name, decision, validationFails = false, cycle = {}) {
   const events = []
   let resolveReview
   const review = new Promise(resolve => { resolveReview = resolve })
@@ -34,8 +34,9 @@ async function check(name, decision, validationFails = false) {
     pollRef: { current: null }, confirming: false, allRequiredMapped: true,
     temp_file_id: payload.temp_file_id, mapping: payload.mapping, ignoreSet: new Set(),
     saveSwitch: false, saveName: '', selectedTemplateId: undefined, countryCode: 'CN', dataYear: 2026,
+    periodType: cycle.periodType, defaultWeek: cycle.defaultWeek,
     batchConfirming: false,
-    pendingFiles: [{ uid: 'test', filename: 'warning.csv', status: 'ready', countryCode: 'CN', headersResult: payload }],
+    pendingFiles: [{ uid: 'test', filename: 'warning.csv', status: 'ready', countryCode: 'CN', headersResult: payload, ...cycle }],
     templates: [], filterRegion: undefined, filterYear: undefined,
     buildAutoMapping: () => ({ mapping: payload.mapping, ignoreColumns: [], missing: [] }),
     message: { warning: noop, loading: noop, destroy: noop, success: noop },
@@ -52,6 +53,8 @@ async function check(name, decision, validationFails = false) {
     reviewUploadWarnings: async () => { events.push('review'); return review },
     confirmUpload: async actual => {
       events.push('confirm')
+      assert.equal(actual.period_type, cycle.periodType ?? 'month')
+      assert.equal(actual.week, cycle.defaultWeek)
       assert.equal(actual.quality_reviewed, true)
       assert.equal(actual.temp_file_id, payload.temp_file_id)
       return { data: { job_id: 1 } }
@@ -70,6 +73,7 @@ async function check(name, decision, validationFails = false) {
     await check(name, false)
     await check(name, true)
     await check(name, true, true)
+    await check(name, true, false, { periodType: 'week', defaultWeek: 3 })
   }
   console.log('Upload submission: single/batch wait for review, cancel and failed validation never submit, accepted submissions carry acknowledgement')
 })().catch(error => { console.error(error); process.exitCode = 1 })

@@ -1,0 +1,51 @@
+{
+  "checks": [
+    "UI upload: five local weeks preserved",
+    "Real category dispatch completed",
+    "UI batch create: five isolated weekly tasks cleaned",
+    "Duplicate weekly upload: 0 inserted / 5 skipped",
+    "Week 2 append: original task preserved, 2 rows",
+    "Monthly coexistence and manual week 3 accepted",
+    "Supplement inherited week 2; explicit week 1 conflict rejected",
+    "Publication: 8 weekly + 1 monthly rows; republishing week 2 retains exactly 3 rows",
+    "Page errors: 0"
+  ],
+  "errors": [],
+  "jobs": [
+    {
+      "id": 5,
+      "week": 5,
+      "status": "reviewing",
+      "row_in": 1,
+      "row_out": 1
+    },
+    {
+      "id": 4,
+      "week": 4,
+      "status": "reviewing",
+      "row_in": 1,
+      "row_out": 1
+    },
+    {
+      "id": 3,
+      "week": 3,
+      "status": "reviewing",
+      "row_in": 1,
+      "row_out": 1
+    },
+    {
+      "id": 2,
+      "week": 2,
+      "status": "reviewing",
+      "row_in": 1,
+      "row_out": 1
+    },
+    {
+      "id": 1,
+      "week": 1,
+      "status": "reviewing",
+      "row_in": 1,
+      "row_out": 1
+    }
+  ]
+}

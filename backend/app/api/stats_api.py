@@ -382,6 +382,7 @@ def _progress_stats(db: Session) -> dict:
         _progress_join(
             db.query(
                 RawDataRecord.month.label("month"),
+                RawDataRecord.week_of_month.label("week_of_month"),
                 DispatchItem.category_code.label("category_code"),
                 func.lower(RawDataRecord.platform).label("platform"),
                 func.count(func.distinct(DispatchItem.raw_data_id)).label("dispatched"),
@@ -406,7 +407,7 @@ def _progress_stats(db: Session) -> dict:
             latest_batches,
         )
         .filter(RawDataRecord.month.isnot(None))
-        .group_by(RawDataRecord.month, DispatchItem.category_code, func.lower(RawDataRecord.platform))
+        .group_by(RawDataRecord.month, DispatchItem.category_code, func.lower(RawDataRecord.platform), RawDataRecord.week_of_month)
         .all()
     )
 
@@ -434,6 +435,7 @@ def _progress_stats(db: Session) -> dict:
     published_rows = (
         db.query(
             job_month.c.month.label("month"),
+            CleanJobRecord.week_of_month.label("week_of_month"),
             category_code.label("category_code"),
             func.lower(CleanJobRecord.platform).label("platform"),
             func.sum(job_publish.c.published).label("published"),
@@ -443,17 +445,18 @@ def _progress_stats(db: Session) -> dict:
         .join(Category, Category.code == category_code)
         .join(job_month, job_month.c.clean_job_id == job_publish.c.clean_job_id)
         .filter(CleanJobRecord.status != ARCHIVED_STATUS)
-        .group_by(job_month.c.month, category_code, func.lower(CleanJobRecord.platform))
+        .group_by(job_month.c.month, category_code, func.lower(CleanJobRecord.platform), CleanJobRecord.week_of_month)
         .all()
     )
 
     names = dict(db.query(Category.code, Category.name).all())
-    rows: dict[tuple[int, str, str], dict] = {}
+    rows: dict[tuple[int, str, str, int], dict] = {}
 
-    def bucket(month: int | None, code: str | None, platform: str | None) -> dict:
-        key = (_int(month), code or "", _normalize_platform(platform))
+    def bucket(month: int | None, code: str | None, platform: str | None, week: int = 0) -> dict:
+        key = (_int(month), code or "", _normalize_platform(platform), _int(week))
         return rows.setdefault(key, {
             "month": key[0],
+            "week_of_month": key[3],
             "category_code": code,
             "category_name": names.get(code) or code or "未分类",
             "platform": key[2] or None,
@@ -478,6 +481,7 @@ def _progress_stats(db: Session) -> dict:
 
     for (
         month,
+        week,
         code,
         platform,
         dispatched,
@@ -496,7 +500,7 @@ def _progress_stats(db: Session) -> dict:
         pending,
         last_processed_at,
     ) in detail_rows:
-        item = bucket(month, code, platform)
+        item = bucket(month, code, platform, week)
         item["dispatched"] = _int(dispatched)
         item["task_created"] = _int(task_created)
         item["task_count"] = _int(task_count)
@@ -518,14 +522,14 @@ def _progress_stats(db: Session) -> dict:
         item["system_filtered"] = _int(filtered)
         item["pending"] = _int(pending)
         item["last_processed_at"] = format_beijing_datetime(last_processed_at)
-    for month, code, platform, published in published_rows:
-        bucket(month, code, platform)["published"] = _int(published)
+    for month, week, code, platform, published in published_rows:
+        bucket(month, code, platform, week)["published"] = _int(published)
 
     # A transfer moves the result to its destination while preserving the source
     # snapshot. It is a completed source decision, not a missing match to rerun.
     transferred = transferred_out_items(db)
     transfer_rows = (
-        db.query(RawDataRecord.month, DispatchItem.category_code, func.lower(RawDataRecord.platform),
+        db.query(RawDataRecord.month, DispatchItem.category_code, func.lower(RawDataRecord.platform), RawDataRecord.week_of_month,
                  func.count(func.distinct(DispatchItem.raw_data_id)), func.max(transferred.c.transferred_at))
         .select_from(transferred)
         .join(CleanJobRecord, and_(CleanJobRecord.id == transferred.c.job_id,
@@ -543,11 +547,11 @@ def _progress_stats(db: Session) -> dict:
                                      FilteredItem.raw_data_id == transferred.c.raw_data_id,
                                      FilteredItem.is_recovered == 0))
         .filter(RawDataRecord.month.isnot(None), MatchResult.id.is_(None), FilteredItem.id.is_(None))
-        .group_by(RawDataRecord.month, DispatchItem.category_code, func.lower(RawDataRecord.platform))
+        .group_by(RawDataRecord.month, DispatchItem.category_code, func.lower(RawDataRecord.platform), RawDataRecord.week_of_month)
         .all()
     )
-    for month, code, platform, count, transferred_at in transfer_rows:
-        item = bucket(month, code, platform)
+    for month, code, platform, week, count, transferred_at in transfer_rows:
+        item = bucket(month, code, platform, week)
         item['transferred_out'] = _int(count)
         item['processed'] += _int(count)
         time_value = format_beijing_datetime(transferred_at)

@@ -12,7 +12,8 @@ assert.match(source, /Popconfirm/, 'delete action should require confirmation')
 assert.match(source, /view === 'active'|view === "active"/, 'delete action should only be available in the active tab')
 assert.match(source, /activeKey=\{jobView\}/, 'tabs should be controlled by the current clean job view')
 
-assert.match(source, /navigate\(`\/data-adjustment\?clean_job_id=\$\{id\}`\)/, 'clean page should expose a separate data adjustment entry')
+assert.match(source, /navigate\(`\/data-adjustment\?clean_job_id=\$\{id\}/, 'clean page should expose a separate data adjustment entry')
+assert.match(source, /&period_type=week&week=\$\{week\}/, 'weekly task navigation should preserve its grain and week')
 assert.match(source, /navigate\(`\/match\?job_id=\$\{id\}`\)/, 'clean page should preserve the match task entry')
 
 assert.match(source, /previewCleanJob/, 'clean page should call previewCleanJob for task preview modal')

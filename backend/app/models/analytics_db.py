@@ -23,7 +23,7 @@ def get_analytics_db():
 class PublishedItem(AnalyticsBase):
     __tablename__ = "published_items"
     __table_args__ = (
-        UniqueConstraint("platform", "item_id", "month", name="uq_published_item"),
+        UniqueConstraint("platform", "item_id", "month", "week_of_month", name="uq_published_item"),
         Index("ix_published_items_model_code_month", "model_code", "month"),
         Index("ix_published_items_match_result_id", "match_result_id"),
         Index("ix_published_items_clean_job_id", "clean_job_id"),
@@ -34,6 +34,7 @@ class PublishedItem(AnalyticsBase):
     clean_job_id      = Column(Integer, nullable=False)
     match_result_id   = Column(Integer, nullable=False)
     platform          = Column(String(50))
+    week_of_month     = Column(Integer, nullable=False, default=0, server_default="0")
     month             = Column(Integer)
     category_lv1      = Column(String(100))
     category_lv2      = Column(String(100))

@@ -364,7 +364,7 @@ def _month_parts(month_value) -> tuple[int | None, int | None]:
 
 def _period_candidates(row) -> list[tuple[int | None, int | None, str | None]]:
     year, month_num = _month_parts(getattr(row, "month", None))
-    week = getattr(row, "week", None)
+    week = None if getattr(row, "week_of_month", 0) else getattr(row, "week", None)
     if year and month_num:
         if week:
             return [(year, month_num, str(week)), (year, month_num, None)]
@@ -461,7 +461,7 @@ def _history_lookup_in_memory(
     (updated_at desc, id desc) 取最新。无月份行要求平台已全量加载
     （_build_history_index 保证：任务含无月份行时加载平台全量）。"""
     year, month_num = _month_parts(getattr(row, "month", None))
-    week = str(getattr(row, "week", None)) if getattr(row, "week", None) is not None else None
+    week = None if getattr(row, "week_of_month", 0) else (str(getattr(row, "week", None)) if getattr(row, "week", None) is not None else None)
     if year and month_num:
         periods = [(year, month_num, week), (year, month_num, None)]
     else:

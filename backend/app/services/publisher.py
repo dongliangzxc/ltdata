@@ -41,7 +41,7 @@ def _upsert_published_items(db, items):
         )
         updates = {name: getattr(incoming, name) for name in fields}
         stmt = stmt.on_duplicate_key_update(**updates) if mysql else stmt.on_conflict_do_update(
-            index_elements=["platform", "item_id", "month"], set_=updates,
+            index_elements=["platform", "item_id", "month", "week_of_month"], set_=updates,
         )
         db.execute(stmt)
 
@@ -52,7 +52,7 @@ def _ensure_analytics_tables():
 
 
 def _count_unique_published_items(items: list[dict]) -> int:
-    return len({(item["platform"], item["item_id"], item["month"]) for item in items})
+    return len({(item["platform"], item["item_id"], item["month"], item.get("week_of_month", 0)) for item in items})
 
 
 def delete_published_data(analytics_db: Session, clean_job_id: int) -> None:
@@ -90,6 +90,7 @@ def _build_published_item_params(r, clean_job_id: int, published_at: datetime) -
         "match_result_id":         r["match_result_id"],
         "platform":                r["platform"],
         "month":                   r["month"],
+        "week_of_month":           r.get("week_of_month", 0),
         "category_lv0":            r["category_lv0"],
         "category_lv1":            r["category_lv1"],
         "category_lv2":            r["category_lv2"],
@@ -143,6 +144,7 @@ def run_publish(luotu_db: Session, analytics_db: Session, clean_job_id: int) -> 
             mr.id           AS match_result_id,
             rd.platform,
             rd.month,
+            rd.week_of_month,
             rd.category_lv0,
             rd.category_lv1,
             rd.category_lv2,
@@ -208,33 +210,33 @@ def run_publish(luotu_db: Session, analytics_db: Session, clean_job_id: int) -> 
     _upsert_published_items(analytics_db, items_to_insert)
 
     # 5. 写入 published_item_specs
-    #    upsert 后无法直接拿到 id，通过 (platform, item_id, month) 查回
+    #    upsert 后无法直接拿到 id，通过 (platform, item_id, month, week_of_month) 查回
     if specs_map or attrs_map:
-        # 构建 (platform, item_id, month) → model_id 映射
+        # 构建 (platform, item_id, month, week_of_month) → model_id 映射
         key_to_model: dict[tuple, int] = {
-            (r["platform"], r["item_id"], r["month"]): r["model_id"]
+            (r["platform"], r["item_id"], r["month"], r.get("week_of_month", 0)): r["model_id"]
             for r in rows
         }
-        # 同时建立 (platform, item_id, month) → match_result_id 映射
+        # 同时建立 (platform, item_id, month, week_of_month) → match_result_id 映射
         key_to_match_result: dict[tuple, int] = {
-            (r["platform"], r["item_id"], r["month"]): r["match_result_id"]
+            (r["platform"], r["item_id"], r["month"], r.get("week_of_month", 0)): r["match_result_id"]
             for r in rows
         }
         # Query back IDs in bounded batches, once per persisted item even when
         # input keys repeat or the database collation merges different spellings.
-        keys = list(dict.fromkeys((d["platform"], d["item_id"], d["month"]) for d in items_to_insert))
+        keys = list(dict.fromkeys((d["platform"], d["item_id"], d["month"], d.get("week_of_month", 0)) for d in items_to_insert))
         seen_pub_ids = set()
         specs_to_insert = []
         for batch in _chunks(keys):
             id_rows = analytics_db.query(
-                PublishedItem.id, PublishedItem.platform, PublishedItem.item_id, PublishedItem.month,
-            ).filter(tuple_(PublishedItem.platform, PublishedItem.item_id, PublishedItem.month).in_(batch)).all()
-            for pub_id, platform, item_id, month in id_rows:
+                PublishedItem.id, PublishedItem.platform, PublishedItem.item_id, PublishedItem.month, PublishedItem.week_of_month,
+            ).filter(tuple_(PublishedItem.platform, PublishedItem.item_id, PublishedItem.month, PublishedItem.week_of_month).in_(batch)).all()
+            for pub_id, platform, item_id, month, week in id_rows:
                 if pub_id in seen_pub_ids:
                     continue
                 seen_pub_ids.add(pub_id)
-                model_id = key_to_model.get((platform, item_id, month))
-                match_result_id = key_to_match_result.get((platform, item_id, month))
+                model_id = key_to_model.get((platform, item_id, month, week))
+                match_result_id = key_to_match_result.get((platform, item_id, month, week))
                 if model_id is None:
                     continue
                 merged = dict(specs_map.get(model_id, {}))

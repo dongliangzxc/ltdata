@@ -8,6 +8,7 @@ from sqlalchemy.orm import relationship, validates
 from sqlalchemy.dialects.mysql import DATETIME as MySQLDateTime
 from pydantic import BaseModel, Field, field_serializer, field_validator
 from app.models.database import Base
+from app.services.data_period import normalize_week
 from app.utils.text_utils import title_key
 from app.utils.time_utils import format_beijing_datetime
 
@@ -21,6 +22,8 @@ class UploadFileRecord(Base):
     filename = Column(String(255), nullable=False)
     stored_filename = Column(String(255), nullable=True, comment='原件存储名；空值兼容旧版按原文件名保存')
     platform = Column(String(50))           # JD / TM / TB
+    period_type = Column(String(10), nullable=False, default="month", server_default="month")
+    weeks = Column(JSON, nullable=True)
     month_range = Column(String(20))        # e.g. "202507-202509"
     row_count = Column(Integer, default=0)
     status = Column(String(20), default="done")  # pending/processing/done/error
@@ -116,9 +119,9 @@ class RawDataRecord(Base):
     # idx_raw_data_month_platform lets 待入清洗队列的按月/平台聚合走覆盖索引，
     # 不再为取 month/platform 回表读取整行（raw_data 含多个 TEXT 宽字段）。
     __table_args__ = (
-        UniqueConstraint("country_code", "item_id", "month", "platform", name="uq_raw_dedup"),
-        Index("idx_raw_dedup_lookup", "country_code", "item_id", "month", "platform"),
-        Index("idx_raw_data_month_platform", "month", "platform"),
+        UniqueConstraint("country_code", "item_id", "month", "platform", "week_of_month", name="uq_raw_dedup"),
+        Index("idx_raw_dedup_lookup", "country_code", "item_id", "month", "platform", "week_of_month"),
+        Index("idx_raw_data_month_platform", "month", "platform", "week_of_month"),
         # Same-title preview joins by clean_job_id -> raw_data_id and then
         # looks up the normalized title.  Keep this index narrow enough for
         # utf8mb4 while retaining the complete value for residual equality.
@@ -133,6 +136,7 @@ class RawDataRecord(Base):
     platform = Column(String(50))
     month = Column(Integer)                 # 202507
     week = Column(String(50))
+    week_of_month = Column(SmallInteger, nullable=False, default=0, server_default="0")
     category_lv0 = Column(String(100))
     category_lv1 = Column(String(100))
     category_lv2 = Column(String(100))
@@ -183,6 +187,7 @@ class CleanJobRecord(Base):
     task_name = Column(String(200), nullable=True)
     category_code = Column(String(50), nullable=True, index=True)
     platform = Column(String(50), nullable=True, index=True)
+    week_of_month = Column(SmallInteger, nullable=False, default=0, server_default="0", index=True)
     source_scope = Column(JSON, nullable=True)
     progress = Column(Integer, default=0, nullable=False)
     progress_stage = Column(String(30), nullable=True)
@@ -261,6 +266,7 @@ class CleanedDataRecord(Base):
     platform = Column(String(50))
     month = Column(Integer)
     week = Column(String(50))
+    week_of_month = Column(SmallInteger, nullable=False, default=0, server_default="0")
     category_lv1 = Column(String(100))
     category_lv2 = Column(String(100))
     category_lv3 = Column(String(100))
@@ -412,6 +418,8 @@ class UploadFileOut(BaseModel):
     filename: str
     platform: Optional[str]
     month_range: Optional[str]
+    period_type: str = "month"
+    weeks: Optional[list[int]] = None
     row_count: int
     status: str
     template_id: Optional[int] = None
@@ -447,6 +455,8 @@ class RawDataOut(BaseModel):
     source_category_name: Optional[str] = None
     platform: Optional[str]
     month: Optional[int]
+    week: Optional[str] = None
+    week_of_month: int = 0
     category_lv0: Optional[str]
     category_lv1: Optional[str]
     category_lv2: Optional[str]
@@ -482,6 +492,7 @@ class CleanJobOut(BaseModel):
     category_code: Optional[str] = None
     platform: Optional[str] = None
     month: Optional[int] = None
+    week_of_month: int = 0
     source_scope: Optional[dict] = None
     progress: int = 0
     progress_stage: Optional[str] = None
@@ -506,6 +517,7 @@ class CleanPoolCategoryOut(BaseModel):
 
 
 class CleanMonthlyPoolOut(BaseModel):
+    week_of_month: int = 0
     category_code: str
     category_name: Optional[str] = None
     platform: Optional[str] = None
@@ -520,6 +532,13 @@ class CleanMonthlyPoolOut(BaseModel):
 
 
 class UpsertMonthlyCleanTaskIn(BaseModel):
+    week: Optional[int] = None
+
+    @field_validator("week", mode="before")
+    @classmethod
+    def validate_week(cls, value):
+        return normalize_week(value, required=True) if value is not None else None
+
     category_code: str
     platform: str
     month: int
@@ -1572,6 +1591,8 @@ class ExportJob(Base):
 
     id               = Column(Integer, primary_key=True, index=True)
     clean_job_id     = Column(Integer, nullable=True)
+    period_type      = Column(String(10), nullable=False, default="month", server_default="month")
+    weeks            = Column(JSON, nullable=True)
     months           = Column(JSON, nullable=True)
     category_code    = Column(String(100), nullable=True)
     platforms        = Column(JSON, nullable=True)
@@ -1587,6 +1608,8 @@ class ExportJob(Base):
 
 
 class ExportJobOut(BaseModel):
+    period_type: str = "month"
+    weeks: Optional[list[int]] = None
     id:              int
     clean_job_id:    Optional[int] = None
     months:          Optional[list[int]] = None

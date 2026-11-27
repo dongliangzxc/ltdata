@@ -2735,6 +2735,12 @@ def transfer_match(match_id: int, payload: TransferPayload, db: Session = Depend
     if not target or target.status not in ACTIVE_TASK_STATUSES:
         raise HTTPException(status_code=400, detail="目标清洗任务不存在或已归档")
 
+    raw = db.query(RawDataRecord).filter(RawDataRecord.id == mr.raw_data_id).first()
+    if raw and (raw.week_of_month or target.week_of_month):
+        months = (target.source_scope or {}).get("months", [])
+        if raw.week_of_month != target.week_of_month or raw.month not in months:
+            raise HTTPException(400, "目标任务与原始数据的月份或周次不一致，不能跨周期转移")
+
     dup = (
         db.query(MatchResult)
         .filter(

@@ -1,0 +1,29 @@
+{
+  "date": "2026-11-27",
+  "feature_commit": "0bf74dc84cfae0347ba93e05c67c0c294e03ec0e",
+  "url": "https://data.runtotech.com",
+  "scope": "Frontend only: fetch all matching brands in CreateModelModal and ignore stale searches",
+  "frontend_image": "sha256:26a144ad9e69b22629e86ce69f1b1aeded2180e3a508ec85990c89735cde5cf9",
+  "backend_worker_image_unchanged": "sha256:e988bc3712c659bd912173a8f767261ce15e4424db482513a3bde3f715fb00bf",
+  "backend_worker_container_ids_unchanged": true,
+  "public_asset_hashes_verified": 6,
+  "migration": "No migration",
+  "business_writes": false,
+  "frontend_tests_passed": 55,
+  "typecheck": "passed",
+  "production_build": "passed",
+  "browser_verification": {
+    "task_id": 312,
+    "keyword": "b",
+    "matching_brands": 798,
+    "verified_brand_at_zero_based_index_61": "BAILULONG",
+    "request": "GET /api/brands?keyword=b&page=1&page_size=2000",
+    "http_status": 200,
+    "console_errors": 0,
+    "model_creation_submitted": false,
+    "screenshot": "production-search-b.png"
+  },
+  "rollback_image": "ltdata-frontend:before-brand-search-0bf74dc",
+  "rollback_compose": "/tmp/luotu-brand-search-release-20261127-0bf74dc/rollback.yml",
+  "rollback_command": "cd /root/luotu/ltdata && docker compose -f docker-compose.rds.yml -f /tmp/luotu-brand-search-release-20261127-0bf74dc/rollback.yml up -d --no-deps --no-build frontend"
+}

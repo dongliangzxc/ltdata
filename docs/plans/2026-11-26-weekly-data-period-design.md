@@ -1,6 +1,6 @@
 # 上传、分发、清洗支持周度：现状与方案
 
-日期：2026-11-26。状态：方案待确认，未实现。
+日期：2026-11-26。状态：早期方案存档；新版方案已于2026-11-27实现并上线，见下方链接。
 
 2026-11-27更新：已基于本轮讨论整合为 [新版完整方案](./2026-11-27-weekly-data-period-proposal.md)，后续评审以新版为准；本文保留现状代码依据和早期分析。
 
@@ -169,4 +169,4 @@
 
 周次取值及输入格式已按用户要求明确；上传交互和其他业务口径仍可继续评审，本轮保持方案阶段，尚未实施迁移。
 
-Deployment compatibility: production raw_data retains legacy duplicates under p65. p82 preserves these rows and application-level dedup, extends the week-aware lookup index, and adds the raw unique constraint only when safe. Published periods must remain unique. Real MySQL 8.0.36 migration checks passed.
+部署兼容说明：正式原始表沿用p65保留的历史重复记录。p82不删除旧行，继续应用层去重，扩展含周次的查重索引；无重复时才建立原始表唯一约束。发布表必须满足周期唯一约束。独立MySQL 8.0.36迁移演练及正式迁移均已通过。

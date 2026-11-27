@@ -1,6 +1,6 @@
 # 数据上传、分发、清洗支持周度：新版方案
 
-日期：2026-11-27。状态：已按用户要求完成本地实现，未发布生产环境。
+日期：2026-11-27。状态：已实现并上线，功能版本`0908154`，迁移`p82a1b2c3d4e5`。
 
 验收入口、测试文件与操作步骤见 [周度功能测试文档](../周度功能测试文档-2026-11-27.md)。
 
@@ -158,4 +158,4 @@
 
 周列映射、无周列时手动指定、周期错误修正后入库、发布保周均已给出具体建议，可结合本方案评审；上述建议不视为用户已授权实现。
 
-Deployment compatibility: production raw_data retains legacy duplicates under p65. p82 preserves these rows and application-level dedup, extends the week-aware lookup index, and adds the raw unique constraint only when safe. Published periods must remain unique. Real MySQL 8.0.36 migration checks passed.
+部署兼容说明：正式原始表沿用p65保留的历史重复记录。p82不删除旧行，继续应用层去重，扩展含周次的查重索引；无重复时才建立原始表唯一约束。发布表必须满足周期唯一约束。独立MySQL 8.0.36迁移演练及正式迁移均已通过。

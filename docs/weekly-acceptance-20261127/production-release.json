@@ -1,0 +1,27 @@
+{
+  "date": "2026-11-27",
+  "feature_commit": "0908154",
+  "url": "https://data.runtotech.com",
+  "migration": "p82a1b2c3d4e5",
+  "backend_and_worker_image": "sha256:6977b8df693ad562055dff4eb68440f4f748a798a7cf114c2049441535c8b24d",
+  "frontend_image": "sha256:f0f44a16de23d9c7d1f91ab9b479f525b3a8aa42ffc977c07e84186e14599452",
+  "python_source_files_verified": 170,
+  "public_frontend_files_verified": 6,
+  "container_restarts": 0,
+  "backend_health": "healthy",
+  "rollback_images": [
+    "ltdata-backend:before-weekly-20261127",
+    "ltdata-frontend:before-weekly-20261127"
+  ],
+  "rollback_directory": "/tmp/luotu-weekly-release-20261127",
+  "rollback_guard": "Old application may only be restored when weekly rows are absent. Once weekly data exists, maintenance and an explicit data isolation or forward-fix plan are required; do not downgrade constraints or delete weekly data.",
+  "production_business_test_writes": false,
+  "regression": {
+    "passed": 1345,
+    "existing_failed": 81,
+    "existing_errors": 6,
+    "new_failures": 0,
+    "frontend_files_passed": 54,
+    "typecheck": "passed"
+  }
+}

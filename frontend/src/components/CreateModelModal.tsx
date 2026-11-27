@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert, Button, Col, Divider, Form, Input, InputNumber,
   Modal, Row, Select, Typography,
@@ -7,7 +7,6 @@ import { PlusOutlined } from '@ant-design/icons'
 import { useRequest } from 'ahooks'
 import {
   createModel,
-  listBrands,
   listModelExtraFields,
   type BrandItem,
   type CreateModelPayload,
@@ -18,6 +17,7 @@ import {
 } from '../services/api'
 import CreateBrandModal from './CreateBrandModal'
 import HoverZoomImage from './HoverZoomImage'
+import { loadAllBrandOptions } from '../utils/brandOptions'
 
 const { Text } = Typography
 
@@ -79,6 +79,7 @@ export default function CreateModelModal({
   const [form] = Form.useForm<CreateModelFormValues>()
   const [brands, setBrands] = useState<BrandItem[]>([])
   const [brandsLoading, setBrandsLoading] = useState(false)
+  const brandSearchSeqRef = useRef(0)
   const [saving, setSaving] = useState(false)
   const [brandModalOpen, setBrandModalOpen] = useState(false)
   const hasProductPreview = Boolean(productImage)
@@ -114,12 +115,17 @@ export default function CreateModelModal({
   )
 
   const loadBrands = async (keyword?: string) => {
+    const searchSeq = ++brandSearchSeqRef.current
+    const isCurrent = () => searchSeq === brandSearchSeqRef.current
+    setBrands([])
     setBrandsLoading(true)
     try {
-      const res = await listBrands({ keyword: keyword?.trim() || undefined, page_size: 50 })
-      setBrands(res.data.items)
+      const results = await loadAllBrandOptions(keyword, isCurrent)
+      if (results && isCurrent()) setBrands(results)
+    } catch {
+      // handled by interceptor; do not display incomplete pages as complete results
     } finally {
-      setBrandsLoading(false)
+      if (isCurrent()) setBrandsLoading(false)
     }
   }
 
@@ -127,10 +133,13 @@ export default function CreateModelModal({
     if (!open) return
     form.resetFields()
     form.setFieldsValue({ status: 'active', spec_values: {}, extra_values: {} })
-    loadBrands()
+    void loadBrands()
+    return () => { brandSearchSeqRef.current += 1 }
   }, [form, open])
 
   const handleCreatedBrand = (brand: BrandItem) => {
+    brandSearchSeqRef.current += 1
+    setBrandsLoading(false)
     setBrands(prev => {
       const exists = prev.some(item => item.brand_code === brand.brand_code)
       return exists ? prev : [...prev, brand].sort((a, b) => a.brand_code.localeCompare(b.brand_code))

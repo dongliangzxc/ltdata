@@ -34,7 +34,7 @@ from app.services.currency_service import get_country
 from app.services.rawdata_cache import invalidate_rawdata_cache
 from app.services.filename_metadata import parse_filename_metadata
 from app.services.upload_validation import inspect_upload_values
-from app.services.data_period import apply_record_period, inspect_upload_periods
+from app.services.data_period import apply_record_period, inspect_upload_periods, normalize_week, normalize_week_selection
 from app.services.import_helper import (
     col_fingerprint as _ih_col_fingerprint,
     read_columns as _ih_read_columns,
@@ -717,6 +717,7 @@ def _run_upload_confirm_thread(
     data_month: int | None = None,
     period_type: str | None = None,
     default_week=None,
+    selected_weeks=None,
 ):
     """后台线程：分块解析 Excel、去重、写库，更新 job 状态。"""
     db = SessionLocal()
@@ -811,8 +812,11 @@ def _run_upload_confirm_thread(
 
         period_summary = inspect_upload_periods(
             tmp_path, mapping, ignore_columns, period_type=period_type,
-            default_week=default_week, filename_month=filename_month,
+            default_week=default_week, filename_month=filename_month, selected_weeks=selected_weeks,
         )
+        selected = normalize_week_selection(selected_weeks)
+        if selected:
+            total_planned = period_summary["selected_rows"]
         file_record.period_type = period_summary["period_type"]
         file_record.weeks = period_summary["weeks"]
         seen_upload_keys: set = set()
@@ -830,7 +834,10 @@ def _run_upload_confirm_thread(
                 db.rollback()
                 return
 
+            included_records = []
             for record in chunk_records:
+                if selected and normalize_week(record.get("week"), required=True) not in selected:
+                    continue
                 if filename_month is not None:
                     record["month"] = filename_month
                 if filename_platform:
@@ -838,6 +845,12 @@ def _run_upload_confirm_thread(
                 apply_record_period(record, period_type=period_summary["period_type"], default_week=default_week)
                 record["source_category_code"] = filename_category_code
                 record["source_category_name"] = filename_category_name
+                included_records.append(record)
+
+            chunk_records = included_records
+            if selected:
+                chunk_months = {record["month"] for record in chunk_records if record.get("month") is not None}
+                chunk_platform = next((str(record["platform"]).upper() for record in chunk_records if record.get("platform")), None)
 
             if not platform and chunk_platform and chunk_platform != "UNKNOWN":
                 platform = chunk_platform
@@ -942,6 +955,7 @@ def _run_upload_confirm_thread(
             "country_code": country_code,
             "batch_key": batch_key,
             "preview": preview,
+            **({"excluded_rows": period_summary["excluded_rows"]} if selected else {}),
         }
         job.file_id = file_record.id
         job.status = "done"
@@ -1142,10 +1156,12 @@ def validate_upload(payload: dict, db: Session = Depends(get_db)):
         summary = inspect_upload_periods(
             tmp_path, payload.get("mapping", {}), payload.get("ignore_columns", []),
             period_type=payload.get("period_type"), default_week=payload.get("week"), filename_month=hints.month,
+            selected_weeks=payload.get("weeks"),
         )
         result = inspect_upload_values(
             tmp_path, payload.get("mapping", {}), payload.get("ignore_columns", []),
             filename_month=hints.month, filename_platform=hints.platform,
+            selected_weeks=payload.get("weeks"),
         )
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"无法检查文件数据：{exc}")
@@ -1219,6 +1235,7 @@ def upload_confirm(payload: dict, db: Session = Depends(get_db)):
         inspect_upload_periods(
             tmp_path, mapping, ignore_columns, period_type=payload.get("period_type"),
             default_week=payload.get("week"), filename_month=filename_hints.month,
+            selected_weeks=payload.get("weeks"),
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -1271,6 +1288,7 @@ def upload_confirm(payload: dict, db: Session = Depends(get_db)):
             data_month,
             payload.get("period_type"),
             payload.get("week"),
+            payload.get("weeks"),
         ),
         daemon=True,
     )

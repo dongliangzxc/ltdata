@@ -2323,6 +2323,7 @@ export const getUploadHeaders = (formData: FormData) =>
 export interface UploadValidationPayload {
   period_type?: 'month' | 'week'
   week?: number | string
+  weeks?: number[]
   temp_file_id: string
   mapping: Record<string, string>
   ignore_columns: string[]

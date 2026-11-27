@@ -1,0 +1,19 @@
+.upload-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.upload-page > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.upload-pending-toolbar {
+  display: flex;
+  width: 100%;
+  margin-bottom: 12px;
+}

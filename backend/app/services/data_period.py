@@ -22,6 +22,14 @@ def period_key(month, week=0) -> str:
     return f"W:{month}:{int(week):02d}" if week else f"M:{month}"
 
 
+def normalize_week_selection(values) -> list[int]:
+    if values is None:
+        return []
+    if not isinstance(values, list):
+        raise ValueError("筛选周次必须是1～5组成的数组，例如[1, 3]")
+    return sorted({normalize_week(value, required=True) for value in values})
+
+
 def job_week(job) -> int:
     return int(getattr(job, "week_of_month", None) or 0)
 
@@ -62,28 +70,49 @@ def filter_period(query, model, period_type=None, week=None):
     return query
 
 
-def inspect_upload_periods(path, mapping, ignored, *, period_type=None, default_week=None, filename_month=None):
+def inspect_upload_periods(path, mapping, ignored, *, period_type=None, default_week=None, filename_month=None, selected_weeks=None):
     from app.services.excel_parser import iter_source_chunks, _clean
 
     fields = {target: col for col, target in mapping.items() if col not in set(ignored)}
-    mode = period_type or ("week" if "week" in fields or default_week is not None else "month")
+    selected = normalize_week_selection(selected_weeks)
+    mode = period_type or ("week" if "week" in fields or default_week is not None or selected else "month")
     # Validate even an empty file or a manual value unused because every row has a week.
     normalize_week(default_week)
     if mode not in ("month", "week"):
         raise ValueError("数据粒度只能为month（月度）或week（周度）")
+    if selected and (mode != "week" or "week" not in fields):
+        raise ValueError("筛选周次需要选择周度并映射文件中的周次列；无周次列时只能统一指定一个周次")
+    if selected and default_week is not None:
+        raise ValueError("不能同时筛选文件周次和统一指定周次")
     if mode == "month" and "week" not in fields and default_week is None:
         return {"period_type": "month", "weeks": []}
     weeks = set()
+    source_rows = selected_rows = 0
     for frame in iter_source_chunks(path, preserve_values=True, typed_columns={fields.get("week")}):
         for number, row in frame.iterrows():
+            source_rows += 1
+            source_week = _clean(row.get(fields.get("week")))
+            if selected:
+                try:
+                    included = normalize_week(source_week, required=True) in selected
+                except ValueError as exc:
+                    raise ValueError(f"第{int(number)}行：{exc}") from exc
+                if not included:
+                    continue
             month = filename_month if filename_month is not None else _clean(row.get(fields.get("month")))
             try:
                 numeric = Decimal(str(month))
                 month = int(numeric) if numeric.is_finite() and numeric == int(numeric) else None
             except Exception:
                 month = None
-            record = {"month": month, "week": _clean(row.get(fields.get("week")))}
+            record = {"month": month, "week": source_week}
             apply_record_period(record, period_type=mode, default_week=default_week, row_number=int(number))
             if record["week_of_month"]:
                 weeks.add(record["week_of_month"])
-    return {"period_type": mode, "weeks": sorted(weeks)}
+            selected_rows += 1
+    summary = {"period_type": mode, "weeks": sorted(weeks)}
+    if selected:
+        if not selected_rows:
+            raise ValueError("文件中没有所选周次的数据，请调整选择或检查周次列")
+        summary.update(selected_rows=selected_rows, excluded_rows=source_rows - selected_rows, selected_weeks=selected)
+    return summary

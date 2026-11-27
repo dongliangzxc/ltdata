@@ -1,0 +1,27 @@
+{
+  "new_backend_selection_tests": 22,
+  "upload_target_tests_passed": 114,
+  "git_base_counts": {
+    "passed": 1367,
+    "failed": 81,
+    "errors": 6
+  },
+  "live_base_before": {
+    "passed": 1359,
+    "failed": 81,
+    "errors": 6
+  },
+  "live_base_after": {
+    "passed": 1381,
+    "failed": 81,
+    "errors": 6
+  },
+  "new_failures": [],
+  "changed_failure_types": [],
+  "frontend_files_passed": 55,
+  "typecheck": "passed",
+  "production_build": "passed",
+  "database_migration": false,
+  "production_base_backend_image": "52a19ca88a4e2a7f774d06f4efbc20b7c8e1762e157f34aa174fa02c048afb51",
+  "preserved_live_matcher_patch": true
+}

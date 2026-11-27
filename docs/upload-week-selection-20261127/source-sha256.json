@@ -1,0 +1,13 @@
+{
+  "backend/app/api/upload.py": "4a304f4f9051f340a5281aa868b75d34c6b182e58165c8a432c8d7664392d4fe",
+  "backend/app/services/data_period.py": "b63645a57e553259cbd8b0bee0695d035896accb014a8675e982fbccb0fd0177",
+  "backend/app/services/upload_validation.py": "169baa1786b351e788c1782320a519b93aac72160b5d7daa8b2c914c41a95fdb",
+  "backend/tests/test_weekly_upload_selection.py": "6be7b0ea1fe3c8f61013fc2c521b80ceeb3e4f1cbca5545b4f829dd17470c0f0",
+  "frontend/src/components/DataPeriodFilter.tsx": "4b71dfd3128785a8dd7d79635eab3b6d400adaaeaf55adc953aa6c32b3807989",
+  "frontend/src/components/DataPeriodFilter.test.cjs": "933527ab83bc92304fe8f169f8c4b014a24248020c577d908bbc3f39dc5d67af",
+  "frontend/src/pages/Upload/index.tsx": "5d1a96b9643aa0818ea2cc54566d42cc309709c8aa5955a117df92ee8e6958f0",
+  "frontend/src/pages/Upload/index.confirm-review.test.cjs": "7c34cc3e2cb4593f1aa9a4167fffb946acd08f61e9bf274b6625387133ba2b26",
+  "frontend/src/pages/Upload/index.layout.test.cjs": "f11caa7f7aea2c6c490a61e4cf803aaa32fd57af38cc37ea1d807d75ceb41604",
+  "frontend/src/pages/Upload/upload.css": "bd490035444eab7c7dfe48cd80f2c7cbe157b97477df0b2bcb84d5c06bc6cbd6",
+  "frontend/src/services/api.ts": "1105e47998ee28a19fdafbf748877abe860444c56d13a56ebf7408b121d8b2ea"
+}

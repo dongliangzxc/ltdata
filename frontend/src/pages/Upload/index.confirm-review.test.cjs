@@ -34,7 +34,7 @@ async function check(name, decision, validationFails = false, cycle = {}) {
     pollRef: { current: null }, confirming: false, allRequiredMapped: true,
     temp_file_id: payload.temp_file_id, mapping: payload.mapping, ignoreSet: new Set(),
     saveSwitch: false, saveName: '', selectedTemplateId: undefined, countryCode: 'CN', dataYear: 2026,
-    periodType: cycle.periodType, defaultWeek: cycle.defaultWeek,
+    periodType: cycle.periodType, defaultWeek: cycle.defaultWeek, weeks: cycle.selectedWeeks,
     batchConfirming: false,
     pendingFiles: [{ uid: 'test', filename: 'warning.csv', status: 'ready', countryCode: 'CN', headersResult: payload, ...cycle }],
     templates: [], filterRegion: undefined, filterYear: undefined,
@@ -55,6 +55,7 @@ async function check(name, decision, validationFails = false, cycle = {}) {
       events.push('confirm')
       assert.equal(actual.period_type, cycle.periodType ?? 'month')
       assert.equal(actual.week, cycle.defaultWeek)
+      assert.deepEqual(actual.weeks, cycle.selectedWeeks)
       assert.equal(actual.quality_reviewed, true)
       assert.equal(actual.temp_file_id, payload.temp_file_id)
       return { data: { job_id: 1 } }
@@ -74,6 +75,7 @@ async function check(name, decision, validationFails = false, cycle = {}) {
     await check(name, true)
     await check(name, true, true)
     await check(name, true, false, { periodType: 'week', defaultWeek: 3 })
+    await check(name, true, false, { periodType: 'week', selectedWeeks: [1, 3, 5] })
   }
   console.log('Upload submission: single/batch wait for review, cancel and failed validation never submit, accepted submissions carry acknowledgement')
 })().catch(error => { console.error(error); process.exitCode = 1 })

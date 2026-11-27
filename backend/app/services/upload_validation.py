@@ -22,6 +22,7 @@ def inspect_upload_values(
     *,
     filename_month: int | None = None,
     filename_platform: str | None = None,
+    selected_weeks: list | None = None,
 ) -> dict:
     """Scan all rows in bounded chunks; return counts and at most 50 examples.
 
@@ -34,7 +35,17 @@ def inspect_upload_values(
         "samples": [], "truncated": False,
     }
     ignored = set(ignore_columns)
+    from app.services.data_period import normalize_week, normalize_week_selection
+    from app.services.excel_parser import _clean
+    selected = normalize_week_selection(selected_weeks)
+    week_column = next((column for column, target in mapping.items() if target == "week" and column not in ignored), None)
+    if selected and week_column is None:
+        raise ValueError("筛选周次需要映射文件中的周次列")
     for frame in iter_source_chunks(file_path, preserve_values=True):
+        if selected:
+            frame = frame.loc[frame[week_column].map(lambda value: normalize_week(_clean(value), required=True) in selected)]
+            if frame.empty:
+                continue
         result["total_rows"] += len(frame)
         affected = pd.Series(False, index=frame.index)
         candidates = []

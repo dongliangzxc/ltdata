@@ -1,4 +1,5 @@
 import DataPeriodFilter from '../../components/DataPeriodFilter'
+import './upload.css'
 import { useState, useRef, useEffect, useMemo } from 'react'
 import {
   Card, Upload, Table, Tag, Button, Popconfirm, Select, Checkbox,
@@ -280,6 +281,7 @@ type PendingUploadFile = {
   filenameHints?: UploadFilenameHints
   periodType?: 'month' | 'week'
   defaultWeek?: number
+  selectedWeeks?: number[]
   error?: string
 }
 
@@ -346,6 +348,9 @@ function MappingCard({
   onTemplateSaved,
   periodType,
   defaultWeek,
+  weeks,
+  onPeriodChange,
+  onWeeksChange,
 }: {
   headersResult: HeadersResult
   templates: TemplateRow[]
@@ -355,6 +360,9 @@ function MappingCard({
   dataYear?: number
   periodType?: 'month' | 'week'
   defaultWeek?: number
+  weeks?: number[]
+  onPeriodChange?: (periodType: 'month' | 'week', defaultWeek?: number) => void
+  onWeeksChange?: (weeks: number[]) => void
   onJobUpdate?: () => void
   onTemplateSaved?: (template: TemplateRow) => void
 }) {
@@ -374,6 +382,10 @@ function MappingCard({
   const [ignoreSet, setIgnoreSet] = useState<Set<string>>(() =>
     new Set(suggested_template?.ignore_columns ?? [])
   )
+  const hasWeekColumn = Object.entries(mapping).some(([column, target]) => target === 'week' && !ignoreSet.has(column))
+  useEffect(() => {
+    if (hasWeekColumn && defaultWeek !== undefined) onWeeksChange?.([defaultWeek])
+  }, [hasWeekColumn, defaultWeek, onWeeksChange])
 
   const [saveSwitch, setSaveSwitch] = useState(false)
   const [saveName, setSaveName] = useState(suggested_template?.name ?? '')
@@ -490,6 +502,7 @@ function MappingCard({
         template_id: selectedTemplateId,
         period_type: periodType ?? (Object.values(mapping).includes('week') ? 'week' : 'month'),
         week: defaultWeek,
+        weeks,
         country_code: countryCode,
         data_year: dataYear,
       }
@@ -643,6 +656,12 @@ function MappingCard({
           </Space>
         }
       >
+        <div style={{ marginBottom: 12 }}>
+          <DataPeriodFilter upload value={periodType ?? (hasWeekColumn ? 'week' : 'month')}
+            hasWeekColumn={hasWeekColumn || !!weeks?.length}
+            week={defaultWeek} weeks={weeks} onChange={(value, week) => onPeriodChange?.(value, week)} onWeeksChange={onWeeksChange} />
+          <div style={{ marginTop: 6 }}><Text type="secondary">文件有周次列时可多选；留空导入全部周次，仅筛选原有数据，不复制销量和金额。无周次列时可统一指定一周。</Text></div>
+        </div>
         <Table
           dataSource={columns.map(col => ({ col }))}
           columns={mappingTableCols}
@@ -1057,6 +1076,7 @@ export default function UploadPage() {
           temp_file_id: plan.headers.temp_file_id,
           period_type: plan.item.periodType ?? (Object.values(plan.auto.mapping).includes('week') ? 'week' : 'month'),
           week: plan.item.defaultWeek,
+          weeks: plan.item.selectedWeeks,
           mapping: plan.auto.mapping,
           ignore_columns: plan.auto.ignoreColumns,
         })).data)
@@ -1080,6 +1100,7 @@ export default function UploadPage() {
             quality_reviewed: true,
             period_type: item.periodType ?? (Object.values(auto.mapping).includes('week') ? 'week' : 'month'),
             week: item.defaultWeek,
+            weeks: item.selectedWeeks,
             temp_file_id: headers.temp_file_id,
             mapping: auto.mapping,
             ignore_columns: auto.ignoreColumns,
@@ -1179,7 +1200,7 @@ export default function UploadPage() {
   const updatePendingTemplate = (uid: string, templateId?: number) => {
     const template = templateId ? templates.find(item => item.id === templateId) : undefined
     setPendingFiles(prev => prev.map(item => item.uid === uid
-      ? { ...item, templateId, templateOverride: template }
+      ? { ...item, templateId, templateOverride: template, selectedWeeks: [], defaultWeek: undefined }
       : item))
   }
 
@@ -1187,7 +1208,7 @@ export default function UploadPage() {
     if (!bulkTemplateId) return
     const template = templates.find(item => item.id === bulkTemplateId)
     setPendingFiles(prev => prev.map(item => item.status === 'ready'
-      ? { ...item, templateId: bulkTemplateId, templateOverride: template }
+      ? { ...item, templateId: bulkTemplateId, templateOverride: template, selectedWeeks: [], defaultWeek: undefined }
       : item))
   }
 
@@ -1309,7 +1330,7 @@ export default function UploadPage() {
   const Dragger = Upload.Dragger
 
   return (
-    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+    <div className="upload-page">
       {/* Step 1: Upload zone */}
       {step === 'upload' && (
         <Card>
@@ -1338,7 +1359,7 @@ export default function UploadPage() {
             </p>
           </Dragger>
           <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
-            <Space>
+            <Space wrap>
               <Button icon={<QuestionCircleOutlined />} onClick={() => setNamingHelpOpen(true)}>
                 文件名命名说明
               </Button>
@@ -1363,8 +1384,8 @@ export default function UploadPage() {
         <Card
           title="待处理文件"
           size="small"
-          extra={
-            <Space wrap>
+        >
+            <Space wrap className="upload-pending-toolbar">
               <Text type="secondary">批量设置国家</Text>
               <Select
                 allowClear
@@ -1404,24 +1425,27 @@ export default function UploadPage() {
                 批量确认入库
               </Button>
             </Space>
-          }
-        >
           <Alert
             type="info"
             showIcon
             style={{ marginBottom: 12 }}
-            message="批量确认会使用推荐模板或标准列名自动映射；标记为「需手动」的文件请点「配置映射」处理。"
+            message="批量确认会使用推荐模板或标准列名自动映射；标记为「需手动」的文件请点「配置映射」处理。文件有周次列时可多选，留空导入全部周次，不复制数据。"
           />
           <Table<PendingUploadFile>
+            className="upload-pending-table"
             rowKey="uid"
             size="small"
             dataSource={pendingFiles}
             pagination={false}
+            tableLayout="fixed"
+            scroll={{ x: 2100 }}
             columns={[
-              { title: '文件名', dataIndex: 'filename', ellipsis: true },
+              { title: '文件名', dataIndex: 'filename', width: 260, ellipsis: true },
               { title: '数据粒度 / 周次', width: 310, render: (_: unknown, row) => <DataPeriodFilter upload
+                hasWeekColumn={!!row.headersResult && Object.values(buildAutoMapping(row.headersResult, row.templateOverride).mapping).includes('week')}
+                weeks={row.selectedWeeks} onWeeksChange={selectedWeeks => setPendingFiles(prev => prev.map(item => item.uid === row.uid ? { ...item, selectedWeeks, defaultWeek: undefined } : item))}
                 value={row.periodType ?? (row.headersResult && Object.values(buildAutoMapping(row.headersResult, row.templateOverride).mapping).includes('week') ? 'week' : 'month')}
-                week={row.defaultWeek} onChange={(periodType, defaultWeek) => setPendingFiles(prev => prev.map(item => item.uid === row.uid ? { ...item, periodType, defaultWeek } : item))} /> },
+                week={row.defaultWeek} onChange={(periodType, defaultWeek) => setPendingFiles(prev => prev.map(item => item.uid === row.uid ? { ...item, periodType, defaultWeek, selectedWeeks: [] } : item))} /> },
               {
                 title: '推荐模板', width: 180, ellipsis: true,
                 render: (_: unknown, row) => row.headersResult?.suggested_template?.name || '-',
@@ -1517,7 +1541,7 @@ export default function UploadPage() {
                     : <Tag color="green">待入库</Tag>,
               },
               {
-                title: '操作', width: 160,
+                title: '操作', width: 160, fixed: 'right',
                 render: (_: unknown, row) => (
                   <Space size={4}>
                     <Button
@@ -1547,6 +1571,7 @@ export default function UploadPage() {
             size="small"
             dataSource={uploadJobs}
             pagination={false}
+            scroll={{ x: 1100 }}
             columns={[
               { title: '文件名', dataIndex: 'filename', ellipsis: true, render: (v: string | null) => v || '-' },
               { title: '状态', dataIndex: 'status', width: 90, render: uploadJobStatusTag },
@@ -1619,11 +1644,9 @@ export default function UploadPage() {
       {step === 'mapping' && activeFile?.headersResult && (
         <>
           <Card style={{ marginBottom: 12 }}>
-            <Space size="large">
+            <Space size="large" wrap>
               <span style={{ fontWeight: 500 }}>数据维度</span>
               <Tag color="blue">国家：{countryName(activeFile.countryCode)}</Tag>
-              <DataPeriodFilter upload value={activeFile.periodType ?? (Object.values(buildAutoMapping(activeFile.headersResult).mapping).includes('week') ? 'week' : 'month')}
-                week={activeFile.defaultWeek} onChange={(periodType, defaultWeek) => setPendingFiles(prev => prev.map(item => item.uid === activeFile.uid ? { ...item, periodType, defaultWeek } : item))} />
               {activeFile.filenameHints?.month != null && (
                 <Tag color="green">识别月份：{activeFile.filenameHints.month}</Tag>
               )}
@@ -1655,6 +1678,9 @@ export default function UploadPage() {
             dataYear={dataYear}
             periodType={activeFile.periodType}
             defaultWeek={activeFile.defaultWeek}
+            weeks={activeFile.selectedWeeks}
+            onPeriodChange={(periodType, defaultWeek) => setPendingFiles(prev => prev.map(item => item.uid === activeFile.uid ? { ...item, periodType, defaultWeek, selectedWeeks: [] } : item))}
+            onWeeksChange={selectedWeeks => setPendingFiles(prev => prev.map(item => item.uid === activeFile.uid ? { ...item, selectedWeeks, defaultWeek: undefined } : item))}
             onJobUpdate={refreshUploadJobs}
             onTemplateSaved={(template) => {
               if (activeFileId) {
@@ -1873,6 +1899,6 @@ export default function UploadPage() {
           ]}
         />
       </Modal>
-    </Space>
+    </div>
   )
 }

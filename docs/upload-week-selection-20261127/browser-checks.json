@@ -1,0 +1,89 @@
+{
+  "geometry": [
+    {
+      "viewport": 1440,
+      "pageWidth": 1440,
+      "cardRight": 1416,
+      "tableRight": 1403,
+      "innerWidth": 1166,
+      "innerScroll": 2100
+    },
+    {
+      "viewport": 1280,
+      "pageWidth": 1280,
+      "cardRight": 1256,
+      "tableRight": 1243,
+      "innerWidth": 1006,
+      "innerScroll": 2100
+    },
+    {
+      "viewport": 1024,
+      "pageWidth": 1024,
+      "cardRight": 1000,
+      "tableRight": 987,
+      "innerWidth": 750,
+      "innerScroll": 2100
+    },
+    {
+      "viewport": 768,
+      "pageWidth": 768,
+      "cardRight": 744,
+      "tableRight": 731,
+      "innerWidth": 494,
+      "innerScroll": 2100
+    }
+  ],
+  "payloads": [
+    {
+      "path": "/api/upload/validate",
+      "weeks": [
+        1,
+        3
+      ]
+    },
+    {
+      "path": "/api/upload/confirm",
+      "weeks": [
+        1,
+        3
+      ]
+    },
+    {
+      "path": "/api/upload/validate",
+      "weeks": [
+        2,
+        4
+      ]
+    },
+    {
+      "path": "/api/upload/confirm",
+      "weeks": [
+        2,
+        4
+      ]
+    },
+    {
+      "path": "/api/upload/validate",
+      "weeks": []
+    },
+    {
+      "path": "/api/upload/confirm",
+      "weeks": []
+    },
+    {
+      "path": "/api/upload/validate",
+      "weeks": [
+        5
+      ]
+    }
+  ],
+  "checks": [
+    "Batch import weeks 1 and 3: 2 rows, quantity 40",
+    "Mapping import weeks 2 and 4: total 4 rows, quantity 100",
+    "Clear selection: imports all source weeks, only week 5 is new, total quantity 150",
+    "No matching week: 422 and raw count unchanged",
+    "History records actual imported weeks",
+    "No JavaScript errors"
+  ],
+  "errors": []
+}
